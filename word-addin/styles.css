@@ -553,3 +553,128 @@ body {
 ::-webkit-scrollbar-track { background: #f1f1f1; }
 ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+/* ---------------------------------------------------------------------------
+   Practice Tools
+--------------------------------------------------------------------------- */
+
+#tools-section {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  overflow-y: auto;
+}
+
+#tools-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+
+#tools-body { display: flex; flex-direction: column; gap: 6px; }
+
+.tools-row { display: flex; align-items: center; gap: 6px; }
+
+.tools-label {
+  font-size: 11px;
+  color: var(--text-light);
+  width: 42px;
+  flex-shrink: 0;
+}
+
+.tools-select {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--text);
+}
+
+.tools-select:disabled { background: #f5f5f5; color: #aaa; }
+
+.tools-textarea {
+  width: 100%;
+  font-size: 11px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+  font-family: inherit;
+  color: var(--text);
+}
+
+.tools-check-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-light);
+  cursor: pointer;
+}
+
+.btn-small { font-size: 11px; padding: 4px 10px; }
+
+#skill-output-area {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+#skill-attorney-banner {
+  background: #fffbeb;
+  border-bottom: 1px solid #fcd34d;
+  font-size: 10px;
+  color: #92400e;
+  padding: 4px 8px;
+  font-weight: 600;
+}
+
+.gate-msg {
+  background: #fef2f2;
+  border-bottom: 1px solid #fca5a5;
+  font-size: 10px;
+  color: #991b1b;
+  padding: 5px 8px;
+}
+
+#skill-result-preview, #skill-result-full {
+  font-size: 10px;
+  color: var(--text);
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.tools-actions { justify-content: flex-end; padding: 4px 6px; border-top: 1px solid var(--border); }
+
+/* Nav tabs */
+#nav-tabs {
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: #f8f9fb;
+  flex-shrink: 0;
+}
+
+.nav-tab {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 7px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-light);
+  cursor: pointer;
+  border-top: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.nav-tab:hover { color: var(--primary); }
+.nav-tab.active { color: var(--primary); border-top-color: var(--primary); }

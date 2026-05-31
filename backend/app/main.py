@@ -2,6 +2,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,12 +11,15 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.database import engine
 from app.middleware.tenant import TenantMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
 from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
 from app.routers.plugins import router as plugins_router
+from app.routers.scheduler import router as scheduler_router
+from app.services.scheduler import LegalScheduler
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -24,24 +28,46 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle events."""
-    # Create upload directory
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info(f"Upload directory ensured: {settings.UPLOAD_DIR}")
 
-    # Test database connection
+    # Redis client for rate limiting
+    try:
+        redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=False)
+        await redis_client.ping()
+        app.state.redis = redis_client
+        logger.info("Redis connected")
+    except Exception as exc:
+        logger.warning(f"Redis unavailable — rate limiting disabled: {exc}")
+        app.state.redis = None
+
+    # Database connection test
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("Database connection successful")
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
-        # Don't prevent startup — let health endpoint report status
+
+    # Start APScheduler
+    try:
+        scheduler = LegalScheduler()
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("Scheduler started")
+    except Exception as exc:
+        logger.error(f"Scheduler failed to start: {exc}")
+        app.state.scheduler = None
 
     yield
 
-    # Shutdown: dispose engine
+    # Shutdown
+    if getattr(app.state, "scheduler", None):
+        app.state.scheduler.shutdown()
+    if getattr(app.state, "redis", None):
+        await app.state.redis.aclose()
     await engine.dispose()
-    logger.info("Database engine disposed")
+    logger.info("Shutdown complete")
 
 
 app = FastAPI(
@@ -75,6 +101,8 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────
 app.add_middleware(TenantMiddleware)
 
+app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
+
 # ─────────────────────────────────────────────────────
 # Routers
 # ─────────────────────────────────────────────────────
@@ -84,6 +112,7 @@ app.include_router(documents_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
+app.include_router(scheduler_router, prefix="/api")
 
 
 # ─────────────────────────────────────────────────────

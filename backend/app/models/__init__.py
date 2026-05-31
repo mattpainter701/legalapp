@@ -3,6 +3,7 @@ from app.models.user import User
 from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.plugin import PracticeProfile, Matter, MatterEvent, Renewal
+from app.models.scheduler import SchedulerLog
 
 __all__ = [
     "Tenant",
@@ -16,4 +17,5 @@ __all__ = [
     "Matter",
     "MatterEvent",
     "Renewal",
+    "SchedulerLog",
 ]

@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     # Premium: Claude Opus 4 for complex drafting tasks
     PREMIUM_LLM: str = "claude-opus-4-8"
 
+    # ── Email / Notifications ─────────────────────────────────────────────────
+    EMAIL_ENABLED: bool = False          # Set True in prod; logs emails in dev
+    EMAIL_HOST: str = "smtp.gmail.com"
+    EMAIL_PORT: int = 587
+    EMAIL_USER: str = ""
+    EMAIL_PASS: str = ""
+    EMAIL_FROM: str = "noreply@legalscribe.ai"
+    SLACK_WEBHOOK_URL: str = ""          # Optional: Slack incoming webhook URL
+
     model_config = SettingsConfigDict(env_file=".env")
 
 

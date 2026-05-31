@@ -108,6 +108,80 @@
     </div>
   </div>
 
+  <!-- Practice Tools Section (collapsed by default) -->
+  <div id="tools-section" class="hidden">
+    <div id="tools-header">
+      <span>⚖️ Practice Tools</span>
+      <button id="btn-toggle-tools" class="btn-link">Hide</button>
+    </div>
+
+    <div id="tools-body">
+      <div class="tools-row">
+        <label class="tools-label">Plugin</label>
+        <select id="plugin-select" class="tools-select">
+          <option value="">Select practice area...</option>
+          <option value="commercial-legal">Commercial Legal</option>
+          <option value="privacy-legal">Privacy Legal</option>
+          <option value="litigation-legal">Litigation Legal</option>
+          <option value="employment-legal">Employment Legal</option>
+          <option value="product-legal">Product Legal</option>
+          <option value="ip-legal">IP Legal</option>
+          <option value="ai-governance-legal">AI Governance</option>
+          <option value="regulatory-legal">Regulatory Legal</option>
+        </select>
+      </div>
+
+      <div class="tools-row">
+        <label class="tools-label">Skill</label>
+        <select id="skill-select" class="tools-select" disabled>
+          <option value="">Select skill...</option>
+        </select>
+      </div>
+
+      <div class="tools-row">
+        <button id="btn-review-selection" class="btn-secondary btn-small">
+          Use Selected Text
+        </button>
+      </div>
+
+      <textarea
+        id="skill-input"
+        class="tools-textarea"
+        placeholder="Paste contract text, PRD, or question here..."
+        rows="4"
+      ></textarea>
+
+      <div class="tools-row">
+        <label class="tools-check-label">
+          <input type="checkbox" id="skill-premium" />
+          Use Premium LLM (Claude Opus 4)
+        </label>
+      </div>
+
+      <button id="btn-run-skill" class="btn-primary btn-small" disabled>
+        Run Skill
+      </button>
+
+      <div id="skill-output-area" class="hidden">
+        <div id="skill-attorney-banner">⚠️ Requires Attorney Review</div>
+        <div id="skill-gates"></div>
+        <div id="skill-result-preview"></div>
+        <div id="skill-result-full" class="hidden"></div>
+        <div class="tools-row tools-actions">
+          <button id="btn-show-full" class="btn-link btn-small hidden">Show full output</button>
+          <button id="btn-insert-skill" class="btn-secondary btn-small">Insert into Document</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nav tabs at bottom -->
+  <div id="nav-tabs">
+    <button class="nav-tab active" data-section="chat">Chat</button>
+    <button class="nav-tab" data-section="tools">Tools</button>
+    <button class="nav-tab" data-section="docs">Docs</button>
+  </div>
+
   <!-- Status bar -->
   <div id="status-bar">
     <span id="status-text"></span>

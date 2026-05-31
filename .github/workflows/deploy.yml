@@ -1,0 +1,92 @@
+# Deploy to production VPS on push to main.
+#
+# Required repository secrets (Settings → Secrets → Actions):
+#   VPS_HOST        — IP or hostname of the production VPS
+#   VPS_USER        — SSH user (e.g. deploy)
+#   VPS_SSH_KEY     — Private SSH key (corresponding public key must be in ~/.ssh/authorized_keys on VPS)
+#   VPS_APP_DIR     — Absolute path to the app on VPS (e.g. /home/deploy/legalapp)
+#   SLACK_WEBHOOK_URL — (optional) Slack incoming webhook for deploy notifications
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Build mode'
+        required: false
+        default: '--build'
+        type: choice
+        options: ['--build', '--pull']
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # never cancel an in-progress deploy
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Add VPS to known hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
+          BUILD_MODE: ${{ github.event.inputs.build_mode || '--build' }}
+        run: |
+          ssh $VPS_USER@$VPS_HOST "
+            set -e
+            cd $VPS_APP_DIR
+            echo '==> Pulling latest code'
+            git fetch origin main
+            git reset --hard origin/main
+            echo '==> Commit: $(git log --oneline -1)'
+            echo '==> Running deploy script'
+            bash scripts/deploy_prod.sh $BUILD_MODE
+          "
+
+      - name: Health check
+        run: |
+          echo "Waiting 15s for services to stabilise..."
+          sleep 15
+          STATUS=$(curl -sf --max-time 10 https://${{ secrets.VPS_HOST }}/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "unreachable")
+          echo "Health: $STATUS"
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Health check failed — status=$STATUS"
+            exit 1
+          fi
+
+      - name: Notify Slack (success)
+        if: success() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            -d "{\"text\":\"✅ LegalScribe AI deployed successfully — <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|$(git log --oneline -1 --format='%s')>\"}"
+
+      - name: Notify Slack (failure)
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            -d "{\"text\":\"❌ LegalScribe AI deploy FAILED — check <https://github.com/${{ github.repository }}/actions|Actions>\"}"

@@ -652,14 +652,166 @@ function init() {
 }
 
 // ---------------------------------------------------------------------------
+// Practice Tools (Plugin Skills)
+// ---------------------------------------------------------------------------
+
+var PLUGIN_SKILLS = {
+  'commercial-legal': ['vendor-agreement-review', 'nda-review', 'saas-msa-review'],
+  'privacy-legal': ['dpa-review', 'dsar-response', 'pia-generation'],
+  'litigation-legal': ['matter-intake', 'claim-chart', 'demand-draft'],
+  'employment-legal': ['hire-review', 'termination-review', 'classification-analysis'],
+  'product-legal': ['launch-review', 'marketing-claims-check'],
+  'ip-legal': ['trademark-clearance', 'fto-analysis'],
+  'ai-governance-legal': ['use-case-triage', 'impact-assessment'],
+  'regulatory-legal': ['reg-gap-analysis', 'policy-diff'],
+};
+
+var skillFullOutput = '';
+
+function initPracticeTools() {
+  var pluginSel = document.getElementById('plugin-select');
+  var skillSel  = document.getElementById('skill-select');
+  var runBtn    = document.getElementById('btn-run-skill');
+
+  pluginSel.addEventListener('change', function () {
+    var plugin = pluginSel.value;
+    skillSel.innerHTML = '<option value="">Select skill...</option>';
+    skillSel.disabled = !plugin;
+    runBtn.disabled = true;
+    if (!plugin) return;
+    var skills = PLUGIN_SKILLS[plugin] || [];
+    skills.forEach(function (s) {
+      var opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.replace(/-/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+      skillSel.appendChild(opt);
+    });
+  });
+
+  skillSel.addEventListener('change', function () {
+    runBtn.disabled = !skillSel.value;
+  });
+
+  document.getElementById('btn-review-selection').addEventListener('click', function () {
+    Office.context.document.getSelectedDataAsync(
+      Office.CoercionType.Text,
+      function (result) {
+        if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
+          document.getElementById('skill-input').value = result.value;
+        } else {
+          setStatus('No text selected in Word document.');
+        }
+      }
+    );
+  });
+
+  runBtn.addEventListener('click', runSkill);
+
+  document.getElementById('btn-show-full').addEventListener('click', function () {
+    document.getElementById('skill-result-full').classList.remove('hidden');
+    this.classList.add('hidden');
+  });
+
+  document.getElementById('btn-insert-skill').addEventListener('click', function () {
+    if (skillFullOutput) {
+      Office.context.document.setSelectedDataAsync(
+        skillFullOutput,
+        { coercionType: Office.CoercionType.Text },
+        function (result) {
+          if (result.status === Office.AsyncResultStatus.Succeeded) {
+            setStatus('Draft inserted at cursor.');
+          }
+        }
+      );
+    }
+  });
+
+  // Nav tabs
+  document.querySelectorAll('.nav-tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      document.querySelectorAll('.nav-tab').forEach(function (t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var section = tab.getAttribute('data-section');
+      document.getElementById('chat-section').classList.toggle('hidden', section !== 'chat');
+      document.getElementById('tools-section').classList.toggle('hidden', section !== 'tools');
+      document.getElementById('docs-section').classList.toggle('hidden', section !== 'docs');
+    });
+  });
+}
+
+function runSkill() {
+  var plugin  = document.getElementById('plugin-select').value;
+  var skill   = document.getElementById('skill-select').value;
+  var input   = document.getElementById('skill-input').value.trim();
+  var premium = document.getElementById('skill-premium').checked;
+
+  if (!plugin || !skill || !input) {
+    setStatus('Select plugin, skill, and provide input text.'); return;
+  }
+  if (!state.token) { setStatus('Please sign in first.'); return; }
+
+  var runBtn = document.getElementById('btn-run-skill');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running...';
+  setStatus('Executing skill...');
+
+  fetch(API_BASE + '/plugins/' + plugin + '/' + skill, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token },
+    body: JSON.stringify({ skill: skill, input_text: input, use_premium: premium }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      var outputArea = document.getElementById('skill-output-area');
+      var gatesEl    = document.getElementById('skill-gates');
+      var previewEl  = document.getElementById('skill-result-preview');
+      var fullEl     = document.getElementById('skill-result-full');
+      var showBtn    = document.getElementById('btn-show-full');
+
+      outputArea.classList.remove('hidden');
+      skillFullOutput = data.memo || '';
+
+      if (data.gates_triggered && data.gates_triggered.length > 0) {
+        gatesEl.innerHTML = data.gates_triggered.map(function (g) {
+          return '<div class="gate-msg">🚫 ' + g + '</div>';
+        }).join('');
+        previewEl.textContent = '';
+        fullEl.textContent = '';
+      } else {
+        gatesEl.innerHTML = '';
+        var preview = skillFullOutput.substring(0, 500);
+        var hasMore = skillFullOutput.length > 500;
+        previewEl.textContent = preview + (hasMore ? '...' : '');
+        fullEl.textContent = skillFullOutput;
+        if (hasMore) {
+          showBtn.classList.remove('hidden');
+          fullEl.classList.add('hidden');
+        } else {
+          showBtn.classList.add('hidden');
+          fullEl.classList.remove('hidden');
+        }
+      }
+      setStatus('Skill complete. Attorney review required before use.');
+    })
+    .catch(function (err) {
+      setStatus('Error: ' + err.message);
+    })
+    .finally(function () {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Skill';
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Office.onReady
 // ---------------------------------------------------------------------------
 
 Office.onReady(function (info) {
   if (info.host === Office.HostType.Word) {
     init();
+    initPracticeTools();
   } else {
-    // Running outside Word (e.g., browser testing)
     init();
+    initPracticeTools();
   }
 });
