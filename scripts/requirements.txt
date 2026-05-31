@@ -1,0 +1,7 @@
+psycopg2-binary
+pgvector
+openai
+tiktoken
+httpx
+tqdm
+python-dotenv
