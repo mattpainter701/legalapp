@@ -1,6 +1,29 @@
-.PHONY: dev dev-build prod-up prod-down prod-build migrate logs shell \
-        sync-public-db deploy-prod backup-db restore-db embed-bulk \
-        jetson-embed lint test clean
+.PHONY: setup dev dev-build dev-down prod-up prod-down prod-build migrate \
+        logs shell sync-public-db deploy-prod backup-db restore-db \
+        embed-bulk jetson-embed lint test clean
+
+# ── First-time setup ─────────────────────────────────────────────────────────
+setup:
+	@if [ ! -f .env ]; then \
+		cp .env.example .env; \
+		echo ""; \
+		echo "  .env created from .env.example."; \
+		echo "  Open .env and fill in at minimum:"; \
+		echo "    ANTHROPIC_API_KEY   — for Claude Opus (premium)"; \
+		echo "    DEEPSEEK_API_KEY    — for DeepSeek (primary LLM)"; \
+		echo "    OPENAI_API_KEY      — for embeddings"; \
+		echo "    SECRET_KEY          — run: openssl rand -hex 32"; \
+		echo ""; \
+		echo "  For OAuth login (optional — use /api/dev/login in dev):"; \
+		echo "    GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET"; \
+		echo "      Redirect URI: http://localhost:8000/api/auth/google/callback"; \
+		echo "    MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET"; \
+		echo "      Redirect URI: http://localhost:8000/api/auth/microsoft/callback"; \
+		echo ""; \
+		echo "  Then run: make dev-build"; \
+	else \
+		echo ".env already exists — edit it directly."; \
+	fi
 
 # ── Dev (on-prem hypervisor) ─────────────────────────────────────────────────
 dev:

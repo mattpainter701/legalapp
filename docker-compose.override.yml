@@ -18,7 +18,7 @@ services:
       - ./frontend/src:/app/src          # HMR for React
       - ./frontend/public:/app/public
     environment:
-      - VITE_API_URL=http://localhost/api
+      - VITE_API_URL=/api               # relative — handled by Vite proxy to backend:8000
 
   postgres:
     ports:
@@ -27,3 +27,12 @@ services:
   redis:
     ports:
       - "6379:6379"    # expose for redis-cli locally
+
+  nginx:
+    # Dev: HTTP only, no SSL certs needed.
+    # Mounts nginx.dev.conf over the prod config baked into the image at build time.
+    # The ./nginx/ssl volume from base compose still mounts (as an empty dir) — harmless.
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
