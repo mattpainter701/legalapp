@@ -19,6 +19,7 @@ from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
+from app.routers.dev import router as dev_router
 from app.services.scheduler import LegalScheduler
 
 settings = get_settings()
@@ -113,6 +114,7 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
+app.include_router(dev_router, prefix="/api")
 
 
 # ─────────────────────────────────────────────────────

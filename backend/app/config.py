@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "noreply@legalscribe.ai"
     SLACK_WEBHOOK_URL: str = ""          # Optional: Slack incoming webhook URL
 
+    # Never set True in production — enables /dev/* endpoints
+    DEV_MODE: bool = False
+
     model_config = SettingsConfigDict(env_file=".env")
 
 
