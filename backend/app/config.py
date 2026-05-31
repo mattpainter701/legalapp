@@ -32,8 +32,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
 
+    # Primary: DeepSeek V4 Flash once released; current OpenAI-compat alias is deepseek-chat
+    # Set PRIMARY_LLM=deepseek-v4-flash in .env when V4 Flash ships
     PRIMARY_LLM: str = "deepseek-chat"
-    PREMIUM_LLM: str = "claude-3-5-sonnet-20241022"
+    # Premium: Claude Opus 4 for complex drafting tasks
+    PREMIUM_LLM: str = "claude-opus-4-8"
 
     model_config = SettingsConfigDict(env_file=".env")
 

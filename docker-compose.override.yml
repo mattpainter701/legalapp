@@ -1,0 +1,29 @@
+# Dev overrides — applied automatically by docker compose on top of docker-compose.yml
+# Hot-reload backend + frontend, expose DB/Redis for local tooling
+
+services:
+  backend:
+    volumes:
+      - ./backend:/app          # live code mount for --reload
+      - ./uploads:/app/uploads
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug"
+
+  frontend:
+    volumes:
+      - ./frontend/src:/app/src          # HMR for React
+      - ./frontend/public:/app/public
+    environment:
+      - VITE_API_URL=http://localhost/api
+
+  postgres:
+    ports:
+      - "5432:5432"    # expose for pgAdmin / DBeaver locally
+
+  redis:
+    ports:
+      - "6379:6379"    # expose for redis-cli locally
