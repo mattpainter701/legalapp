@@ -1,0 +1,43 @@
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: str
+    REDIS_URL: str = "redis://redis:6379"
+    SECRET_KEY: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+
+    MICROSOFT_CLIENT_ID: str = ""
+    MICROSOFT_CLIENT_SECRET: str = ""
+    MICROSOFT_TENANT_ID: str = "common"
+
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
+    OPENAI_API_KEY: str = ""
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
+    ANTHROPIC_API_KEY: str = ""
+
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+
+    FRONTEND_URL: str = "http://localhost:3000"
+    UPLOAD_DIR: str = "/app/uploads"
+    MAX_FILE_SIZE_MB: int = 50
+
+    RAG_TOP_K: int = 8
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIM: int = 1536
+
+    PRIMARY_LLM: str = "deepseek-chat"
+    PREMIUM_LLM: str = "claude-3-5-sonnet-20241022"
+
+    model_config = SettingsConfigDict(env_file=".env")
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
