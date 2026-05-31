@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Georgia', 'Times New Roman', serif;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Georgia', 'Times New Roman', serif;
+  }
+
+  input, textarea, button, select {
+    font-family: 'Arial', 'Helvetica', sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-[#1e3a5f] text-white px-4 py-2 rounded hover:bg-[#2e4f7a] transition-colors duration-150 font-sans text-sm font-medium;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-[#1e3a5f] px-4 py-2 rounded border border-[#1e3a5f] hover:bg-gray-50 transition-colors duration-150 font-sans text-sm font-medium;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-4;
+  }
+
+  .sidebar-item {
+    @apply flex items-center px-3 py-2 text-sm rounded cursor-pointer transition-colors duration-100;
+  }
+
+  .sidebar-item-active {
+    @apply bg-[#1e3a5f] text-white;
+  }
+
+  .sidebar-item-inactive {
+    @apply text-gray-700 hover:bg-gray-100;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* Markdown content styles */
+.prose-legal h1 { @apply text-2xl font-bold mb-4 text-[#1e3a5f]; }
+.prose-legal h2 { @apply text-xl font-bold mb-3 text-[#1e3a5f]; }
+.prose-legal h3 { @apply text-lg font-semibold mb-2 text-[#1e3a5f]; }
+.prose-legal p { @apply mb-3 leading-relaxed; }
+.prose-legal ul { @apply list-disc list-inside mb-3 space-y-1; }
+.prose-legal ol { @apply list-decimal list-inside mb-3 space-y-1; }
+.prose-legal code { @apply bg-gray-100 px-1 py-0.5 rounded text-sm font-mono; }
+.prose-legal pre { @apply bg-gray-100 p-3 rounded mb-3 overflow-x-auto; }
+.prose-legal blockquote { @apply border-l-4 border-[#1e3a5f] pl-4 italic text-gray-600 mb-3; }
+.prose-legal strong { @apply font-bold; }
+.prose-legal em { @apply italic; }
+.prose-legal a { @apply text-[#1e3a5f] underline hover:text-[#2e4f7a]; }

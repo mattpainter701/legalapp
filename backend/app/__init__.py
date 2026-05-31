@@ -1,0 +1,1 @@
+# LegalScribe AI — FastAPI Backend

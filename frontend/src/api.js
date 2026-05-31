@@ -1,0 +1,99 @@
+import axios from 'axios'
+
+const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+
+const api = axios.create({
+  baseURL: BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+// Request interceptor: attach token from localStorage
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
+// Response interceptor: handle 401 by clearing token and redirecting
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+// Auth
+export const getMe = () => api.get('/auth/me').then((r) => r.data)
+
+export const loginMicrosoft = () => {
+  window.location.href = `${BASE_URL}/auth/microsoft/login`
+}
+
+export const loginGoogle = () => {
+  window.location.href = `${BASE_URL}/auth/google/login`
+}
+
+export const logout = () => api.post('/auth/logout').then((r) => r.data)
+
+// Conversations
+export const getConversations = () =>
+  api.get('/conversations').then((r) => r.data)
+
+export const createConversation = (title) =>
+  api.post('/conversations', title ? { title } : {}).then((r) => r.data)
+
+export const getConversation = (id) =>
+  api.get(`/conversations/${id}`).then((r) => r.data)
+
+export const sendMessage = (conversationId, content, includePublic = true, usePremium = false) =>
+  api
+    .post(`/conversations/${conversationId}/messages`, {
+      content,
+      include_public: includePublic,
+      use_premium_llm: usePremium,
+    })
+    .then((r) => r.data)
+
+export const deleteConversation = (id) =>
+  api.delete(`/conversations/${id}`).then((r) => r.data)
+
+// Documents
+export const getDocuments = () =>
+  api.get('/documents').then((r) => r.data)
+
+export const uploadDocument = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api
+    .post('/documents/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data)
+}
+
+export const deleteDocument = (id) =>
+  api.delete(`/documents/${id}`).then((r) => r.data)
+
+// Admin
+export const getAdminUsers = () =>
+  api.get('/admin/users').then((r) => r.data)
+
+export const getAdminUsage = () =>
+  api.get('/admin/usage').then((r) => r.data)
+
+export const getAdminTenant = () =>
+  api.get('/admin/tenant').then((r) => r.data)
+
+export default api
