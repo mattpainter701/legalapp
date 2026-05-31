@@ -645,10 +645,11 @@ async def cold_start_interview(
 
     # Record usage
     model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
-    tokens_used = result_data.get("tokens_used", 0)
+    tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
+    tokens_out_val = result_data.get("tokens_out", result_data.get("tokens_used", 0) // 2)
     cost = calculate_cost(
-        tokens_in=tokens_used // 2,
-        tokens_out=tokens_used // 2,
+        tokens_in=tokens_in_val,
+        tokens_out=tokens_out_val,
         model=model_used,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
     )
@@ -658,9 +659,13 @@ async def cold_start_interview(
         user_id=user.id,
         conversation_id=None,
         model_used=model_used,
-        tokens_in=tokens_used // 2,
-        tokens_out=tokens_used // 2,
+        tokens_in=tokens_in_val,
+        tokens_out=tokens_out_val,
         cost_usd=cost,
+        operation_type="cold_start",
+        query_text=body.input_text[:2000] if body.input_text else None,
+        ip_address=request.client.host if request.client else None,
+        user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
     db.add(usage)
 
@@ -712,10 +717,11 @@ async def execute_skill(
 
     # Record usage
     model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
-    tokens_used = result_data.get("tokens_used", 0)
+    tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
+    tokens_out_val = result_data.get("tokens_out", result_data.get("tokens_used", 0) // 2)
     cost = calculate_cost(
-        tokens_in=tokens_used // 2,
-        tokens_out=tokens_used // 2,
+        tokens_in=tokens_in_val,
+        tokens_out=tokens_out_val,
         model=model_used,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
     )
@@ -725,9 +731,13 @@ async def execute_skill(
         user_id=user.id,
         conversation_id=None,
         model_used=model_used,
-        tokens_in=tokens_used // 2,
-        tokens_out=tokens_used // 2,
+        tokens_in=tokens_in_val,
+        tokens_out=tokens_out_val,
         cost_usd=cost,
+        operation_type="plugin_skill",
+        query_text=body.input_text[:2000] if body.input_text else None,
+        ip_address=request.client.host if request.client else None,
+        user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
     db.add(usage)
     await db.commit()

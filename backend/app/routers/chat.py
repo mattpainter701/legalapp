@@ -339,6 +339,12 @@ async def send_message(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_usd=cost,
+        operation_type="chat",
+        query_text=body.content[:2000] if body.content else None,
+        rag_chunks_retrieved=len(chunks),
+        rag_source_ids=[c["id"] for c in chunks if c.get("id")],
+        ip_address=request.client.host if request.client else None,
+        user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
     db.add(usage)
 

@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
 import stripe
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,11 +13,15 @@ from app.models.conversation import UsageRecord
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.admin import (
+    AuditLog,
+    AuditRecord,
     BillingUpdate,
     TenantInfo,
     UsageStats,
     UserList,
     UserResponse,
+    UserUsageBreakdown,
+    UserUsageRow,
 )
 
 settings = get_settings()
@@ -153,6 +157,119 @@ async def get_tenant_info(
         flat_seat_count=tenant.flat_seat_count,
         is_active=tenant.is_active,
         created_at=tenant.created_at,
+    )
+
+
+@router.get("/audit", response_model=AuditLog)
+async def get_audit_log(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    user_id: Optional[str] = Query(None),
+    operation_type: Optional[str] = Query(None),
+    start: Optional[datetime] = Query(None),
+    end: Optional[datetime] = Query(None),
+):
+    """Paginated audit log of all LLM requests for this tenant."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    filters = [UsageRecord.tenant_id == admin.tenant_id]
+    if user_id:
+        filters.append(UsageRecord.user_id == user_id)
+    if operation_type:
+        filters.append(UsageRecord.operation_type == operation_type)
+    if start:
+        filters.append(UsageRecord.created_at >= start)
+    if end:
+        filters.append(UsageRecord.created_at <= end)
+
+    total_result = await db.execute(
+        select(func.count(UsageRecord.id)).where(*filters)
+    )
+    total = total_result.scalar_one()
+
+    rows_result = await db.execute(
+        select(UsageRecord, User.email.label("user_email"))
+        .join(User, User.id == UsageRecord.user_id, isouter=True)
+        .where(*filters)
+        .order_by(UsageRecord.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    rows = rows_result.all()
+
+    records = [
+        AuditRecord(
+            id=str(rec.id),
+            user_id=str(rec.user_id),
+            user_email=email,
+            operation_type=rec.operation_type,
+            model_used=rec.model_used,
+            tokens_in=rec.tokens_in,
+            tokens_out=rec.tokens_out,
+            cost_usd=float(rec.cost_usd) if rec.cost_usd is not None else None,
+            query_text=rec.query_text,
+            rag_chunks_retrieved=rec.rag_chunks_retrieved,
+            rag_source_ids=rec.rag_source_ids,
+            ip_address=rec.ip_address,
+            user_agent=rec.user_agent,
+            created_at=rec.created_at,
+        )
+        for rec, email in rows
+    ]
+
+    return AuditLog(records=records, total=total, page=page, limit=limit)
+
+
+@router.get("/usage/by-user", response_model=UserUsageBreakdown)
+async def get_usage_by_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+):
+    """Per-user token and cost breakdown for the given window (default 30 days)."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    period_end = datetime.now(timezone.utc)
+    period_start = period_end - timedelta(days=days)
+
+    rows_result = await db.execute(
+        select(
+            UsageRecord.user_id,
+            User.email.label("user_email"),
+            func.count(UsageRecord.id).label("request_count"),
+            func.coalesce(func.sum(UsageRecord.tokens_in), 0).label("total_tokens_in"),
+            func.coalesce(func.sum(UsageRecord.tokens_out), 0).label("total_tokens_out"),
+            func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("total_cost_usd"),
+        )
+        .join(User, User.id == UsageRecord.user_id, isouter=True)
+        .where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+            UsageRecord.created_at <= period_end,
+        )
+        .group_by(UsageRecord.user_id, User.email)
+        .order_by(func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out).desc())
+    )
+    rows = rows_result.all()
+
+    return UserUsageBreakdown(
+        users=[
+            UserUsageRow(
+                user_id=str(row.user_id),
+                user_email=row.user_email or "unknown",
+                request_count=int(row.request_count),
+                total_tokens_in=int(row.total_tokens_in),
+                total_tokens_out=int(row.total_tokens_out),
+                total_cost_usd=float(row.total_cost_usd),
+            )
+            for row in rows
+        ],
+        period_start=period_start,
+        period_end=period_end,
     )
 
 

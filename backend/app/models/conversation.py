@@ -92,6 +92,13 @@ class UsageRecord(Base):
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    # Audit fields
+    operation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rag_chunks_retrieved: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rag_source_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

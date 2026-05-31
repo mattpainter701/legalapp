@@ -212,5 +212,7 @@ Every output requires attorney review. This is not legal advice.
             "flags": [],
             "requires_attorney_review": True,
             "tokens_used": tokens_in + tokens_out,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
             "model_used": model_used,
         }
