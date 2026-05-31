@@ -52,3 +52,6 @@ services:
     restart: unless-stopped
     environment:
       - DOMAIN=${DOMAIN}
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl:ro           # cert files (written by renew-cert.sh)
+      - ./nginx/webroot:/var/www/certbot:ro     # ACME challenge files (written by certbot)

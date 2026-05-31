@@ -24,6 +24,12 @@ Thumbs.db
 # Uploads (runtime data)
 uploads/
 
+# SSL certs and Let's Encrypt data — never commit private keys
+nginx/ssl/*.pem
+nginx/ssl/*.key
+nginx/letsencrypt/
+nginx/webroot/
+
 # Backups / logs
 *.dump
 *.dump.gz
