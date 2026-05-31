@@ -1,0 +1,188 @@
+"""Pydantic schemas for the legal practice plugin system."""
+
+from datetime import date, datetime
+from typing import List, Optional
+
+from pydantic import BaseModel
+
+
+# ── Practice Profiles ─────────────────────────────────────────────────────────
+
+class PracticeProfileUpsert(BaseModel):
+    profile_content: str
+    is_complete: bool = False
+
+
+class PracticeProfileResponse(BaseModel):
+    id: str
+    plugin_name: str
+    profile_content: str
+    is_complete: bool
+    setup_step: int
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Plugin Skill Execution ────────────────────────────────────────────────────
+
+class SkillRequest(BaseModel):
+    skill: str                          # e.g. "vendor-agreement-review"
+    input_text: str                     # Contract text, question, etc.
+    context: Optional[dict] = None     # Extra structured context
+    use_premium: bool = False
+
+
+class CitationTag(BaseModel):
+    text: str
+    tag: str    # "settled", "verify", "model-knowledge", "web-search"
+    source: Optional[str] = None
+
+
+class SkillFinding(BaseModel):
+    category: str
+    legal_risk: str          # "critical", "high", "medium", "low"
+    business_friction: str   # "critical", "high", "medium", "low"
+    finding: str
+    redline: Optional[str] = None
+    fallback: Optional[str] = None
+    citations: List[CitationTag] = []
+    requires_verify: bool = False
+
+
+class SkillResponse(BaseModel):
+    skill: str
+    plugin: str
+    memo: str              # Full formatted markdown output with work-product header
+    findings: List[SkillFinding] = []
+    gates_triggered: List[str] = []     # Hard gate messages
+    flags: List[str] = []               # Soft warning flags
+    requires_attorney_review: bool = True
+    tokens_used: int = 0
+    model_used: str
+
+
+# ── Matters ───────────────────────────────────────────────────────────────────
+
+class MatterCreate(BaseModel):
+    matter_name: str
+    matter_type: str
+    counterparty: str
+    jurisdiction: str
+    role: str
+    source: str
+
+
+class MatterResponse(BaseModel):
+    id: str
+    slug: str
+    matter_name: str
+    matter_type: str
+    role: str
+    counterparty: str
+    jurisdiction: str
+    status: str
+    risk_level: Optional[str]
+    materiality: Optional[str]
+    conflicts_status: str
+    legal_hold_issued: bool
+    is_closed: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MatterUpdate(BaseModel):
+    matter_name: Optional[str] = None
+    matter_type: Optional[str] = None
+    counterparty: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    role: Optional[str] = None
+    source: Optional[str] = None
+    status: Optional[str] = None
+    stage: Optional[str] = None
+    risk_level: Optional[str] = None
+    materiality: Optional[str] = None
+    exposure_range: Optional[str] = None
+    outside_counsel: Optional[dict] = None
+    internal_owners: Optional[dict] = None
+    conflicts_status: Optional[str] = None
+    conflicts_override_reason: Optional[str] = None
+    legal_hold_issued: Optional[bool] = None
+    legal_hold_details: Optional[dict] = None
+    key_dates: Optional[dict] = None
+    initial_posture: Optional[str] = None
+    decision: Optional[str] = None
+    is_closed: Optional[bool] = None
+    outcome: Optional[str] = None
+    final_cost: Optional[str] = None
+
+
+class MatterEventCreate(BaseModel):
+    event_type: str
+    title: str
+    content: str
+
+
+class MatterEventResponse(BaseModel):
+    id: str
+    event_type: str
+    title: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Renewals ──────────────────────────────────────────────────────────────────
+
+class RenewalCreate(BaseModel):
+    contract_name: str
+    vendor: str
+    renewal_date: date
+    notice_deadline: Optional[date] = None
+    contract_value_annual: Optional[float] = None
+    auto_renewal: bool = True
+    business_owner: Optional[str] = None
+    business_owner_email: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RenewalResponse(BaseModel):
+    id: str
+    contract_name: str
+    vendor: str
+    renewal_date: date
+    notice_deadline: Optional[date]
+    contract_value_annual: Optional[float]
+    auto_renewal: bool
+    status: str
+    days_until_renewal: int
+    urgency: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RenewalUpdate(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# ── Plugin Listing ────────────────────────────────────────────────────────────
+
+class PluginInfo(BaseModel):
+    plugin_name: str
+    display_name: str
+    skills: List[str]
+    has_profile: bool
+    profile_is_complete: bool
+
+
+class PluginListResponse(BaseModel):
+    plugins: List[PluginInfo]

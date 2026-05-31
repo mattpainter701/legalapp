@@ -96,4 +96,26 @@ export const getAdminUsage = () =>
 export const getAdminTenant = () =>
   api.get('/admin/tenant').then((r) => r.data)
 
+// ── Plugin API ────────────────────────────────────────────────────────────────
+export const getPlugins = () => api.get('/plugins').then((r) => r.data)
+export const getPluginProfile = (plugin) => api.get(`/plugins/${plugin}/profile`).then((r) => r.data)
+export const savePluginProfile = (plugin, data) => api.put(`/plugins/${plugin}/profile`, data).then((r) => r.data)
+export const runColdStart = (plugin, message, step) =>
+  api.post(`/plugins/${plugin}/cold-start`, { message, step }).then((r) => r.data)
+export const executeSkill = (plugin, skill, data) =>
+  api.post(`/plugins/${plugin}/${skill}`, data).then((r) => r.data)
+
+// Matters
+export const getMatters = () => api.get('/plugins/litigation/matters').then((r) => r.data)
+export const createMatter = (data) => api.post('/plugins/litigation/matters', data).then((r) => r.data)
+export const getMatter = (id) => api.get(`/plugins/litigation/matters/${id}`).then((r) => r.data)
+export const updateMatter = (id, data) => api.patch(`/plugins/litigation/matters/${id}`, data).then((r) => r.data)
+export const addMatterEvent = (id, data) => api.post(`/plugins/litigation/matters/${id}/events`, data).then((r) => r.data)
+
+// Renewals
+export const getRenewals = () => api.get('/plugins/commercial/renewals').then((r) => r.data)
+export const createRenewal = (data) => api.post('/plugins/commercial/renewals', data).then((r) => r.data)
+export const updateRenewal = (id, data) => api.patch(`/plugins/commercial/renewals/${id}`, data).then((r) => r.data)
+export const deleteRenewal = (id) => api.delete(`/plugins/commercial/renewals/${id}`).then((r) => r.data)
+
 export default api
