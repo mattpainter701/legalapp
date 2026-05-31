@@ -15,6 +15,7 @@ from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
 from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
+from app.routers.plugins import router as plugins_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
+app.include_router(plugins_router, prefix="/api")
 
 
 # ─────────────────────────────────────────────────────

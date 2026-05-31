@@ -4,6 +4,11 @@ import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
 import AdminPage from './pages/AdminPage'
 import AuthCallback from './pages/AuthCallback'
+import PluginsPage from './pages/PluginsPage'
+import PluginPage from './pages/PluginPage'
+import MatterPortfolioPage from './pages/MatterPortfolioPage'
+import MatterDetailPage from './pages/MatterDetailPage'
+import RenewalTrackerPage from './pages/RenewalTrackerPage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -130,6 +135,46 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <AdminPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins"
+          element={
+            <ProtectedRoute>
+              <PluginsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/litigation/matters"
+          element={
+            <ProtectedRoute>
+              <MatterPortfolioPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/litigation/matters/:id"
+          element={
+            <ProtectedRoute>
+              <MatterDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/commercial/renewals"
+          element={
+            <ProtectedRoute>
+              <RenewalTrackerPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/:pluginName"
+          element={
+            <ProtectedRoute>
+              <PluginPage />
             </ProtectedRoute>
           }
         />

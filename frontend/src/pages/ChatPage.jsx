@@ -79,6 +79,13 @@ export default function ChatPage() {
         }
       })
       .catch(console.error)
+
+    // Check for pending message from plugin skill output
+    const pending = sessionStorage.getItem('pending_chat_message')
+    if (pending) {
+      setInputValue(pending)
+      sessionStorage.removeItem('pending_chat_message')
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadConversation = useCallback(async (id) => {

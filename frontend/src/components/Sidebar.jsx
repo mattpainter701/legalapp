@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import FileUpload from './FileUpload'
 import { deleteDocument, deleteConversation } from '../api'
@@ -120,6 +121,8 @@ export default function Sidebar({
   user,
   onLogout,
 }) {
+  const navigate = useNavigate()
+
   const handleDeleteConv = async (id) => {
     try {
       await deleteConversation(id)
@@ -162,6 +165,15 @@ export default function Sidebar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
           New Conversation
+        </button>
+        <button
+          onClick={() => navigate('/plugins')}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-white border border-[#1e3a5f] text-[#1e3a5f] text-sm rounded-lg hover:bg-blue-50 transition-colors font-sans"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          Practice Plugins
         </button>
       </div>
 
