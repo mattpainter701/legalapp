@@ -40,12 +40,12 @@ for i in "${!JETSONS[@]}"; do
        --total-workers 3 \
        --db-url '$DATABASE_URL' \
        --batch-size $BATCH_SIZE \
-       >> /var/log/legalscribe/jetson_worker_$i.log 2>&1 &
+       >> /var/log/clarity-legal/jetson_worker_$i.log 2>&1 &
     echo Worker $i PID: \$!" &
 done
 
 wait
 echo "All Jetson workers launched. Tail logs with:"
 for i in "${!JETSONS[@]}"; do
-  echo "  ssh $JETSON_USER@${JETSONS[$i]} tail -f /var/log/legalscribe/jetson_worker_$i.log"
+  echo "  ssh $JETSON_USER@${JETSONS[$i]} tail -f /var/log/clarity-legal/jetson_worker_$i.log"
 done

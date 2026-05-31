@@ -80,7 +80,7 @@ jobs:
         run: |
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-type: application/json' \
-            -d "{\"text\":\"✅ LegalScribe AI deployed successfully — <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|$(git log --oneline -1 --format='%s')>\"}"
+            -d "{\"text\":\"✅ Clarity Legal deployed successfully — <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|$(git log --oneline -1 --format='%s')>\"}"
 
       - name: Notify Slack (failure)
         if: failure() && env.SLACK_WEBHOOK_URL != ''
@@ -89,4 +89,4 @@ jobs:
         run: |
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-type: application/json' \
-            -d "{\"text\":\"❌ LegalScribe AI deploy FAILED — check <https://github.com/${{ github.repository }}/actions|Actions>\"}"
+            -d "{\"text\":\"❌ Clarity Legal deploy FAILED — check <https://github.com/${{ github.repository }}/actions|Actions>\"}"

@@ -101,7 +101,7 @@ export default function ChatMessage({ message }) {
               />
             </svg>
           </div>
-          <span className="text-xs text-gray-500 font-sans">LegalScribe AI</span>
+          <span className="text-xs text-gray-500 font-sans">Clarity Legal</span>
           {timestamp && (
             <span className="text-xs text-gray-400">{timestamp}</span>
           )}

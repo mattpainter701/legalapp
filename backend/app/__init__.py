@@ -1,1 +1,1 @@
-# LegalScribe AI — FastAPI Backend
+# Clarity Legal — FastAPI Backend

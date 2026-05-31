@@ -155,7 +155,7 @@ export default function Sidebar({
               />
             </svg>
           </div>
-          <span className="font-serif font-bold text-[#1e3a5f] text-sm">LegalScribe AI</span>
+          <span className="font-serif font-bold text-[#1e3a5f] text-sm">Clarity Legal</span>
         </div>
         <button
           onClick={onNewConversation}

@@ -26,7 +26,7 @@ function TypingIndicator() {
               />
             </svg>
           </div>
-          <span className="text-xs text-gray-500 font-sans">LegalScribe AI</span>
+          <span className="text-xs text-gray-500 font-sans">Clarity Legal</span>
         </div>
         <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm inline-block">
           <div className="flex gap-1.5 items-center h-4">
@@ -326,7 +326,7 @@ export default function ChatPage() {
                 </svg>
               </div>
               <h3 className="font-serif text-xl font-semibold text-[#1e3a5f] mb-2">
-                Welcome to LegalScribe AI
+                Welcome to Clarity Legal
               </h3>
               <p className="text-gray-500 text-sm max-w-md leading-relaxed">
                 Ask a legal research question, request a document draft, or analyze a case.
@@ -404,7 +404,7 @@ export default function ChatPage() {
             </button>
           </div>
           <p className="mt-2 text-xs text-gray-400 font-sans">
-            LegalScribe AI may produce inaccurate information. Always verify citations independently.
+            Clarity Legal may produce inaccurate information. Always verify citations independently.
           </p>
         </div>
       </div>

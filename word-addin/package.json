@@ -1,7 +1,7 @@
 {
-  "name": "legalscribe-word-addin",
+  "name": "clarity-legal-word-addin",
   "version": "0.1.0",
-  "description": "LegalScribe AI Word Add-in task pane",
+  "description": "Clarity Legal Word Add-in task pane",
   "scripts": {
     "start": "npx http-server . -p 3001 --ssl --cert localhost.crt --key localhost.key"
   },

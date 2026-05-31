@@ -1,5 +1,5 @@
 """
-Test fixtures for LegalScribe AI backend.
+Test fixtures for Clarity Legal backend.
 """
 
 import asyncio

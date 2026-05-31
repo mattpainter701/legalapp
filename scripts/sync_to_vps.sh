@@ -25,7 +25,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-LOG_DIR="/var/log/legalscribe"
+LOG_DIR="/var/log/clarity-legal"
 LOG_FILE="$LOG_DIR/sync_$(date +%Y%m%d_%H%M%S).log"
 DUMP_FILE="/tmp/public_chunks_$(date +%Y%m%d_%H%M%S).dump"
 PUBLIC_TENANT_ID="00000000-0000-0000-0000-000000000001"

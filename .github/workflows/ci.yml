@@ -1,5 +1,5 @@
 # =============================================================================
-# CI Pipeline — LegalScribe AI
+# CI Pipeline — Clarity Legal
 # =============================================================================
 # Runs on every pull request targeting main, and on every push to main.
 #

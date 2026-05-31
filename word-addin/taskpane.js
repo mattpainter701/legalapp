@@ -1,5 +1,5 @@
 /**
- * LegalScribe AI - Word Add-in Task Pane
+ * Clarity Legal - Word Add-in Task Pane
  * Vanilla JS implementation for Office.js
  */
 
@@ -428,7 +428,7 @@ function openAuthPopup(url) {
   var top = (screen.height - height) / 2;
   var popup = window.open(
     url,
-    'LegalScribeAuth',
+    'Clarity LegalAuth',
     'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top
   );
 

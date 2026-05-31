@@ -268,7 +268,7 @@ def run_worker(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Jetson Orin embedding worker for LegalScribe AI"
+        description="Jetson Orin embedding worker for Clarity Legal"
     )
     parser.add_argument(
         "--worker-id",
@@ -324,7 +324,7 @@ def main():
         print("ERROR: --db-url or DATABASE_URL env var required.")
         sys.exit(1)
 
-    print(f"=== LegalScribe AI Jetson Embed Worker ===")
+    print(f"=== Clarity Legal Jetson Embed Worker ===")
     print(f"  Worker: {args.worker_id} of {args.total_workers}")
     print(f"  Model:  {args.model}")
     print(f"  Batch:  {args.batch_size}")

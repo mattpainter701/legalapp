@@ -81,7 +81,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif tracking-tight">
-            LegalScribe AI
+            Clarity Legal
           </h1>
           <p className="mt-2 text-gray-500 text-sm leading-relaxed">
             AI-powered legal research and drafting assistant

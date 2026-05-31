@@ -33,9 +33,9 @@ fi
 DATABASE_URL="${DATABASE_URL:-}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 COURTLISTENER_URL="${COURTLISTENER_URL:-https://www.courtlistener.com/api/bulk-data/}"
-DOWNLOAD_DIR="${DOWNLOAD_DIR:-/tmp/legalscribe_downloads}"
+DOWNLOAD_DIR="${DOWNLOAD_DIR:-/tmp/clarity_legal_downloads}"
 SCRIPTS_DIR="${SCRIPTS_DIR:-$SCRIPT_DIR}"
-LOG_DIR="${LOG_DIR:-/var/log/legalscribe}"
+LOG_DIR="${LOG_DIR:-/var/log/clarity-legal}"
 NOTIFY_EMAIL="${NOTIFY_EMAIL:-}"
 SMTP_HOST="${SMTP_HOST:-localhost}"
 
@@ -76,8 +76,8 @@ send_error_notification() {
     if [ -n "$NOTIFY_EMAIL" ] && command -v sendmail &>/dev/null; then
         {
             echo "To: $NOTIFY_EMAIL"
-            echo "From: legalscribe-noreply@localhost"
-            echo "Subject: [LegalScribe] $subject"
+            echo "From: clarity-legal-noreply@localhost"
+            echo "Subject: [Clarity Legal] $subject"
             echo ""
             echo "$body"
             echo ""
@@ -107,7 +107,7 @@ trap cleanup EXIT
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-log_info "=== LegalScribe AI Daily Update: $TODAY ==="
+log_info "=== Clarity Legal Daily Update: $TODAY ==="
 
 # Create directories
 mkdir -p "$LOG_DIR" "$DOWNLOAD_DIR"

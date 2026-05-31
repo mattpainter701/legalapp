@@ -68,7 +68,7 @@ _BASE_HTML = """\
 <div class="wrapper">
   {content}
   <div class="footer">
-    LegalScribe AI &bull; This is an automated notification &bull;
+    Clarity Legal &bull; This is an automated notification &bull;
     {timestamp}
   </div>
 </div>
@@ -127,7 +127,7 @@ def _build_renewal_alert_html(alerts: List[dict]) -> str:
 
     content = f"""
     <div class="header">
-      <h1>LegalScribe AI &mdash; Renewal Alerts</h1>
+      <h1>Clarity Legal &mdash; Renewal Alerts</h1>
       <p>Contracts requiring attention within the next 90 days</p>
     </div>
     <div class="body">
@@ -168,7 +168,7 @@ def _build_agent_digest_html(agent_name: str, digest_markdown: str) -> str:
 
     content = f"""
     <div class="header">
-      <h1>LegalScribe AI &mdash; {agent_name}</h1>
+      <h1>Clarity Legal &mdash; {agent_name}</h1>
       <p>Automated digest &bull; Generated {now_str}</p>
     </div>
     <div class="body">
@@ -222,7 +222,7 @@ def _build_oc_status_html(
 
     content = f"""
     <div class="header">
-      <h1>LegalScribe AI &mdash; Weekly Portfolio Status</h1>
+      <h1>Clarity Legal &mdash; Weekly Portfolio Status</h1>
       <p>{tenant_name} &bull; {now_str}</p>
     </div>
     <div class="body">
@@ -413,7 +413,7 @@ class EmailService:
             logger.info("send_renewal_alert: no alerts to send to %s", recipient)
             return True
 
-        subject = f"LegalScribe AI — {len(alerts)} Contract Renewal Alert(s)"
+        subject = f"Clarity Legal — {len(alerts)} Contract Renewal Alert(s)"
         html_body = _build_renewal_alert_html(alerts)
         text_body = self._renewal_text_fallback(alerts)
 
@@ -426,7 +426,7 @@ class EmailService:
         Send an agent digest email.
         digest_html may be markdown text — it will be rendered to HTML.
         """
-        subject = f"LegalScribe AI — {agent_name} Weekly Digest"
+        subject = f"Clarity Legal — {agent_name} Weekly Digest"
         html_body = _build_agent_digest_html(agent_name, digest_html)
         text_body = f"{agent_name} Weekly Digest\n\n{digest_html}"
 
@@ -443,7 +443,7 @@ class EmailService:
         stale_matters: List[dict],
     ) -> bool:
         """Send weekly OC portfolio status email."""
-        subject = f"LegalScribe AI — Weekly Portfolio Status: {tenant_name}"
+        subject = f"Clarity Legal — Weekly Portfolio Status: {tenant_name}"
         html_body = _build_oc_status_html(
             tenant_name, total_active, by_risk, by_type,
             upcoming_deadlines, stale_matters
@@ -497,7 +497,7 @@ class EmailService:
 
     @staticmethod
     def _renewal_text_fallback(alerts: List[dict]) -> str:
-        lines = ["LegalScribe AI — Renewal Alerts\n"]
+        lines = ["Clarity Legal — Renewal Alerts\n"]
         for a in alerts:
             lines.append(
                 f"  {a.get('contract_name', '?')} / {a.get('vendor', '?')} "

@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="LegalScribe AI API",
+    title="Clarity Legal API",
     version="1.0.0",
     description="Multi-tenant legal AI SaaS backend",
     lifespan=lifespan,

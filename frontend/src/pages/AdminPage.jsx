@@ -256,7 +256,7 @@ export default function AdminPage() {
               />
             </svg>
           </div>
-          <span className="font-serif font-bold">LegalScribe AI</span>
+          <span className="font-serif font-bold">Clarity Legal</span>
           <span className="text-white/40 mx-1">/</span>
           <span className="text-white/80 text-sm font-sans">Admin Panel</span>
         </div>

@@ -107,7 +107,7 @@ export default function PluginsPage() {
             Back to Chat
           </button>
           <span className="text-blue-300">|</span>
-          <span className="font-serif font-semibold text-lg">LegalScribe AI</span>
+          <span className="font-serif font-semibold text-lg">Clarity Legal</span>
         </div>
       </div>
 

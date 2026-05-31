@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
-    EMAIL_FROM: str = "noreply@legalscribe.ai"
+    EMAIL_FROM: str = "noreply@clarity.legal"
     SLACK_WEBHOOK_URL: str = ""          # Optional: Slack incoming webhook URL
 
     # Never set True in production — enables /dev/* endpoints

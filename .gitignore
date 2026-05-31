@@ -33,4 +33,4 @@ nginx/webroot/
 # Backups / logs
 *.dump
 *.dump.gz
-/var/log/legalscribe/
+/var/log/clarity-legal/

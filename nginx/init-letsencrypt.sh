@@ -8,7 +8,7 @@
 #   bash nginx/init-letsencrypt.sh <domain> <email>
 #
 # Example:
-#   bash nginx/init-letsencrypt.sh app.legalscribeai.com admin@legalscribeai.com
+#   bash nginx/init-letsencrypt.sh app.platform.clarity.legal admin@platform.clarity.legal
 #
 # Prerequisites:
 #   - Docker + Docker Compose installed on the VPS
