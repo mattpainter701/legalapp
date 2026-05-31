@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
 
     FRONTEND_URL: str = "http://localhost:3000"
+    # OAuth callbacks must point to the backend, not the frontend.
+    # In prod behind nginx both URLs share the same domain so set this to
+    # https://yourdomain.com. In dev set to http://localhost:8000.
+    BACKEND_URL: str = "http://localhost:8000"
     UPLOAD_DIR: str = "/app/uploads"
     MAX_FILE_SIZE_MB: int = 50
 
