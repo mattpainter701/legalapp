@@ -3,36 +3,29 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import { getMatter, updateMatter, addMatterEvent } from '../api'
+import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock } from 'lucide-react'
 
 const EVENT_TYPES = [
-  'filing',
-  'hearing',
-  'deposition',
-  'settlement_discussion',
-  'correspondence',
-  'internal_review',
-  'court_order',
-  'discovery',
-  'other',
+  'filing', 'hearing', 'deposition', 'settlement_discussion',
+  'correspondence', 'internal_review', 'court_order', 'discovery', 'other',
 ]
-
 const RISK_OPTIONS = ['critical', 'high', 'medium', 'low']
 const STATUS_OPTIONS = ['active', 'threatened', 'closed', 'settled', 'dismissed']
 
 function EventTypeBadge({ type }) {
   const colors = {
-    filing: 'bg-blue-100 text-blue-800',
-    hearing: 'bg-purple-100 text-purple-800',
-    deposition: 'bg-indigo-100 text-indigo-800',
-    settlement_discussion: 'bg-green-100 text-green-800',
-    correspondence: 'bg-gray-100 text-gray-700',
-    internal_review: 'bg-yellow-100 text-yellow-800',
-    court_order: 'bg-red-100 text-red-800',
-    discovery: 'bg-orange-100 text-orange-800',
-    other: 'bg-gray-100 text-gray-600',
+    filing: 'bg-blue-100 text-blue-800 border-blue-200',
+    hearing: 'bg-purple-100 text-purple-800 border-purple-200',
+    deposition: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    settlement_discussion: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+    correspondence: 'bg-brand-bg-soft text-brand-ink-2 border-brand-line',
+    internal_review: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+    court_order: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+    discovery: 'bg-orange-100 text-orange-800 border-orange-200',
+    other: 'bg-brand-bg-soft text-brand-muted border-brand-line',
   }
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium font-sans ${colors[type] || 'bg-gray-100 text-gray-600'}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider font-sans border ${colors[type] || colors.other}`}>
       {type?.replace(/_/g, ' ') || 'other'}
     </span>
   )
@@ -40,39 +33,40 @@ function EventTypeBadge({ type }) {
 
 function RiskBadge({ level }) {
   const cfg = {
-    critical: 'bg-red-100 text-red-800',
-    high: 'bg-orange-100 text-orange-800',
-    medium: 'bg-amber-100 text-amber-800',
-    low: 'bg-green-100 text-green-800',
-  }[level?.toLowerCase()] || 'bg-gray-100 text-gray-600'
-  const icons = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' }
+    critical: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+    high: 'bg-orange-100 text-orange-800 border-orange-200',
+    medium: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+    low: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+  }[level?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium font-sans ${cfg}`}>
-      {icons[level?.toLowerCase()]} {level || '—'}
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide font-sans border ${cfg}`}>
+      {level || '—'}
     </span>
   )
 }
 
 function StatusBadge({ status }) {
   const cfg = {
-    active: 'bg-green-100 text-green-800',
-    threatened: 'bg-amber-100 text-amber-800',
-    closed: 'bg-gray-100 text-gray-600',
-    settled: 'bg-blue-100 text-blue-800',
-    dismissed: 'bg-gray-100 text-gray-500',
-  }[status?.toLowerCase()] || 'bg-gray-100 text-gray-600'
+    active: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+    threatened: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+    closed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+    settled: 'bg-blue-50 text-blue-700 border-blue-200',
+    dismissed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+  }[status?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
   return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-sm font-medium font-sans ${cfg}`}>
+    <span className={`inline-flex items-center px-3 py-1 rounded-full text-[13px] font-semibold capitalize font-sans border ${cfg}`}>
       {status || '—'}
     </span>
   )
 }
 
-function Field({ label, children }) {
+function Field({ label, children, bold = false }) {
   return (
-    <div>
-      <dt className="text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">{label}</dt>
-      <dd className="text-sm text-gray-800 font-sans">{children || <span className="text-gray-400">—</span>}</dd>
+    <div className="py-3 border-b border-brand-line/50 last:border-0">
+      <dt className="text-[11px] font-bold text-brand-muted font-sans uppercase tracking-widest mb-1.5">{label}</dt>
+      <dd className={`text-[14px] font-sans ${bold ? 'font-semibold text-brand-ink' : 'text-brand-ink-2'}`}>
+        {children || <span className="text-brand-line-2">—</span>}
+      </dd>
     </div>
   )
 }
@@ -84,14 +78,10 @@ export default function MatterDetailPage() {
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-
-  // Inline editing
   const [editing, setEditing] = useState(false)
   const [editData, setEditData] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
-
-  // Add event form
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [newEvent, setNewEvent] = useState({ event_type: 'other', title: '', content: '' })
   const [addingEvent, setAddingEvent] = useState(false)
@@ -104,10 +94,7 @@ export default function MatterDetailPage() {
         setEvents(data.events || [])
         setEditData(data.matter || data)
       })
-      .catch((err) => {
-        setError('Failed to load matter.')
-        console.error(err)
-      })
+      .catch(() => setError('Failed to load matter.'))
       .finally(() => setLoading(false))
   }, [id])
 
@@ -118,7 +105,7 @@ export default function MatterDetailPage() {
       const updated = await updateMatter(id, editData)
       setMatter(updated.matter || updated)
       setEditing(false)
-    } catch (err) {
+    } catch {
       setSaveError('Failed to save changes.')
     } finally {
       setSaving(false)
@@ -134,7 +121,7 @@ export default function MatterDetailPage() {
       setEvents((prev) => [...prev, result.event || result])
       setNewEvent({ event_type: 'other', title: '', content: '' })
       setShowAddEvent(false)
-    } catch (err) {
+    } catch {
       setAddEventError('Failed to add event.')
     } finally {
       setAddingEvent(false)
@@ -143,20 +130,21 @@ export default function MatterDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="w-8 h-8 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center min-h-screen bg-brand-bg">
+        <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   if (error || !matter) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center">
-          <p className="text-red-600 font-sans mb-4">{error || 'Matter not found.'}</p>
+      <div className="flex items-center justify-center min-h-screen bg-brand-bg">
+        <div className="text-center bg-brand-surface p-10 rounded-2xl border border-brand-line shadow-sm max-w-md w-full mx-4">
+          <Landmark size={32} className="mx-auto text-brand-rose mb-4" strokeWidth={1.5} />
+          <p className="text-brand-ink font-serif font-bold text-xl mb-4">{error || 'Matter not found.'}</p>
           <button
             onClick={() => navigate('/plugins/litigation/matters')}
-            className="text-[#1e3a5f] font-sans text-sm hover:underline"
+            className="text-brand-surface bg-brand-ink px-5 py-2.5 rounded-lg font-sans font-medium text-sm hover:bg-brand-ink-2 transition-colors w-full"
           >
             Back to Portfolio
           </button>
@@ -166,289 +154,165 @@ export default function MatterDetailPage() {
   }
 
   const displayMatter = editing ? editData : matter
+  const inputClasses = "w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
+  const labelClasses = "block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5"
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Top nav */}
-      <div className="bg-[#1e3a5f] text-white px-6 py-4 flex items-center gap-3">
-        <button
-          onClick={() => navigate('/plugins/litigation/matters')}
-          className="flex items-center gap-1.5 text-blue-200 hover:text-white transition-colors text-sm font-sans"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          Matter Portfolio
-        </button>
-        <span className="text-blue-300">|</span>
-        <span className="font-serif font-semibold truncate">{matter.matter_name || 'Matter Detail'}</span>
+    <div className="min-h-screen bg-brand-bg">
+      <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-4">
+          <button onClick={() => navigate('/plugins/litigation/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink transition-colors text-sm font-sans font-medium">
+            <ArrowLeft size={16} /> Matter Portfolio
+          </button>
+          <div className="h-4 w-px bg-brand-line"></div>
+          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight truncate max-w-xs">{matter.matter_name || 'Matter Detail'}</span>
+        </div>
+        <div className="flex gap-3">
+          {editing ? (
+            <>
+              <button onClick={() => { setEditing(false); setEditData(matter) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-all flex items-center gap-2">
+                <X size={16} /> Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 transition-all flex items-center gap-2">
+                {saving ? 'Saving...' : <><Check size={16} /> Save</>}
+              </button>
+            </>
+          ) : (
+            <button onClick={() => setEditing(true)} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-all flex items-center gap-2">
+              <FileEdit size={16} /> Edit Matter
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Matter header */}
-        <div className="flex items-start justify-between mb-6">
-          <div className="flex items-start gap-4">
-            <div>
-              <h1 className="font-serif text-2xl font-bold text-[#1e3a5f]">
-                {matter.matter_name || 'Untitled Matter'}
-              </h1>
-              <div className="flex items-center gap-2 mt-2">
-                <StatusBadge status={matter.status} />
-                <RiskBadge level={matter.risk_level} />
-              </div>
+      <div className="max-w-[1200px] mx-auto px-8 py-10">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-10">
+          <div>
+            <h1 className="font-serif text-4xl font-bold text-brand-ink tracking-tight mb-4">{matter.matter_name || 'Untitled Matter'}</h1>
+            <div className="flex items-center gap-3">
+              <StatusBadge status={matter.status} />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-line-2"></div>
+              <RiskBadge level={matter.risk_level} />
             </div>
-          </div>
-          <div className="flex gap-2">
-            {editing ? (
-              <>
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="px-4 py-2 bg-[#1e3a5f] text-white text-sm font-sans font-medium rounded-lg hover:bg-[#2e4f7a] disabled:opacity-40 transition-colors"
-                >
-                  {saving ? 'Saving…' : 'Save Changes'}
-                </button>
-                <button
-                  onClick={() => { setEditing(false); setEditData(matter) }}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-sans font-medium rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => setEditing(true)}
-                className="px-4 py-2 border border-[#1e3a5f] text-[#1e3a5f] text-sm font-sans font-medium rounded-lg hover:bg-blue-50 transition-colors"
-              >
-                Edit Matter
-              </button>
-            )}
           </div>
         </div>
 
-        {saveError && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4 text-red-700 text-sm font-sans">
-            {saveError}
-          </div>
-        )}
+        {saveError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-8 text-brand-rose text-sm font-sans">{saveError}</div>}
 
-        {/* Two-column layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Matter details */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="font-serif font-semibold text-[#1e3a5f] text-base mb-4">Matter Details</h2>
-
-            {editing ? (
-              <div className="space-y-4">
-                {[
-                  { key: 'matter_name', label: 'Matter Name', type: 'text' },
-                  { key: 'matter_type', label: 'Matter Type', type: 'text' },
-                  { key: 'counterparty', label: 'Counterparty', type: 'text' },
-                  { key: 'jurisdiction', label: 'Jurisdiction', type: 'text' },
-                  { key: 'assigned_attorney', label: 'Assigned Attorney', type: 'text' },
-                  { key: 'business_unit', label: 'Business Unit', type: 'text' },
-                  { key: 'next_deadline', label: 'Next Deadline', type: 'date' },
-                  { key: 'estimated_exposure', label: 'Estimated Exposure', type: 'text' },
-                ].map(({ key, label, type }) => (
-                  <div key={key}>
-                    <label className="block text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">
-                      {label}
-                    </label>
-                    <input
-                      type={type}
-                      value={editData[key] || ''}
-                      onChange={(e) => setEditData((prev) => ({ ...prev, [key]: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                    />
-                  </div>
-                ))}
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">
-                    Risk Level
-                  </label>
-                  <select
-                    value={editData.risk_level || 'medium'}
-                    onChange={(e) => setEditData((prev) => ({ ...prev, risk_level: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  >
-                    {RISK_OPTIONS.map((r) => (
-                      <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">
-                    Status
-                  </label>
-                  <select
-                    value={editData.status || 'active'}
-                    onChange={(e) => setEditData((prev) => ({ ...prev, status: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  >
-                    {STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">
-                    Summary
-                  </label>
-                  <textarea
-                    value={editData.summary || ''}
-                    onChange={(e) => setEditData((prev) => ({ ...prev, summary: e.target.value }))}
-                    rows={4}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent resize-none"
-                  />
-                </div>
-              </div>
-            ) : (
-              <dl className="space-y-4">
-                <Field label="Matter Type">{displayMatter.matter_type}</Field>
-                <Field label="Counterparty">{displayMatter.counterparty}</Field>
-                <Field label="Jurisdiction">{displayMatter.jurisdiction}</Field>
-                <Field label="Assigned Attorney">{displayMatter.assigned_attorney}</Field>
-                <Field label="Business Unit">{displayMatter.business_unit}</Field>
-                <Field label="Risk Level"><RiskBadge level={displayMatter.risk_level} /></Field>
-                <Field label="Status"><StatusBadge status={displayMatter.status} /></Field>
-                <Field label="Estimated Exposure">{displayMatter.estimated_exposure}</Field>
-                <Field label="Next Deadline">
-                  {displayMatter.next_deadline ? (
-                    (() => {
-                      try {
-                        return format(parseISO(displayMatter.next_deadline), 'MMMM d, yyyy')
-                      } catch {
-                        return displayMatter.next_deadline
-                      }
-                    })()
-                  ) : null}
-                </Field>
-                <Field label="Conflicts Cleared">
-                  {displayMatter.conflicts_cleared ? '✅ Yes' : '⚠️ Not cleared'}
-                </Field>
-                <Field label="Legal Hold Issued">
-                  {displayMatter.legal_hold_issued ? '✅ Yes' : '—'}
-                </Field>
-                {displayMatter.summary && (
-                  <div>
-                    <dt className="text-xs font-medium text-gray-500 font-sans uppercase tracking-wide mb-1">Summary</dt>
-                    <dd className="text-sm text-gray-700 font-sans leading-relaxed">{displayMatter.summary}</dd>
-                  </div>
-                )}
-              </dl>
-            )}
-          </div>
-
-          {/* Right: Event log */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6 flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-serif font-semibold text-[#1e3a5f] text-base">Event Log</h2>
-              <button
-                onClick={() => setShowAddEvent((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1e3a5f] text-white text-xs font-sans font-medium rounded-lg hover:bg-[#2e4f7a] transition-colors"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-                Add Event
-              </button>
-            </div>
-
-            {/* Add event form */}
-            {showAddEvent && (
-              <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 font-sans mb-1">Event Type</label>
-                  <select
-                    value={newEvent.event_type}
-                    onChange={(e) => setNewEvent((prev) => ({ ...prev, event_type: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent"
-                  >
-                    {EVENT_TYPES.map((t) => (
-                      <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 font-sans mb-1">Title</label>
-                  <input
-                    type="text"
-                    value={newEvent.title}
-                    onChange={(e) => setNewEvent((prev) => ({ ...prev, title: e.target.value }))}
-                    placeholder="Event title…"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent placeholder-gray-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 font-sans mb-1">Content</label>
-                  <textarea
-                    value={newEvent.content}
-                    onChange={(e) => setNewEvent((prev) => ({ ...prev, content: e.target.value }))}
-                    placeholder="Event notes, details…"
-                    rows={3}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent placeholder-gray-400 resize-none"
-                  />
-                </div>
-                {addEventError && (
-                  <p className="text-red-600 text-xs font-sans">{addEventError}</p>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleAddEvent}
-                    disabled={addingEvent || !newEvent.title.trim()}
-                    className="px-4 py-2 bg-[#1e3a5f] text-white text-xs font-sans font-medium rounded-lg hover:bg-[#2e4f7a] disabled:opacity-40 transition-colors"
-                  >
-                    {addingEvent ? 'Adding…' : 'Add Event'}
-                  </button>
-                  <button
-                    onClick={() => setShowAddEvent(false)}
-                    className="px-4 py-2 bg-gray-100 text-gray-700 text-xs font-sans font-medium rounded-lg hover:bg-gray-200 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Timeline */}
-            <div className="flex-1 overflow-y-auto space-y-4">
-              {events.length === 0 ? (
-                <p className="text-gray-400 text-sm font-sans text-center py-8">No events recorded yet.</p>
-              ) : (
-                events
-                  .slice()
-                  .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-                  .map((ev, i) => (
-                    <div key={ev.id || i} className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className="w-2 h-2 bg-[#1e3a5f] rounded-full mt-1.5 flex-shrink-0" />
-                        {i < events.length - 1 && (
-                          <div className="w-0.5 bg-gray-200 flex-1 mt-1" />
-                        )}
-                      </div>
-                      <div className="flex-1 pb-4">
-                        <div className="flex items-center gap-2 mb-1">
-                          <EventTypeBadge type={ev.event_type} />
-                          <span className="text-xs text-gray-400 font-sans">
-                            {ev.created_at ? (() => {
-                              try { return format(parseISO(ev.created_at), 'MMM d, yyyy h:mm a') }
-                              catch { return ev.created_at }
-                            })() : ''}
-                          </span>
-                          {ev.added_by && (
-                            <span className="text-xs text-gray-400 font-sans">· {ev.added_by}</span>
-                          )}
-                        </div>
-                        <p className="text-sm font-medium text-gray-800 font-sans">{ev.title}</p>
-                        {ev.content && (
-                          <div className="mt-1 text-xs text-gray-600 font-sans leading-relaxed prose-sm">
-                            <ReactMarkdown>{ev.content}</ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1 space-y-6">
+            <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
+              <h2 className="font-serif font-bold text-xl text-brand-ink mb-6 flex items-center gap-2">
+                <Landmark size={20} className="text-brand-accent" /> Details
+              </h2>
+              {editing ? (
+                <div className="space-y-5">
+                  {[
+                    { key: 'matter_name', label: 'Matter Name' }, { key: 'matter_type', label: 'Matter Type' },
+                    { key: 'counterparty', label: 'Counterparty' }, { key: 'jurisdiction', label: 'Jurisdiction' },
+                    { key: 'assigned_attorney', label: 'Assigned Attorney' }, { key: 'estimated_exposure', label: 'Estimated Exposure' },
+                    { key: 'next_deadline', label: 'Next Deadline', type: 'date' },
+                  ].map(({ key, label, type = 'text' }) => (
+                    <div key={key}>
+                      <label className={labelClasses}>{label}</label>
+                      <input type={type} value={editData[key] || ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
                     </div>
-                  ))
+                  ))}
+                  <div>
+                    <label className={labelClasses}>Risk Level</label>
+                    <select value={editData.risk_level || 'medium'} onChange={(e) => setEditData((p) => ({ ...p, risk_level: e.target.value }))} className={inputClasses}>
+                      {RISK_OPTIONS.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelClasses}>Status</label>
+                    <select value={editData.status || 'active'} onChange={(e) => setEditData((p) => ({ ...p, status: e.target.value }))} className={inputClasses}>
+                      {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <dl className="flex flex-col">
+                  <Field label="Matter Type" bold>{displayMatter.matter_type}</Field>
+                  <Field label="Counterparty">{displayMatter.counterparty}</Field>
+                  <Field label="Jurisdiction">{displayMatter.jurisdiction}</Field>
+                  <Field label="Assigned Attorney">{displayMatter.assigned_attorney}</Field>
+                  <Field label="Estimated Exposure" bold>{displayMatter.estimated_exposure}</Field>
+                  <Field label="Next Deadline">
+                    {displayMatter.next_deadline ? (() => { try { return format(parseISO(displayMatter.next_deadline), 'MMMM d, yyyy') } catch { return displayMatter.next_deadline } })() : null}
+                  </Field>
+                </dl>
               )}
+            </div>
+          </div>
+
+          <div className="lg:col-span-2 flex flex-col">
+            <div className="bg-brand-surface border border-brand-line rounded-2xl flex flex-col h-full shadow-sm">
+              <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between bg-brand-bg-soft/50 rounded-t-2xl">
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Clock size={20} className="text-brand-accent" /> Matter Timeline
+                </h2>
+                <button onClick={() => setShowAddEvent((v) => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:border-brand-ink hover:bg-brand-bg-soft transition-colors shadow-sm">
+                  <CalendarPlus size={16} /> Add Event
+                </button>
+              </div>
+
+              {showAddEvent && (
+                <div className="p-6 bg-brand-bg border-b border-brand-line">
+                  <h3 className="text-sm font-bold font-sans text-brand-ink uppercase tracking-widest mb-4">Record New Event</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+                    <div>
+                      <label className={labelClasses}>Event Type</label>
+                      <select value={newEvent.event_type} onChange={(e) => setNewEvent((p) => ({ ...p, event_type: e.target.value }))} className={inputClasses}>
+                        {EVENT_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClasses}>Title</label>
+                      <input type="text" value={newEvent.title} onChange={(e) => setNewEvent((p) => ({ ...p, title: e.target.value }))} placeholder="e.g., Motion to Dismiss Filed" className={inputClasses} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className={labelClasses}>Description & Notes</label>
+                      <textarea value={newEvent.content} onChange={(e) => setNewEvent((p) => ({ ...p, content: e.target.value }))} placeholder="Key takeaways, next steps..." rows={3} className={`${inputClasses} resize-none`} />
+                    </div>
+                  </div>
+                  {addEventError && <p className="text-brand-rose text-sm font-sans mb-4 bg-brand-rose/10 px-3 py-2 rounded border border-brand-rose/20">{addEventError}</p>}
+                  <div className="flex gap-3 justify-end">
+                    <button onClick={() => setShowAddEvent(false)} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans hover:text-brand-ink transition-colors">Cancel</button>
+                    <button onClick={handleAddEvent} disabled={addingEvent || !newEvent.title.trim()} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm">
+                      {addingEvent ? 'Saving…' : 'Save Event'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto p-6">
+                {events.length === 0 ? (
+                  <div className="text-center py-16">
+                    <Clock size={32} className="mx-auto text-brand-line-2 mb-3" strokeWidth={1.5} />
+                    <p className="text-brand-ink font-serif text-lg font-bold mb-1">No timeline events</p>
+                    <p className="text-brand-muted text-sm font-sans">Record filings, hearings, and correspondence here.</p>
+                  </div>
+                ) : (
+                  <div className="relative border-l-2 border-brand-line ml-4 space-y-8 pb-4">
+                    {events.slice().sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)).map((ev, i) => (
+                      <div key={ev.id || i} className="relative pl-6">
+                        <div className="absolute w-4 h-4 bg-brand-surface border-2 border-brand-ink rounded-full -left-[9px] top-1"></div>
+                        <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-5 hover:border-brand-line-2 transition-colors">
+                          <div className="flex flex-wrap items-center gap-3 mb-2">
+                            <EventTypeBadge type={ev.event_type} />
+                            <span className="text-[13px] text-brand-ink-2 font-sans">
+                              {ev.created_at ? (() => { try { return format(parseISO(ev.created_at), 'MMM d, yyyy h:mm a') } catch { return ev.created_at } })() : ''}
+                            </span>
+                          </div>
+                          <h4 className="text-[15px] font-bold text-brand-ink font-sans mb-2">{ev.title}</h4>
+                          {ev.content && <div className="text-[14px] text-brand-ink-2 font-sans leading-relaxed"><ReactMarkdown>{ev.content}</ReactMarkdown></div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
