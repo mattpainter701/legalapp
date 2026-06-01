@@ -86,7 +86,7 @@ export const deleteConversation = (id) =>
 
 // Documents
 export const getDocuments = () =>
-  api.get('/documents').then((r) => r.data)
+  api.get('/documents').then((r) => r.data.documents)
 
 export const uploadDocument = (file) => {
   const formData = new FormData()
