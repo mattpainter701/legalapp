@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { uploadDocument } from '../api'
+import { uploadDocument, getDocuments } from '../api'
 import { FileUp, FileText, Check, AlertCircle, Loader2, Cloud } from 'lucide-react'
 import ConnectedFilesModal from './ConnectedFilesModal'
 
@@ -60,7 +60,6 @@ export default function FileUpload({ onUploadComplete, showCloudIntegration = tr
               return
             }
             try {
-              const { getDocuments } = await import('../api')
               const docs = await getDocuments()
               const found = docs.find((d) => d.id === doc.id)
               if (found) {
