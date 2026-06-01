@@ -145,6 +145,12 @@ For a remote Docker context, set the browser-reachable API URL before building:
 LOCAL_API_URL=http://172.16.16.202:8010/api docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend
 ```
 
+For OAuth testing through the established tunnel (`ssh -L 8080:localhost:80 varta@172.16.16.202 -N`), build nginx and the frontend for the tunneled origin:
+
+```bash
+LOCAL_API_URL=http://localhost:8080/api docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend local-nginx
+```
+
 | Service | URL |
 |-|-|
 | App (via nginx) | http://localhost |
@@ -152,6 +158,7 @@ LOCAL_API_URL=http://172.16.16.202:8010/api docker compose -f docker-compose.yml
 | API docs (no-bind local) | http://localhost:8010/docs |
 | App (remote Docker context) | http://172.16.16.202:3010 |
 | API docs (remote Docker context) | http://172.16.16.202:8010/docs |
+| App (SSH tunnel) | http://localhost:8080 |
 
 ### OAuth setup
 

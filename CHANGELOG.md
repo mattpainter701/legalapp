@@ -5,6 +5,7 @@
 ### Added
 - Local no-bind Docker Compose mode for Windows workspaces that Docker cannot bind mount
   - `docker-compose.local.yml` exposes backend, frontend, Postgres, Redis, and vectordb without live mounts
+  - `local-nginx` bakes the dev proxy config into an image so the existing `localhost:8080` SSH tunnel can serve the app and `/api/*`
   - Frontend Dockerfile accepts `VITE_API_URL` at build time for direct local frontend-to-backend testing
 - CourtListener public RAG pipeline
   - `scripts/ingest_courtlistener.py` now extracts/chunks only and inserts `public_chunks` rows pending Jetson embeddings

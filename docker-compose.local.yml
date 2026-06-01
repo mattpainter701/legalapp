@@ -11,6 +11,18 @@ services:
     ports:
       - "3010:3000"
 
+  local-nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.local
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+
   postgres:
     image: pgvector/pgvector:pg16
     ports:
