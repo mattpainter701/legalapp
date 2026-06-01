@@ -16,6 +16,21 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # Token encryption key for OAuth tokens at rest (Fernet symmetric)
+    TOKEN_ENCRYPTION_KEY: str = ""
+
+    # Azure OpenAI (Copilot backend)
+    AZURE_OPENAI_ENDPOINT: str = ""
+    AZURE_OPENAI_KEY: str = ""
+    AZURE_OPENAI_DEPLOYMENT: str = ""
+
+    # Google Gemini
+    GEMINI_API_KEY: str = ""
+
+    # Google Workspace — domain-wide delegation service account
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: str = ""
+    GOOGLE_SERVICE_ACCOUNT_KEY: str = ""  # JSON key or path
+
     OPENAI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     OPENCODE_KEY: str = ""  # alias accepted alongside DEEPSEEK_API_KEY

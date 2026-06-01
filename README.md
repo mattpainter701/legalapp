@@ -7,12 +7,14 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 ## What it does
 
 | Capability | Description |
-|---|---|
+|---|---|---|
 | **Legal Research Chat** | Ask legal questions; answers are grounded in your uploaded documents + public case law via pgvector RAG |
 | **Practice Area Plugins** | 9 specialised workspaces with cold-start interviews, structured skill prompts, dual LLM tiers, and hard compliance gates |
 | **Matter Management** | Litigation portfolio tracker with conflicts check, legal-hold flag, key dates, and append-only event timeline |
 | **Contract Renewal Tracker** | Urgency-rated renewal dashboard with automated weekly email alerts |
 | **Scheduled Legal Agents** | 4 background agents run weekly: renewal watcher, regulatory monitor, docket watcher, portfolio status digest |
+| **M365 & Google Workspace** | OAuth-connected email reading + LLM triage/drafting, calendar sync with deadline push, document sync from OneDrive/SharePoint/Google Drive into RAG, admin user import |
+| **Multi-Model AI** | DeepSeek V4 Flash (primary), Claude Opus 4 (premium), Azure OpenAI GPT-4o, Google Gemini 2.0 Flash |
 | **Audit & Usage Logging** | Every LLM call is logged with tokens, cost, query text, RAG sources, IP, and user agent |
 | **Microsoft Word Add-in** | Chat + Practice Tools panel directly inside Word via Office.js |
 | **Billing** | Stripe flat-seat and PAYG metered tiers; 10× PAYG markup on base model cost |
@@ -31,9 +33,10 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Auth | JWT (python-jose) + Microsoft Entra OAuth2 + Google OAuth2 |
 | Primary LLM | DeepSeek V4 Flash (`deepseek-chat` alias, OpenAI-compatible) |
 | Premium LLM | Claude Opus 4 (`claude-opus-4-8`, Anthropic SDK) |
+| Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash |
 | Embeddings | OpenAI `text-embedding-3-small` (1536-dim, Phase 1) → BAAI/bge-small-en-v1.5 (384-dim, Phase 2 via Jetson Orin cluster) |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (4 migrations, chained) |
+| Migrations | Alembic (9 migrations, chained) |
 | Email | aiosmtplib async SMTP; Slack webhook via httpx |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security (RLS) — enforced at DB layer |
@@ -197,14 +200,14 @@ make sync-public-db   # pg_dump public case-law chunks from on-prem, rsync to VP
 legalapp/
 ├── backend/
 │   ├── app/
-│   │   ├── models/          # SQLAlchemy models (tenant, user, document, conversation, plugin, scheduler)
-│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, scheduler, dev)
-│   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler, email, plugins
+│   │   ├── models/          # SQLAlchemy models (tenant, user, document, conversation, plugin, scheduler, oauth)
+│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, scheduler, dev, integrations, email_agent, document_sync, user_sync)
+│   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler, email, plugins, token_vault, email_agent, calendar_sync, document_sync, user_sync, microsoft_mail, google_mail
 │   │   │   └── plugins/     # 9 practice area prompts + executor
 │   │   ├── middleware/       # Tenant context (JWT) + Redis rate limiter
 │   │   ├── schemas/         # Pydantic request/response models
 │   │   └── main.py          # App factory, lifespan, middleware wiring
-│   ├── migrations/          # Alembic migrations (001–004)
+│   ├── migrations/          # Alembic migrations (001–009)
 │   └── tests/               # pytest-asyncio suite
 ├── frontend/
 │   ├── src/
@@ -238,6 +241,11 @@ legalapp/
 | `002_plugins` | Practice profiles, matters, matter events, renewals + RLS |
 | `003_scheduler` | Scheduler logs |
 | `004_audit_log` | Audit columns on usage_records (operation_type, query_text, rag_chunks_retrieved, rag_source_ids, ip_address, user_agent) |
+| `005_password_and_company` | password_hash to users; company fields to tenants |
+| `006_public_chunks` | Public case-law chunks with BGE-384 embeddings |
+| `007_tenant_api_key` | API key column on tenants (MCP auth) |
+| `008_estate_mediation` | Estate planning + mediation case tables |
+| `009_oauth_tokens` | Tenant credentials + user OAuth tokens with Fernet encryption |
 
 ---
 

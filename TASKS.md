@@ -2,6 +2,13 @@
 
 ## Completed
 
+### M365 + Google Workspace Integration
+- [x] Phase 1: OAuth token persistence (tenant/user token tables, Fernet encryption, token vault, integration connect/disconnect/status API)
+- [x] Phase 2: Email agentic pipeline + Calendar sync (M365/Google mail read, LLM classification + draft responses, calendar read/write + deadline sync)
+- [x] Phase 3: Document sync for RAG (OneDrive, SharePoint, Google Drive listing + download + ingest into RAG pipeline)
+- [x] Phase 4: Gemini + Azure OpenAI LLM providers (added to LLMService with provider routing)
+- [x] Phase 5: Admin user sync dashboard (M365/Google Workspace user import via Directory API)
+
 ### Auth System
 - [x] Add password_hash to User model (005 migration)
 - [x] Add company fields to Tenant model (005 migration)

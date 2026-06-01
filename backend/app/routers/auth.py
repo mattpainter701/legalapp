@@ -247,7 +247,7 @@ async def microsoft_login(
         f"?client_id={settings.MICROSOFT_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={redirect_uri}"
-        f"&scope=openid+email+profile+User.Read"
+        f"&scope=openid+email+profile+User.Read+offline_access"
         f"&state={state}"
         f"&response_mode=query"
     )
@@ -278,7 +278,7 @@ async def microsoft_callback(
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
-                "scope": "openid email profile User.Read",
+                "scope": "openid email profile User.Read offline_access",
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
@@ -463,7 +463,7 @@ async def google_login(
         f"?client_id={settings.GOOGLE_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={redirect_uri}"
-        f"&scope=openid+email+profile"
+        f"&scope=openid+email+profile+offline_access"
         f"&state={state}"
         f"&access_type=offline"
     )
