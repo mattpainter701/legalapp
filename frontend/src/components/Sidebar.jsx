@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
+import IntegrationPanel from './IntegrationPanel'
 import { deleteDocument, deleteConversation } from '../api'
 import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2 } from 'lucide-react'
 
@@ -193,6 +194,27 @@ export default function Sidebar({
           <div className="px-4">
             <FileUpload onUploadComplete={onDocumentUploaded} />
           </div>
+        </div>
+
+        <div className="w-full h-px bg-brand-line my-2"></div>
+
+        {/* Cloud Integrations */}
+        <div className="py-4 px-4">
+          <IntegrationPanel
+            integrationStatus={{
+              google_drive: { connected: false, fileCount: 0 },
+              onedrive: { connected: false, fileCount: 0 },
+              sharepoint: { connected: false, fileCount: 0 },
+            }}
+            onConnect={(serviceId) => {
+              // TODO: Implement OAuth flow for each service
+              console.log('Connect to:', serviceId)
+            }}
+            onDisconnect={(serviceId) => {
+              // TODO: Implement disconnect
+              console.log('Disconnect from:', serviceId)
+            }}
+          />
         </div>
       </div>
 
