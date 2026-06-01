@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { uploadDocument } from '../api'
+import { FileUp, FileText, Check, AlertCircle, Loader2 } from 'lucide-react'
 
 const ACCEPTED_TYPES = {
   'application/pdf': ['.pdf'],
@@ -10,30 +11,18 @@ const ACCEPTED_TYPES = {
 
 function FileStatusIcon({ status }) {
   if (status === 'uploading') {
-    return (
-      <div className="w-4 h-4 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
-    )
+    return <Loader2 size={16} className="text-blue-500 animate-spin" />
   }
   if (status === 'processing') {
-    return (
-      <div className="w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
-    )
+    return <Loader2 size={16} className="text-orange-500 animate-spin" />
   }
   if (status === 'done' || status === 'indexed') {
-    return (
-      <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-      </svg>
-    )
+    return <Check size={16} className="text-brand-green" strokeWidth={3} />
   }
   if (status === 'error') {
-    return (
-      <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-      </svg>
-    )
+    return <AlertCircle size={16} className="text-brand-rose" />
   }
-  return null
+  return <FileText size={16} className="text-brand-muted" />
 }
 
 export default function FileUpload({ onUploadComplete }) {
@@ -60,7 +49,6 @@ export default function FileUpload({ onUploadComplete }) {
             onUploadComplete(doc)
           }
 
-          // Poll for completion
           let attempts = 0
           const poll = setInterval(async () => {
             attempts++
@@ -103,47 +91,44 @@ export default function FileUpload({ onUploadComplete }) {
     <div>
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-3 text-center cursor-pointer transition-colors duration-150 ${
+        className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 ${
           isDragActive
-            ? 'border-[#1e3a5f] bg-blue-50'
-            : 'border-gray-300 hover:border-[#1e3a5f] hover:bg-gray-50'
+            ? 'border-brand-accent bg-brand-green/5 scale-[1.02]'
+            : 'border-brand-line hover:border-brand-accent hover:bg-brand-surface'
         }`}
       >
         <input {...getInputProps()} />
-        <svg
-          className="w-5 h-5 text-gray-400 mx-auto mb-1"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-          />
-        </svg>
-        <p className="text-xs text-gray-500">
-          {isDragActive ? 'Drop files here' : 'Upload PDF, DOCX, or TXT'}
+        <div className={`w-10 h-10 mx-auto rounded-full flex items-center justify-center mb-3 transition-colors ${
+          isDragActive ? 'bg-brand-accent text-white' : 'bg-brand-bg-soft text-brand-muted'
+        }`}>
+           <FileUp size={20} />
+        </div>
+        <p className="text-[13px] font-sans font-medium text-brand-ink-2">
+          {isDragActive ? 'Drop files to upload' : 'Click or drag files to upload'}
+        </p>
+        <p className="text-[11px] font-sans text-brand-muted mt-1 uppercase tracking-wide">
+           PDF, DOCX, TXT up to 50MB
         </p>
       </div>
 
       {uploads.length > 0 && (
-        <div className="mt-2 space-y-1">
+        <div className="mt-3 space-y-2">
           {uploads.map((u) => (
             <div
               key={u.id}
-              className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2 py-1.5"
+              className="flex items-center gap-3 bg-brand-surface border border-brand-line rounded-lg px-3 py-2.5 shadow-sm"
             >
-              <FileStatusIcon status={u.status} />
-              <span className="flex-1 truncate text-gray-700">{u.name}</span>
+              <div className="shrink-0">
+                 <FileStatusIcon status={u.status} />
+              </div>
+              <span className="flex-1 truncate text-[13px] font-sans font-medium text-brand-ink">{u.name}</span>
               <span
-                className={`text-xs capitalize ${
+                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border shrink-0 ${
                   u.status === 'error'
-                    ? 'text-red-500'
+                    ? 'text-brand-rose bg-brand-rose/10 border-brand-rose/20'
                     : u.status === 'indexed' || u.status === 'done'
-                    ? 'text-green-500'
-                    : 'text-yellow-600'
+                    ? 'text-brand-green bg-brand-green/10 border-brand-green/20'
+                    : 'text-orange-600 bg-orange-100 border-orange-200'
                 }`}
               >
                 {u.status === 'error' ? u.error || 'Error' : u.status}
