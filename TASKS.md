@@ -34,6 +34,7 @@
 - [x] api.js: register, login, forgotPassword, resetPassword functions
 
 ### Infrastructure
+- [x] Add no-bind local Docker Compose mode for engines that cannot mount Windows workspaces
 - [x] Fix Sidebar: Array.isArray guards for documents/conversations
 - [x] Fix passlib→bcrypt in requirements.txt
 - [x] Fix reset token visibility (DEV_MODE check)

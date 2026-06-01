@@ -133,10 +133,25 @@ SECRET_KEY=<random-64-char>
 docker compose up -d
 ```
 
+If Docker cannot bind mount this Windows workspace, use the no-bind local profile instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend
+```
+
+For a remote Docker context, set the browser-reachable API URL before building:
+
+```bash
+LOCAL_API_URL=http://172.16.16.202:8010/api docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend
+```
+
 | Service | URL |
 |-|-|
 | App (via nginx) | http://localhost |
-| API docs | http://localhost:8000/docs |
+| App (no-bind local) | http://localhost:3010 |
+| API docs (no-bind local) | http://localhost:8010/docs |
+| App (remote Docker context) | http://172.16.16.202:3010 |
+| API docs (remote Docker context) | http://172.16.16.202:8010/docs |
 
 ### OAuth setup
 
@@ -208,6 +223,7 @@ legalapp/
 ├── scripts/
 ├── docker-compose.yml
 ├── docker-compose.override.yml
+├── docker-compose.local.yml
 ├── docker-compose.hypervisor.yml
 └── docker-compose.prod.yml
 ```
