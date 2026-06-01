@@ -56,6 +56,9 @@ class LLMService:
         """
         Generate a completion.
         Returns (response_text, tokens_in, tokens_out).
+
+        Premium mode uses PREMIUM_LLM. If it starts with "claude-" or "anthropic",
+        routes to Anthropic; otherwise uses the DeepSeek/OpenAI-compatible endpoint.
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
@@ -63,7 +66,12 @@ class LLMService:
         )
 
         if use_premium:
-            return await self._complete_anthropic(messages, system_prompt)
+            model = settings.PREMIUM_LLM.lower()
+            if model.startswith("claude") or model.startswith("anthropic"):
+                return await self._complete_anthropic(messages, system_prompt)
+            return await self._complete_deepseek(
+                messages, system_prompt, model=settings.PREMIUM_LLM
+            )
         else:
             return await self._complete_deepseek(messages, system_prompt)
 
@@ -71,12 +79,13 @@ class LLMService:
         self,
         messages: List[dict],
         system_prompt: str,
+        model: str = None,
     ) -> Tuple[str, int, int]:
         """Call DeepSeek via OpenAI-compatible endpoint."""
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
         response = await self.deepseek_client.chat.completions.create(
-            model=settings.PRIMARY_LLM,
+            model=model or settings.PRIMARY_LLM,
             messages=all_messages,
             temperature=0.1,
             max_tokens=4096,

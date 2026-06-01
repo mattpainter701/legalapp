@@ -117,6 +117,10 @@ async def full_rag_query(
     """
     query_embedding = await embedding_service.embed_text(question)
 
+    if query_embedding is None:
+        # Embeddings unavailable — return empty context (chat still works, no RAG)
+        return "", []
+
     chunks = await search_chunks(
         db=db,
         query_embedding=query_embedding,
