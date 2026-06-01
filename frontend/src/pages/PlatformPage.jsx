@@ -3,10 +3,10 @@ import { getPlatformTenants, getPlatformUsage, updatePlatformTenant } from '../a
 
 function StatCard({ label, value, sub }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
-      <p className="text-xs text-gray-500 font-sans uppercase tracking-wider mb-1">{label}</p>
-      <p className="text-2xl font-bold text-[#1e3a5f] font-serif">{value ?? '—'}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1 font-sans">{sub}</p>}
+    <div className="bg-brand-surface border border-brand-line rounded-lg p-5 shadow-sm">
+      <p className="text-xs text-brand-muted font-sans uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-2xl font-bold text-brand-ink font-serif">{value ?? '—'}</p>
+      {sub && <p className="text-xs text-brand-muted mt-1 font-sans">{sub}</p>}
     </div>
   )
 }
@@ -43,12 +43,12 @@ function LoginScreen({ onLogin }) {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 w-full max-w-sm">
-        <h1 className="text-xl font-bold text-[#1e3a5f] font-serif mb-1">Platform Admin</h1>
-        <p className="text-sm text-gray-400 font-sans mb-6">Operator access only</p>
+    <div className="flex items-center justify-center min-h-screen bg-brand-bg">
+      <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-8 w-full max-w-sm">
+        <h1 className="text-xl font-bold text-brand-ink font-serif mb-1">Platform Admin</h1>
+        <p className="text-sm text-brand-muted font-sans mb-6">Operator access only</p>
         {error && (
-          <p className="text-sm text-red-500 font-sans mb-4">{error}</p>
+          <p className="text-sm text-brand-rose font-sans mb-4">{error}</p>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -56,13 +56,13 @@ function LoginScreen({ onLogin }) {
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder="Platform secret key"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent"
             required
           />
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[#1e3a5f] text-white py-2 rounded-lg text-sm font-medium font-sans hover:bg-[#163050] disabled:opacity-60"
+            className="w-full bg-brand-accent text-white py-2 rounded-lg text-sm font-medium font-sans hover:bg-brand-accent-2 disabled:opacity-60"
           >
             {loading ? 'Authenticating…' : 'Access Platform'}
           </button>
@@ -89,17 +89,17 @@ function TenantRow({ tenant, platformKey, onUpdate }) {
   }
 
   return (
-    <tr className="hover:bg-gray-50 text-sm font-sans border-t border-gray-100">
+    <tr className="hover:bg-brand-bg text-sm font-sans border-t border-brand-line">
       <td className="px-4 py-3">
-        <p className="font-medium text-gray-800">{tenant.name}</p>
-        <p className="text-xs text-gray-400">{tenant.domain}</p>
+        <p className="font-medium text-brand-ink-2">{tenant.name}</p>
+        <p className="text-xs text-brand-muted">{tenant.domain}</p>
       </td>
       <td className="px-4 py-3">
         <TierBadge tier={tenant.billing_tier} />
       </td>
-      <td className="px-4 py-3 text-gray-600">{tenant.user_count}</td>
-      <td className="px-4 py-3 text-gray-600">{tenant.requests_30d.toLocaleString()}</td>
-      <td className="px-4 py-3 text-gray-600">${tenant.cost_usd_30d.toFixed(2)}</td>
+      <td className="px-4 py-3 text-brand-ink-2">{tenant.user_count}</td>
+      <td className="px-4 py-3 text-brand-ink-2">{tenant.requests_30d.toLocaleString()}</td>
+      <td className="px-4 py-3 text-brand-ink-2">${tenant.cost_usd_30d.toFixed(2)}</td>
       <td className="px-4 py-3">
         <button
           onClick={() => toggle('is_active', !tenant.is_active)}
@@ -118,7 +118,7 @@ function TenantRow({ tenant, platformKey, onUpdate }) {
           <button
             onClick={() => toggle('billing_tier', 'flat')}
             disabled={updating === 'billing_tier'}
-            className="text-xs text-blue-600 hover:underline"
+            className="text-xs text-brand-accent hover:underline"
           >
             {updating === 'billing_tier' ? '…' : '→ flat'}
           </button>
@@ -126,7 +126,7 @@ function TenantRow({ tenant, platformKey, onUpdate }) {
           <button
             onClick={() => toggle('billing_tier', 'payg')}
             disabled={updating === 'billing_tier'}
-            className="text-xs text-gray-400 hover:underline"
+            className="text-xs text-brand-muted hover:underline"
           >
             {updating === 'billing_tier' ? '…' : '→ payg'}
           </button>
@@ -187,27 +187,27 @@ export default function PlatformPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-brand-bg">
       <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif">Platform Admin</h1>
-            <p className="text-sm text-gray-400 font-sans mt-1">Cross-tenant operator view</p>
+            <h1 className="text-2xl font-bold text-brand-ink font-serif">Platform Admin</h1>
+            <p className="text-sm text-brand-muted font-sans mt-1">Cross-tenant operator view</p>
           </div>
           <button
             onClick={() => {
               sessionStorage.removeItem('platform_key')
               setPlatformKey(null)
             }}
-            className="text-sm text-gray-400 hover:text-red-500 font-sans"
+            className="text-sm text-brand-muted hover:text-brand-rose font-sans"
           >
             Sign out
           </button>
         </div>
 
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-sans">
+          <div className="mb-6 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
             {error}
           </div>
         )}
@@ -223,15 +223,15 @@ export default function PlatformPage() {
         )}
 
         {/* Tenant table */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <p className="text-sm font-semibold text-[#1e3a5f] font-sans">
+        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-brand-line">
+            <p className="text-sm font-semibold text-brand-ink font-sans">
               Tenants ({total})
             </p>
             <button
               onClick={loadData}
               disabled={loading}
-              className="text-xs text-gray-400 hover:text-[#1e3a5f] font-sans"
+              className="text-xs text-brand-muted hover:text-brand-ink font-sans"
             >
               {loading ? 'Loading…' : 'Refresh'}
             </button>
@@ -239,13 +239,13 @@ export default function PlatformPage() {
 
           {loading && tenants.length === 0 ? (
             <div className="flex justify-center py-12">
-              <div className="w-6 h-6 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
+              <div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr className="text-xs text-gray-400 uppercase tracking-wider font-sans">
+                <thead className="bg-brand-bg-soft">
+                  <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
                     <th className="text-left px-4 py-2">Tenant</th>
                     <th className="text-left px-4 py-2">Tier</th>
                     <th className="text-left px-4 py-2">Users</th>
@@ -271,21 +271,21 @@ export default function PlatformPage() {
 
           {/* Pagination */}
           {total > LIMIT && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-brand-line">
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="text-sm text-gray-400 hover:text-[#1e3a5f] disabled:opacity-40 font-sans"
+                className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans"
               >
                 ← Prev
               </button>
-              <span className="text-xs text-gray-400 font-sans">
+              <span className="text-xs text-brand-muted font-sans">
                 Page {page} of {Math.ceil(total / LIMIT)}
               </span>
               <button
                 onClick={() => setPage((p) => p + 1)}
                 disabled={page * LIMIT >= total}
-                className="text-sm text-gray-400 hover:text-[#1e3a5f] disabled:opacity-40 font-sans"
+                className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans"
               >
                 Next →
               </button>

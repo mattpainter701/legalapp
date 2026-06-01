@@ -14,7 +14,7 @@ function CopyButton({ value }) {
   return (
     <button
       onClick={handle}
-      className="ml-2 text-xs text-[#1e3a5f] hover:underline font-sans"
+      className="ml-2 text-xs text-brand-accent hover:underline font-sans"
     >
       {copied ? 'Copied!' : 'Copy'}
     </button>
@@ -25,10 +25,10 @@ function CodeBlock({ value, label }) {
   return (
     <div>
       {label && (
-        <p className="text-xs text-gray-400 uppercase tracking-wider font-sans mb-1">{label}</p>
+        <p className="text-xs text-brand-muted uppercase tracking-wider font-sans mb-1">{label}</p>
       )}
-      <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-        <code className="text-sm text-gray-700 font-mono truncate">{value}</code>
+      <div className="flex items-center justify-between bg-brand-bg border border-brand-line rounded-lg px-3 py-2">
+        <code className="text-sm text-brand-ink-2 font-mono truncate">{value}</code>
         <CopyButton value={value} />
       </div>
     </div>
@@ -85,45 +85,58 @@ export default function MCPPage() {
 
   if (user?.role !== 'admin') {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <p className="text-gray-500 font-sans">Admin access required.</p>
+      <div className="flex items-center justify-center h-screen bg-brand-bg">
+        <p className="text-brand-muted font-sans">Admin access required.</p>
       </div>
     )
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="w-6 h-6 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-brand-bg">
+        <div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-brand-bg">
       <div className="max-w-2xl mx-auto px-4 py-12">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif">MCP Server</h1>
-            <p className="text-sm text-gray-500 mt-1 font-sans">
+            <h1 className="text-2xl font-bold text-brand-ink font-serif">MCP Server</h1>
+            <p className="text-sm text-brand-muted mt-1 font-sans">
               Connect Claude Desktop or any MCP-compatible client to Clarity Legal
             </p>
           </div>
-          <button onClick={() => navigate(-1)} className="text-sm text-gray-500 hover:text-[#1e3a5f] font-sans">
+          <button onClick={() => navigate(-1)} className="text-sm text-brand-muted hover:text-brand-ink font-sans">
             ← Back
           </button>
         </div>
 
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-sans">
+          <div className="mb-6 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
             {error}
           </div>
         )}
 
+        {/* Product description */}
+        <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm mb-6">
+          <h2 className="font-serif text-2xl font-bold text-brand-ink mb-3">Model Context Protocol (MCP)</h2>
+          <p className="font-sans text-brand-muted text-sm leading-relaxed mb-4">
+            Connect any MCP-compatible AI assistant — Claude, Cursor, or custom agents — directly to your
+            legal knowledge base. Search case law, retrieve document chunks, and run legal skills from
+            external tools without leaving your workflow.
+          </p>
+          <p className="font-sans text-brand-muted text-sm">
+            MCP usage is billed through your existing plan.
+          </p>
+        </div>
+
         {/* Connection info */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6 space-y-4">
-          <p className="text-sm font-semibold text-[#1e3a5f] font-sans">Connection Details</p>
+        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6 space-y-4">
+          <p className="text-sm font-semibold text-brand-ink font-sans">Connection Details</p>
 
           {info?.mcp_server_url && (
             <CodeBlock label="MCP Server URL" value={info.mcp_server_url} />
@@ -131,7 +144,7 @@ export default function MCPPage() {
 
           {newKey ? (
             <div>
-              <p className="text-xs text-gray-400 uppercase tracking-wider font-sans mb-1">
+              <p className="text-xs text-brand-muted uppercase tracking-wider font-sans mb-1">
                 New API Key — copy now, won't be shown again
               </p>
               <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -141,13 +154,13 @@ export default function MCPPage() {
             </div>
           ) : info?.has_api_key ? (
             <div>
-              <p className="text-xs text-gray-400 uppercase tracking-wider font-sans mb-1">API Key</p>
-              <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                <code className="text-sm text-gray-500 font-mono">{info.api_key_masked}</code>
+              <p className="text-xs text-brand-muted uppercase tracking-wider font-sans mb-1">API Key</p>
+              <div className="flex items-center justify-between bg-brand-bg border border-brand-line rounded-lg px-3 py-2">
+                <code className="text-sm text-brand-muted font-mono">{info.api_key_masked}</code>
                 <button
                   onClick={handleRegenerate}
                   disabled={regenerating}
-                  className="ml-2 text-xs text-red-500 hover:underline font-sans"
+                  className="ml-2 text-xs text-brand-rose hover:underline font-sans"
                 >
                   {regenerating ? 'Regenerating…' : 'Regenerate'}
                 </button>
@@ -155,13 +168,13 @@ export default function MCPPage() {
             </div>
           ) : (
             <div>
-              <p className="text-sm text-gray-500 font-sans mb-3">
+              <p className="text-sm text-brand-muted font-sans mb-3">
                 No API key yet. Generate one to authenticate MCP clients.
               </p>
               <button
                 onClick={handleRegenerate}
                 disabled={regenerating}
-                className="bg-[#1e3a5f] text-white px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-[#163050] disabled:opacity-60"
+                className="bg-brand-accent text-white px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-brand-accent-2 disabled:opacity-60"
               >
                 {regenerating ? 'Generating…' : 'Generate API Key'}
               </button>
@@ -171,8 +184,8 @@ export default function MCPPage() {
 
         {/* Claude Desktop config */}
         {info?.mcp_server_url && (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
-            <p className="text-sm font-semibold text-[#1e3a5f] font-sans mb-3">
+          <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6">
+            <p className="text-sm font-semibold text-brand-ink font-sans mb-3">
               Claude Desktop Config (claude_desktop_config.json)
             </p>
             <div className="bg-gray-900 rounded-lg p-4 overflow-auto">
@@ -190,23 +203,23 @@ export default function MCPPage() {
   }
 }`}</pre>
             </div>
-            <p className="text-xs text-gray-400 mt-2 font-sans">
-              Replace <code className="bg-gray-100 px-1 rounded">YOUR_API_KEY_HERE</code> with your API key above.
+            <p className="text-xs text-brand-muted mt-2 font-sans">
+              Replace <code className="bg-brand-bg-soft px-1 rounded">YOUR_API_KEY_HERE</code> with your API key above.
             </p>
           </div>
         )}
 
         {/* Tool reference */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-          <p className="text-sm font-semibold text-[#1e3a5f] font-sans mb-4">Available Tools</p>
+        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6">
+          <p className="text-sm font-semibold text-brand-ink font-sans mb-4">Available Tools</p>
           <div className="space-y-5">
             {TOOL_DOCS.map((tool) => (
-              <div key={tool.name} className="border-l-2 border-[#1e3a5f] pl-4">
-                <p className="text-sm font-mono font-semibold text-[#1e3a5f]">{tool.name}</p>
-                <p className="text-xs text-gray-500 mt-0.5 font-sans mb-2">{tool.description}</p>
+              <div key={tool.name} className="border-l-2 border-brand-accent pl-4">
+                <p className="text-sm font-mono font-semibold text-brand-ink">{tool.name}</p>
+                <p className="text-xs text-brand-muted mt-0.5 font-sans mb-2">{tool.description}</p>
                 <table className="text-xs font-sans w-full">
                   <thead>
-                    <tr className="text-gray-400">
+                    <tr className="text-brand-muted">
                       <th className="text-left pb-1 pr-3">Param</th>
                       <th className="text-left pb-1 pr-3">Type</th>
                       <th className="text-left pb-1">Description</th>
@@ -215,12 +228,12 @@ export default function MCPPage() {
                   <tbody>
                     {tool.params.map((p) => (
                       <tr key={p.name}>
-                        <td className="pr-3 py-0.5 font-mono text-gray-700">
+                        <td className="pr-3 py-0.5 font-mono text-brand-ink-2">
                           {p.name}
-                          {p.required && <span className="text-red-400 ml-0.5">*</span>}
+                          {p.required && <span className="text-brand-rose ml-0.5">*</span>}
                         </td>
-                        <td className="pr-3 py-0.5 text-gray-400">{p.type}</td>
-                        <td className="py-0.5 text-gray-500">{p.desc}</td>
+                        <td className="pr-3 py-0.5 text-brand-muted">{p.type}</td>
+                        <td className="py-0.5 text-brand-muted">{p.desc}</td>
                       </tr>
                     ))}
                   </tbody>
