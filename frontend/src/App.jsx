@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
+import HomePage from './pages/HomePage'
 import SignupPage from './pages/SignupPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
@@ -12,6 +13,10 @@ import PluginPage from './pages/PluginPage'
 import MatterPortfolioPage from './pages/MatterPortfolioPage'
 import MatterDetailPage from './pages/MatterDetailPage'
 import RenewalTrackerPage from './pages/RenewalTrackerPage'
+import EstatePortfolioPage from './pages/EstatePortfolioPage'
+import EstateDetailPage from './pages/EstateDetailPage'
+import MediationPortfolioPage from './pages/MediationPortfolioPage'
+import MediationDetailPage from './pages/MediationDetailPage'
 import BillingPage from './pages/BillingPage'
 import MCPPage from './pages/MCPPage'
 import PlatformPage from './pages/PlatformPage'
@@ -86,8 +91,8 @@ function ProtectedRoute({ children, adminOnly = false }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="text-[#1e3a5f] text-lg font-serif">Loading...</div>
+      <div className="flex items-center justify-center h-screen bg-brand-bg">
+        <div className="text-brand-ink text-lg font-serif">Loading...</div>
       </div>
     )
   }
@@ -108,13 +113,13 @@ function RootRedirect() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="text-[#1e3a5f] text-lg font-serif">Loading...</div>
+      <div className="flex items-center justify-center h-screen bg-brand-bg">
+        <div className="text-brand-ink text-lg font-serif">Loading...</div>
       </div>
     )
   }
 
-  return <Navigate to={user ? '/chat' : '/login'} replace />
+  return user ? <Navigate to="/chat" replace /> : <HomePage />
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +181,38 @@ export default function App() {
           element={
             <ProtectedRoute>
               <RenewalTrackerPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/trust-estate/estates"
+          element={
+            <ProtectedRoute>
+              <EstatePortfolioPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/trust-estate/estates/:id"
+          element={
+            <ProtectedRoute>
+              <EstateDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/mediation/cases"
+          element={
+            <ProtectedRoute>
+              <MediationPortfolioPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/plugins/mediation/cases/:id"
+          element={
+            <ProtectedRoute>
+              <MediationDetailPage />
             </ProtectedRoute>
           }
         />
