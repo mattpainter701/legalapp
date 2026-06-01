@@ -40,33 +40,49 @@ def _state_key(state: str) -> str:
     return f"oauth:state:{state}"
 
 
-async def _save_state(request: Request, state: str) -> None:
+def _state_data_key(state: str) -> str:
+    return f"oauth:statedata:{state}"
+
+
+async def _save_state(request: Request, state: str, data: dict = None) -> None:
     """Persist OAuth state token in Redis (falls back to in-process dict if Redis is absent)."""
     redis = getattr(request.app.state, "redis", None)
     if redis:
         await redis.setex(_state_key(state), _STATE_TTL, "1")
+        if data:
+            await redis.setex(_state_data_key(state), _STATE_TTL, _json.dumps(data))
     else:
         _gc_fallback_dicts()
         _fallback_states[state] = _time.time()
+        if data:
+            _fallback_state_data[state] = data
 
 
-async def _consume_state(request: Request, state: str) -> bool:
-    """Return True and delete if state exists; False otherwise."""
+async def _consume_state(request: Request, state: str) -> tuple[bool, dict | None]:
+    """Return (is_valid, signup_data_or_None)."""
     redis = getattr(request.app.state, "redis", None)
+    data = None
     if redis:
         deleted = await redis.delete(_state_key(state))
-        return bool(deleted)
+        if deleted:
+            raw = await redis.get(_state_data_key(state))
+            if raw:
+                data = _json.loads(raw)
+            await redis.delete(_state_data_key(state))
+        return bool(deleted), data
     ts = _fallback_states.pop(state, None)
     if ts is None:
-        return False
+        return False, None
+    data = _fallback_state_data.pop(state, None)
     if _time.time() - ts > _FALLBACK_TTL:
-        return False
-    return True
+        return False, None
+    return True, data
 
 
 _FALLBACK_TTL = 600
 
 _fallback_states: dict[str, float] = {}
+_fallback_state_data: dict[str, dict] = {}
 
 
 def _gc_fallback_dicts() -> None:
@@ -74,6 +90,7 @@ def _gc_fallback_dicts() -> None:
     for k, v in list(_fallback_states.items()):
         if now - v > _FALLBACK_TTL:
             del _fallback_states[k]
+            _fallback_state_data.pop(k, None)
     for k, v in list(_fallback_reset_tokens.items()):
         if now - v[1] > _FALLBACK_TTL:
             del _fallback_reset_tokens[k]
@@ -198,14 +215,29 @@ def _oauth_configured(client_id: str, client_secret: str) -> bool:
 
 
 @router.get("/microsoft/login")
-async def microsoft_login(request: Request):
+async def microsoft_login(
+    request: Request,
+    signup: str = "",
+    company_name: str = "",
+    address: str = "",
+    phone: str = "",
+    staff_size: str = "",
+):
     if not _oauth_configured(
         settings.MICROSOFT_CLIENT_ID, settings.MICROSOFT_CLIENT_SECRET
     ):
         raise HTTPException(status_code=501, detail="Microsoft OAuth not configured")
 
     state = secrets.token_urlsafe(32)
-    await _save_state(request, state)
+    signup_data = None
+    if signup == "true":
+        signup_data = {
+            "company_name": company_name,
+            "address": address,
+            "phone": phone,
+            "staff_size": staff_size,
+        }
+    await _save_state(request, state, signup_data)
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/microsoft/callback"
@@ -229,7 +261,8 @@ async def microsoft_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    if not await _consume_state(request, state):
+    valid, signup_data = await _consume_state(request, state)
+    if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/microsoft/callback"
@@ -284,13 +317,55 @@ async def microsoft_callback(
         raise HTTPException(status_code=400, detail="No email in Microsoft profile")
 
     domain = email.split("@")[-1]
-    tenant_name = domain.split(".")[0].capitalize()
+    # Use provided company info from signup flow, or derive from email domain
+    if signup_data and signup_data.get("company_name"):
+        tenant_name = signup_data["company_name"]
+        company_name = signup_data.get("company_name")
+        address = signup_data.get("address")
+        phone = signup_data.get("phone")
+        staff_size_str = signup_data.get("staff_size", "")
+        try:
+            staff_size = int(staff_size_str) if staff_size_str else None
+        except (ValueError, TypeError):
+            staff_size = None
+    else:
+        tenant_name = domain.split(".")[0].capitalize()
+        company_name = None
+        address = None
+        phone = None
+        staff_size = None
 
     async with db.begin():
-        tenant = await _get_or_create_tenant(db, domain, tenant_name)
-        user = await _get_or_create_user(
-            db, tenant.id, email, full_name, "microsoft", ms_sub
-        )
+        if signup_data and signup_data.get("company_name"):
+            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+            tenant = result.scalar_one_or_none()
+            if tenant is None:
+                tenant = Tenant(
+                    id=uuid.uuid4(),
+                    name=tenant_name,
+                    domain=domain,
+                    company_name=company_name,
+                    address=address,
+                    phone=phone,
+                    staff_size=staff_size,
+                    billing_tier="payg",
+                    is_active=True,
+                )
+                db.add(tenant)
+                await db.flush()
+            count_result = await db.execute(
+                select(User).where(User.tenant_id == tenant.id)
+            )
+            is_first = len(count_result.scalars().all()) == 0
+            role = "admin" if is_first else "user"
+            user = await _get_or_create_user(
+                db, tenant.id, email, full_name, "microsoft", ms_sub
+            )
+        else:
+            tenant = await _get_or_create_tenant(db, domain, tenant_name)
+            user = await _get_or_create_user(
+                db, tenant.id, email, full_name, "microsoft", ms_sub
+            )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
@@ -359,12 +434,27 @@ async def _verify_google_id_token(id_token: str) -> dict:
 
 
 @router.get("/google/login")
-async def google_login(request: Request):
+async def google_login(
+    request: Request,
+    signup: str = "",
+    company_name: str = "",
+    address: str = "",
+    phone: str = "",
+    staff_size: str = "",
+):
     if not _oauth_configured(settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET):
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
     state = secrets.token_urlsafe(32)
-    await _save_state(request, state)
+    signup_data = None
+    if signup == "true":
+        signup_data = {
+            "company_name": company_name,
+            "address": address,
+            "phone": phone,
+            "staff_size": staff_size,
+        }
+    await _save_state(request, state, signup_data)
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/google/callback"
 
@@ -387,7 +477,8 @@ async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    if not await _consume_state(request, state):
+    valid, signup_data = await _consume_state(request, state)
+    if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/google/callback"
@@ -426,13 +517,55 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="No email in Google profile")
 
     domain = email.split("@")[-1]
-    tenant_name = domain.split(".")[0].capitalize()
+    # Use provided company info from signup flow, or derive from email domain
+    if signup_data and signup_data.get("company_name"):
+        tenant_name = signup_data["company_name"]
+        company_name = signup_data.get("company_name")
+        address = signup_data.get("address")
+        phone = signup_data.get("phone")
+        staff_size_str = signup_data.get("staff_size", "")
+        try:
+            staff_size = int(staff_size_str) if staff_size_str else None
+        except (ValueError, TypeError):
+            staff_size = None
+    else:
+        tenant_name = domain.split(".")[0].capitalize()
+        company_name = None
+        address = None
+        phone = None
+        staff_size = None
 
     async with db.begin():
-        tenant = await _get_or_create_tenant(db, domain, tenant_name)
-        user = await _get_or_create_user(
-            db, tenant.id, email, full_name, "google", google_sub
-        )
+        if signup_data and signup_data.get("company_name"):
+            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+            tenant = result.scalar_one_or_none()
+            if tenant is None:
+                tenant = Tenant(
+                    id=uuid.uuid4(),
+                    name=tenant_name,
+                    domain=domain,
+                    company_name=company_name,
+                    address=address,
+                    phone=phone,
+                    staff_size=staff_size,
+                    billing_tier="payg",
+                    is_active=True,
+                )
+                db.add(tenant)
+                await db.flush()
+            count_result = await db.execute(
+                select(User).where(User.tenant_id == tenant.id)
+            )
+            is_first = len(count_result.scalars().all()) == 0
+            role = "admin" if is_first else "user"
+            user = await _get_or_create_user(
+                db, tenant.id, email, full_name, "google", google_sub
+            )
+        else:
+            tenant = await _get_or_create_tenant(db, domain, tenant_name)
+            user = await _get_or_create_user(
+                db, tenant.id, email, full_name, "google", google_sub
+            )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
