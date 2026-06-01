@@ -16,6 +16,10 @@ package-lock.json
 .env
 .env.prod
 *.env
+.env.*
+
+# Claude Code session memory (local only)
+memory/
 
 # OS
 .DS_Store
