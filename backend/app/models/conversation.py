@@ -61,6 +61,11 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Context tracking
+    skill_applied: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    context_used: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    context_relevance_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pii_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

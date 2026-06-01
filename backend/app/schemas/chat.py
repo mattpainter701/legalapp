@@ -22,6 +22,8 @@ class MessageCreate(BaseModel):
     include_public: bool = True
     use_premium_llm: bool = False
     provider: str = "default"  # "default" | "openrouter" | "gemini" | "azure"
+    skill: Optional[str] = None  # e.g., "commercial-legal", "litigation-legal"
+    matter_id: Optional[str] = None  # UUID of related matter for context injection
 
 
 class SourceCitation(BaseModel):

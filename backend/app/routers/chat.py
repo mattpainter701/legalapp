@@ -22,7 +22,8 @@ from app.services.embeddings import EmbeddingService
 from app.services.rag import full_rag_query
 from app.services.llm import LLMService
 from app.services.billing import calculate_cost
-from app.utils.guardrails import apply_guardrails
+from app.services.pii_detection import detect_pii
+from app.utils.guardrails import apply_guardrails, check_pii_in_input
 
 settings = get_settings()
 router = APIRouter(prefix="/conversations", tags=["chat"])
@@ -224,7 +225,10 @@ async def send_message(
     if conv.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # 2. Save user message
+    # 2. Check for PII in user input
+    pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
+
+    # 2a. Save user message with PII flags
     user_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -232,6 +236,7 @@ async def send_message(
         role="user",
         content=body.content,
         sources=None,
+        pii_flags=pii_findings if pii_findings else None,
     )
     db.add(user_msg)
     await db.flush()
@@ -270,8 +275,10 @@ async def send_message(
         provider=body.provider,
     )
 
-    # 6. Apply guardrails
-    cleaned_response, needs_retry = apply_guardrails(response_text)
+    # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
+    cleaned_response, needs_retry, response_pii = apply_guardrails(
+        response_text, privacy_mode=user.privacy_mode
+    )
 
     if needs_retry:
         # Retry once with an explicit instruction
@@ -289,12 +296,16 @@ async def send_message(
             use_premium=body.use_premium_llm,
             provider=body.provider,
         )
-        cleaned_response, _ = apply_guardrails(response_text2)
+        cleaned_response, _, response_pii = apply_guardrails(
+            response_text2, privacy_mode=user.privacy_mode
+        )
         tokens_in += tokens_in2
         tokens_out += tokens_out2
 
-    # Build source citations from retrieved chunks
+    # Build source citations from retrieved chunks with relevance scores
     source_dicts = []
+    context_used = []
+    context_scores = {}
     seen_citations: set = set()
     for chunk in chunks:
         citation_key = chunk.get("citation") or chunk.get("case_name") or ""
@@ -302,6 +313,9 @@ async def send_message(
             continue
         if citation_key:
             seen_citations.add(citation_key)
+        chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
+        context_used.append(chunk_id)
+        context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
         source_dicts.append(
             {
                 "case_name": chunk.get("case_name") or "Unknown Case",
@@ -311,8 +325,9 @@ async def send_message(
             }
         )
 
-    # 7. Save assistant message
+    # 7. Save assistant message with context tracking and skill info
     model_used = settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
+    skill_applied = body.skill if hasattr(body, 'skill') and body.skill else user.default_skill
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -320,6 +335,10 @@ async def send_message(
         role="assistant",
         content=cleaned_response,
         sources=source_dicts if source_dicts else None,
+        skill_applied=skill_applied,
+        context_used=context_used if context_used else None,
+        context_relevance_scores=context_scores if context_scores else None,
+        pii_flags=response_pii if response_pii else None,
     )
     db.add(assistant_msg)
 
