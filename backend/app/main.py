@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Redis unavailable — rate limiting disabled: {exc}")
         app.state.redis = None
 
+    app.state.jti_blacklist: dict[str, float] = {}
+
     # Database connection test
     try:
         async with engine.connect() as conn:
@@ -86,6 +88,9 @@ origins = list(
         settings.FRONTEND_URL,
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://localhost:3000",
+        "https://172.16.16.202",
+        "http://172.16.16.202:3000",
     }
 )
 

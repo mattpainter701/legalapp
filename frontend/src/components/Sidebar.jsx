@@ -183,7 +183,7 @@ export default function Sidebar({
           <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
             Conversations
           </p>
-          {conversations.length === 0 ? (
+          {!Array.isArray(conversations) || conversations.length === 0 ? (
             <p className="px-3 py-2 text-xs text-gray-400 italic">No conversations yet</p>
           ) : (
             conversations.map((conv) => (
@@ -203,7 +203,7 @@ export default function Sidebar({
           <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
             Documents
           </p>
-          {documents.length === 0 ? (
+          {!Array.isArray(documents) || documents.length === 0 ? (
             <p className="px-3 py-1 text-xs text-gray-400 italic">No documents uploaded</p>
           ) : (
             documents.map((doc) => (

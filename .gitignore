@@ -34,3 +34,7 @@ nginx/webroot/
 *.dump
 *.dump.gz
 /var/log/clarity-legal/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

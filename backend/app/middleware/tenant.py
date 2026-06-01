@@ -1,10 +1,14 @@
-from fastapi import Request, HTTPException
+import time as _time
+from datetime import datetime, timezone
+
+from fastapi import Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from jose import JWTError, jwt
 
+from app.database import get_db
 from app.config import get_settings
 
 settings = get_settings()
@@ -42,6 +46,20 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 settings.SECRET_KEY,
                 algorithms=[settings.ALGORITHM],
             )
+            jti: str | None = payload.get("jti")
+            if jti:
+                redis = getattr(request.app.state, "redis", None)
+                blacklisted = False
+                if redis:
+                    blacklisted = await redis.exists(f"jti:{jti}")
+                else:
+                    blacklist = getattr(request.app.state, "jti_blacklist", {})
+                    ts = blacklist.get(jti)
+                    if ts and _time.time() < ts:
+                        blacklisted = True
+                if blacklisted:
+                    return await call_next(request)
+
             tenant_id: str = payload.get("tenant_id")
             user_id: str = payload.get("sub")
 
@@ -75,6 +93,17 @@ async def get_current_user(request: Request, db: AsyncSession):
                 settings.SECRET_KEY,
                 algorithms=[settings.ALGORITHM],
             )
+            jti: str | None = payload.get("jti")
+            if jti:
+                redis = getattr(request.app.state, "redis", None)
+                if redis:
+                    blacklisted = await redis.exists(f"jti:{jti}")
+                else:
+                    blacklist = getattr(request.app.state, "jti_blacklist", {})
+                    ts = blacklist.get(jti)
+                    blacklisted = ts and _time.time() < ts
+                if blacklisted:
+                    raise HTTPException(status_code=401, detail="Token has been revoked")
             user_id = payload.get("sub")
             tenant_id = payload.get("tenant_id")
         except JWTError:
@@ -95,7 +124,7 @@ async def get_current_user(request: Request, db: AsyncSession):
     return user
 
 
-async def require_admin(request: Request, db: AsyncSession):
+async def require_admin(request: Request, db: AsyncSession = Depends(get_db)):
     """
     FastAPI dependency that enforces admin role.
     Usage: admin = await require_admin(request, db)
