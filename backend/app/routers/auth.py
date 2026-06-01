@@ -353,11 +353,6 @@ async def microsoft_callback(
                 )
                 db.add(tenant)
                 await db.flush()
-            count_result = await db.execute(
-                select(User).where(User.tenant_id == tenant.id)
-            )
-            is_first = len(count_result.scalars().all()) == 0
-            role = "admin" if is_first else "user"
             user = await _get_or_create_user(
                 db, tenant.id, email, full_name, "microsoft", ms_sub
             )
@@ -553,11 +548,6 @@ async def google_callback(
                 )
                 db.add(tenant)
                 await db.flush()
-            count_result = await db.execute(
-                select(User).where(User.tenant_id == tenant.id)
-            )
-            is_first = len(count_result.scalars().all()) == 0
-            role = "admin" if is_first else "user"
             user = await _get_or_create_user(
                 db, tenant.id, email, full_name, "google", google_sub
             )
@@ -712,8 +702,7 @@ async def forgot_password(
         _fallback_reset_tokens[token] = (user.email, _time.time())
 
     if settings.EMAIL_ENABLED:
-        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-        # TODO: send email with reset_link
+        # TODO: send email with reset link
         return {"message": "If that email exists, a reset link has been sent."}
     else:
         return {

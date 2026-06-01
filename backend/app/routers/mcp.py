@@ -12,7 +12,6 @@ Endpoints:
   POST /api/mcp/api-key      — regenerate the tenant's API key (admin only)
 """
 import secrets
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel

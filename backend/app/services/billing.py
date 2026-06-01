@@ -2,7 +2,6 @@ import stripe
 from decimal import Decimal
 
 from app.config import get_settings
-from app.models.tenant import Tenant
 
 settings = get_settings()
 

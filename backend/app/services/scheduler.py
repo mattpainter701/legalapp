@@ -86,7 +86,7 @@ async def _get_tenant_admins(session, tenant_id: uuid.UUID) -> List[User]:
         select(User).where(
             User.tenant_id == tenant_id,
             User.role == "admin",
-            User.is_active == True,
+            User.is_active,
         )
     )
     return list(result.scalars().all())
@@ -445,7 +445,7 @@ class LegalScheduler:
                 result = await session.execute(
                     select(PracticeProfile).where(
                         PracticeProfile.plugin_name == "regulatory-legal",
-                        PracticeProfile.is_complete == True,
+                        PracticeProfile.is_complete,
                     )
                 )
                 profiles = list(result.scalars().all())
@@ -522,7 +522,7 @@ class LegalScheduler:
                 await _bypass_rls(session)
 
                 result = await session.execute(
-                    select(Matter).where(Matter.is_closed == False)
+                    select(Matter).where(not Matter.is_closed)
                 )
                 matters = list(result.scalars().all())
 
@@ -637,7 +637,7 @@ class LegalScheduler:
 
                 # All active matters across all tenants
                 result = await session.execute(
-                    select(Matter).where(Matter.is_closed == False)
+                    select(Matter).where(not Matter.is_closed)
                 )
                 matters = list(result.scalars().all())
 
