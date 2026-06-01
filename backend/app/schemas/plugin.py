@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 # ── Practice Profiles ─────────────────────────────────────────────────────────
 
+
 class PracticeProfileUpsert(BaseModel):
     profile_content: str
     is_complete: bool = False
@@ -27,23 +28,24 @@ class PracticeProfileResponse(BaseModel):
 
 # ── Plugin Skill Execution ────────────────────────────────────────────────────
 
+
 class SkillRequest(BaseModel):
-    skill: str                          # e.g. "vendor-agreement-review"
-    input_text: str                     # Contract text, question, etc.
-    context: Optional[dict] = None     # Extra structured context
+    skill: str  # e.g. "vendor-agreement-review"
+    input_text: str  # Contract text, question, etc.
+    context: Optional[dict] = None  # Extra structured context
     use_premium: bool = False
 
 
 class CitationTag(BaseModel):
     text: str
-    tag: str    # "settled", "verify", "model-knowledge", "web-search"
+    tag: str  # "settled", "verify", "model-knowledge", "web-search"
     source: Optional[str] = None
 
 
 class SkillFinding(BaseModel):
     category: str
-    legal_risk: str          # "critical", "high", "medium", "low"
-    business_friction: str   # "critical", "high", "medium", "low"
+    legal_risk: str  # "critical", "high", "medium", "low"
+    business_friction: str  # "critical", "high", "medium", "low"
     finding: str
     redline: Optional[str] = None
     fallback: Optional[str] = None
@@ -54,16 +56,17 @@ class SkillFinding(BaseModel):
 class SkillResponse(BaseModel):
     skill: str
     plugin: str
-    memo: str              # Full formatted markdown output with work-product header
+    memo: str  # Full formatted markdown output with work-product header
     findings: List[SkillFinding] = []
-    gates_triggered: List[str] = []     # Hard gate messages
-    flags: List[str] = []               # Soft warning flags
+    gates_triggered: List[str] = []  # Hard gate messages
+    flags: List[str] = []  # Soft warning flags
     requires_attorney_review: bool = True
     tokens_used: int = 0
     model_used: str
 
 
 # ── Matters ───────────────────────────────────────────────────────────────────
+
 
 class MatterCreate(BaseModel):
     matter_name: str
@@ -140,6 +143,7 @@ class MatterEventResponse(BaseModel):
 
 # ── Renewals ──────────────────────────────────────────────────────────────────
 
+
 class RenewalCreate(BaseModel):
     contract_name: str
     vendor: str
@@ -174,7 +178,105 @@ class RenewalUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+# ── Estates (Trust & Estate) ──────────────────────────────────────────────────
+
+
+class EstateCreate(BaseModel):
+    title: str
+    grantor: Optional[str] = None
+    estate_type: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class EstateUpdate(BaseModel):
+    title: Optional[str] = None
+    grantor: Optional[str] = None
+    estate_type: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class EstateEventCreate(BaseModel):
+    event_type: str
+    title: str
+    content: Optional[str] = None
+
+
+class EstateEventResponse(BaseModel):
+    id: str
+    event_type: str
+    title: str
+    content: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class EstateResponse(BaseModel):
+    id: str
+    title: str
+    grantor: Optional[str]
+    estate_type: Optional[str]
+    status: str
+    summary: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    events: List[EstateEventResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ── Mediation Cases ───────────────────────────────────────────────────────────
+
+
+class MediationCaseCreate(BaseModel):
+    title: str
+    parties: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class MediationCaseUpdate(BaseModel):
+    title: Optional[str] = None
+    parties: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class MediationCaseEventCreate(BaseModel):
+    event_type: str
+    title: str
+    content: Optional[str] = None
+
+
+class MediationCaseEventResponse(BaseModel):
+    id: str
+    event_type: str
+    title: str
+    content: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MediationCaseResponse(BaseModel):
+    id: str
+    title: str
+    parties: Optional[str]
+    status: str
+    summary: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    events: List[MediationCaseEventResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
 # ── Plugin Listing ────────────────────────────────────────────────────────────
+
 
 class PluginInfo(BaseModel):
     plugin_name: str

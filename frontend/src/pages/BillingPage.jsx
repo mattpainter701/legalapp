@@ -17,7 +17,7 @@ function TierBadge({ tier }) {
 }
 
 export default function BillingPage() {
-  const { user } = useAuth()
+  useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
@@ -63,26 +63,26 @@ export default function BillingPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="w-6 h-6 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-brand-bg">
+        <div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-brand-bg">
       <div className="max-w-2xl mx-auto px-4 py-12">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif">Billing</h1>
-            <p className="text-sm text-gray-500 mt-1 font-sans">
+            <h1 className="text-2xl font-bold text-brand-ink font-serif">Billing</h1>
+            <p className="text-sm text-brand-muted mt-1 font-sans">
               Manage your subscription and payment method
             </p>
           </div>
           <button
             onClick={() => navigate(-1)}
-            className="text-sm text-gray-500 hover:text-[#1e3a5f] font-sans"
+            className="text-sm text-brand-muted hover:text-brand-ink font-sans"
           >
             ← Back
           </button>
@@ -95,26 +95,26 @@ export default function BillingPage() {
         )}
 
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-sans">
+          <div className="mb-6 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
             {error}
           </div>
         )}
 
         {/* Current plan card */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
+        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider font-sans mb-1">
+              <p className="text-xs text-brand-muted uppercase tracking-wider font-sans mb-1">
                 Current Plan
               </p>
               <div className="flex items-center gap-3">
-                <span className="text-xl font-bold text-[#1e3a5f] font-serif capitalize">
+                <span className="text-xl font-bold text-brand-ink font-serif capitalize">
                   {status?.billing_tier ?? '—'}
                 </span>
                 {status?.billing_tier && <TierBadge tier={status.billing_tier} />}
               </div>
               {status?.flat_seat_count > 0 && (
-                <p className="text-sm text-gray-500 mt-1 font-sans">
+                <p className="text-sm text-brand-muted mt-1 font-sans">
                   {status.flat_seat_count} seat{status.flat_seat_count !== 1 ? 's' : ''}
                 </p>
               )}
@@ -122,8 +122,8 @@ export default function BillingPage() {
           </div>
 
           {status?.billing_tier === 'payg' && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <p className="text-sm text-gray-600 font-sans mb-3">
+            <div className="mt-4 pt-4 border-t border-brand-line">
+              <p className="text-sm text-brand-ink-2 font-sans mb-3">
                 On pay-as-you-go, usage is billed at a 10× markup on model cost.
                 Upgrade to a flat-seat plan for predictable monthly pricing and
                 significantly lower per-query costs.
@@ -131,7 +131,7 @@ export default function BillingPage() {
               <button
                 onClick={handleUpgrade}
                 disabled={actionLoading === 'checkout'}
-                className="inline-flex items-center gap-2 bg-[#1e3a5f] text-white px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-[#163050] disabled:opacity-60 transition-colors"
+                className="inline-flex items-center gap-2 bg-brand-accent text-white px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-brand-accent-2 disabled:opacity-60 transition-colors"
               >
                 {actionLoading === 'checkout' ? (
                   <>
@@ -148,18 +148,18 @@ export default function BillingPage() {
 
         {/* Manage subscription */}
         {status?.stripe_customer_id && (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
-            <p className="text-sm font-semibold text-[#1e3a5f] font-sans mb-1">
+          <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6">
+            <p className="text-sm font-semibold text-brand-ink font-sans mb-1">
               Manage Subscription
             </p>
-            <p className="text-sm text-gray-500 font-sans mb-4">
+            <p className="text-sm text-brand-muted font-sans mb-4">
               Update your payment method, download invoices, or cancel via the
               Stripe customer portal.
             </p>
             <button
               onClick={handlePortal}
               disabled={actionLoading === 'portal'}
-              className="inline-flex items-center gap-2 border border-[#1e3a5f] text-[#1e3a5f] px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-[#1e3a5f] hover:text-white disabled:opacity-60 transition-colors"
+              className="inline-flex items-center gap-2 border border-brand-accent text-brand-accent px-4 py-2 rounded-lg text-sm font-medium font-sans hover:bg-brand-accent hover:text-white disabled:opacity-60 transition-colors"
             >
               {actionLoading === 'portal' ? (
                 <>
@@ -174,26 +174,26 @@ export default function BillingPage() {
         )}
 
         {/* Pricing reference */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-          <p className="text-sm font-semibold text-[#1e3a5f] font-sans mb-3">Pricing reference</p>
+        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6">
+          <p className="text-sm font-semibold text-brand-ink font-sans mb-3">Pricing reference</p>
           <table className="w-full text-sm font-sans">
             <thead>
-              <tr className="text-xs text-gray-400 uppercase">
+              <tr className="text-xs text-brand-muted uppercase">
                 <th className="text-left pb-2">Model</th>
                 <th className="text-right pb-2">PAYG (10×)</th>
                 <th className="text-right pb-2">Flat-seat</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-brand-line">
               <tr className="py-2">
-                <td className="py-2 text-gray-700">DeepSeek (primary)</td>
-                <td className="py-2 text-right text-gray-500">$2.70 / 1M input</td>
-                <td className="py-2 text-right text-gray-500">$0.27 / 1M input</td>
+                <td className="py-2 text-brand-ink-2">DeepSeek (primary)</td>
+                <td className="py-2 text-right text-brand-muted">$2.70 / 1M input</td>
+                <td className="py-2 text-right text-brand-muted">$0.27 / 1M input</td>
               </tr>
               <tr>
-                <td className="py-2 text-gray-700">Claude Opus 4 (premium)</td>
-                <td className="py-2 text-right text-gray-500">$30 / 1M input</td>
-                <td className="py-2 text-right text-gray-500">$3 / 1M input</td>
+                <td className="py-2 text-brand-ink-2">Claude Opus 4 (premium)</td>
+                <td className="py-2 text-right text-brand-muted">$30 / 1M input</td>
+                <td className="py-2 text-right text-brand-muted">$3 / 1M input</td>
               </tr>
             </tbody>
           </table>
