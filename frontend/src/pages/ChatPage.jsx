@@ -65,7 +65,7 @@ export default function ChatPage() {
     Promise.all([getConversations(), getDocuments()])
       .then(([convs, docs]) => {
         setConversations(convs)
-        setDocuments(docs)
+        setDocuments(Array.isArray(docs) ? docs : docs?.documents || [])
         if (convs.length > 0) {
           loadConversation(convs[0].id)
         }
