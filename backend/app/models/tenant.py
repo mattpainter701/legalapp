@@ -24,6 +24,7 @@ class Tenant(Base):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     billing_tier: Mapped[str] = mapped_column(String(50), default="payg", server_default="payg")
+    api_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     flat_seat_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")

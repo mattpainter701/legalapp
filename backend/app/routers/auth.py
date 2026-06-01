@@ -19,6 +19,7 @@ from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -262,6 +263,7 @@ async def microsoft_callback(
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
         user = await _get_or_create_user(db, tenant.id, email, full_name, "microsoft", ms_sub)
+        await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
     return RedirectResponse(
@@ -396,6 +398,7 @@ async def google_callback(
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
         user = await _get_or_create_user(db, tenant.id, email, full_name, "google", google_sub)
+        await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
     return RedirectResponse(
@@ -455,6 +458,7 @@ async def register(
         is_active=True,
     )
     db.add(user)
+    await ensure_stripe_customer(tenant, db)
     await db.commit()
     await db.refresh(user)
     await db.refresh(tenant)

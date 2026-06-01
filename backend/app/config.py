@@ -23,6 +23,16 @@ class Settings(BaseSettings):
 
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_ID: str = ""            # Stripe Price ID for flat subscription
+    STRIPE_SUCCESS_URL: str = ""         # e.g. https://yourdomain.com/billing?success=1
+    STRIPE_CANCEL_URL: str = ""          # e.g. https://yourdomain.com/billing?cancel=1
+
+    # Super-admin platform key — set a long random token; never commit
+    PLATFORM_SECRET_KEY: str = ""
+
+    # Optional separate vectorDB for public CourtListener chunks (BGE embeddings)
+    # If empty, public_chunks table lives in main DATABASE_URL
+    VECTORDB_URL: str = ""
 
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.

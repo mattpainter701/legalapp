@@ -12,6 +12,9 @@ import PluginPage from './pages/PluginPage'
 import MatterPortfolioPage from './pages/MatterPortfolioPage'
 import MatterDetailPage from './pages/MatterDetailPage'
 import RenewalTrackerPage from './pages/RenewalTrackerPage'
+import BillingPage from './pages/BillingPage'
+import MCPPage from './pages/MCPPage'
+import PlatformPage from './pages/PlatformPage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -184,6 +187,24 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/billing"
+          element={
+            <ProtectedRoute>
+              <BillingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/mcp"
+          element={
+            <ProtectedRoute adminOnly>
+              <MCPPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Platform admin — has its own auth (platform key), not protected by JWT */}
+        <Route path="/platform" element={<PlatformPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>
