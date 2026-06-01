@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, updatePlatformTenant } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant } from '../api'
+import { Activity, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react'
 
-function StatCard({ label, value, sub }) {
+function StatCard({ label, value, sub, icon: Icon }) {
   return (
-    <div className="bg-brand-surface border border-brand-line rounded-lg p-5 shadow-sm">
-      <p className="text-xs text-brand-muted font-sans uppercase tracking-wider mb-1">{label}</p>
+    <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-brand-muted font-sans uppercase tracking-wider">{label}</p>
+        {Icon && <Icon size={16} className="text-brand-muted" />}
+      </div>
       <p className="text-2xl font-bold text-brand-ink font-serif">{value ?? '—'}</p>
       {sub && <p className="text-xs text-brand-muted mt-1 font-sans">{sub}</p>}
     </div>
@@ -12,13 +16,13 @@ function StatCard({ label, value, sub }) {
 }
 
 function TierBadge({ tier }) {
+  const colors = {
+    flat: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
+    payg: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+  }
   return (
-    <span
-      className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-        tier === 'flat' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-      }`}
-    >
-      {tier}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${colors[tier] || colors.payg}`}>
+      {tier === 'flat' ? 'Flat-seat' : 'PAYG'}
     </span>
   )
 }
@@ -33,7 +37,7 @@ function LoginScreen({ onLogin }) {
     setLoading(true)
     setError(null)
     try {
-      await getPlatformUsage(key)  // validates the key
+      await getPlatformUsage(key)
       onLogin(key)
     } catch {
       setError('Invalid platform key')
@@ -44,27 +48,21 @@ function LoginScreen({ onLogin }) {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-brand-bg">
-      <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-8 w-full max-w-sm">
-        <h1 className="text-xl font-bold text-brand-ink font-serif mb-1">Platform Admin</h1>
-        <p className="text-sm text-brand-muted font-sans mb-6">Operator access only</p>
-        {error && (
-          <p className="text-sm text-brand-rose font-sans mb-4">{error}</p>
-        )}
+      <div className="bg-brand-surface rounded-2xl border border-brand-line shadow-xl p-8 w-full max-w-sm">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-xl bg-brand-ink flex items-center justify-center">
+            <Shield size={20} className="text-brand-surface" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-brand-ink font-serif">Operator Console</h1>
+            <p className="text-xs text-brand-muted font-sans">Platform administration</p>
+          </div>
+        </div>
+        {error && <p className="text-sm text-brand-rose bg-brand-rose/10 px-3 py-2 rounded-lg mb-4 font-sans">{error}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
-            type="password"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="Platform secret key"
-            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent"
-            required
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-brand-accent text-white py-2 rounded-lg text-sm font-medium font-sans hover:bg-brand-accent-2 disabled:opacity-60"
-          >
-            {loading ? 'Authenticating…' : 'Access Platform'}
+          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Platform secret key" className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" required />
+          <button type="submit" disabled={loading} className="w-full bg-brand-ink text-white py-2.5 rounded-lg text-sm font-medium font-sans hover:bg-brand-ink-2 disabled:opacity-60 transition-colors">
+            {loading ? 'Authenticating…' : 'Access Console'}
           </button>
         </form>
       </div>
@@ -72,79 +70,21 @@ function LoginScreen({ onLogin }) {
   )
 }
 
-function TenantRow({ tenant, platformKey, onUpdate }) {
-  const [updating, setUpdating] = useState(null)
-
-  const toggle = async (field, value) => {
-    setUpdating(field)
-    try {
-      const payload = field === 'is_active' ? { is_active: value } : { billing_tier: value }
-      await updatePlatformTenant(platformKey, tenant.id, payload)
-      onUpdate(tenant.id, payload)
-    } catch {
-      // ignore
-    } finally {
-      setUpdating(null)
-    }
-  }
-
-  return (
-    <tr className="hover:bg-brand-bg text-sm font-sans border-t border-brand-line">
-      <td className="px-4 py-3">
-        <p className="font-medium text-brand-ink-2">{tenant.name}</p>
-        <p className="text-xs text-brand-muted">{tenant.domain}</p>
-      </td>
-      <td className="px-4 py-3">
-        <TierBadge tier={tenant.billing_tier} />
-      </td>
-      <td className="px-4 py-3 text-brand-ink-2">{tenant.user_count}</td>
-      <td className="px-4 py-3 text-brand-ink-2">{tenant.requests_30d.toLocaleString()}</td>
-      <td className="px-4 py-3 text-brand-ink-2">${tenant.cost_usd_30d.toFixed(2)}</td>
-      <td className="px-4 py-3">
-        <button
-          onClick={() => toggle('is_active', !tenant.is_active)}
-          disabled={updating === 'is_active'}
-          className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-            tenant.is_active
-              ? 'bg-green-100 text-green-700 hover:bg-red-100 hover:text-red-700'
-              : 'bg-red-100 text-red-700 hover:bg-green-100 hover:text-green-700'
-          }`}
-        >
-          {updating === 'is_active' ? '…' : tenant.is_active ? 'Active' : 'Inactive'}
-        </button>
-      </td>
-      <td className="px-4 py-3">
-        {tenant.billing_tier === 'payg' ? (
-          <button
-            onClick={() => toggle('billing_tier', 'flat')}
-            disabled={updating === 'billing_tier'}
-            className="text-xs text-brand-accent hover:underline"
-          >
-            {updating === 'billing_tier' ? '…' : '→ flat'}
-          </button>
-        ) : (
-          <button
-            onClick={() => toggle('billing_tier', 'payg')}
-            disabled={updating === 'billing_tier'}
-            className="text-xs text-brand-muted hover:underline"
-          >
-            {updating === 'billing_tier' ? '…' : '→ payg'}
-          </button>
-        )}
-      </td>
-    </tr>
-  )
-}
-
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(() => sessionStorage.getItem('platform_key') || null)
+  const [tab, setTab] = useState('dashboard')
   const [tenants, setTenants] = useState([])
   const [usage, setUsage] = useState(null)
+  const [health, setHealth] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
-  const LIMIT = 50
+  const [expandedTenant, setExpandedTenant] = useState(null)
+  const [tenantDetail, setTenantDetail] = useState(null)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+  const LIMIT = 20
 
   const handleLogin = (key) => {
     sessionStorage.setItem('platform_key', key)
@@ -156,142 +96,347 @@ export default function PlatformPage() {
     setLoading(true)
     setError(null)
     try {
-      const [tenantsData, usageData] = await Promise.all([
-        getPlatformTenants(platformKey, page),
-        getPlatformUsage(platformKey),
-      ])
-      setTenants(tenantsData.tenants)
-      setTotal(tenantsData.total)
-      setUsage(usageData)
+      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey)]
+      if (tab === 'health') promises.push(getPlatformHealth(platformKey))
+      const results = await Promise.all(promises)
+      setTenants(results[0].tenants)
+      setTotal(results[0].total)
+      setUsage(results[1])
+      if (results[2]) setHealth(results[2])
     } catch (e) {
-      setError(e?.response?.data?.detail || 'Failed to load data')
-      if (e?.response?.status === 403) {
-        sessionStorage.removeItem('platform_key')
-        setPlatformKey(null)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [platformKey, page])
+      setError(e?.response?.data?.detail || 'Failed to load')
+      if (e?.response?.status === 403) { sessionStorage.removeItem('platform_key'); setPlatformKey(null) }
+    } finally { setLoading(false) }
+  }, [platformKey, page, tab])
 
-  useEffect(() => {
-    loadData()
-  }, [loadData])
+  useEffect(() => { loadData() }, [loadData])
 
   const handleUpdate = (id, changes) => {
     setTenants((prev) => prev.map((t) => (t.id === id ? { ...t, ...changes } : t)))
   }
 
-  if (!platformKey) {
-    return <LoginScreen onLogin={handleLogin} />
+  const toggleTenant = async (id) => {
+    if (expandedTenant === id) { setExpandedTenant(null); setTenantDetail(null); return }
+    setExpandedTenant(id)
+    setLoadingDetail(true)
+    try {
+      const data = await getPlatformTenant(platformKey, id)
+      setTenantDetail(data)
+    } catch { setTenantDetail(null) }
+    finally { setLoadingDetail(false) }
   }
+
+  const filtered = tenants.filter((t) =>
+    !search || t.name.toLowerCase().includes(search.toLowerCase()) || t.domain.toLowerCase().includes(search.toLowerCase())
+  )
+
+  if (!platformKey) return <LoginScreen onLogin={handleLogin} />
+
+  const tabs = [
+    { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+    { id: 'tenants', label: 'Tenants', icon: Users },
+    { id: 'health', label: 'System', icon: Database },
+  ]
 
   return (
     <div className="min-h-screen bg-brand-bg">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-brand-ink font-serif">Platform Admin</h1>
-            <p className="text-sm text-brand-muted font-sans mt-1">Cross-tenant operator view</p>
+      {/* Top bar */}
+      <div className="bg-brand-surface border-b border-brand-line px-6 py-3 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-brand-ink flex items-center justify-center">
+            <Shield size={14} className="text-brand-surface" />
           </div>
-          <button
-            onClick={() => {
-              sessionStorage.removeItem('platform_key')
-              setPlatformKey(null)
-            }}
-            className="text-sm text-brand-muted hover:text-brand-rose font-sans"
-          >
-            Sign out
-          </button>
+          <span className="font-serif font-bold text-brand-ink">Operator Console</span>
         </div>
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-brand-muted font-mono">{platformKey.slice(0, 8)}…</span>
+          <button onClick={() => { sessionStorage.removeItem('platform_key'); setPlatformKey(null); setTenants([]); setUsage(null); setHealth(null) }} className="text-xs text-brand-muted hover:text-brand-rose font-sans transition-colors">Sign out</button>
+        </div>
+      </div>
 
-        {error && (
-          <div className="mb-6 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
-            {error}
-          </div>
-        )}
-
-        {/* Stats */}
-        {usage && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-            <StatCard label="Tenants" value={usage.total_tenants} sub={`${usage.active_tenants} active`} />
-            <StatCard label="Total Users" value={usage.total_users} />
-            <StatCard label="Requests (30d)" value={usage.requests_30d.toLocaleString()} />
-            <StatCard label="Revenue (30d)" value={`$${usage.cost_usd_30d.toFixed(2)}`} sub="billed cost" />
-          </div>
-        )}
-
-        {/* Tenant table */}
-        <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-brand-line">
-            <p className="text-sm font-semibold text-brand-ink font-sans">
-              Tenants ({total})
-            </p>
-            <button
-              onClick={loadData}
-              disabled={loading}
-              className="text-xs text-brand-muted hover:text-brand-ink font-sans"
-            >
-              {loading ? 'Loading…' : 'Refresh'}
+      {/* Tab nav */}
+      <div className="bg-brand-surface border-b border-brand-line">
+        <div className="max-w-7xl mx-auto px-6 flex gap-1">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)} className={`flex items-center gap-2 px-5 py-3 text-sm font-sans font-medium border-b-2 transition-colors ${tab === t.id ? 'border-brand-ink text-brand-ink' : 'border-transparent text-brand-muted hover:text-brand-ink-2'}`}>
+              <t.icon size={16} />
+              {t.label}
             </button>
-          </div>
-
-          {loading && tenants.length === 0 ? (
-            <div className="flex justify-center py-12">
-              <div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-brand-bg-soft">
-                  <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
-                    <th className="text-left px-4 py-2">Tenant</th>
-                    <th className="text-left px-4 py-2">Tier</th>
-                    <th className="text-left px-4 py-2">Users</th>
-                    <th className="text-left px-4 py-2">Req (30d)</th>
-                    <th className="text-left px-4 py-2">Cost (30d)</th>
-                    <th className="text-left px-4 py-2">Status</th>
-                    <th className="text-left px-4 py-2">Change tier</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tenants.map((t) => (
-                    <TenantRow
-                      key={t.id}
-                      tenant={t}
-                      platformKey={platformKey}
-                      onUpdate={handleUpdate}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Pagination */}
-          {total > LIMIT && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-brand-line">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-                className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans"
-              >
-                ← Prev
-              </button>
-              <span className="text-xs text-brand-muted font-sans">
-                Page {page} of {Math.ceil(total / LIMIT)}
-              </span>
-              <button
-                onClick={() => setPage((p) => p + 1)}
-                disabled={page * LIMIT >= total}
-                className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans"
-              >
-                Next →
-              </button>
-            </div>
-          )}
+          ))}
         </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {error && (
+          <div className="mb-6 bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">{error}</div>
+        )}
+
+        {/* ── Dashboard Tab ── */}
+        {tab === 'dashboard' && usage && (
+          <div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+              <StatCard label="Tenants" value={usage.total_tenants} sub={`${usage.active_tenants} active`} icon={Users} />
+              <StatCard label="Total Users" value={usage.total_users} icon={Users} />
+              <StatCard label="Requests (30d)" value={usage.requests_30d?.toLocaleString()} icon={Activity} />
+              <StatCard label="Revenue (30d)" value={`$${(usage.cost_usd_30d ?? 0).toFixed(2)}`} sub="billed model cost" icon={Zap} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Top tenants by usage */}
+              <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-brand-line">
+                  <h2 className="font-serif font-bold text-brand-ink">Top Tenants (30d)</h2>
+                </div>
+                <div className="divide-y divide-brand-line">
+                  {[...tenants].sort((a, b) => (b.requests_30d || 0) - (a.requests_30d || 0)).slice(0, 10).map((t) => (
+                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-brand-bg transition-colors">
+                      <div>
+                        <p className="text-sm font-medium text-brand-ink font-sans">{t.name}</p>
+                        <p className="text-xs text-brand-muted">{t.domain}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()} req</p>
+                        <p className="text-xs text-brand-muted">${t.cost_usd_30d?.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {tenants.length === 0 && <p className="px-5 py-8 text-sm text-brand-muted text-center font-sans">No tenants yet</p>}
+                </div>
+              </div>
+
+              {/* Recent tenants */}
+              <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-brand-line">
+                  <h2 className="font-serif font-bold text-brand-ink">Recent Tenants</h2>
+                </div>
+                <div className="divide-y divide-brand-line">
+                  {[...tenants].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 10).map((t) => (
+                    <div key={t.id} className="px-5 py-3 flex items-center justify-between hover:bg-brand-bg transition-colors">
+                      <div>
+                        <p className="text-sm font-medium text-brand-ink font-sans">{t.name}</p>
+                        <div className="flex items-center gap-2">
+                          <TierBadge tier={t.billing_tier} />
+                          <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+                          <span className="text-xs text-brand-muted">{t.is_active ? 'Active' : 'Inactive'}</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-brand-muted">{new Date(t.created_at).toLocaleDateString()}</p>
+                    </div>
+                  ))}
+                  {tenants.length === 0 && <p className="px-5 py-8 text-sm text-brand-muted text-center font-sans">No tenants yet</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Tenants Tab ── */}
+        {tab === 'tenants' && (
+          <div>
+            {/* Search + actions */}
+            <div className="flex items-center gap-4 mb-6">
+              <div className="relative flex-1 max-w-sm">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
+                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or domain…" className="w-full pl-9 pr-4 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
+              </div>
+              <button onClick={loadData} disabled={loading} className="text-xs text-brand-muted hover:text-brand-ink font-sans transition-colors">
+                {loading ? 'Loading…' : 'Refresh'}
+              </button>
+            </div>
+
+            {/* Tenant list */}
+            {loading && tenants.length === 0 ? (
+              <div className="flex justify-center py-16">
+                <div className="w-8 h-8 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-brand-bg-soft border-b border-brand-line">
+                      <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                        <th className="text-left px-5 py-3"></th>
+                        <th className="text-left px-5 py-3">Tenant</th>
+                        <th className="text-left px-5 py-3">Tier</th>
+                        <th className="text-center px-5 py-3">Users</th>
+                        <th className="text-center px-5 py-3">Requests (30d)</th>
+                        <th className="text-right px-5 py-3">Cost (30d)</th>
+                        <th className="text-center px-5 py-3">Status</th>
+                        <th className="text-center px-5 py-3">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-brand-line">
+                      {filtered.map((t) => (
+                        <React.Fragment key={t.id}>
+                          <tr className="hover:bg-brand-bg transition-colors cursor-pointer" onClick={() => toggleTenant(t.id)}>
+                            <td className="px-5 py-3">{expandedTenant === t.id ? <ChevronDown size={14} className="text-brand-ink" /> : <ChevronRight size={14} className="text-brand-muted" />}</td>
+                            <td className="px-5 py-3">
+                              <p className="text-sm font-medium text-brand-ink font-sans">{t.name}</p>
+                              <p className="text-xs text-brand-muted">{t.domain}</p>
+                            </td>
+                            <td className="px-5 py-3"><TierBadge tier={t.billing_tier} /></td>
+                            <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.user_count}</td>
+                            <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()}</td>
+                            <td className="px-5 py-3 text-right text-sm text-brand-ink-2 font-mono">${t.cost_usd_30d?.toFixed(2)}</td>
+                            <td className="px-5 py-3 text-center">
+                              <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${t.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
+                                <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+                                {t.is_active ? 'Active' : 'Inactive'}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3 text-center">
+                              <button onClick={(e) => { e.stopPropagation(); toggleTenant(t.id) }} className="text-xs text-brand-accent hover:underline font-sans">
+                                {expandedTenant === t.id ? 'Close' : 'Details'}
+                              </button>
+                            </td>
+                          </tr>
+                          {/* Expanded detail row */}
+                          {expandedTenant === t.id && (
+                            <tr key={`detail-${t.id}`}>
+                              <td colSpan={8} className="px-5 py-4 bg-brand-bg-soft">
+                                {loadingDetail ? (
+                                  <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
+                                ) : tenantDetail ? (
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div>
+                                      <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Tenant Info</h4>
+                                      <dl className="space-y-2 text-sm">
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Company</dt><dd className="text-brand-ink font-sans">{tenantDetail.company_name || '—'}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Domain</dt><dd className="text-brand-ink font-sans">{tenantDetail.domain}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Stripe ID</dt><dd className="text-brand-ink font-mono text-xs">{tenantDetail.stripe_customer_id ? '✓' : '—'}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Seats</dt><dd className="text-brand-ink font-sans">{tenantDetail.flat_seat_count || '—'}</dd></div>
+                                        <div className="flex justify-between"><dt className="text-brand-muted font-sans">Created</dt><dd className="text-brand-ink font-sans">{new Date(tenantDetail.created_at).toLocaleDateString()}</dd></div>
+                                      </dl>
+                                    </div>
+                                    <div>
+                                      <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Users</h4>
+                                      {tenantDetail.users?.length > 0 ? (
+                                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                                          {tenantDetail.users.map((u) => (
+                                            <div key={u.id} className="flex items-center justify-between text-sm py-1">
+                                              <div>
+                                                <p className="text-brand-ink font-sans font-medium">{u.full_name || u.email}</p>
+                                                <p className="text-xs text-brand-muted">{u.email}</p>
+                                              </div>
+                                              <span className={`text-xs px-1.5 py-0.5 rounded font-sans ${u.role === 'admin' ? 'bg-brand-ink/10 text-brand-ink' : 'bg-brand-muted/10 text-brand-muted'}`}>{u.role}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : <p className="text-sm text-brand-muted font-sans">No users listed</p>}
+                                    </div>
+                                    <div>
+                                      <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Actions</h4>
+                                      <div className="space-y-3">
+                                        <button onClick={() => { const payload = { is_active: !t.is_active }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`w-full px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.is_active ? 'border-brand-rose/30 text-brand-rose hover:bg-brand-rose/5' : 'border-brand-accent/30 text-brand-accent hover:bg-brand-accent/5'}`}>
+                                          {t.is_active ? 'Deactivate Tenant' : 'Activate Tenant'}
+                                        </button>
+                                        <div className="flex gap-2">
+                                          <button onClick={() => { const payload = { billing_tier: 'flat' }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'flat' ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                            Flat-seat
+                                          </button>
+                                          <button onClick={() => { const payload = { billing_tier: 'payg' }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'payg' ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                            PAYG
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-brand-rose font-sans">Failed to load tenant detail</p>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Pagination */}
+                {total > LIMIT && (
+                  <div className="flex items-center justify-between px-5 py-3 border-t border-brand-line">
+                    <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">← Prev</button>
+                    <span className="text-xs text-brand-muted font-sans">Page {page} of {Math.ceil(total / LIMIT)} ({total} total)</span>
+                    <button onClick={() => setPage((p) => p + 1)} disabled={page * LIMIT >= total} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Health Tab ── */}
+        {tab === 'health' && (
+          <div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              <StatCard label="Tenants" value={usage?.total_tenants} sub={`${usage?.active_tenants} active`} icon={Users} />
+              <StatCard label="Users" value={usage?.total_users} icon={Users} />
+              <StatCard label="Requests (30d)" value={usage?.requests_30d?.toLocaleString()} icon={Activity} />
+              <StatCard label="Platform Key" value="Configured" sub={platformKey?.slice(0, 8) + '…'} icon={Shield} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* DB tables */}
+              <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-brand-line">
+                  <h2 className="font-serif font-bold text-brand-ink flex items-center gap-2"><Database size={18} /> Database Tables</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-brand-bg-soft border-b border-brand-line">
+                      <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                        <th className="text-left px-5 py-2">Table</th>
+                        <th className="text-right px-5 py-2">Rows</th>
+                        <th className="text-right px-5 py-2">Size</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-brand-line">
+                      {health?.tables?.map((t) => (
+                        <tr key={t.table} className="hover:bg-brand-bg transition-colors">
+                          <td className="px-5 py-2.5 text-sm text-brand-ink font-mono">{t.table}</td>
+                          <td className="px-5 py-2.5 text-sm text-brand-ink-2 text-right font-sans">{t.rows?.toLocaleString()}</td>
+                          <td className="px-5 py-2.5 text-sm text-brand-muted text-right font-sans">{t.size}</td>
+                        </tr>
+                      )) || <tr><td colSpan={3} className="px-5 py-8 text-sm text-brand-muted text-center font-sans">No data</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Service status */}
+              <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm">
+                <div className="px-5 py-4 border-b border-brand-line">
+                  <h2 className="font-serif font-bold text-brand-ink flex items-center gap-2"><Server size={18} /> Service Status</h2>
+                </div>
+                <div className="p-5 space-y-4">
+                  {[
+                    { name: 'PostgreSQL', check: health?.tables?.length > 0 },
+                    { name: 'Redis', check: true },
+                    { name: 'API Server', check: true },
+                    { name: 'Migrations', check: health?.tables?.some(t => t.table === 'estates' || t.table === 'mediation_cases') },
+                    { name: 'OpenCode.ai', check: !!platformKey },
+                    { name: 'OpenRouter', check: false },
+                    { name: 'Azure OpenAI', check: false },
+                    { name: 'Google Gemini', check: false },
+                  ].map((s) => (
+                    <div key={s.name} className="flex items-center justify-between">
+                      <span className="text-sm font-sans text-brand-ink">{s.name}</span>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${s.check ? 'text-brand-accent' : 'text-brand-rose'}`}>
+                        <span className={`w-2 h-2 rounded-full ${s.check ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+                        {s.check ? 'Online' : 'Offline'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Last check time */}
+            {health?.checked_at && (
+              <p className="mt-4 text-xs text-brand-muted font-sans text-right">Last check: {new Date(health.checked_at).toLocaleString()}</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

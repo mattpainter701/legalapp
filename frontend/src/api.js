@@ -195,4 +195,7 @@ export const updatePlatformTenant = (key, id, data) =>
 export const getPlatformUsage = (key) =>
   platformApi(key).get('/platform/usage').then((r) => r.data)
 
+export const getPlatformHealth = (key) =>
+  platformApi(key).get('/platform/health').then((r) => r.data)
+
 export default api
