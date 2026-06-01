@@ -68,6 +68,7 @@ _FALLBACK_TTL = 600
 
 _fallback_states: dict[str, float] = {}
 
+
 def _gc_fallback_dicts() -> None:
     now = _time.time()
     for k, v in list(_fallback_states.items()):
@@ -88,6 +89,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
+
 def _create_access_token(user: User, tenant: Tenant) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -104,6 +106,7 @@ def _create_access_token(user: User, tenant: Tenant) -> str:
 
 
 # ── Tenant / user upsert helpers ───────────────────────────────────────────────
+
 
 async def _get_or_create_tenant(
     db: AsyncSession, domain: str, tenant_name: str
@@ -182,9 +185,23 @@ async def _get_or_create_user(
 
 # ── Microsoft OAuth ────────────────────────────────────────────────────────────
 
+
+def _oauth_configured(client_id: str, client_secret: str) -> bool:
+    """Reject empty, whitespace-only, or obviously bogus placeholder values."""
+    cid = (client_id or "").strip()
+    cs = (client_secret or "").strip()
+    if not cid or not cs:
+        return False
+    if cid.startswith("#") or "TODO" in cid.upper():
+        return False
+    return True
+
+
 @router.get("/microsoft/login")
 async def microsoft_login(request: Request):
-    if not settings.MICROSOFT_CLIENT_ID:
+    if not _oauth_configured(
+        settings.MICROSOFT_CLIENT_ID, settings.MICROSOFT_CLIENT_SECRET
+    ):
         raise HTTPException(status_code=501, detail="Microsoft OAuth not configured")
 
     state = secrets.token_urlsafe(32)
@@ -234,23 +251,32 @@ async def microsoft_callback(
         )
 
         if token_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to exchange Microsoft authorization code")
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to exchange Microsoft authorization code",
+            )
 
         token_data = token_response.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            raise HTTPException(status_code=400, detail="No access token from Microsoft")
+            raise HTTPException(
+                status_code=400, detail="No access token from Microsoft"
+            )
 
         graph_response = await client.get(
             "https://graph.microsoft.com/v1.0/me",
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if graph_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch Microsoft profile")
+            raise HTTPException(
+                status_code=400, detail="Failed to fetch Microsoft profile"
+            )
 
         profile = graph_response.json()
 
-    email = (profile.get("mail") or profile.get("userPrincipalName") or "").lower().strip()
+    email = (
+        (profile.get("mail") or profile.get("userPrincipalName") or "").lower().strip()
+    )
     full_name = profile.get("displayName")
     ms_sub = profile.get("id", "")
 
@@ -262,7 +288,9 @@ async def microsoft_callback(
 
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
-        user = await _get_or_create_user(db, tenant.id, email, full_name, "microsoft", ms_sub)
+        user = await _get_or_create_user(
+            db, tenant.id, email, full_name, "microsoft", ms_sub
+        )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
@@ -294,8 +322,7 @@ async def _verify_google_id_token(id_token: str) -> dict:
             raise HTTPException(status_code=502, detail="Failed to fetch Google JWKS")
         jwks = jwks_response.json()
 
-    from jose import jwk, jws
-    from jose.utils import base64url_decode
+    from jose import jwk
 
     # Parse the JWT header to find the key ID
     header_segment = id_token.split(".")[0]
@@ -311,7 +338,9 @@ async def _verify_google_id_token(id_token: str) -> dict:
             break
 
     if matching_key is None:
-        raise HTTPException(status_code=400, detail="No matching Google public key for token kid")
+        raise HTTPException(
+            status_code=400, detail="No matching Google public key for token kid"
+        )
 
     try:
         public_key = jwk.construct(matching_key)
@@ -322,14 +351,16 @@ async def _verify_google_id_token(id_token: str) -> dict:
             audience=settings.GOOGLE_CLIENT_ID,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Google id_token verification failed: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"Google id_token verification failed: {exc}"
+        )
 
     return claims
 
 
 @router.get("/google/login")
 async def google_login(request: Request):
-    if not settings.GOOGLE_CLIENT_ID:
+    if not _oauth_configured(settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET):
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
     state = secrets.token_urlsafe(32)
@@ -375,7 +406,9 @@ async def google_callback(
         )
 
         if token_response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to exchange Google authorization code")
+            raise HTTPException(
+                status_code=400, detail="Failed to exchange Google authorization code"
+            )
 
         token_data = token_response.json()
 
@@ -397,7 +430,9 @@ async def google_callback(
 
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
-        user = await _get_or_create_user(db, tenant.id, email, full_name, "google", google_sub)
+        user = await _get_or_create_user(
+            db, tenant.id, email, full_name, "google", google_sub
+        )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
@@ -407,6 +442,7 @@ async def google_callback(
 
 
 # ── Email/password register & login ────────────────────────────────────────────
+
 
 @router.post("/register")
 async def register(
@@ -529,7 +565,10 @@ async def forgot_password(
 
     # Always return success to avoid email enumeration
     if not user or not user.password_hash:
-        return {"message": "If that email exists, a reset link has been sent.", "reset_token": None}
+        return {
+            "message": "If that email exists, a reset link has been sent.",
+            "reset_token": None,
+        }
 
     token = secrets.token_urlsafe(32)
     redis = getattr(request.app.state, "redis", None)
@@ -591,13 +630,16 @@ _fallback_reset_tokens: dict[str, tuple[str, float]] = {}
 
 # ── Logout / Me ────────────────────────────────────────────────────────────────
 
+
 @router.post("/logout")
 async def logout(request: Request):
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ", 1)[1]
         try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            payload = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
             if jti and exp:

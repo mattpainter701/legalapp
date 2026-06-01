@@ -51,6 +51,9 @@ export const loginGoogle = () => {
   window.location.href = `${BASE_URL}/auth/google/login`
 }
 
+export const checkOAuthStatus = () =>
+  api.get('/auth/me').then(() => true).catch(() => false)
+
 export const logout = () => api.post('/auth/logout').then((r) => r.data)
 
 export const forgotPassword = (email) =>

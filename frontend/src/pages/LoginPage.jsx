@@ -1,5 +1,7 @@
-import React from 'react'
-import { loginMicrosoft, loginGoogle } from '../api'
+import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { loginMicrosoft, loginGoogle, login } from '../api'
+import { useAuth } from '../App'
 
 function MicrosoftIcon() {
   return (
@@ -36,6 +38,36 @@ function GoogleIcon() {
 }
 
 export default function LoginPage() {
+  const [showEmail, setShowEmail] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const { login: authLogin } = useAuth()
+  const navigate = useNavigate()
+
+  const handleEmailLogin = async (e) => {
+    e.preventDefault()
+    if (!email || !password) {
+      setError('Please enter your email and password.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await login({ email, password })
+      await authLogin(result.access_token)
+      navigate('/chat', { replace: true })
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      setError(detail || 'Invalid email or password.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const inputClasses = "w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
+
   return (
     <div className="min-h-screen bg-brand-bg flex flex-col items-center justify-center px-4 relative overflow-hidden">
       {/* Background grain/texture */}
@@ -68,7 +100,6 @@ export default function LoginPage() {
                 strokeLinejoin="round"
               />
             </svg>
-            {/* Accent dot */}
             <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-brand-accent border-2 border-brand-surface rounded-full"></div>
           </div>
           <h1 className="text-3xl font-serif text-brand-ink tracking-tight mb-3">
@@ -79,14 +110,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Divider */}
-        <div className="flex items-center gap-4 mb-8">
-          <div className="h-[1px] flex-1 bg-brand-line"></div>
-          <span className="text-xs font-mono text-brand-muted uppercase tracking-widest">Sign In</span>
-          <div className="h-[1px] flex-1 bg-brand-line"></div>
-        </div>
-
-        {/* Sign-in buttons */}
+        {/* OAuth buttons */}
         <div className="space-y-4">
           <button
             onClick={loginMicrosoft}
@@ -105,16 +129,87 @@ export default function LoginPage() {
           </button>
         </div>
 
+        {/* Divider */}
+        <div className="flex items-center gap-4 my-6">
+          <div className="h-[1px] flex-1 bg-brand-line"></div>
+          <span className="text-xs text-brand-muted font-sans">or</span>
+          <div className="h-[1px] flex-1 bg-brand-line"></div>
+        </div>
+
+        {/* Email login toggle */}
+        {!showEmail ? (
+          <button
+            onClick={() => setShowEmail(true)}
+            className="w-full text-center text-sm text-brand-accent hover:text-brand-accent-2 font-sans font-medium transition-colors"
+          >
+            Sign in with email & password
+          </button>
+        ) : (
+          <form onSubmit={handleEmailLogin} className="space-y-4">
+            {error && (
+              <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
+                {error}
+              </div>
+            )}
+            <div>
+              <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@firm.com"
+                className={inputClasses}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={inputClasses}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex items-center justify-center px-5 py-3 rounded-xl bg-brand-ink text-white font-sans text-sm font-medium hover:bg-brand-ink-2 disabled:opacity-60 transition-all duration-200 shadow-sm"
+            >
+              {loading ? (
+                <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                'Sign In'
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowEmail(false); setError(null) }}
+              className="w-full text-center text-sm text-brand-muted hover:text-brand-ink font-sans transition-colors"
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+
         {/* Info text */}
         <p className="mt-8 text-xs text-brand-muted text-center leading-relaxed">
-          By signing in, you agree to our Terms of Service and Privacy Policy. <br />Your firm's data is isolated and never shared.
+          By signing in, you agree to our Terms of Service and Privacy Policy.
+          <br />Your firm's data is isolated and never shared.
         </p>
       </div>
 
       {/* Footer */}
       <div className="relative z-10 mt-10 text-center">
-        <p className="text-brand-gold text-sm font-serif italic tracking-wide">
-          Secure. Private. Accurate.
+        <p className="text-brand-muted text-sm font-sans">
+          Don't have an account?{' '}
+          <a href="/signup" className="text-brand-accent hover:text-brand-accent-2 font-medium">
+            Create one
+          </a>
         </p>
       </div>
     </div>
