@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Scale } from 'lucide-react'
 import ChatMessage from './ChatMessage'
+import { MessageSkeleton } from './LoadingSkeleton'
 
 function TypingIndicator() {
   return (
@@ -99,8 +100,9 @@ export default function Messages({ messages, isLoading, isSending, onMessageScro
       ) : (
         <>
           {isLoading ? (
-            <div className="flex justify-center py-12">
-              <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+            <div className="max-w-4xl mx-auto">
+              <MessageSkeleton />
+              <MessageSkeleton />
             </div>
           ) : (
             <div className="max-w-4xl mx-auto">

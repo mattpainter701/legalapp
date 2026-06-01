@@ -48,12 +48,12 @@ export default function ChatHeader({
                 setIsEditing(false)
               }
             }}
-            className="font-serif text-xl text-brand-ink font-semibold bg-brand-bg border border-brand-accent px-2 py-0.5 focus:outline-none"
+            className="font-serif text-xl text-brand-ink font-semibold bg-brand-bg border border-brand-accent px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-accent"
             autoFocus
           />
         ) : (
           <h1
-            className="font-serif text-xl text-brand-ink font-semibold truncate cursor-pointer hover:text-brand-accent transition-colors"
+            className="font-serif text-xl text-brand-ink font-semibold truncate cursor-pointer hover:text-brand-accent hover:bg-brand-line/20 px-1 py-0.5 rounded transition-all"
             onClick={() => setIsEditing(true)}
             title="Click to edit title"
           >
@@ -74,23 +74,23 @@ export default function ChatHeader({
         </div>
 
         {/* Model selector */}
-        <div className="flex items-center bg-brand-surface-2 border border-brand-line p-0.5">
+        <div className="flex items-center bg-brand-surface-2 border border-brand-line p-0.5 rounded">
           <button
             onClick={() => setUsePremium(false)}
-            className={`px-3 py-1 text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 text-xs font-medium transition-all rounded-sm ${
               !usePremium
                 ? 'bg-brand-surface text-brand-ink shadow-sm border border-brand-line'
-                : 'text-brand-muted hover:text-brand-ink'
+                : 'text-brand-muted hover:text-brand-ink hover:bg-brand-line/30'
             }`}
           >
             Standard
           </button>
           <button
             onClick={() => setUsePremium(true)}
-            className={`px-3 py-1 text-xs font-medium transition-all ${
+            className={`px-3 py-1.5 text-xs font-medium transition-all rounded-sm ${
               usePremium
                 ? 'bg-brand-surface text-brand-ink shadow-sm border border-brand-line'
-                : 'text-brand-muted hover:text-brand-ink'
+                : 'text-brand-muted hover:text-brand-ink hover:bg-brand-line/30'
             }`}
           >
             Premium
@@ -120,21 +120,22 @@ export default function ChatHeader({
         </button>
 
         {/* Menu */}
-        <div className="relative">
+        <div className="relative group">
           <button
             onClick={() => setShowMenu(!showMenu)}
-            className="p-2 hover:bg-brand-line/40 transition-colors text-brand-muted hover:text-brand-ink"
+            className="p-2 text-brand-muted hover:text-brand-ink hover:bg-brand-line/40 rounded transition-all"
+            title="More options"
           >
             <MoreVertical size={16} />
           </button>
           {showMenu && (
-            <div className="absolute right-0 mt-1 w-48 bg-brand-surface border border-brand-line shadow-lg z-30">
+            <div className="absolute right-0 mt-2 w-48 bg-brand-surface border border-brand-line shadow-lg z-30 rounded-lg overflow-hidden animate-scale-in">
               <button
                 onClick={() => {
                   onSearchMessages?.()
                   setShowMenu(false)
                 }}
-                className="w-full text-left px-4 py-2 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors"
+                className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors"
               >
                 <Search size={14} /> Search messages
               </button>
@@ -143,19 +144,19 @@ export default function ChatHeader({
                   onExportConversation?.()
                   setShowMenu(false)
                 }}
-                className="w-full text-left px-4 py-2 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors border-t border-brand-line"
+                className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors border-t border-brand-line"
               >
                 <Download size={14} /> Export conversation
               </button>
               {user?.role === 'admin' && (
                 <>
-                  <div className="border-t border-brand-line my-1"></div>
+                  <div className="border-t border-brand-line"></div>
                   <button
                     onClick={() => {
                       navigate('/admin')
                       setShowMenu(false)
                     }}
-                    className="w-full text-left px-4 py-2 hover:bg-brand-line/40 text-sm text-brand-ink uppercase tracking-wider font-semibold transition-colors"
+                    className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink uppercase tracking-wider font-semibold transition-colors"
                   >
                     Admin
                   </button>

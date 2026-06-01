@@ -50,7 +50,7 @@ export default function ChatInput({
             <Sparkles size={12} /> Suggested prompts
           </button>
           {showExamples && (
-            <div className="absolute top-8 left-1/2 -translate-x-1/2 w-96 bg-brand-surface border border-brand-line shadow-lg z-10 rounded">
+            <div className="absolute top-8 left-1/2 -translate-x-1/2 w-96 bg-brand-surface border border-brand-line shadow-lg z-10 rounded-lg overflow-hidden animate-scale-in">
               {quickExamples.map((example, i) => (
                 <button
                   key={i}
@@ -91,8 +91,10 @@ export default function ChatInput({
           <div className="absolute right-3 top-3 flex items-center gap-2">
             {charCount > 0 && (
               <span
-                className={`text-[10px] font-mono uppercase tracking-wider ${
-                  charCount > 1000 ? 'text-brand-rose' : 'text-brand-muted'
+                className={`text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded ${
+                  charCount > 1000
+                    ? 'text-brand-rose bg-brand-rose/10'
+                    : 'text-brand-muted bg-brand-line/20'
                 }`}
               >
                 {charCount}
@@ -101,7 +103,7 @@ export default function ChatInput({
             <button
               onClick={onUploadClick}
               disabled={isSending}
-              className="p-2 text-brand-muted hover:text-brand-ink hover:bg-brand-line/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="p-2 text-brand-muted hover:text-brand-ink hover:bg-brand-line/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded"
               title="Upload document"
             >
               <Upload className="w-4 h-4" />
@@ -109,7 +111,7 @@ export default function ChatInput({
             <button
               onClick={onSend}
               disabled={!inputValue.trim() || isSending}
-              className="p-2 bg-brand-ink text-brand-surface hover:bg-brand-accent disabled:bg-brand-line disabled:text-brand-muted disabled:cursor-not-allowed transition-colors"
+              className="p-2 bg-brand-ink text-brand-surface hover:bg-brand-accent hover:shadow-md disabled:bg-brand-line disabled:text-brand-muted disabled:cursor-not-allowed transition-all rounded"
               title="Send message (Shift+Enter for new line)"
             >
               {isSending ? (
