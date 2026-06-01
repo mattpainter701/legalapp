@@ -1,7 +1,7 @@
-import React from 'react'
+import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { format } from 'date-fns'
-import { Book, Scale } from 'lucide-react'
+import { Book, Scale, Copy, Check } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
 
 function SourcesLedger({ sources }) {
@@ -71,25 +71,39 @@ export default function ChatMessage({ message }) {
   const timestamp = message.created_at
     ? format(new Date(message.created_at), 'h:mm a')
     : ''
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(message.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   if (isUser) {
     return (
-      <div className="flex justify-end mb-8">
-        <div className="bg-brand-ink text-brand-bg p-5 max-w-2xl border-l-4 border-brand-accent shadow-sm">
+      <div className="flex justify-end mb-8 group">
+        <div className="bg-brand-ink text-brand-bg p-5 max-w-2xl border-l-4 border-brand-accent shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center gap-2 mb-2 text-xs font-mono text-brand-bg/60 uppercase tracking-wider">
             <span className="font-bold text-brand-accent">Q</span>
             <span>Query</span>
             {timestamp && <span className="ml-auto">{timestamp}</span>}
           </div>
           <p className="text-base leading-relaxed font-sans whitespace-pre-wrap">{message.content}</p>
+          <button
+            onClick={handleCopy}
+            className="mt-2 text-brand-bg/40 hover:text-brand-bg/80 opacity-0 group-hover:opacity-100 transition-opacity text-xs flex items-center gap-1"
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+            {copied ? 'Copied' : 'Copy'}
+          </button>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex justify-start mb-8">
-      <div className="bg-brand-surface border border-brand-line p-8 max-w-3xl w-full shadow-sm relative">
+    <div className="flex justify-start mb-8 group">
+      <div className="bg-brand-surface border border-brand-line p-8 max-w-3xl w-full shadow-sm hover:shadow-md transition-shadow relative">
         {/* Gold top bar */}
         <div className="absolute top-0 left-0 w-full h-1 bg-brand-gold"></div>
 
@@ -98,6 +112,13 @@ export default function ChatMessage({ message }) {
           <Scale className="w-4 h-4 text-brand-gold" strokeWidth={2} />
           <span className="font-bold text-brand-ink">Clarity Legal Analysis</span>
           {timestamp && <span className="ml-auto">{timestamp}</span>}
+          <button
+            onClick={handleCopy}
+            className="ml-2 text-brand-muted hover:text-brand-ink opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Copy response"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
         </div>
 
         {/* Body */}
