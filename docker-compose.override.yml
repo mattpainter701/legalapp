@@ -22,7 +22,7 @@ services:
 
   postgres:
     ports:
-      - "5432:5432"    # expose for pgAdmin / DBeaver locally
+      - "5434:5432"    # expose for pgAdmin / DBeaver locally (5432 may be taken on hypervisor)
 
   # Dedicated vectorDB for CourtListener public_chunks (BGE-384 embeddings).
   # Populated by scripts/ingest_courtlistener.py and scripts/jetson_embed_worker.py.
@@ -46,7 +46,7 @@ services:
 
   redis:
     ports:
-      - "6379:6379"    # expose for redis-cli locally
+      - "6380:6379"    # expose for redis-cli locally (6379 may be taken on hypervisor)
 
   nginx:
     # Dev: HTTP only, no SSL certs needed.
