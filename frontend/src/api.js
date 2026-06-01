@@ -130,6 +130,40 @@ export const createRenewal = (data) => api.post('/plugins/commercial/renewals', 
 export const updateRenewal = (id, data) => api.patch(`/plugins/commercial/renewals/${id}`, data).then((r) => r.data)
 export const deleteRenewal = (id) => api.delete(`/plugins/commercial/renewals/${id}`).then((r) => r.data)
 
+// ── Trust & Estate ─────────────────────────────────────────────────────────
+
+export const getEstates = () =>
+  api.get('/plugins/trust-estate/estates').then(r => r.data)
+
+export const createEstate = (data) =>
+  api.post('/plugins/trust-estate/estates', data).then(r => r.data)
+
+export const getEstate = (id) =>
+  api.get(`/plugins/trust-estate/estates/${id}`).then(r => r.data)
+
+export const updateEstate = (id, data) =>
+  api.patch(`/plugins/trust-estate/estates/${id}`, data).then(r => r.data)
+
+export const addEstateEvent = (id, data) =>
+  api.post(`/plugins/trust-estate/estates/${id}/events`, data).then(r => r.data)
+
+// ── Mediation ──────────────────────────────────────────────────────────────
+
+export const getMediationCases = () =>
+  api.get('/plugins/mediation/cases').then(r => r.data)
+
+export const createMediationCase = (data) =>
+  api.post('/plugins/mediation/cases', data).then(r => r.data)
+
+export const getMediationCase = (id) =>
+  api.get(`/plugins/mediation/cases/${id}`).then(r => r.data)
+
+export const updateMediationCase = (id, data) =>
+  api.patch(`/plugins/mediation/cases/${id}`, data).then(r => r.data)
+
+export const addMediationEvent = (id, data) =>
+  api.post(`/plugins/mediation/cases/${id}/events`, data).then(r => r.data)
+
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
 export const createCheckoutSession = () => api.post('/billing/checkout-session').then((r) => r.data)
