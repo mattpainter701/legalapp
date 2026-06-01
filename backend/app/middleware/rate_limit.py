@@ -28,6 +28,7 @@ RATE_LIMITED_PREFIXES = ("/api/conversations", "/api/plugins")
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
+    "/api/platform/",   # platform auth is key-based, not JWT
     "/health",
     "/docs",
     "/openapi.json",

@@ -130,4 +130,32 @@ export const createRenewal = (data) => api.post('/plugins/commercial/renewals', 
 export const updateRenewal = (id, data) => api.patch(`/plugins/commercial/renewals/${id}`, data).then((r) => r.data)
 export const deleteRenewal = (id) => api.delete(`/plugins/commercial/renewals/${id}`).then((r) => r.data)
 
+// Billing
+export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
+export const createCheckoutSession = () => api.post('/billing/checkout-session').then((r) => r.data)
+export const createPortalSession = () => api.post('/billing/portal').then((r) => r.data)
+
+// MCP
+export const getMcpInfo = () => api.get('/mcp/api-key').then((r) => r.data)
+export const regenerateMcpApiKey = () => api.post('/mcp/api-key').then((r) => r.data)
+
+// Platform (uses platform key header — passed explicitly)
+const platformApi = (platformKey) =>
+  axios.create({
+    baseURL: BASE_URL,
+    headers: { 'X-Platform-Key': platformKey },
+  })
+
+export const getPlatformTenants = (key, page = 1) =>
+  platformApi(key).get(`/platform/tenants?page=${page}`).then((r) => r.data)
+
+export const getPlatformTenant = (key, id) =>
+  platformApi(key).get(`/platform/tenants/${id}`).then((r) => r.data)
+
+export const updatePlatformTenant = (key, id, data) =>
+  platformApi(key).put(`/platform/tenants/${id}`, data).then((r) => r.data)
+
+export const getPlatformUsage = (key) =>
+  platformApi(key).get('/platform/usage').then((r) => r.data)
+
 export default api

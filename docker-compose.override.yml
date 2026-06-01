@@ -24,6 +24,26 @@ services:
     ports:
       - "5432:5432"    # expose for pgAdmin / DBeaver locally
 
+  # Dedicated vectorDB for CourtListener public_chunks (BGE-384 embeddings).
+  # Populated by scripts/ingest_courtlistener.py and scripts/jetson_embed_worker.py.
+  # Set VECTORDB_URL=postgresql://vectordb:vectordb@localhost:5433/vectordb in .env
+  # to point the ingest script at this instance instead of the main DB.
+  vectordb:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: vectordb
+      POSTGRES_PASSWORD: vectordb
+      POSTGRES_DB: vectordb
+    ports:
+      - "5433:5432"
+    volumes:
+      - vectordb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vectordb -d vectordb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     ports:
       - "6379:6379"    # expose for redis-cli locally
@@ -36,3 +56,6 @@ services:
       - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "80:80"
+
+volumes:
+  vectordb_data:

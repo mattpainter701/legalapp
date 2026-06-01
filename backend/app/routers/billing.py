@@ -1,3 +1,5 @@
+import logging
+
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -5,11 +7,145 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
+from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 
 settings = get_settings()
 router = APIRouter(prefix="/billing", tags=["billing"])
+logger = logging.getLogger(__name__)
 
+
+# ── Stripe customer helper (called from auth on tenant creation) ───────────────
+
+async def ensure_stripe_customer(tenant: Tenant, db: AsyncSession) -> None:
+    """Create a Stripe customer for the tenant if one doesn't exist yet."""
+    if tenant.stripe_customer_id or not settings.STRIPE_SECRET_KEY:
+        return
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    try:
+        customer = stripe.Customer.create(
+            name=tenant.company_name or tenant.name,
+            metadata={"tenant_id": str(tenant.id), "domain": tenant.domain},
+        )
+        tenant.stripe_customer_id = customer["id"]
+        await db.flush()
+    except stripe.StripeError as exc:
+        logger.warning(f"Stripe customer creation failed for tenant {tenant.id}: {exc}")
+
+
+# ── Self-service billing endpoints ────────────────────────────────────────────
+
+@router.get("/status")
+async def billing_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current billing tier and masked Stripe IDs for the tenant."""
+    user = await get_current_user(request, db)
+    result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    def _mask(val: str | None) -> str | None:
+        if not val:
+            return None
+        return val[:8] + "..." + val[-4:]
+
+    return {
+        "billing_tier": tenant.billing_tier,
+        "stripe_customer_id": _mask(tenant.stripe_customer_id),
+        "stripe_subscription_id": _mask(tenant.stripe_subscription_id),
+        "flat_seat_count": tenant.flat_seat_count,
+    }
+
+
+@router.post("/checkout-session")
+async def create_checkout_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a Stripe Checkout Session for upgrading to the flat subscription.
+    Returns {checkout_url} for the frontend to redirect to.
+    """
+    if not settings.STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=501, detail="Stripe not configured")
+    if not settings.STRIPE_PRICE_ID:
+        raise HTTPException(status_code=501, detail="STRIPE_PRICE_ID not configured")
+
+    user = await get_current_user(request, db)
+    result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    await ensure_stripe_customer(tenant, db)
+    await db.commit()
+    await db.refresh(tenant)
+
+    success_url = settings.STRIPE_SUCCESS_URL or f"{settings.FRONTEND_URL}/billing?success=1"
+    cancel_url = settings.STRIPE_CANCEL_URL or f"{settings.FRONTEND_URL}/billing?cancel=1"
+
+    try:
+        session = stripe.checkout.Session.create(
+            customer=tenant.stripe_customer_id,
+            mode="subscription",
+            line_items=[{
+                "price": settings.STRIPE_PRICE_ID,
+                "quantity": max(tenant.flat_seat_count, 1),
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"tenant_id": str(tenant.id)},
+        )
+    except stripe.StripeError as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+
+    return {"checkout_url": session.url}
+
+
+@router.post("/portal")
+async def create_portal_session(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a Stripe Customer Portal session so the tenant can manage their subscription.
+    Returns {portal_url}.
+    """
+    if not settings.STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=501, detail="Stripe not configured")
+
+    user = await get_current_user(request, db)
+    result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    await ensure_stripe_customer(tenant, db)
+    await db.commit()
+    await db.refresh(tenant)
+
+    if not tenant.stripe_customer_id:
+        raise HTTPException(status_code=400, detail="No Stripe customer found for this tenant")
+
+    return_url = f"{settings.FRONTEND_URL}/billing"
+
+    try:
+        portal = stripe.billing_portal.Session.create(
+            customer=tenant.stripe_customer_id,
+            return_url=return_url,
+        )
+    except stripe.StripeError as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+
+    return {"portal_url": portal.url}
+
+
+# ── Stripe webhook ─────────────────────────────────────────────────────────────
 
 @router.post("/webhook", status_code=200)
 async def stripe_webhook(
@@ -58,7 +194,6 @@ async def stripe_webhook(
 async def _find_tenant_by_customer(
     db: AsyncSession, customer_id: str
 ) -> Tenant | None:
-    """Look up a tenant by Stripe customer ID."""
     result = await db.execute(
         select(Tenant).where(Tenant.stripe_customer_id == customer_id)
     )
@@ -66,7 +201,6 @@ async def _find_tenant_by_customer(
 
 
 async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> None:
-    """Update tenant billing tier based on subscription status."""
     customer_id = subscription.get("customer")
     if not customer_id:
         return
@@ -77,11 +211,9 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
 
     status = subscription.get("status", "")
     subscription_id = subscription.get("id")
-
     tenant.stripe_subscription_id = subscription_id
 
     if status in ("active", "trialing"):
-        # Determine tier from subscription items
         items = subscription.get("items", {}).get("data", [])
         billing_tier = "flat"
         for item in items:
@@ -101,7 +233,6 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
 
 
 async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> None:
-    """Handle subscription cancellation."""
     customer_id = subscription.get("customer")
     if not customer_id:
         return
@@ -116,7 +247,6 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> 
 
 
 async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
-    """Handle failed payment — optionally suspend tenant."""
     customer_id = invoice.get("customer")
     if not customer_id:
         return
@@ -127,7 +257,6 @@ async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
 
     attempt_count = invoice.get("attempt_count", 1)
 
-    # After 3 failed attempts, downgrade to PAYG
     if attempt_count >= 3:
         tenant.billing_tier = "payg"
         await db.commit()
