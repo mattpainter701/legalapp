@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# trigger_jetson_workers.sh — SSH into each Jetson and start the embed worker
+# trigger_jetson_workers.sh — SSH into Jetson(s) and start embed workers
 #
-# Sets up 3-way parallel embedding:
-#   Jetson 0 → processes chunks where HASHTEXT(id::text) % 3 = 0
-#   Jetson 1 → processes chunks where HASHTEXT(id::text) % 3 = 1
-#   Jetson 2 → processes chunks where HASHTEXT(id::text) % 3 = 2
+# Default setup is one Jetson on the same network as PostgreSQL:
+#   JETSON_HOST=172.16.x.x
+#
+# Optional multi-Jetson setup:
+#   JETSON_HOSTS="host0 host1 host2"
 #
 # Requires in .env / .env.prod:
-#   JETSON_0_HOST, JETSON_1_HOST, JETSON_2_HOST  (IPs or hostnames)
+#   JETSON_HOST or JETSON_HOSTS (IPs or hostnames)
 #   JETSON_USER (default: jetson)
-#   DATABASE_URL (Jetsons connect directly to Dell server PostgreSQL)
+#   DATABASE_URL (Jetson connects directly to PostgreSQL)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -19,17 +20,17 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 [[ -f "$ROOT_DIR/.env" ]] && { set -a; source "$ROOT_DIR/.env"; set +a; }
 
-: "${JETSON_0_HOST:?Set JETSON_0_HOST in .env}"
-: "${JETSON_1_HOST:?Set JETSON_1_HOST in .env}"
-: "${JETSON_2_HOST:?Set JETSON_2_HOST in .env}"
+: "${JETSON_HOSTS:=${JETSON_HOST:-}}"
+: "${JETSON_HOSTS:?Set JETSON_HOST or JETSON_HOSTS in .env}"
 : "${JETSON_USER:=jetson}"
 : "${DATABASE_URL:?Set DATABASE_URL in .env}"
 : "${JETSON_SCRIPT_DIR:=/home/jetson/legalapp/scripts}"
-: "${BATCH_SIZE:=256}"
+: "${BATCH_SIZE:=64}"
 
-JETSONS=("$JETSON_0_HOST" "$JETSON_1_HOST" "$JETSON_2_HOST")
+read -r -a JETSONS <<< "$JETSON_HOSTS"
+TOTAL_WORKERS="${#JETSONS[@]}"
 
-echo "Triggering embedding workers on ${#JETSONS[@]} Jetsons…"
+echo "Triggering embedding workers on $TOTAL_WORKERS Jetson(s)..."
 
 for i in "${!JETSONS[@]}"; do
   HOST="${JETSONS[$i]}"
@@ -37,7 +38,7 @@ for i in "${!JETSONS[@]}"; do
   ssh -o StrictHostKeyChecking=no "$JETSON_USER@$HOST" \
     "nohup python3 $JETSON_SCRIPT_DIR/jetson_embed_worker.py \
        --worker-id $i \
-       --total-workers 3 \
+       --total-workers $TOTAL_WORKERS \
        --db-url '$DATABASE_URL' \
        --batch-size $BATCH_SIZE \
        >> /var/log/clarity-legal/jetson_worker_$i.log 2>&1 &

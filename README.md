@@ -8,7 +8,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 
 | Capability | Description |
 |-|-|
-| **Legal Research Chat** | Grounded in uploaded documents + public case law via pgvector RAG; confidence-tagged citations |
+| **Legal Research Chat** | Grounded in uploaded documents + CourtListener public case law via pgvector RAG; confidence-tagged citations |
 | **Practice Area Plugins** | 11 workspaces with cold-start profiles, structured skill prompts, dual LLM tiers, and compliance gates |
 | **Matter Management** | Litigation, Trust & Estate, and Mediation portfolios with append-only event timelines |
 | **Contract Renewal Tracker** | Urgency-rated dashboard with automated weekly email alerts |
@@ -34,9 +34,9 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Primary LLM | DeepSeek V4 Flash via OpenCode.ai (OpenAI-compatible) |
 | Premium LLM | DeepSeek V4 Pro via OpenCode.ai |
 | Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
-| Embeddings | OpenAI text-embedding-3-small (falls back to OpenCode.ai key) |
+| Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (8 migrations) |
+| Migrations | Alembic (9 migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
 
@@ -167,6 +167,19 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `004_audit_log` | Audit columns on usage_records |
 | `005`–`007` | Platform admin, MCP keys, model settings |
 | `008_estate_mediation` | Trust & Estate + Mediation tables and routes |
+| `009_oauth_tokens` | Encrypted tenant/user OAuth token persistence |
+
+### CourtListener public RAG
+
+CourtListener data is staged in `public_chunks` and embedded on one local NVIDIA Jetson connected to PostgreSQL over the same network.
+
+```bash
+python scripts/ingest_courtlistener.py --file /data/courtlistener/opinions.json.gz --batch-size 1000
+python scripts/jetson_embed_worker.py --worker-id 0 --total-workers 1 --batch-size 64 --db-url "$DATABASE_URL" --loop
+psql "$DATABASE_URL" -f scripts/create_public_chunks_index.sql
+```
+
+Full operator notes are in `scripts/courtlistener_jetson_pipeline.md`.
 
 ---
 
@@ -183,7 +196,7 @@ legalapp/
 │   │   ├── middleware/       # Tenant context + rate limiter
 │   │   ├── schemas/         # Pydantic models
 │   │   └── main.py
-│   ├── migrations/          # Alembic (001–008)
+│   ├── migrations/          # Alembic (001–009)
 │   └── tests/
 ├── frontend/
 │   ├── src/

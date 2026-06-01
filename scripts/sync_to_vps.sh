@@ -3,8 +3,8 @@
 # sync_to_vps.sh — Transfer public case-law vectors from on-prem to cloud VPS
 #
 # What gets synced:
-#   1. Public chunks table (tenant_id = 00000000-0000-0000-0000-000000000001)
-#      These are the CourtListener opinion embeddings — huge but not sensitive.
+#   1. public_chunks table.
+#      These are CourtListener opinion chunks and BGE embeddings; huge but not sensitive.
 #   2. App schema migrations (so VPS is always up to date).
 #
 # What does NOT get synced (stays on-prem or originates on VPS):
@@ -28,7 +28,6 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 LOG_DIR="/var/log/clarity-legal"
 LOG_FILE="$LOG_DIR/sync_$(date +%Y%m%d_%H%M%S).log"
 DUMP_FILE="/tmp/public_chunks_$(date +%Y%m%d_%H%M%S).dump"
-PUBLIC_TENANT_ID="00000000-0000-0000-0000-000000000001"
 
 # ── Load config ───────────────────────────────────────────────────────────────
 if [[ -f "$ROOT_DIR/.env.prod" ]]; then
@@ -60,27 +59,28 @@ PG_DB=$(echo "$LOCAL_DB_CLEAN"   | sed -E 's|.*/([^?]+).*|\1|')
 export PGPASSWORD="$PG_PASS"
 
 # ── Build dump query ──────────────────────────────────────────────────────────
+PG_DUMP_ARGS=(
+  -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB"
+  --format=custom
+  --table=public_chunks
+  --no-owner --no-privileges
+  -f "$DUMP_FILE"
+)
+
 if [[ "$MODE" == "--full" ]]; then
-  DUMP_QUERY="SELECT * FROM chunks WHERE tenant_id = '$PUBLIC_TENANT_ID'"
-  echo "[$(date)] Full dump of all public chunks…"
+  echo "[$(date)] Full dump of all public_chunks..."
 else
   CUTOFF=$(date -d '25 hours ago' --utc +"%Y-%m-%d %H:%M:%S")
-  DUMP_QUERY="SELECT * FROM chunks WHERE tenant_id = '$PUBLIC_TENANT_ID' AND created_at > '$CUTOFF'"
-  echo "[$(date)] Incremental dump (since $CUTOFF)…"
+  PG_DUMP_ARGS+=(--where="created_at > '$CUTOFF'")
+  echo "[$(date)] Incremental dump of public_chunks since $CUTOFF..."
 fi
 
 CHUNK_COUNT=$(psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" -tAc \
-  "SELECT COUNT(*) FROM chunks WHERE tenant_id = '$PUBLIC_TENANT_ID'")
-echo "[$(date)] Total public chunks on-prem: $CHUNK_COUNT"
+  "SELECT COUNT(*) FROM public_chunks")
+echo "[$(date)] Total public_chunks on-prem: $CHUNK_COUNT"
 
 # Use pg_dump with --table and --where for the subset
-pg_dump \
-  -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" \
-  --format=custom \
-  --table=chunks \
-  --where="tenant_id = '$PUBLIC_TENANT_ID'" \
-  --no-owner --no-privileges \
-  -f "$DUMP_FILE"
+pg_dump "${PG_DUMP_ARGS[@]}"
 
 DUMP_SIZE=$(du -sh "$DUMP_FILE" | cut -f1)
 echo "[$(date)] Dump complete: $DUMP_FILE ($DUMP_SIZE)"
@@ -112,20 +112,19 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE_SCRIPT
   # Truncate existing public chunks to avoid duplicates on full sync
   if [[ "$MODE" == "--full" ]]; then
     psql -h $VPS_PG_HOST -p $VPS_PG_PORT -U $VPS_PG_USER -d $VPS_PG_DB \
-      -c "DELETE FROM chunks WHERE tenant_id = '$PUBLIC_TENANT_ID'"
-    echo "Cleared existing public chunks on VPS"
+      -c "TRUNCATE TABLE public_chunks"
+    echo "Cleared existing public_chunks on VPS"
   fi
 
   pg_restore \
     -h $VPS_PG_HOST -p $VPS_PG_PORT -U $VPS_PG_USER -d $VPS_PG_DB \
     --no-owner --no-privileges \
-    --data-only --table=chunks \
-    --on-conflict-do-nothing \
-    "$REMOTE_DUMP" 2>&1 || true
+    --data-only --table=public_chunks \
+    "$REMOTE_DUMP"
 
   RESTORED=\$(psql -h $VPS_PG_HOST -p $VPS_PG_PORT -U $VPS_PG_USER -d $VPS_PG_DB \
-    -tAc "SELECT COUNT(*) FROM chunks WHERE tenant_id = '$PUBLIC_TENANT_ID'")
-  echo "VPS public chunk count after restore: \$RESTORED"
+    -tAc "SELECT COUNT(*) FROM public_chunks")
+  echo "VPS public_chunks count after restore: \$RESTORED"
 
   rm -f "$REMOTE_DUMP"
 REMOTE_SCRIPT

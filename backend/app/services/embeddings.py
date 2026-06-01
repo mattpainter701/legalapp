@@ -1,5 +1,7 @@
-from typing import List
+import asyncio
 import logging
+from typing import List
+
 from openai import AsyncOpenAI
 
 from app.config import get_settings
@@ -32,6 +34,9 @@ class EmbeddingService:
                     base_url=settings.DEEPSEEK_BASE_URL,
                 )
                 self.model = settings.EMBEDDING_MODEL
+
+        self.public_model = None
+        self.public_model_load_failed = False
 
     async def embed_text(self, text: str) -> List[float] | None:
         """Embed a single text string. Returns None if embeddings unavailable."""
@@ -68,3 +73,52 @@ class EmbeddingService:
         except Exception as e:
             logger.warning("Batch embedding failed: %s", e)
             return []
+
+    async def embed_public_query(self, text: str) -> List[float] | None:
+        """Embed a public case-law query with BGE-small if dependencies exist."""
+        if self.public_model_load_failed:
+            return None
+
+        try:
+            model = await self._get_public_model()
+            if model is None:
+                return None
+
+            prefixed = "Represent this sentence for searching relevant passages: " + text
+            embedding = await asyncio.to_thread(
+                model.encode,
+                prefixed,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            if hasattr(embedding, "tolist"):
+                embedding = embedding.tolist()
+            return list(embedding)
+        except Exception as e:
+            logger.warning("Public BGE query embedding failed: %s", e)
+            return None
+
+    async def _get_public_model(self):
+        if self.public_model is not None:
+            return self.public_model
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            logger.info(
+                "sentence-transformers not installed; public CourtListener RAG disabled"
+            )
+            self.public_model_load_failed = True
+            return None
+
+        try:
+            self.public_model = await asyncio.to_thread(
+                SentenceTransformer,
+                settings.PUBLIC_EMBEDDING_MODEL,
+            )
+            return self.public_model
+        except Exception as e:
+            logger.warning("Failed to load public embedding model: %s", e)
+            self.public_model_load_failed = True
+            return None

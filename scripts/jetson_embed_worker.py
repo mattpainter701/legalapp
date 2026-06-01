@@ -20,7 +20,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import psycopg2
 import psycopg2.extras
@@ -324,7 +324,7 @@ def main():
         print("ERROR: --db-url or DATABASE_URL env var required.")
         sys.exit(1)
 
-    print(f"=== Clarity Legal Jetson Embed Worker ===")
+    print("=== Clarity Legal Jetson Embed Worker ===")
     print(f"  Worker: {args.worker_id} of {args.total_workers}")
     print(f"  Model:  {args.model}")
     print(f"  Batch:  {args.batch_size}")
@@ -334,7 +334,7 @@ def main():
     model = load_model(args.model)
 
     while True:
-        print(f"\nConnecting to database...")
+        print("\nConnecting to database...")
         conn = get_connection(db_url)
 
         try:

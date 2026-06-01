@@ -3,6 +3,12 @@
 ## [0.3.0] — 2026-06-01
 
 ### Added
+- CourtListener public RAG pipeline
+  - `scripts/ingest_courtlistener.py` now extracts/chunks only and inserts `public_chunks` rows pending Jetson embeddings
+  - `scripts/jetson_embed_worker.py` remains the BGE-small embedding writer for `public_chunks.embedding`
+  - `scripts/create_public_chunks_index.sql` builds the IVFFlat index after embedding
+  - `scripts/courtlistener_jetson_pipeline.md` documents the single-Jetson same-network workflow
+  - RAG now searches `public_chunks` with optional BGE query embeddings alongside tenant document chunks
 - Phase 1: OAuth token persistence — encrypted token vault with Fernet (AES-256-GCM)
   - `TenantCredential` and `UserOAuthToken` SQLAlchemy models with RLS
   - `TokenVault` service with auto-refresh for MS Graph + Google APIs
@@ -36,6 +42,8 @@
 - New deps: `cryptography`, `google-auth-oauthlib`, `google-api-python-client`, `google-genai`
 
 ### Changed
+- CourtListener sync tooling now targets `public_chunks` instead of tenant-scoped sentinel rows in `chunks`
+- Jetson launcher defaults to one `JETSON_HOST`, with optional multi-host `JETSON_HOSTS`
 - Auth OAuth flows: added `offline_access` scope to MS and Google login
 - LLMService: added optional `provider` parameter for Gemini/Azure routing
 
