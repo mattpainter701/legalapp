@@ -17,6 +17,8 @@ from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
 from app.routers.admin import router as admin_router
 from app.routers.billing import router as billing_router
+from app.routers.mcp import router as mcp_router
+from app.routers.platform import router as platform_router
 from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.dev import router as dev_router
@@ -41,6 +43,8 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Redis unavailable — rate limiting disabled: {exc}")
         app.state.redis = None
+
+    app.state.jti_blacklist: dict[str, float] = {}
 
     # Database connection test
     try:
@@ -86,6 +90,9 @@ origins = list(
         settings.FRONTEND_URL,
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://localhost:3000",
+        "https://172.16.16.202",
+        "http://172.16.16.202:3000",
     }
 )
 
@@ -112,6 +119,8 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
+app.include_router(mcp_router, prefix="/api")
+app.include_router(platform_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev_router, prefix="/api")

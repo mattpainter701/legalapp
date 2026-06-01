@@ -1,10 +1,12 @@
 import base64
 import json as _json
 import secrets
+import time as _time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -17,7 +19,15 @@ from app.database import get_db
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.schemas.auth import TokenResponse, UserInfo
+from app.routers.billing import ensure_stripe_customer
+from app.schemas.auth import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserInfo,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -36,7 +46,8 @@ async def _save_state(request: Request, state: str) -> None:
     if redis:
         await redis.setex(_state_key(state), _STATE_TTL, "1")
     else:
-        _fallback_states[state] = True
+        _gc_fallback_dicts()
+        _fallback_states[state] = _time.time()
 
 
 async def _consume_state(request: Request, state: str) -> bool:
@@ -45,26 +56,49 @@ async def _consume_state(request: Request, state: str) -> bool:
     if redis:
         deleted = await redis.delete(_state_key(state))
         return bool(deleted)
-    return _fallback_states.pop(state, None) is not None
+    ts = _fallback_states.pop(state, None)
+    if ts is None:
+        return False
+    if _time.time() - ts > _FALLBACK_TTL:
+        return False
+    return True
 
 
-# In-process fallback — fine for single-worker dev, not for prod multi-worker
-_fallback_states: dict[str, bool] = {}
+_FALLBACK_TTL = 600
+
+_fallback_states: dict[str, float] = {}
+
+def _gc_fallback_dicts() -> None:
+    now = _time.time()
+    for k, v in list(_fallback_states.items()):
+        if now - v > _FALLBACK_TTL:
+            del _fallback_states[k]
+    for k, v in list(_fallback_reset_tokens.items()):
+        if now - v[1] > _FALLBACK_TTL:
+            del _fallback_reset_tokens[k]
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
 def _create_access_token(user: User, tenant: Tenant) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user.id),
         "tenant_id": str(user.tenant_id),
         "role": user.role,
         "email": user.email,
         "billing_tier": tenant.billing_tier,
-        "exp": expire,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+        "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
@@ -229,6 +263,7 @@ async def microsoft_callback(
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
         user = await _get_or_create_user(db, tenant.id, email, full_name, "microsoft", ms_sub)
+        await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
     return RedirectResponse(
@@ -363,6 +398,7 @@ async def google_callback(
     async with db.begin():
         tenant = await _get_or_create_tenant(db, domain, tenant_name)
         user = await _get_or_create_user(db, tenant.id, email, full_name, "google", google_sub)
+        await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
     return RedirectResponse(
@@ -370,10 +406,209 @@ async def google_callback(
     )
 
 
+# ── Email/password register & login ────────────────────────────────────────────
+
+@router.post("/register")
+async def register(
+    body: RegisterRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    body.email = body.email.lower().strip()
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    domain = body.email.split("@")[-1]
+    tenant_name = body.company_name or domain.split(".")[0].capitalize()
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+    tenant = tenant_result.scalar_one_or_none()
+
+    if tenant is None:
+        tenant = Tenant(
+            id=uuid.uuid4(),
+            name=tenant_name,
+            domain=domain,
+            company_name=body.company_name,
+            staff_size=body.staff_size,
+            address=body.address,
+            phone=body.phone,
+            billing_tier="payg",
+            is_active=True,
+        )
+        db.add(tenant)
+        await db.flush()
+        role = "admin"
+    else:
+        count_result = await db.execute(select(User).where(User.tenant_id == tenant.id))
+        is_first = len(count_result.scalars().all()) == 0
+        role = "admin" if is_first else "user"
+
+    password_hash = _hash_password(body.password)
+
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        email=body.email,
+        full_name=body.full_name or "",
+        password_hash=password_hash,
+        role=role,
+        is_active=True,
+    )
+    db.add(user)
+    await ensure_stripe_customer(tenant, db)
+    await db.commit()
+    await db.refresh(user)
+    await db.refresh(tenant)
+
+    jwt_token = _create_access_token(user, tenant)
+    return TokenResponse(
+        access_token=jwt_token,
+        user_id=str(user.id),
+        tenant_id=str(tenant.id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
+
+
+@router.post("/login")
+async def login(
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    body.email = body.email.lower().strip()
+
+    result = await db.execute(
+        select(User)
+        .where(User.email == body.email)
+        .order_by(User.created_at.desc())
+        .limit(1)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user or not user.password_hash or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not _verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    tenant = user.tenant
+    jwt_token = _create_access_token(user, tenant)
+    return TokenResponse(
+        access_token=jwt_token,
+        user_id=str(user.id),
+        tenant_id=str(tenant.id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
+
+
+# ── Password reset ─────────────────────────────────────────────────────────────
+
+_RESET_TTL = 1800  # 30 minutes
+
+
+def _reset_key(token: str) -> str:
+    return f"reset:token:{token}"
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    body.email = body.email.lower().strip()
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    # Always return success to avoid email enumeration
+    if not user or not user.password_hash:
+        return {"message": "If that email exists, a reset link has been sent.", "reset_token": None}
+
+    token = secrets.token_urlsafe(32)
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        await redis.setex(_reset_key(token), _RESET_TTL, user.email)
+    else:
+        _gc_fallback_dicts()
+        _fallback_reset_tokens[token] = (user.email, _time.time())
+
+    if settings.EMAIL_ENABLED:
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+        # TODO: send email with reset_link
+        return {"message": "If that email exists, a reset link has been sent."}
+    else:
+        return {
+            "message": "If that email exists, a reset link has been sent.",
+            "reset_token": token if settings.DEV_MODE else None,
+        }
+
+
+@router.post("/reset-password")
+async def reset_password(
+    body: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    redis = getattr(request.app.state, "redis", None)
+    email = None
+
+    if redis:
+        email_bytes = await redis.get(_reset_key(body.token))
+        if email_bytes:
+            email = email_bytes.decode("utf-8")
+            await redis.delete(_reset_key(body.token))
+    else:
+        entry = _fallback_reset_tokens.pop(body.token, None)
+        if entry:
+            email, ts = entry
+            if _time.time() - ts > _RESET_TTL:
+                email = None
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user.password_hash = _hash_password(body.password)
+    await db.commit()
+
+    return {"message": "Password reset successfully"}
+
+
+_fallback_reset_tokens: dict[str, tuple[str, float]] = {}
+
+
 # ── Logout / Me ────────────────────────────────────────────────────────────────
 
 @router.post("/logout")
-async def logout():
+async def logout(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            jti = payload.get("jti")
+            exp = payload.get("exp", 0)
+            if jti and exp:
+                ttl = max(0, exp - int(_time.time()))
+                redis = getattr(request.app.state, "redis", None)
+                if redis:
+                    await redis.setex(f"jti:{jti}", ttl, "1")
+                else:
+                    request.app.state.jti_blacklist[jti] = _time.time() + ttl
+        except Exception:
+            pass
     return {"message": "Logged out successfully"}
 
 

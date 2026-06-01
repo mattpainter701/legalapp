@@ -183,7 +183,7 @@ export default function Sidebar({
           <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
             Conversations
           </p>
-          {conversations.length === 0 ? (
+          {!Array.isArray(conversations) || conversations.length === 0 ? (
             <p className="px-3 py-2 text-xs text-gray-400 italic">No conversations yet</p>
           ) : (
             conversations.map((conv) => (
@@ -203,7 +203,7 @@ export default function Sidebar({
           <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
             Documents
           </p>
-          {documents.length === 0 ? (
+          {!Array.isArray(documents) || documents.length === 0 ? (
             <p className="px-3 py-1 text-xs text-gray-400 italic">No documents uploaded</p>
           ) : (
             documents.map((doc) => (
@@ -235,6 +235,27 @@ export default function Sidebar({
             </p>
             <p className="text-xs text-gray-400 capitalize">{user?.billing_tier || 'free'}</p>
           </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => navigate('/billing')}
+              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1e3a5f] transition-colors"
+              title="Billing"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              </svg>
+            </button>
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => navigate('/mcp')}
+                className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1e3a5f] transition-colors"
+                title="MCP Server"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </button>
+            )}
           <button
             onClick={onLogout}
             className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
@@ -249,6 +270,7 @@ export default function Sidebar({
               />
             </svg>
           </button>
+          </div>
         </div>
       </div>
     </div>
