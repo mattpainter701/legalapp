@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
+    # OpenRouter — free model access (OpenAI-compatible)
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
@@ -61,6 +65,8 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 8
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
+    PUBLIC_RAG_TOP_K: int = 8
+    PUBLIC_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
     # Primary: DeepSeek V4 Flash once released; current OpenAI-compat alias is deepseek-chat
     # Set PRIMARY_LLM=deepseek-v4-flash in .env when V4 Flash ships

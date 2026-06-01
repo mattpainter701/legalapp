@@ -55,6 +55,13 @@ class LLMService:
                 base_url=f"{settings.AZURE_OPENAI_ENDPOINT.rstrip('/')}/openai/deployments/{settings.AZURE_OPENAI_DEPLOYMENT}",
                 default_query={"api-version": "2024-08-01-preview"},
             )
+        # OpenRouter — OpenAI-compatible, free model access
+        self.openrouter_client = None
+        if settings.OPENROUTER_API_KEY:
+            self.openrouter_client = AsyncOpenAI(
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url=settings.OPENROUTER_BASE_URL,
+            )
 
     def _build_messages(
         self,
@@ -82,10 +89,11 @@ class LLMService:
         Returns (response_text, tokens_in, tokens_out).
 
         Provider routing:
+          - "openrouter" → OpenRouter (free models: google/gemma-4-31b-it:free etc.)
           - "gemini" → Google Gemini
-          - "azure"  → Azure OpenAI (GPT-4o)
+          - "azure" → Azure OpenAI (GPT-4o)
           - premium/Claude → Anthropic
-          - default → DeepSeek
+          - default → DeepSeek/OpenCode
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
@@ -96,6 +104,9 @@ class LLMService:
             return await self._complete_gemini(messages, system_prompt)
         if provider == "azure":
             return await self._complete_azure(messages, system_prompt)
+        if provider == "openrouter":
+            model = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
+            return await self._complete_openrouter(messages, system_prompt, model)
 
         if use_premium:
             model = settings.PREMIUM_LLM.lower()
@@ -201,6 +212,30 @@ class LLMService:
 
         response = await self.azure_client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+        )
+
+        response_text = response.choices[0].message.content or ""
+        tokens_in = response.usage.prompt_tokens if response.usage else 0
+        tokens_out = response.usage.completion_tokens if response.usage else 0
+
+        return response_text, tokens_in, tokens_out
+
+    async def _complete_openrouter(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> Tuple[str, int, int]:
+        """Call OpenRouter — OpenAI-compatible API for free/cheap models."""
+        if not self.openrouter_client:
+            raise ValueError("OpenRouter not configured — set OPENROUTER_API_KEY")
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        response = await self.openrouter_client.chat.completions.create(
+            model=model,
             messages=all_messages,
             temperature=0.1,
             max_tokens=4096,

@@ -1,17 +1,15 @@
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
-from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -33,7 +31,9 @@ embedding_service = EmbeddingService()
 llm_service = LLMService()
 
 
-def _conversation_to_response(conv: Conversation, message_count: int = None) -> ConversationResponse:
+def _conversation_to_response(
+    conv: Conversation, message_count: int = None
+) -> ConversationResponse:
     return ConversationResponse(
         id=str(conv.id),
         title=conv.title,
@@ -93,8 +93,7 @@ async def list_conversations(
     count_map = {str(row.conversation_id): row.cnt for row in count_result.fetchall()}
 
     return [
-        _conversation_to_response(c, count_map.get(str(c.id), 0))
-        for c in conversations
+        _conversation_to_response(c, count_map.get(str(c.id), 0)) for c in conversations
     ]
 
 
@@ -187,7 +186,9 @@ async def delete_conversation(
     await db.commit()
 
 
-@router.post("/{conversation_id}/messages", response_model=MessageResponse, status_code=201)
+@router.post(
+    "/{conversation_id}/messages", response_model=MessageResponse, status_code=201
+)
 async def send_message(
     conversation_id: str,
     body: MessageCreate,
@@ -266,6 +267,7 @@ async def send_message(
         tenant_name=tenant_name,
         context=context_str,
         use_premium=body.use_premium_llm,
+        provider=body.provider,
     )
 
     # 6. Apply guardrails
@@ -285,6 +287,7 @@ async def send_message(
             tenant_name=tenant_name,
             context=context_str,
             use_premium=body.use_premium_llm,
+            provider=body.provider,
         )
         cleaned_response, _ = apply_guardrails(response_text2)
         tokens_in += tokens_in2

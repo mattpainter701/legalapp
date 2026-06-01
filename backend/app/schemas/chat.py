@@ -21,6 +21,7 @@ class MessageCreate(BaseModel):
     content: str
     include_public: bool = True
     use_premium_llm: bool = False
+    provider: str = "default"  # "default" | "openrouter" | "gemini" | "azure"
 
 
 class SourceCitation(BaseModel):
