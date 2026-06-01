@@ -1,61 +1,76 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getPlugins } from '../api'
+import {
+  Scale, Lock, Landmark, Building2, UserCircle, Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake
+} from 'lucide-react'
 
 const PLUGIN_CONFIG = [
   {
     id: 'commercial-legal',
-    icon: '⚖️',
+    icon: Scale,
     name: 'Commercial Legal',
     description: 'Contract review, NDA triage, SaaS agreement analysis, renewal tracking',
   },
   {
     id: 'privacy-legal',
-    icon: '🔒',
+    icon: Lock,
     name: 'Privacy Legal',
     description: 'DPA review, DSAR responses, Privacy Impact Assessments',
   },
   {
     id: 'litigation-legal',
-    icon: '🏛️',
+    icon: Landmark,
     name: 'Litigation Legal',
     description: 'Matter intake, portfolio management, demand letters, claim charts',
   },
   {
     id: 'corporate-legal',
-    icon: '🏢',
+    icon: Building2,
     name: 'Corporate Legal',
     description: 'M&A diligence, closing checklists, entity compliance',
   },
   {
     id: 'employment-legal',
-    icon: '👔',
+    icon: UserCircle,
     name: 'Employment Legal',
     description: 'Hire/termination review, worker classification, leave tracking',
   },
   {
     id: 'product-legal',
-    icon: '🚀',
+    icon: Rocket,
     name: 'Product Legal',
     description: 'Launch reviews, marketing claims check, regulatory triage',
   },
   {
     id: 'ip-legal',
-    icon: '💡',
+    icon: Lightbulb,
     name: 'IP Legal',
     description: 'Trademark clearance, freedom-to-operate, C&D letters',
   },
   {
     id: 'ai-governance-legal',
-    icon: '🤖',
+    icon: Bot,
     name: 'AI Governance',
     description: 'AI use case triage, impact assessments, vendor AI review',
   },
   {
     id: 'regulatory-legal',
-    icon: '📋',
+    icon: ClipboardList,
     name: 'Regulatory Legal',
     description: 'Regulatory monitoring, policy gap analysis, NPRM comments',
+  },
+  {
+    id: 'trust-estate-legal',
+    icon: Vault,
+    name: 'Trust & Estate',
+    description: 'Will & trust review, estate tax analysis, probate, estate portfolio',
+  },
+  {
+    id: 'mediation-legal',
+    icon: Handshake,
+    name: 'Mediation',
+    description: 'Mediation intake, briefs, settlement drafting, case tracking',
   },
 ]
 
@@ -68,7 +83,6 @@ export default function PluginsPage() {
   useEffect(() => {
     getPlugins()
       .then((data) => {
-        // data may be an array of plugin objects or a map
         const map = {}
         if (Array.isArray(data)) {
           data.forEach((p) => {
@@ -93,72 +107,76 @@ export default function PluginsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-brand-bg">
       {/* Top nav */}
-      <div className="bg-[#1e3a5f] text-white px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="bg-brand-surface border-b border-brand-line px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-4">
           <button
             onClick={() => navigate('/chat')}
-            className="flex items-center gap-1.5 text-blue-200 hover:text-white transition-colors text-sm font-sans"
+            className="flex items-center gap-2 text-brand-muted hover:text-brand-ink transition-colors text-sm font-sans font-medium"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
             Back to Chat
           </button>
-          <span className="text-blue-300">|</span>
-          <span className="font-serif font-semibold text-lg">Clarity Legal</span>
+          <div className="h-4 w-px bg-brand-line"></div>
+          <span className="font-serif font-semibold text-lg text-brand-ink">Clarity Legal</span>
         </div>
       </div>
 
       {/* Page header */}
-      <div className="max-w-6xl mx-auto px-6 py-10">
-        <div className="mb-8">
-          <h1 className="font-serif text-3xl font-bold text-[#1e3a5f] mb-2">
-            Legal Practice Plugins
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        <div className="mb-10 text-center">
+          <h1 className="font-serif text-4xl font-bold text-brand-ink mb-4">
+            Add-on Modules
           </h1>
-          <p className="text-gray-500 font-sans text-base">
-            AI-assisted legal workflows with attorney-reviewed outputs
+          <p className="text-brand-muted font-sans text-lg max-w-2xl mx-auto">
+            Specialized workspaces that extend your legal-safe coworker — each with attorney-reviewed outputs tailored to a practice area. Activate the add-ons your firm needs.
           </p>
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-6 text-red-700 text-sm font-sans">
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-8 text-red-700 text-sm font-sans text-center">
             {error}
           </div>
         )}
 
         {loading ? (
           <div className="flex justify-center py-20">
-            <div className="w-8 h-8 border-2 border-[#1e3a5f] border-t-transparent rounded-full animate-spin" />
+            <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {PLUGIN_CONFIG.map((plugin) => {
               const active = hasProfile(plugin.id)
+              const Icon = plugin.icon
               return (
                 <div
                   key={plugin.id}
-                  className="bg-white border border-gray-200 rounded-xl p-6 flex flex-col hover:shadow-md transition-shadow"
+                  className="bg-brand-surface border border-brand-line rounded-2xl p-6 flex flex-col hover:shadow-md hover:border-brand-accent hover:-translate-y-1 transition-all duration-200 group cursor-pointer"
+                  onClick={() => navigate(`/plugins/${plugin.id}`)}
                 >
                   {/* Icon + name */}
-                  <div className="flex items-start gap-3 mb-3">
-                    <span className="text-3xl leading-none">{plugin.icon}</span>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-serif font-semibold text-[#1e3a5f] text-base leading-tight">
+                  <div className="flex items-start gap-4 mb-4">
+                    <div className="w-12 h-12 rounded-xl bg-brand-bg border border-brand-line flex items-center justify-center text-brand-ink group-hover:bg-brand-ink group-hover:text-brand-surface transition-colors duration-200 shrink-0">
+                      <Icon size={24} strokeWidth={1.5} />
+                    </div>
+                    <div className="flex-1 min-w-0 pt-1">
+                      <h3 className="font-serif font-bold text-brand-ink text-lg leading-tight mb-2">
                         {plugin.name}
                       </h3>
                       {/* Profile badge */}
-                      <div className="mt-1">
+                      <div>
                         {active ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium font-sans bg-green-100 text-green-800">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider bg-green-100 text-green-700 border border-green-200">
                             <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                            Profile: Active
+                            Active
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium font-sans bg-amber-100 text-amber-800">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200">
                             <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
-                            Profile: Setup Required
+                            Setup Required
                           </span>
                         )}
                       </div>
@@ -166,16 +184,15 @@ export default function PluginsPage() {
                   </div>
 
                   {/* Description */}
-                  <p className="text-gray-500 text-sm font-sans leading-relaxed flex-1 mb-4">
+                  <p className="text-brand-muted text-sm font-sans leading-relaxed flex-1 mb-6">
                     {plugin.description}
                   </p>
 
                   {/* Open button */}
                   <button
-                    onClick={() => navigate(`/plugins/${plugin.id}`)}
-                    className="w-full py-2 bg-[#1e3a5f] text-white text-sm font-sans font-medium rounded-lg hover:bg-[#2e4f7a] transition-colors"
+                    className="w-full py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors"
                   >
-                    Open
+                    Open Workspace
                   </button>
                 </div>
               )

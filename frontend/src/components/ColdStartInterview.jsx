@@ -14,6 +14,8 @@ const PLUGIN_LABELS = {
   'ip-legal': 'IP Legal',
   'ai-governance-legal': 'AI Governance Legal',
   'regulatory-legal': 'Regulatory Legal',
+  'trust-estate-legal': 'Trust & Estate',
+  'mediation-legal': 'Mediation',
 }
 
 export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) {
