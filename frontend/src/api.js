@@ -100,7 +100,7 @@ export const deleteDocument = (id) =>
 
 // Admin
 export const getAdminUsers = () =>
-  api.get('/admin/users').then((r) => r.data)
+  api.get('/admin/users').then((r) => r.data.users ?? r.data)
 
 export const getAdminUsage = () =>
   api.get('/admin/usage').then((r) => r.data)

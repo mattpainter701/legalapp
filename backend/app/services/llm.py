@@ -23,9 +23,9 @@ CONTEXT (legal sources retrieved from database):
 
 class LLMService:
     def __init__(self):
-        # DeepSeek uses OpenAI-compatible API
+        # DeepSeek uses OpenAI-compatible API; accept OPENCODE_KEY as alias
         self.deepseek_client = AsyncOpenAI(
-            api_key=settings.DEEPSEEK_API_KEY,
+            api_key=settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY,
             base_url=settings.DEEPSEEK_BASE_URL,
         )
         # Anthropic client for premium tier
@@ -97,9 +97,7 @@ class LLMService:
         # Convert messages to Anthropic format — system is passed separately
         anthropic_messages = []
         for msg in messages:
-            anthropic_messages.append(
-                {"role": msg["role"], "content": msg["content"]}
-            )
+            anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
         response = await self.anthropic_client.messages.create(
             model=settings.PREMIUM_LLM,

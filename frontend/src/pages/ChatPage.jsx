@@ -52,8 +52,8 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState('')
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
   const [isSending, setIsSending] = useState(false)
-  const [includePublic, setIncludePublic] = useState(true)
-  const [usePremium, setUsePremium] = useState(false)
+  const includePublic = localStorage.getItem('clarity_include_public') !== 'false'
+  const usePremium = localStorage.getItem('clarity_use_premium') === 'true'
   const [activeConvTitle, setActiveConvTitle] = useState('')
 
   const messagesEndRef = useRef(null)
@@ -251,48 +251,6 @@ export default function ChatPage() {
             </h2>
           </div>
           <div className="flex items-center gap-4 flex-shrink-0">
-            {/* Model selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-sans">Model:</span>
-              <button
-                onClick={() => setUsePremium(false)}
-                className={`px-2.5 py-1 text-xs rounded font-sans transition-colors ${
-                  !usePremium
-                    ? 'bg-[#1e3a5f] text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                DeepSeek
-              </button>
-              <button
-                onClick={() => setUsePremium(true)}
-                className={`px-2.5 py-1 text-xs rounded font-sans transition-colors ${
-                  usePremium
-                    ? 'bg-[#1e3a5f] text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Claude (Premium)
-              </button>
-            </div>
-
-            {/* Public case law toggle */}
-            <label className="flex items-center gap-2 cursor-pointer">
-              <span className="text-xs text-gray-500 font-sans">Public case law</span>
-              <div
-                className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${
-                  includePublic ? 'bg-[#1e3a5f]' : 'bg-gray-300'
-                }`}
-                onClick={() => setIncludePublic((v) => !v)}
-              >
-                <div
-                  className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                    includePublic ? 'translate-x-4' : 'translate-x-0.5'
-                  }`}
-                />
-              </div>
-            </label>
-
             {/* Admin link */}
             {user?.role === 'admin' && (
               <button

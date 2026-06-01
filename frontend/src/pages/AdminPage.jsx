@@ -226,6 +226,56 @@ function TenantTab() {
   )
 }
 
+function SettingsTab() {
+  const [includePublic, setIncludePublic] = useState(() => {
+    const stored = localStorage.getItem('clarity_include_public')
+    return stored === null ? true : stored === 'true'
+  })
+  const [usePremium, setUsePremium] = useState(() => {
+    return localStorage.getItem('clarity_use_premium') === 'true'
+  })
+
+  const toggle = (key, setter) => (val) => {
+    setter(val)
+    localStorage.setItem(key, String(val))
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <h3 className="font-serif font-semibold text-[#1e3a5f]">Chat Settings</h3>
+        <p className="text-xs text-gray-500 font-sans mt-1">These defaults apply to all new conversations for your tenant.</p>
+      </div>
+      <div className="divide-y divide-gray-100">
+        <div className="flex items-center justify-between px-5 py-4">
+          <div>
+            <p className="text-sm font-sans font-medium text-gray-800">Public case law search</p>
+            <p className="text-xs text-gray-500 font-sans mt-0.5">Include CourtListener public opinions in RAG retrieval</p>
+          </div>
+          <div
+            className={`relative w-10 h-6 rounded-full transition-colors cursor-pointer flex-shrink-0 ${includePublic ? 'bg-[#1e3a5f]' : 'bg-gray-300'}`}
+            onClick={() => toggle('clarity_include_public', setIncludePublic)(!includePublic)}
+          >
+            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${includePublic ? 'translate-x-5' : 'translate-x-1'}`} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between px-5 py-4">
+          <div>
+            <p className="text-sm font-sans font-medium text-gray-800">Premium model</p>
+            <p className="text-xs text-gray-500 font-sans mt-0.5">Use the premium LLM for new conversations (higher cost)</p>
+          </div>
+          <div
+            className={`relative w-10 h-6 rounded-full transition-colors cursor-pointer flex-shrink-0 ${usePremium ? 'bg-[#1e3a5f]' : 'bg-gray-300'}`}
+            onClick={() => toggle('clarity_use_premium', setUsePremium)(!usePremium)}
+          >
+            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${usePremium ? 'translate-x-5' : 'translate-x-1'}`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AdminPage() {
   const { user, logout: authLogout } = useAuth()
   const navigate = useNavigate()
@@ -235,6 +285,7 @@ export default function AdminPage() {
     { id: 'users', label: 'Users' },
     { id: 'usage', label: 'Usage' },
     { id: 'tenant', label: 'Tenant' },
+    { id: 'settings', label: 'Settings' },
   ]
 
   const handleLogout = async () => {
@@ -308,6 +359,7 @@ export default function AdminPage() {
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'usage' && <UsageTab />}
         {activeTab === 'tenant' && <TenantTab />}
+        {activeTab === 'settings' && <SettingsTab />}
       </div>
     </div>
   )

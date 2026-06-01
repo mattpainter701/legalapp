@@ -18,14 +18,15 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
+    OPENCODE_KEY: str = ""  # alias accepted alongside DEEPSEEK_API_KEY
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_PRICE_ID: str = ""            # Stripe Price ID for flat subscription
-    STRIPE_SUCCESS_URL: str = ""         # e.g. https://yourdomain.com/billing?success=1
-    STRIPE_CANCEL_URL: str = ""          # e.g. https://yourdomain.com/billing?cancel=1
+    STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
+    STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
+    STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 
     # Super-admin platform key — set a long random token; never commit
     PLATFORM_SECRET_KEY: str = ""
@@ -53,13 +54,13 @@ class Settings(BaseSettings):
     PREMIUM_LLM: str = "claude-opus-4-8"
 
     # ── Email / Notifications ─────────────────────────────────────────────────
-    EMAIL_ENABLED: bool = False          # Set True in prod; logs emails in dev
+    EMAIL_ENABLED: bool = False  # Set True in prod; logs emails in dev
     EMAIL_HOST: str = "smtp.gmail.com"
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
     EMAIL_FROM: str = "noreply@clarity.legal"
-    SLACK_WEBHOOK_URL: str = ""          # Optional: Slack incoming webhook URL
+    SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 
     # Never set True in production — enables /dev/* endpoints
     DEV_MODE: bool = False
