@@ -32,7 +32,7 @@ services:
         condition: service_healthy
     env_file: .env
     volumes:
-      - ./uploads:/app/uploads
+      - uploads:/app/uploads
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
@@ -66,3 +66,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  uploads:
