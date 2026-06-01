@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { runColdStart, savePluginProfile } from '../api'
+import { X, Check, Bot } from 'lucide-react'
 
 const TOTAL_STEPS = 8
 
@@ -27,14 +28,13 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
   const textareaRef = useRef(null)
   const messagesEndRef = useRef(null)
 
-  // Kick off step 1 on mount
   useEffect(() => {
     startStep1()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, loading])
 
   const startStep1 = async () => {
     setLoading(true)
@@ -93,7 +93,6 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
   }
 
   const handleSaveAndExit = async () => {
-    // Save partial progress in localStorage for resume
     const key = `coldstart_${plugin}`
     localStorage.setItem(
       key,
@@ -112,41 +111,40 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
   const isComplete = generatedProfile !== null || step > TOTAL_STEPS
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-brand-ink/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+      <div className="bg-brand-bg rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh] border border-brand-line overflow-hidden animate-in zoom-in-95 duration-200">
+
         {/* Header */}
-        <div className="bg-[#1e3a5f] px-6 py-4 rounded-t-2xl flex-shrink-0">
-          <div className="flex items-center justify-between">
+        <div className="bg-brand-surface px-8 py-5 border-b border-brand-line flex-shrink-0">
+          <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-white font-serif font-semibold text-lg">
-                {PLUGIN_LABELS[plugin] || plugin} — Setup Interview
+              <h2 className="text-brand-ink font-serif font-bold text-xl">
+                {PLUGIN_LABELS[plugin] || plugin} — Setup
               </h2>
-              <p className="text-blue-200 text-xs mt-0.5 font-sans">
+              <p className="text-brand-ink-2 text-sm font-sans mt-1">
                 Step {Math.min(step, TOTAL_STEPS)} of {TOTAL_STEPS}
               </p>
             </div>
             <button
               onClick={onClose}
-              className="text-blue-200 hover:text-white transition-colors"
+              className="text-brand-muted hover:text-brand-ink transition-colors p-2"
               title="Close"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X size={20} />
             </button>
           </div>
 
           {/* Progress bar */}
-          <div className="mt-3 bg-blue-800 rounded-full h-1.5">
+          <div className="bg-brand-bg-soft rounded-full h-1.5 overflow-hidden">
             <div
-              className="bg-blue-300 h-1.5 rounded-full transition-all duration-500"
+              className="bg-brand-accent h-1.5 rounded-full transition-all duration-500 ease-out"
               style={{ width: `${(Math.min(step, TOTAL_STEPS) / TOTAL_STEPS) * 100}%` }}
             />
           </div>
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
           {messages.map((msg, i) => (
             <div
               key={i}
@@ -154,29 +152,24 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
             >
               {msg.role === 'assistant' && (
                 <div className="max-w-[85%]">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <div className="w-6 h-6 bg-[#1e3a5f] rounded-full flex items-center justify-center flex-shrink-0">
-                      <svg width="12" height="12" viewBox="0 0 32 32" fill="none">
-                        <path
-                          d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z"
-                          fill="white"
-                          fillOpacity="0.9"
-                        />
-                      </svg>
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div className="w-7 h-7 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center flex-shrink-0 relative">
+                       <Bot size={14} className="text-brand-ink" />
+                       <div className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-brand-accent border border-brand-surface rounded-full"></div>
                     </div>
-                    <span className="text-xs text-gray-500 font-sans">Setup Assistant</span>
+                    <span className="text-[13px] text-brand-ink font-sans font-bold">Setup Assistant</span>
                   </div>
-                  <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3">
-                    <div className="text-sm prose-legal">
+                  <div className="bg-brand-surface border border-brand-line rounded-2xl rounded-tl-sm px-5 py-4 shadow-sm">
+                    <div className="text-[15px] prose-legal">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
                   </div>
                 </div>
               )}
               {msg.role === 'user' && (
-                <div className="max-w-[75%]">
-                  <div className="bg-[#1e3a5f] text-white rounded-2xl rounded-tr-sm px-4 py-3">
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                <div className="max-w-[80%]">
+                  <div className="bg-brand-ink text-brand-surface border border-brand-ink rounded-2xl rounded-tr-sm px-5 py-4 shadow-sm">
+                    <p className="text-[15px] leading-relaxed whitespace-pre-wrap font-sans font-medium">{msg.content}</p>
                   </div>
                 </div>
               )}
@@ -185,34 +178,41 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
 
           {loading && (
             <div className="flex justify-start">
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3">
-                <div className="flex gap-1.5 items-center h-4">
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
+              <div className="max-w-[85%]">
+                 <div className="flex items-center gap-2.5 mb-2">
+                    <div className="w-7 h-7 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center flex-shrink-0 relative">
+                       <Bot size={14} className="text-brand-ink" />
+                    </div>
+                 </div>
+                 <div className="bg-brand-surface border border-brand-line rounded-2xl rounded-tl-sm px-5 py-4 shadow-sm inline-block">
+                   <div className="flex gap-1.5 items-center h-4">
+                     <span className="w-2 h-2 bg-brand-muted rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                     <span className="w-2 h-2 bg-brand-muted rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                     <span className="w-2 h-2 bg-brand-muted rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                   </div>
+                 </div>
               </div>
             </div>
           )}
 
           {/* Generated profile preview */}
           {isComplete && generatedProfile && (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <svg className="w-4 h-4 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="text-green-800 font-semibold text-sm font-sans">Profile Ready</span>
+            <div className="bg-brand-green/10 border border-brand-green/20 rounded-2xl p-6">
+              <div className="flex items-center gap-2.5 mb-3">
+                <div className="w-6 h-6 rounded-full bg-brand-green flex items-center justify-center text-white">
+                   <Check size={14} strokeWidth={3} />
+                </div>
+                <span className="text-brand-green font-bold text-[15px] font-sans">Profile Ready</span>
               </div>
-              <p className="text-green-700 text-xs font-sans">
+              <p className="text-brand-green font-sans text-sm font-medium leading-relaxed">
                 Your {PLUGIN_LABELS[plugin] || plugin} profile has been generated. Review and save it to activate the plugin.
               </p>
             </div>
           )}
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-              <p className="text-red-700 text-sm font-sans">{error}</p>
+            <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4">
+              <p className="text-brand-rose text-[14px] font-sans font-medium">{error}</p>
             </div>
           )}
 
@@ -220,49 +220,53 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
         </div>
 
         {/* Input area */}
-        <div className="px-6 py-4 border-t border-gray-200 flex-shrink-0">
+        <div className="bg-brand-surface px-8 py-5 border-t border-brand-line flex-shrink-0">
           {!isComplete ? (
-            <div className="flex gap-3 items-end">
+            <div className="flex gap-4 items-end">
               <textarea
                 ref={textareaRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your answer..."
-                className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-3 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent placeholder-gray-400 min-h-[48px] max-h-32"
-                rows={2}
+                placeholder="Type your answer... (Enter to send)"
+                className="flex-1 resize-none bg-brand-bg-soft border border-brand-line rounded-xl px-5 py-3.5 text-[15px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent placeholder-brand-muted min-h-[52px] max-h-32 transition-all shadow-sm"
+                rows={1}
                 disabled={loading}
               />
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2 shrink-0">
                 <button
                   onClick={handleContinue}
                   disabled={!inputValue.trim() || loading}
-                  className="px-4 py-2 bg-[#1e3a5f] text-white text-sm font-sans font-medium rounded-xl hover:bg-[#2e4f7a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="px-6 py-3.5 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted disabled:cursor-not-allowed transition-all shadow-sm"
                 >
-                  Continue
+                  Send
                 </button>
                 <button
                   onClick={handleSaveAndExit}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-sans font-medium rounded-xl hover:bg-gray-200 transition-colors"
+                  className="px-6 py-2.5 bg-brand-surface text-brand-ink text-[13px] font-sans font-semibold rounded-xl border border-brand-line hover:bg-brand-bg-soft hover:border-brand-ink transition-all"
                 >
                   Save & Exit
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex gap-3">
+            <div className="flex gap-4">
               {generatedProfile && (
                 <button
                   onClick={handleSaveProfile}
                   disabled={savingProfile}
-                  className="flex-1 px-4 py-2.5 bg-[#1e3a5f] text-white text-sm font-sans font-medium rounded-xl hover:bg-[#2e4f7a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="flex-1 px-6 py-3.5 bg-brand-ink text-white text-[15px] font-sans font-bold rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted transition-all shadow-sm flex items-center justify-center gap-2"
                 >
-                  {savingProfile ? 'Saving...' : 'Save Profile'}
+                  {savingProfile ? (
+                     <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving...</>
+                  ) : (
+                     <><Check size={18} /> Save Profile</>
+                  )}
                 </button>
               )}
               <button
                 onClick={onClose}
-                className="px-4 py-2.5 bg-gray-100 text-gray-700 text-sm font-sans font-medium rounded-xl hover:bg-gray-200 transition-colors"
+                className="px-6 py-3.5 bg-brand-surface text-brand-ink text-[15px] font-sans font-semibold rounded-xl border border-brand-line hover:bg-brand-bg-soft transition-all"
               >
                 Close
               </button>

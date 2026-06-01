@@ -1,61 +1,47 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format } from 'date-fns'
 import FileUpload from './FileUpload'
 import { deleteDocument, deleteConversation } from '../api'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2 } from 'lucide-react'
 
-function ConversationItem({ conv, isActive, onClick, onDelete }) {
+function ConversationItem({ conv, index, isActive, onClick, onDelete }) {
   const [hover, setHover] = useState(false)
 
   return (
     <div
-      className={`sidebar-item ${isActive ? 'sidebar-item-active' : 'sidebar-item-inactive'}`}
+      role="button"
+      tabIndex={0}
+      className={`w-full text-left px-4 py-2 text-sm flex items-start gap-3 border-l-2 transition-colors cursor-pointer group focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-ink ${
+        isActive
+          ? 'border-brand-accent bg-brand-bg text-brand-ink font-medium'
+          : 'border-transparent text-brand-muted hover:bg-brand-line/40 hover:text-brand-ink'
+      }`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick()
+        }
+      }}
     >
-      <button
-        onClick={onClick}
-        className="flex-1 text-left truncate text-sm"
-        title={conv.title || 'Untitled conversation'}
-      >
+      <span className="font-mono text-[10px] pt-[3px] text-brand-muted shrink-0">
+        {String(index + 1).padStart(2, '0')}
+      </span>
+      <span className="flex-1 truncate leading-tight" title={conv.title || 'Untitled conversation'}>
         {conv.title || 'Untitled conversation'}
-      </button>
-      {hover && !isActive && (
+      </span>
+      {(hover || isActive) && (
         <button
           onClick={(e) => {
             e.stopPropagation()
             onDelete(conv.id)
           }}
-          className="ml-1 p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-500 transition-colors"
+          className="shrink-0 p-1 text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose transition-colors"
           title="Delete conversation"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-            />
-          </svg>
-        </button>
-      )}
-      {isActive && hover && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(conv.id)
-          }}
-          className="ml-1 p-0.5 rounded hover:bg-[#2e4f7a] text-white/70 hover:text-white transition-colors"
-          title="Delete conversation"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-            />
-          </svg>
+          <Trash2 size={13} />
         </button>
       )}
     </div>
@@ -63,47 +49,38 @@ function ConversationItem({ conv, isActive, onClick, onDelete }) {
 }
 
 function DocumentItem({ doc, onDelete }) {
-  const statusColor = {
-    indexed: 'text-green-600',
-    processing: 'text-yellow-600',
-    uploading: 'text-blue-600',
-    error: 'text-red-600',
-  }[doc.status] || 'text-gray-500'
+  const isIndexed = doc.status === 'indexed'
+  const isProcessing = doc.status === 'processing' || doc.status === 'uploading'
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 group">
-      <svg
-        className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-        />
-      </svg>
-      <span className="flex-1 text-xs text-gray-700 truncate" title={doc.filename}>
-        {doc.filename}
-      </span>
-      <span className={`text-xs capitalize ${statusColor} hidden group-hover:block`}>
-        {doc.status}
-      </span>
+    <div className="flex items-center gap-3 px-2 py-2 text-sm group hover:bg-brand-line/40 transition-colors">
+      <FileText className="w-4 h-4 text-brand-muted shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="truncate text-brand-ink font-mono text-xs" title={doc.filename}>
+          {doc.filename}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          {isIndexed ? (
+            <span className="flex items-center gap-1 text-[8px] uppercase tracking-widest text-brand-accent font-bold">
+              <CheckCircle2 className="w-3 h-3" /> Indexed
+            </span>
+          ) : isProcessing ? (
+            <span className="flex items-center gap-1 text-[8px] uppercase tracking-widest text-brand-amber font-bold">
+              <Loader2 className="w-3 h-3 animate-spin" /> Processing
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-[8px] uppercase tracking-widest text-brand-rose font-bold">
+              {doc.status}
+            </span>
+          )}
+        </div>
+      </div>
       <button
         onClick={() => onDelete(doc.id)}
-        className="hidden group-hover:block p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-500 transition-colors"
+        className="shrink-0 p-1 text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
         title="Delete document"
       >
-        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M6 18L18 6M6 6l12 12"
-          />
-        </svg>
+        <Trash2 size={13} />
       </button>
     </div>
   )
@@ -142,136 +119,103 @@ export default function Sidebar({
   }
 
   return (
-    <div className="w-64 flex-shrink-0 bg-[#f8f9fc] border-r border-gray-200 flex flex-col h-full">
+    <div className="w-[300px] flex-shrink-0 border-r border-brand-line flex flex-col h-full bg-brand-surface-2 relative z-20">
       {/* Header */}
-      <div className="px-4 py-4 border-b border-gray-200">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 bg-[#1e3a5f] rounded-full flex items-center justify-center">
-            <svg width="14" height="14" viewBox="0 0 32 32" fill="none">
-              <path
-                d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z"
-                fill="white"
-                fillOpacity="0.9"
-              />
-            </svg>
-          </div>
-          <span className="font-serif font-bold text-[#1e3a5f] text-sm">Clarity Legal</span>
-        </div>
+      <div className="h-16 flex items-center px-4 border-b border-brand-line shrink-0">
+        <Scale className="w-5 h-5 mr-2 text-brand-accent" strokeWidth={1.5} />
+        <span className="font-serif font-semibold text-lg tracking-tight text-brand-ink">Clarity Legal</span>
+      </div>
+
+      {/* Actions */}
+      <div className="p-4 flex flex-col gap-2 border-b border-brand-line shrink-0">
         <button
           onClick={onNewConversation}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#1e3a5f] text-white text-sm rounded-lg hover:bg-[#2e4f7a] transition-colors font-sans"
+          className="flex items-center justify-between w-full px-3 py-2 bg-brand-ink text-white text-sm font-medium hover:bg-brand-ink-2 transition-colors border border-brand-ink"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          New Conversation
+          <span className="flex items-center gap-2">
+            <Plus className="w-4 h-4" /> New Conversation
+          </span>
+          <span className="text-white/50 text-xs font-mono">⌘N</span>
         </button>
         <button
           onClick={() => navigate('/plugins')}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-white border border-[#1e3a5f] text-[#1e3a5f] text-sm rounded-lg hover:bg-blue-50 transition-colors font-sans"
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-          </svg>
-          Practice Plugins
+          <span className="flex items-center gap-2">
+            <Blocks className="w-4 h-4" /> Add-on Modules
+          </span>
         </button>
       </div>
 
-      {/* Conversations */}
+      {/* Scrollable areas */}
       <div className="flex-1 overflow-y-auto">
-        <div className="px-2 py-2">
-          <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
-            Conversations
-          </p>
-          {!Array.isArray(conversations) || conversations.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-400 italic">No conversations yet</p>
+        {/* Conversations */}
+        <div className="py-4">
+          <div className="px-4 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
+            <span>Conversations</span>
+            <span className="font-mono text-[10px]">{conversations.length}</span>
+          </div>
+          {conversations.length === 0 ? (
+            <p className="px-4 text-[13px] text-brand-muted italic font-sans">No history yet</p>
           ) : (
-            conversations.map((conv) => (
-              <ConversationItem
-                key={conv.id}
-                conv={conv}
-                isActive={conv.id === activeConvId}
-                onClick={() => onSelectConversation(conv.id)}
-                onDelete={handleDeleteConv}
-              />
-            ))
+            <div className="flex flex-col">
+              {conversations.map((conv, index) => (
+                <ConversationItem
+                  key={conv.id}
+                  conv={conv}
+                  index={index}
+                  isActive={conv.id === activeConvId}
+                  onClick={() => onSelectConversation(conv.id)}
+                  onDelete={handleDeleteConv}
+                />
+              ))}
+            </div>
           )}
         </div>
 
-        {/* Documents */}
-        <div className="px-2 py-2 border-t border-gray-200 mt-2">
-          <p className="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 font-sans">
-            Documents
-          </p>
-          {!Array.isArray(documents) || documents.length === 0 ? (
-            <p className="px-3 py-1 text-xs text-gray-400 italic">No documents uploaded</p>
+        <div className="w-full h-px bg-brand-line my-2"></div>
+
+        {/* Library Documents */}
+        <div className="py-4">
+          <div className="px-4 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
+            <span>Library Documents</span>
+            <span className="font-mono text-[10px]">{documents.length}</span>
+          </div>
+          {documents.length === 0 ? (
+            <p className="px-4 text-[13px] text-brand-muted italic font-sans mb-3">No documents uploaded</p>
           ) : (
-            documents.map((doc) => (
-              <DocumentItem key={doc.id} doc={doc} onDelete={handleDeleteDoc} />
-            ))
+            <div className="flex flex-col gap-1 px-2 mb-3">
+              {documents.map((doc) => (
+                <DocumentItem key={doc.id} doc={doc} onDelete={handleDeleteDoc} />
+              ))}
+            </div>
           )}
+          <div className="px-4">
+            <FileUpload onUploadComplete={onDocumentUploaded} />
+          </div>
         </div>
       </div>
 
-      {/* Upload area */}
-      <div className="px-3 py-3 border-t border-gray-200">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 font-sans">
-          Upload Document
-        </p>
-        <FileUpload onUploadComplete={onDocumentUploaded} />
-      </div>
-
-      {/* User info */}
-      <div className="px-3 py-3 border-t border-gray-200">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
-            <span className="text-xs font-semibold text-gray-600 font-sans">
-              {user?.full_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-gray-700 truncate">
-              {user?.full_name || user?.email}
-            </p>
-            <p className="text-xs text-gray-400 capitalize">{user?.billing_tier || 'free'}</p>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => navigate('/billing')}
-              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1e3a5f] transition-colors"
-              title="Billing"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-              </svg>
-            </button>
-            {user?.role === 'admin' && (
-              <button
-                onClick={() => navigate('/mcp')}
-                className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1e3a5f] transition-colors"
-                title="MCP Server"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-              </button>
-            )}
-          <button
-            onClick={onLogout}
-            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-            title="Sign out"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-              />
-            </svg>
-          </button>
-          </div>
+      {/* Footer / User info */}
+      <div className="p-4 border-t border-brand-line flex items-center gap-3 bg-brand-surface-2 shrink-0">
+        <div className="w-8 h-8 bg-brand-ink text-brand-bg flex items-center justify-center font-serif text-sm font-semibold shrink-0">
+          {user?.full_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
         </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-brand-ink truncate">
+            {user?.full_name || user?.email}
+          </p>
+          <p className="text-xs text-brand-muted font-mono uppercase tracking-wider truncate">
+            {user?.billing_tier || 'Free Tier'}
+          </p>
+        </div>
+        <button
+          onClick={onLogout}
+          className="text-brand-muted hover:text-brand-ink transition-colors shrink-0"
+          title="Sign out"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
       </div>
     </div>
   )
