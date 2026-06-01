@@ -21,6 +21,7 @@ services:
       - VITE_API_URL=/api               # relative — handled by Vite proxy to backend:8000
 
   postgres:
+    image: pgvector/pgvector:pg16    # vector extension required for migration 006
     ports:
       - "5434:5432"    # expose for pgAdmin / DBeaver locally (5432 may be taken on hypervisor)
 
