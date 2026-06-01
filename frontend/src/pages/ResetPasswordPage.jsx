@@ -31,28 +31,22 @@ export default function ResetPasswordPage() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-[#1e3a5f] flex flex-col items-center justify-center px-4">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-md px-8 py-10 text-center">
-          <p className="text-red-600 text-sm">No reset token provided. Use the link from your email.</p>
-          <p className="mt-4"><Link to="/forgot-password" className="text-[#1e3a5f] font-medium hover:underline">Request a new reset link</Link></p>
+      <div className="min-h-screen bg-brand-bg flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-brand-surface border border-brand-line rounded-xl shadow-sm p-8 text-center">
+          <p className="font-sans text-brand-rose text-sm">No reset token provided. Use the link from your email.</p>
+          <p className="mt-4 font-sans text-sm">
+            <Link to="/forgot-password" className="text-brand-accent hover:text-brand-accent-2 font-medium">Request a new reset link</Link>
+          </p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-[#1e3a5f] flex flex-col items-center justify-center px-4">
-      <div className="absolute inset-0 opacity-5 pointer-events-none">
-        <div className="w-full h-full" style={{
-          backgroundImage: `repeating-linear-gradient(45deg,#fff,#fff 1px,transparent 1px,transparent 60px)`,
-        }} />
-      </div>
-
-      <div className="relative z-10 bg-white rounded-xl shadow-2xl w-full max-w-md px-8 py-10">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif">Set New Password</h1>
-          <p className="mt-2 text-gray-500 text-sm">Enter your new password</p>
-        </div>
+    <div className="min-h-screen bg-brand-bg flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-brand-surface border border-brand-line rounded-xl shadow-sm p-8">
+        <h1 className="font-serif text-2xl text-brand-ink mb-2">Set new password</h1>
+        <p className="font-sans text-brand-muted text-sm mb-6">Enter your new password</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -62,20 +56,20 @@ export default function ResetPasswordPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
             minLength={8}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+            className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent focus:border-brand-accent"
           />
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-lg text-white font-sans text-sm font-medium bg-[#1e3a5f] hover:opacity-90 disabled:opacity-50"
+            className="w-full py-3 rounded-lg text-white font-sans text-sm font-medium bg-brand-accent hover:bg-brand-accent-2 transition-all duration-150 disabled:opacity-50"
           >
             {loading ? 'Resetting...' : 'Reset Password'}
           </button>
         </form>
 
-        {error && <p className="mt-4 text-red-600 text-sm text-center">{error}</p>}
-        {message && <p className="mt-4 text-green-600 text-sm text-center">{message}</p>}
+        {error && <p className="mt-4 font-sans text-brand-rose text-sm text-center">{error}</p>}
+        {message && <p className="mt-4 font-sans text-green-600 text-sm text-center">{message}</p>}
       </div>
     </div>
   )

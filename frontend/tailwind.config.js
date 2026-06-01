@@ -18,7 +18,17 @@ export default {
           700: '#1e4d8c',
           800: '#1e3a5f',
           900: '#132540',
-        }
+        },
+        brand: {
+          bg: '#F7F3EC',
+          surface: '#FFFFFF',
+          ink: '#14253B',
+          muted: '#6B7280',
+          accent: '#1e3a5f',
+          'accent-2': '#2e619e',
+          line: '#E5E0D8',
+          rose: '#DC2626',
+        },
       }
     },
   },

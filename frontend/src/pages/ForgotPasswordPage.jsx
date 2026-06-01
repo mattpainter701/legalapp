@@ -28,18 +28,10 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1e3a5f] flex flex-col items-center justify-center px-4">
-      <div className="absolute inset-0 opacity-5 pointer-events-none">
-        <div className="w-full h-full" style={{
-          backgroundImage: `repeating-linear-gradient(45deg,#fff,#fff 1px,transparent 1px,transparent 60px)`,
-        }} />
-      </div>
-
-      <div className="relative z-10 bg-white rounded-xl shadow-2xl w-full max-w-md px-8 py-10">
-        <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-[#1e3a5f] font-serif">Reset Password</h1>
-          <p className="mt-2 text-gray-500 text-sm">Enter your email to receive a reset link</p>
-        </div>
+    <div className="min-h-screen bg-brand-bg flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-brand-surface border border-brand-line rounded-xl shadow-sm p-8">
+        <h1 className="font-serif text-2xl text-brand-ink mb-2">Reset password</h1>
+        <p className="font-sans text-brand-muted text-sm mb-6">Enter your email to receive a reset link</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -48,27 +40,27 @@ export default function ForgotPasswordPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f]"
+            className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent focus:border-brand-accent"
           />
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-lg text-white font-sans text-sm font-medium bg-[#1e3a5f] hover:opacity-90 disabled:opacity-50"
+            className="w-full py-3 rounded-lg text-white font-sans text-sm font-medium bg-brand-accent hover:bg-brand-accent-2 transition-all duration-150 disabled:opacity-50"
           >
             {loading ? 'Sending...' : 'Send Reset Link'}
           </button>
         </form>
 
         {message && (
-          <div className="mt-4 text-sm text-gray-600">
+          <div className="mt-4 text-sm font-sans text-brand-muted">
             <p>{message}</p>
             {resetToken && (
-              <div className="mt-3 p-3 bg-gray-50 rounded border text-xs break-all">
-                <p className="font-medium text-gray-700 mb-1">Dev mode — your reset token:</p>
-                <code className="text-[#1e3a5f]">{resetToken}</code>
+              <div className="mt-3 p-3 bg-brand-bg rounded border border-brand-line text-xs break-all">
+                <p className="font-medium text-brand-ink mb-1">Dev mode — your reset token:</p>
+                <code className="text-brand-accent">{resetToken}</code>
                 <p className="mt-2">
-                  <Link to={`/reset-password?token=${resetToken}`} className="text-[#1e3a5f] font-medium hover:underline">
+                  <Link to={`/reset-password?token=${resetToken}`} className="text-brand-accent hover:text-brand-accent-2 font-medium">
                     Click here to reset
                   </Link>
                 </p>
@@ -77,8 +69,8 @@ export default function ForgotPasswordPage() {
           </div>
         )}
 
-        <p className="mt-6 text-center text-sm text-gray-500">
-          <Link to="/login" className="text-[#1e3a5f] font-medium hover:underline">Back to sign in</Link>
+        <p className="mt-6 text-center text-sm font-sans text-brand-muted">
+          <Link to="/login" className="text-brand-accent hover:text-brand-accent-2 font-medium">Back to sign in</Link>
         </p>
       </div>
     </div>
