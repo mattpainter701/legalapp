@@ -37,13 +37,32 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import UsageRecord
-from app.models.plugin import Matter, MatterEvent, PracticeProfile, Renewal
+from app.models.plugin import (
+    Estate,
+    EstateEvent,
+    Matter,
+    MatterEvent,
+    MediationCase,
+    MediationCaseEvent,
+    PracticeProfile,
+    Renewal,
+)
 from app.schemas.plugin import (
+    EstateCreate,
+    EstateEventCreate,
+    EstateEventResponse,
+    EstateResponse,
+    EstateUpdate,
     MatterCreate,
     MatterEventCreate,
     MatterEventResponse,
     MatterResponse,
     MatterUpdate,
+    MediationCaseCreate,
+    MediationCaseEventCreate,
+    MediationCaseEventResponse,
+    MediationCaseResponse,
+    MediationCaseUpdate,
     PluginInfo,
     PluginListResponse,
     PracticeProfileResponse,
@@ -153,6 +172,73 @@ def _renewal_to_response(renewal: Renewal) -> RenewalResponse:
     )
 
 
+def _estate_to_response(estate: Estate) -> EstateResponse:
+    return EstateResponse(
+        id=str(estate.id),
+        title=estate.title,
+        grantor=estate.grantor,
+        estate_type=estate.estate_type,
+        status=estate.status,
+        summary=estate.summary,
+        created_at=estate.created_at,
+        updated_at=estate.updated_at,
+        events=[
+            EstateEventResponse(
+                id=str(e.id),
+                event_type=e.event_type,
+                title=e.title,
+                content=e.content,
+                created_at=e.created_at,
+            )
+            for e in (estate.events or [])
+        ],
+    )
+
+
+def _estate_event_to_response(event: EstateEvent) -> EstateEventResponse:
+    return EstateEventResponse(
+        id=str(event.id),
+        event_type=event.event_type,
+        title=event.title,
+        content=event.content,
+        created_at=event.created_at,
+    )
+
+
+def _mediation_case_to_response(case: MediationCase) -> MediationCaseResponse:
+    return MediationCaseResponse(
+        id=str(case.id),
+        title=case.title,
+        parties=case.parties,
+        status=case.status,
+        summary=case.summary,
+        created_at=case.created_at,
+        updated_at=case.updated_at,
+        events=[
+            MediationCaseEventResponse(
+                id=str(e.id),
+                event_type=e.event_type,
+                title=e.title,
+                content=e.content,
+                created_at=e.created_at,
+            )
+            for e in (case.events or [])
+        ],
+    )
+
+
+def _mediation_event_to_response(
+    event: MediationCaseEvent,
+) -> MediationCaseEventResponse:
+    return MediationCaseEventResponse(
+        id=str(event.id),
+        event_type=event.event_type,
+        title=event.title,
+        content=event.content,
+        created_at=event.created_at,
+    )
+
+
 def _validate_plugin(plugin: str) -> None:
     if plugin not in VALID_PLUGINS:
         raise HTTPException(
@@ -164,6 +250,7 @@ def _validate_plugin(plugin: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — Plugin listing (no path params)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 @router.get("", response_model=PluginListResponse)
 async def list_plugins(
@@ -205,6 +292,7 @@ async def list_plugins(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Litigation Matters ────────────────────────────────────────────────────────
+
 
 @router.get("/litigation/matters", response_model=List[MatterResponse])
 async def list_matters(
@@ -390,6 +478,7 @@ async def append_matter_event(
 
 # ── Commercial Renewals ───────────────────────────────────────────────────────
 
+
 @router.get("/commercial/renewals", response_model=List[RenewalResponse])
 async def list_renewals(
     request: Request,
@@ -494,11 +583,293 @@ async def delete_renewal(
     await db.commit()
 
 
+# ── Trust & Estate ────────────────────────────────────────────────────────────
+
+
+@router.get("/trust-estate/estates", response_model=List[EstateResponse])
+async def list_estates(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all estates for the tenant, sorted by updated_at descending."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Estate)
+        .where(Estate.tenant_id == user.tenant_id)
+        .order_by(Estate.updated_at.desc())
+    )
+    estates = result.scalars().all()
+    return [_estate_to_response(e) for e in estates]
+
+
+@router.post("/trust-estate/estates", response_model=EstateResponse, status_code=201)
+async def create_estate(
+    body: EstateCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new estate matter."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    estate = Estate(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        title=body.title,
+        grantor=body.grantor,
+        estate_type=body.estate_type,
+        status="active",
+        summary=body.summary,
+    )
+    db.add(estate)
+    await db.commit()
+    await db.refresh(estate)
+    return _estate_to_response(estate)
+
+
+@router.get("/trust-estate/estates/{estate_id}", response_model=EstateResponse)
+async def get_estate(
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single estate by ID."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Estate).where(
+            Estate.id == estate_id,
+            Estate.tenant_id == user.tenant_id,
+        )
+    )
+    estate = result.scalar_one_or_none()
+    if estate is None:
+        raise HTTPException(status_code=404, detail="Estate not found")
+    return _estate_to_response(estate)
+
+
+@router.patch("/trust-estate/estates/{estate_id}", response_model=EstateResponse)
+async def update_estate(
+    estate_id: str,
+    body: EstateUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Partially update an estate."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Estate).where(
+            Estate.id == estate_id,
+            Estate.tenant_id == user.tenant_id,
+        )
+    )
+    estate = result.scalar_one_or_none()
+    if estate is None:
+        raise HTTPException(status_code=404, detail="Estate not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(estate, field, value)
+    estate.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(estate)
+    return _estate_to_response(estate)
+
+
+@router.post(
+    "/trust-estate/estates/{estate_id}/events",
+    response_model=EstateEventResponse,
+    status_code=201,
+)
+async def append_estate_event(
+    estate_id: str,
+    body: EstateEventCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Append an event to an estate's event log."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Estate).where(
+            Estate.id == estate_id,
+            Estate.tenant_id == user.tenant_id,
+        )
+    )
+    estate = result.scalar_one_or_none()
+    if estate is None:
+        raise HTTPException(status_code=404, detail="Estate not found")
+
+    event = EstateEvent(
+        id=uuid.uuid4(),
+        estate_id=estate.id,
+        event_type=body.event_type,
+        title=body.title,
+        content=body.content,
+    )
+    db.add(event)
+    estate.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(event)
+    return _estate_event_to_response(event)
+
+
+# ── Mediation Cases ───────────────────────────────────────────────────────────
+
+
+@router.get("/mediation/cases", response_model=List[MediationCaseResponse])
+async def list_mediation_cases(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all mediation cases for the tenant, sorted by updated_at descending."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(MediationCase)
+        .where(MediationCase.tenant_id == user.tenant_id)
+        .order_by(MediationCase.updated_at.desc())
+    )
+    cases = result.scalars().all()
+    return [_mediation_case_to_response(c) for c in cases]
+
+
+@router.post("/mediation/cases", response_model=MediationCaseResponse, status_code=201)
+async def create_mediation_case(
+    body: MediationCaseCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new mediation case."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    case = MediationCase(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        title=body.title,
+        parties=body.parties,
+        status="active",
+        summary=body.summary,
+    )
+    db.add(case)
+    await db.commit()
+    await db.refresh(case)
+    return _mediation_case_to_response(case)
+
+
+@router.get(
+    "/mediation/cases/{mediation_case_id}", response_model=MediationCaseResponse
+)
+async def get_mediation_case(
+    mediation_case_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single mediation case by ID."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(MediationCase).where(
+            MediationCase.id == mediation_case_id,
+            MediationCase.tenant_id == user.tenant_id,
+        )
+    )
+    case = result.scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Mediation case not found")
+    return _mediation_case_to_response(case)
+
+
+@router.patch(
+    "/mediation/cases/{mediation_case_id}", response_model=MediationCaseResponse
+)
+async def update_mediation_case(
+    mediation_case_id: str,
+    body: MediationCaseUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Partially update a mediation case."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(MediationCase).where(
+            MediationCase.id == mediation_case_id,
+            MediationCase.tenant_id == user.tenant_id,
+        )
+    )
+    case = result.scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Mediation case not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(case, field, value)
+    case.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(case)
+    return _mediation_case_to_response(case)
+
+
+@router.post(
+    "/mediation/cases/{mediation_case_id}/events",
+    response_model=MediationCaseEventResponse,
+    status_code=201,
+)
+async def append_mediation_case_event(
+    mediation_case_id: str,
+    body: MediationCaseEventCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Append an event to a mediation case's event log."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(MediationCase).where(
+            MediationCase.id == mediation_case_id,
+            MediationCase.tenant_id == user.tenant_id,
+        )
+    )
+    case = result.scalar_one_or_none()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Mediation case not found")
+
+    event = MediationCaseEvent(
+        id=uuid.uuid4(),
+        case_id=case.id,
+        event_type=body.event_type,
+        title=body.title,
+        content=body.content,
+    )
+    db.add(event)
+    case.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(event)
+    return _mediation_event_to_response(event)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 3 — Dynamic plugin routes (/{plugin}/...) — registered AFTER statics
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Practice Profile CRUD ─────────────────────────────────────────────────────
+
 
 @router.get("/{plugin}/profile", response_model=PracticeProfileResponse)
 async def get_practice_profile(
@@ -586,6 +957,7 @@ async def upsert_practice_profile(
 
 # ── Cold-Start Interview ──────────────────────────────────────────────────────
 
+
 @router.post("/{plugin}/cold-start", response_model=SkillResponse)
 async def cold_start_interview(
     plugin: str,
@@ -646,7 +1018,9 @@ async def cold_start_interview(
     # Record usage
     model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
-    tokens_out_val = result_data.get("tokens_out", result_data.get("tokens_used", 0) // 2)
+    tokens_out_val = result_data.get(
+        "tokens_out", result_data.get("tokens_used", 0) // 2
+    )
     cost = calculate_cost(
         tokens_in=tokens_in_val,
         tokens_out=tokens_out_val,
@@ -675,6 +1049,7 @@ async def cold_start_interview(
 
 
 # ── Skill Execution (catch-all — must be LAST) ────────────────────────────────
+
 
 @router.post("/{plugin}/{skill}", response_model=SkillResponse)
 async def execute_skill(
@@ -718,7 +1093,9 @@ async def execute_skill(
     # Record usage
     model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
-    tokens_out_val = result_data.get("tokens_out", result_data.get("tokens_used", 0) // 2)
+    tokens_out_val = result_data.get(
+        "tokens_out", result_data.get("tokens_used", 0) // 2
+    )
     cost = calculate_cost(
         tokens_in=tokens_in_val,
         tokens_out=tokens_out_val,

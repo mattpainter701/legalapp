@@ -27,7 +27,9 @@ class PracticeProfile(Base):
 
     __tablename__ = "practice_profiles"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "plugin_name", name="uq_practice_profiles_tenant_plugin"),
+        UniqueConstraint(
+            "tenant_id", "plugin_name", name="uq_practice_profiles_tenant_plugin"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -47,7 +49,9 @@ class PracticeProfile(Base):
     )
     plugin_name: Mapped[str] = mapped_column(String(100), nullable=False)
     profile_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_complete: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     setup_step: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -112,7 +116,9 @@ class Matter(Base):
     key_dates: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     initial_posture: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    is_closed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_closed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     outcome: Mapped[str | None] = mapped_column(String(200), nullable=True)
     final_cost: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -190,8 +196,12 @@ class Renewal(Base):
     )
     renewal_date: Mapped[datetime] = mapped_column(Date, nullable=False)
     notice_deadline: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    auto_renewal: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    price_increase_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    auto_renewal: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    price_increase_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
     business_owner: Mapped[str | None] = mapped_column(String(300), nullable=True)
     business_owner_email: Mapped[str | None] = mapped_column(String(300), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -209,4 +219,143 @@ class Renewal(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default="now()",
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class Estate(Base):
+    """Trust & Estate matter — one row per estate administration."""
+
+    __tablename__ = "estates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    grantor: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    estate_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(100), default="active", server_default="active"
+    )
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    events: Mapped[list["EstateEvent"]] = relationship(
+        "EstateEvent", back_populates="estate", order_by="EstateEvent.created_at"
+    )
+
+
+class EstateEvent(Base):
+    """Append-only event log for an estate matter."""
+
+    __tablename__ = "estate_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    estate_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("estates.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="other", server_default="other"
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    estate: Mapped["Estate"] = relationship("Estate", back_populates="events")
+
+
+class MediationCase(Base):
+    """Mediation case — one row per mediation engagement."""
+
+    __tablename__ = "mediation_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    parties: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(100), default="active", server_default="active"
+    )
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    events: Mapped[list["MediationCaseEvent"]] = relationship(
+        "MediationCaseEvent",
+        back_populates="case",
+        order_by="MediationCaseEvent.created_at",
+    )
+
+
+class MediationCaseEvent(Base):
+    """Append-only event log for a mediation case."""
+
+    __tablename__ = "mediation_case_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mediation_cases.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="other", server_default="other"
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    case: Mapped["MediationCase"] = relationship(
+        "MediationCase", back_populates="events"
     )
