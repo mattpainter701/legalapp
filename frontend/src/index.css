@@ -1,48 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  html {
-    font-family: 'Georgia', 'Times New Roman', serif;
-  }
-
-  body {
-    @apply bg-gray-50 text-gray-900;
+  html, body {
+    @apply bg-brand-bg text-brand-ink font-sans;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-family: 'Georgia', 'Times New Roman', serif;
+    @apply font-serif text-brand-ink font-medium tracking-tight text-balance;
   }
 
   input, textarea, button, select {
-    font-family: 'Arial', 'Helvetica', sans-serif;
+    @apply font-sans text-brand-ink;
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply bg-[#1e3a5f] text-white px-4 py-2 rounded hover:bg-[#2e4f7a] transition-colors duration-150 font-sans text-sm font-medium;
+    @apply bg-brand-ink text-white px-5 py-2.5 rounded-lg hover:bg-brand-ink-2 hover:-translate-y-[1px] active:translate-y-0 transition-all duration-150 font-sans text-sm font-medium shadow-sm;
   }
 
   .btn-secondary {
-    @apply bg-white text-[#1e3a5f] px-4 py-2 rounded border border-[#1e3a5f] hover:bg-gray-50 transition-colors duration-150 font-sans text-sm font-medium;
+    @apply bg-brand-surface text-brand-ink px-5 py-2.5 rounded-lg border border-brand-line-2 hover:border-brand-ink hover:bg-brand-bg-soft hover:-translate-y-[1px] active:translate-y-0 transition-all duration-150 font-sans text-sm font-medium shadow-sm;
   }
 
   .card {
-    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-4;
+    @apply bg-brand-surface rounded-xl shadow-sm border border-brand-line p-5;
   }
 
   .sidebar-item {
-    @apply flex items-center px-3 py-2 text-sm rounded cursor-pointer transition-colors duration-100;
+    @apply flex items-center gap-2.5 px-3 py-2 text-sm rounded-lg cursor-pointer transition-colors duration-150 font-sans font-medium text-brand-ink-2 hover:bg-brand-bg-soft hover:text-brand-ink;
   }
 
   .sidebar-item-active {
-    @apply bg-[#1e3a5f] text-white;
+    @apply bg-brand-bg-soft text-brand-ink relative;
+  }
+
+  .sidebar-item-active::before {
+    content: "";
+    @apply absolute -left-2 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-brand-accent rounded-r-sm;
   }
 
   .sidebar-item-inactive {
-    @apply text-gray-700 hover:bg-gray-100;
+    @apply text-brand-ink-2 hover:bg-brand-bg-soft;
   }
 }
 
@@ -53,28 +58,28 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: theme('colors.brand.bg');
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: theme('colors.brand.line-2');
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: theme('colors.brand.muted');
 }
 
 /* Markdown content styles */
-.prose-legal h1 { @apply text-2xl font-bold mb-4 text-[#1e3a5f]; }
-.prose-legal h2 { @apply text-xl font-bold mb-3 text-[#1e3a5f]; }
-.prose-legal h3 { @apply text-lg font-semibold mb-2 text-[#1e3a5f]; }
-.prose-legal p { @apply mb-3 leading-relaxed; }
-.prose-legal ul { @apply list-disc list-inside mb-3 space-y-1; }
-.prose-legal ol { @apply list-decimal list-inside mb-3 space-y-1; }
-.prose-legal code { @apply bg-gray-100 px-1 py-0.5 rounded text-sm font-mono; }
-.prose-legal pre { @apply bg-gray-100 p-3 rounded mb-3 overflow-x-auto; }
-.prose-legal blockquote { @apply border-l-4 border-[#1e3a5f] pl-4 italic text-gray-600 mb-3; }
-.prose-legal strong { @apply font-bold; }
+.prose-legal h1 { @apply text-2xl font-bold mb-4 text-brand-ink font-serif; }
+.prose-legal h2 { @apply text-xl font-bold mb-3 text-brand-ink font-serif; }
+.prose-legal h3 { @apply text-lg font-semibold mb-2 text-brand-ink font-serif; }
+.prose-legal p { @apply mb-3 leading-relaxed text-brand-ink font-sans; }
+.prose-legal ul { @apply list-disc list-inside mb-3 space-y-1 text-brand-ink font-sans; }
+.prose-legal ol { @apply list-decimal list-inside mb-3 space-y-1 text-brand-ink font-sans; }
+.prose-legal code { @apply bg-brand-bg-soft px-1.5 py-0.5 rounded text-sm font-mono text-brand-accent-2 border border-brand-line; }
+.prose-legal pre { @apply bg-brand-bg-soft p-4 rounded-lg mb-3 overflow-x-auto text-brand-ink border border-brand-line; }
+.prose-legal blockquote { @apply border-l-4 border-brand-accent pl-4 italic text-brand-ink-2 mb-3 bg-brand-surface-2 py-2 rounded-r-lg; }
+.prose-legal strong { @apply font-semibold text-brand-ink; }
 .prose-legal em { @apply italic; }
-.prose-legal a { @apply text-[#1e3a5f] underline hover:text-[#2e4f7a]; }
+.prose-legal a { @apply text-brand-accent underline hover:text-brand-accent-2 transition-colors; }
