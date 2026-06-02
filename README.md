@@ -57,7 +57,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Containers | Docker Compose (base + override + hypervisor + prod profiles) |
 | Reverse proxy | Nginx (HTTP dev config; TLS 1.2/1.3 prod config) |
 | SSL | Let's Encrypt via Certbot |
-| CI/CD | GitHub Actions — lint, test, build, SSH deploy |
+| CI/CD | GitHub Actions ΓÇö lint, test, build, SSH deploy |
 
 ---
 
@@ -85,22 +85,22 @@ All skill outputs include confidence tags (`[settled]` / `[verify]` / `[model kn
 
 | Path | Auth | Page |
 |-|-|-|
-| `/` | — | Marketing homepage (unauthenticated); Chat (authenticated) |
-| `/login` | — | OAuth + email login |
-| `/signup` | — | Unified signup (company info + OAuth or email) |
-| `/chat` | ✓ | Main research chat |
-| `/plugins` | ✓ | Plugin gallery |
-| `/plugins/:name` | ✓ | Plugin detail + skills |
-| `/plugins/litigation/matters` | ✓ | Litigation portfolio |
-| `/plugins/litigation/matters/:id` | ✓ | Matter detail + timeline |
-| `/plugins/commercial/renewals` | ✓ | Renewal tracker |
-| `/plugins/trust-estate/estates` | ✓ | Trust & Estate portfolio |
-| `/plugins/trust-estate/estates/:id` | ✓ | Estate detail + activity log |
-| `/plugins/mediation/cases` | ✓ | Mediation case list |
-| `/plugins/mediation/cases/:id` | ✓ | Case detail + session log |
-| `/admin` | ✓ admin | Tenant admin (users, usage, model settings) |
-| `/billing` | ✓ | Stripe billing management |
-| `/mcp` | ✓ admin | MCP API keys + tool docs + connection guide |
+| `/` | ΓÇö | Marketing homepage (unauthenticated); Chat (authenticated) |
+| `/login` | ΓÇö | OAuth + email login |
+| `/signup` | ΓÇö | Unified signup (company info + OAuth or email) |
+| `/chat` | Γ£ô | Main research chat |
+| `/plugins` | Γ£ô | Plugin gallery |
+| `/plugins/:name` | Γ£ô | Plugin detail + skills |
+| `/plugins/litigation/matters` | Γ£ô | Litigation portfolio |
+| `/plugins/litigation/matters/:id` | Γ£ô | Matter detail + timeline |
+| `/plugins/commercial/renewals` | Γ£ô | Renewal tracker |
+| `/plugins/trust-estate/estates` | Γ£ô | Trust & Estate portfolio |
+| `/plugins/trust-estate/estates/:id` | Γ£ô | Estate detail + activity log |
+| `/plugins/mediation/cases` | Γ£ô | Mediation case list |
+| `/plugins/mediation/cases/:id` | Γ£ô | Case detail + session log |
+| `/admin` | Γ£ô admin | Tenant admin (users, usage, model settings) |
+| `/billing` | Γ£ô | Stripe billing management |
+| `/mcp` | Γ£ô admin | MCP API keys + tool docs + connection guide |
 | `/platform` | platform key | Operator console (multi-tenant admin) |
 
 ---
@@ -125,7 +125,7 @@ DEEPSEEK_BASE_URL=https://opencode.ai/zen/go/v1   # or https://api.deepseek.com/
 DEEPSEEK_API_KEY=sk-...                            # OpenCode.ai or direct DeepSeek key
 PRIMARY_LLM=deepseek-v4-flash
 PREMIUM_LLM=deepseek-v4-pro
-OPENAI_API_KEY=sk-...                              # Optional — embeddings (falls back to deepseek key)
+OPENAI_API_KEY=sk-...                              # Optional ΓÇö embeddings (falls back to deepseek key)
 SECRET_KEY=<random-64-char>
 ```
 
@@ -162,7 +162,7 @@ LOCAL_API_URL=http://localhost:8080/api docker compose -f docker-compose.yml -f 
 
 ### OAuth setup
 
-Register redirect URIs in your OAuth providers (use the URL your browser accesses — `localhost:8080` via SSH tunnel, or public DNS):
+Register redirect URIs in your OAuth providers (use the URL your browser accesses ΓÇö `localhost:8080` via SSH tunnel, or public DNS):
 
 | Provider | Redirect URI |
 |-|-|
@@ -187,7 +187,7 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `002_plugins` | Practice profiles, matters, matter events, renewals |
 | `003_scheduler` | Scheduler logs |
 | `004_audit_log` | Audit columns on usage_records |
-| `005`–`007` | Platform admin, MCP keys, model settings |
+| `005`ΓÇô`007` | Platform admin, MCP keys, model settings |
 | `008_estate_mediation` | Trust & Estate + Mediation tables and routes |
 | `009_oauth_tokens` | Encrypted tenant/user OAuth token persistence |
 
@@ -209,34 +209,34 @@ Full operator notes are in `scripts/courtlistener_jetson_pipeline.md`.
 
 ```
 legalapp/
-├── backend/
-│   ├── app/
-│   │   ├── models/          # SQLAlchemy models
-│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
-│   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler
-│   │   │   └── plugins/     # 11 practice area prompts + executor
-│   │   ├── middleware/       # Tenant context + rate limiter
-│   │   ├── schemas/         # Pydantic models
-│   │   └── main.py
-│   ├── migrations/          # Alembic (001–009)
-│   └── tests/
-├── frontend/
-│   ├── src/
-│   │   ├── pages/           # 20 page components
-│   │   ├── components/      # Sidebar, ChatMessage, FileUpload, SkillOutput, ColdStartInterview, legalMarkdown
-│   │   └── assets/          # Homepage images
-│   └── public/
-├── nginx/
-├── scripts/
-├── docker-compose.yml
-├── docker-compose.override.yml
-├── docker-compose.local.yml
-├── docker-compose.hypervisor.yml
-└── docker-compose.prod.yml
+Γö£ΓöÇΓöÇ backend/
+Γöé   Γö£ΓöÇΓöÇ app/
+Γöé   Γöé   Γö£ΓöÇΓöÇ models/          # SQLAlchemy models
+Γöé   Γöé   Γö£ΓöÇΓöÇ routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
+Γöé   Γöé   Γö£ΓöÇΓöÇ services/        # LLM, RAG, embeddings, billing, scheduler
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ plugins/     # 11 practice area prompts + executor
+Γöé   Γöé   Γö£ΓöÇΓöÇ middleware/       # Tenant context + rate limiter
+Γöé   Γöé   Γö£ΓöÇΓöÇ schemas/         # Pydantic models
+Γöé   Γöé   ΓööΓöÇΓöÇ main.py
+Γöé   Γö£ΓöÇΓöÇ migrations/          # Alembic (001ΓÇô009)
+Γöé   ΓööΓöÇΓöÇ tests/
+Γö£ΓöÇΓöÇ frontend/
+Γöé   Γö£ΓöÇΓöÇ src/
+Γöé   Γöé   Γö£ΓöÇΓöÇ pages/           # 20 page components
+Γöé   Γöé   Γö£ΓöÇΓöÇ components/      # Sidebar, ChatMessage, FileUpload, SkillOutput, ColdStartInterview, legalMarkdown
+Γöé   Γöé   ΓööΓöÇΓöÇ assets/          # Homepage images
+Γöé   ΓööΓöÇΓöÇ public/
+Γö£ΓöÇΓöÇ nginx/
+Γö£ΓöÇΓöÇ scripts/
+Γö£ΓöÇΓöÇ docker-compose.yml
+Γö£ΓöÇΓöÇ docker-compose.override.yml
+Γö£ΓöÇΓöÇ docker-compose.local.yml
+Γö£ΓöÇΓöÇ docker-compose.hypervisor.yml
+ΓööΓöÇΓöÇ docker-compose.prod.yml
 ```
 
 ---
 
 ## License
 
-Private — all rights reserved.
+Private ΓÇö all rights reserved.

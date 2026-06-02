@@ -36,7 +36,7 @@
 ### Infrastructure
 - [x] Add no-bind local Docker Compose mode for engines that cannot mount Windows workspaces
 - [x] Fix Sidebar: Array.isArray guards for documents/conversations
-- [x] Fix passlib→bcrypt in requirements.txt
+- [x] Fix passlibΓåÆbcrypt in requirements.txt
 - [x] Fix reset token visibility (DEV_MODE check)
 - [x] Fix TTL garbage collection for fallback dicts
 - [x] Fix CORS origins for hypervisor IP
@@ -46,17 +46,18 @@
 - [x] Deploy to hypervisor (172.16.16.202)
 
 ### Security
+- [x] Harden auth review findings: tenant join controls, OAuth callbacks, token vault, rate limits
 - [x] Regenerate SECRET_KEY on hypervisor
 - [x] Set DEV_MODE=false on hypervisor
 - [x] Remove credentials from .env
 - [x] Set FRONTEND_URL/BACKEND_URL correctly
-- [x] PRIMARY_LLM→deepseek-chat
+- [x] PRIMARY_LLMΓåÆdeepseek-chat
 
 ## Pending
 
 ### Enhancements
 - [ ] Email verification on registration (requires SMTP)
-- [ ] Rate limiting on auth endpoints
+- [x] Rate limiting on auth endpoints
 - [ ] OAuth provider credential setup (Google, Microsoft)
 - [ ] Email notifications for password reset (currently dev-mode only)
 
