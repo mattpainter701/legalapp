@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.5.1] — 2026-06-02
+
+### Added — Trust Accounting + PDF Export
+
+#### Trust Accounting CRUD
+- `TrustAccount` CRUD endpoints (`POST/GET/PATCH /api/trust/accounts`, `POST /api/trust/accounts/{id}/close`)
+- `TrustTransaction` endpoints (`POST/GET /api/trust/transactions`) with balance tracking
+- Three-way IOLTA reconciliation (`POST /api/trust/accounts/{id}/reconcile`)
+  - Bank balance vs trust liability vs unallocated funds
+  - Auto-marks transactions as reconciled when balanced
+  - Outstanding deposits/disbursements tracking
+  - Reconciliation status endpoint (`GET /api/trust/accounts/{id}/reconciliation`)
+- `TrustAccountCreate/Update/Response`, `TrustTransactionCreate/Response` Pydantic schemas
+- `ReconciliationRequest/Response` with reconciling items detail
+- `backend/app/routers/trust_accounting.py` — 8 endpoints
+- `backend/app/schemas/trust_accounting.py` — 11 schemas
+
+#### PDF Invoice Export
+- `InvoicePDFService` — professional legal invoice PDF generation via ReportLab
+- Clean letterhead layout: firm name, invoice details grid, line items table with totals, payments section, balance due
+- `POST /api/billing/invoices/{id}/export` format=pdf returns `application/pdf`
+
+### Changed
+- `app/routers/__init__.py` — added trust_accounting_router
+- `app/services/__init__.py` — added generate_invoice_pdf
+- `app/main.py` — wired trust_accounting_router
+- `requirements.txt` — added reportlab==4.2.5
+
+## [0.5.0] — 2026-06-01
+
+### Added — Billing & QBO Integration Foundation
+
+#### Core Billing Models
+- `TimeEntry` — billable time with matter link, UTBMS task/activity codes, status lifecycle (draft→billed→written_off)
+- `Expense` — disbursements with category tracking (filing fees, court reporter, expert witness, etc.)
+- `Invoice` — auto-numbered (INV-YYYY-XXXXXX), Stripe payment link, QBO sync status, LEDES export tracking
+- `InvoiceLineItem` — polymorphic source tracking (time_entry/expense/flat_fee/adjustment/discount)
+- `Payment` — multi-method (stripe/check/wire/trust_account/cash/other) with QBO sync
+- 23 Pydantic v2 schemas in `schemas/billing.py`
+- Migration 015: billing tables with RLS policies
+
+#### QBO Integration
+- `QBOIntegration` model — per-tenant QBO OAuth2 tokens (Fernet AES-256-GCM encryption, same pattern as TenantCredential)
+- Full OAuth2 flow: `GET /api/integrations/qbo/connect` → callback → token exchange + encrypted storage
+- Token refresh with refresh_token grant, sandbox/production toggle
+- State-based CSRF protection with Redis fallback
+- `QBOSyncService` — Matter→QBO Customer, TimeEntry→TimeActivity, Invoice→Invoice, Payment→Payment sync
+- Migration 016: qbo_integrations table with RLS
+
+#### Time Tracking & Billing CRUD
+- TimeEntry CRUD: create, list (by matter/status/unbilled), detail, edit, soft-delete
+- Expense CRUD: create, list (by matter/category/unbilled), detail, edit, delete
+- Invoice generation: gather unbilled time+expenses → compute line items → auto-number → link sources
+- Invoice CRUD: list, detail (with line items + payments), status transitions
+- Payment recording with auto invoice status update (paid/partially_paid)
+- Stripe Payment Link generation on invoice
+
+#### Legal Billing Compliance
+- LEDES 1998B pipe-delimited export (24-field format, full UTBMS task/activity code maps)
+- Litigation (L100-L220), Counseling (C100-C800), Project (P100-P500), Bankruptcy (B100-B190) codes
+- CSV invoice export
+
+#### Trust Accounting Foundations
+- `TrustAccount` model — per-matter IOLTA accounts with auto-replenish support
+- `TrustTransaction` model — deposit/disbursement/transfer/replenishment/fee/adjustment types
+- Migration 017: trust_accounts + trust_transactions tables with RLS
+
+### Changed
+- `app/config.py` — added QBO_CLIENT_ID, QBO_CLIENT_SECRET, QBO_REDIRECT_URI, QBO_ENVIRONMENT, QBO_WEBHOOK_VERIFIER
+- `app/models/__init__.py` — registered 8 new models
+- `app/schemas/__init__.py` — registered 28 new schemas
+- `app/routers/__init__.py` — registered qbo_router, billing_extended_router
+- `app/services/__init__.py` — registered QBOSyncService, export_ledes_1998b
+- `app/main.py` — wired qbo_router, billing_extended_router
+
 ## [0.4.0] — 2026-06-02
 
 ### Added - Enhanced User Model & Context Management

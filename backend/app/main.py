@@ -26,6 +26,9 @@ from app.routers.integrations import router as integrations_router
 from app.routers.email_agent import router as email_router
 from app.routers.document_sync import router as document_sync_router
 from app.routers.user_sync import router as user_sync_router
+from app.routers.qbo import router as qbo_router
+from app.routers.billing_extended import router as billing_extended_router
+from app.routers.trust_accounting import router as trust_accounting_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
