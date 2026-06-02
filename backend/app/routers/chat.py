@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List
@@ -28,6 +29,8 @@ from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.utils.guardrails import apply_guardrails, check_pii_in_input
 from app.services.error_tracker import capture_chat_error
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -113,21 +116,24 @@ async def _trigger_auto_memory_generation(
 
     # Trigger memory generation every 10 messages
     if message_count % 10 == 0 and message_count > 0:
-        await memory_service.summarize_conversation(
-            db=db,
-            user_id=user.id,
-            tenant_id=user.tenant_id,
-            conversation_id=conversation_id,
-            tenant_name=user.tenant.name if user.tenant else "Legal",
-        )
-        # Update overall user memory summary
-        await memory_service.update_user_memory_summary(
-            db=db,
-            user_id=user.id,
-            tenant_id=user.tenant_id,
-            tensor_name=user.tenant.name if user.tenant else "Legal",
-        )
-        await db.commit()
+        try:
+            await memory_service.summarize_conversation(
+                db=db,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                conversation_id=conversation_id,
+                tenant_name=user.tenant.name if user.tenant else "Legal",
+            )
+            # Update overall user memory summary
+            await memory_service.update_user_memory_summary(
+                db=db,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                tensor_name=user.tenant.name if user.tenant else "Legal",
+            )
+            await db.commit()
+        except Exception:
+            logger.warning("Auto-memory generation failed", exc_info=True)
 
 
 @router.get("", response_model=List[ConversationResponse])

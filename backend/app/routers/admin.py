@@ -28,6 +28,13 @@ from app.schemas.admin import (
     TenantSettingsUpdate,
     TenantDetailResponse,
     CacheAnalytics,
+    UserErrorLogsResponse,
+    ErrorLogResponse,
+    SystemErrorLogsResponse,
+    ErrorSummaryResponse,
+    ErrorTrendBucket,
+    ErrorResolveRequest,
+    ErrorResolveResponse,
 )
 
 settings = get_settings()

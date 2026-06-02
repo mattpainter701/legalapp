@@ -2,23 +2,22 @@
 
 ## [0.5.2] — 2026-06-02
 
-### Sprint 2 — Webhooks, QBO Push Sync & Error Tracking
-
-### Added
-- Stripe webhook handler (`POST /api/billing/webhooks/stripe`) — verifies signature, handles `payment_intent.succeeded` (auto-create Payment + update invoice), `payment_intent.payment_failed` (log + note), `checkout.session.completed` (reconcile Payment Link). Idempotency via `stripe_payment_intent_id` lookup.
-- QBO auto-push sync — triggers `sync_invoice()` on status change (draft→sent/paid) and `sync_payment()` on payment create. Fire-and-forget via `asyncio.create_task()` with exponential backoff retry (max 3 attempts).
-- QBO sync status lifecycle: `pending→syncing→synced|failed` with ErrorLog capture on exhaustion.
-- Error log admin endpoints: `GET /admin/errors/user/{id}`, `GET /admin/errors/system`, `GET /admin/errors/summary` (trend buckets), `PATCH /admin/errors/{id}/resolve`. Admin-only, tenant-scoped.
-- Error capture middleware — `ErrorLog` persistence in exception handlers (400/401/403/404/500) + chat endpoint (RAG failures, LLM timeouts, cache errors).
-- `services/error_tracker.py` — `capture_error()` and `capture_chat_error()` helpers with auto-severity mapping from HTTP status codes.
-
 ### Fixed — Security & Bug Fixes
+
+#### Critical Bug Fixes
 - `app/services/qbo_sync.py` — SQL injection in QBO query strings: escape single quotes in display_name, item_name, and customer_name via `_safe_qbo_string()` helper
 - `app/routers/billing_extended.py` — Added `set_tenant_context()` to all 4 list endpoints (time entries, expenses, invoices, payments) for RLS correctness
 - `app/routers/billing_extended.py` — `delete_time_entry` now hard-deletes unbilled entries (was incorrectly soft-deleting with `status=written_off` while returning 204)
 - `app/routers/qbo.py` — QBO OAuth fallback state dicts now evict expired entries on each write to prevent unbounded memory growth
 - `app/services/cache.py` — Fixed `invalidate_user_cache` key-pattern to match actual key format (`{type}:{tenant_id}|{user_id}|{suffix}`)
 - `app/services/pii_detection.py` — Tightened `driver_license` regex (requires 9+ digits after letters) and `bank_account` regex (lookahead/behind to reduce false positives on phone numbers)
+
+#### Sprint 2 Audit Fixes
+- `app/routers/billing_extended.py` — Added missing `import asyncio` and `async_session_maker` (QBO sync fire-and-forget was broken at runtime)
+- `app/services/rag.py` — Fixed SQL injection in pgvector queries: embedding vectors now passed as bind parameters instead of f-string interpolation
+- `app/routers/billing_extended.py` — Added `logger.warning()` to silent `except Exception: pass` blocks in QBO sync tasks
+- `app/routers/admin.py` — Added missing error schema imports (`ErrorLogResponse`, `SystemErrorLogsResponse`, `ErrorResolveRequest`, etc.)
+- `app/routers/chat.py` — Wrapped `_trigger_auto_memory_generation` in try/except to prevent memory failures from breaking chat responses
 
 ## [0.5.1] — 2026-06-02
 

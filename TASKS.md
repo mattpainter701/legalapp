@@ -107,6 +107,13 @@ Files: `backend/app/services/invoice_pdf.py`
 - [x] Fix unbounded QBO OAuth fallback state dicts (add TTL-based eviction on write)
 - [x] Fix cache invalidation key-pattern mismatch (`invalidate_user_cache` pattern now matches actual key format)
 - [x] Tighten PII detection regexes (driver_license: require 9+ digits; bank_account: use lookahead to exclude phone-like sequences)
+
+### 512. Sprint 2 Code Audit Fixes (P0, MEDIUM) — COMPLETED
+- [x] Add missing `import asyncio` and `async_session_maker` to billing_extended.py (QBO sync was broken)
+- [x] Fix SQL injection in rag.py — parameterized embedding vector in pgvector queries
+- [x] Add logging to silent `except Exception: pass` in QBO sync fire-and-forget tasks
+- [x] Add missing error schema imports in admin.py (ErrorLogResponse, SystemErrorLogsResponse, etc.)
+- [x] Add try/except error handling to `_trigger_auto_memory_generation` in chat.py
 - [ ] P3-2: Clio marketplace listing + API integration
 - [ ] P3-3: Clio data migration tool
 - [ ] P3-4: Tabs3 data migration tool

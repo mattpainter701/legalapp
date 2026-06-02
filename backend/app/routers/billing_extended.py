@@ -1,5 +1,6 @@
 """Extended billing router — time entries, expenses, invoice generation, payments."""
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -10,7 +11,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
@@ -731,7 +732,7 @@ async def update_invoice(
                     )
                 )
         except Exception:
-            pass  # Fire-and-forget: don't block the response
+            logger.warning("QBO invoice sync task failed", exc_info=True)
 
     return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
@@ -810,7 +811,7 @@ async def create_payment(
                 )
             )
     except Exception:
-        pass  # Fire-and-forget
+        logger.warning("QBO payment sync task failed", exc_info=True)
 
     return PaymentResponse.model_validate(payment)
 
