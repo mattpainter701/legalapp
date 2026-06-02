@@ -1,4 +1,4 @@
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User, UserMemory
 from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
@@ -9,6 +9,7 @@ from app.models.user_oauth_token import UserOAuthToken
 
 __all__ = [
     "Tenant",
+    "TenantSettings",
     "User",
     "UserMemory",
     "Document",

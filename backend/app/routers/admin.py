@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import UsageRecord
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 from app.schemas.admin import (
     AuditLog,
@@ -22,6 +22,11 @@ from app.schemas.admin import (
     UserResponse,
     UserUsageBreakdown,
     UserUsageRow,
+    UserDetailResponse,
+    TenantSettingsResponse,
+    TenantSettingsUpdate,
+    TenantDetailResponse,
+    CacheAnalytics,
 )
 
 settings = get_settings()
@@ -329,4 +334,269 @@ async def update_billing(
         flat_seat_count=tenant.flat_seat_count,
         is_active=tenant.is_active,
         created_at=tenant.created_at,
+    )
+
+
+# ─────────────────────────────────────────────────────
+# TENANT SETTINGS MANAGEMENT
+# ─────────────────────────────────────────────────────
+
+@router.get("/settings", response_model=TenantSettingsResponse)
+async def get_tenant_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get tenant-level settings and configuration overrides."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    settings_record = result.scalar_one_or_none()
+
+    if settings_record is None:
+        # Create default settings if not exists
+        settings_record = TenantSettings(
+            id=__import__('uuid').uuid4(),
+            tenant_id=admin.tenant_id,
+        )
+        db.add(settings_record)
+        await db.commit()
+        await db.refresh(settings_record)
+
+    return TenantSettingsResponse.model_validate(settings_record)
+
+
+@router.put("/settings", response_model=TenantSettingsResponse)
+async def update_tenant_settings(
+    body: TenantSettingsUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update tenant-level settings and configuration."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    settings_record = result.scalar_one_or_none()
+
+    if settings_record is None:
+        settings_record = TenantSettings(
+            id=__import__('uuid').uuid4(),
+            tenant_id=admin.tenant_id,
+        )
+        db.add(settings_record)
+
+    # Update only provided fields
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if hasattr(settings_record, field):
+            setattr(settings_record, field, value)
+
+    await db.commit()
+    await db.refresh(settings_record)
+
+    return TenantSettingsResponse.model_validate(settings_record)
+
+
+# ─────────────────────────────────────────────────────
+# ENHANCED TENANT & USER DRILL-DOWN
+# ─────────────────────────────────────────────────────
+
+@router.get("/tenant/detailed", response_model=TenantDetailResponse)
+async def get_tenant_detailed(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get enhanced tenant information with analytics and drill-down data."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    # Get tenant
+    tenant_result = await db.execute(
+        select(Tenant).where(Tenant.id == admin.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Get user counts
+    total_users_result = await db.execute(
+        select(func.count(User.id)).where(User.tenant_id == admin.tenant_id)
+    )
+    total_users = total_users_result.scalar() or 0
+
+    active_users_result = await db.execute(
+        select(func.count(User.id)).where(
+            User.tenant_id == admin.tenant_id,
+            User.is_active == True,
+        )
+    )
+    active_users = active_users_result.scalar() or 0
+
+    # Get message and cost stats (30 days)
+    period_start = datetime.now(timezone.utc) - timedelta(days=30)
+    messages_result = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    total_messages = messages_result.scalar() or 0
+
+    cost_result = await db.execute(
+        select(func.coalesce(func.sum(UsageRecord.cost_usd), 0)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    total_cost_usd = float(cost_result.scalar() or 0)
+
+    # Calculate cache hit rate
+    cache_hits = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+            (UsageRecord.cache_hit_rag == True) |
+            (UsageRecord.cache_hit_llm == True) |
+            (UsageRecord.cache_hit_matter == True),
+        )
+    )
+    cache_hit_count = cache_hits.scalar() or 0
+    cache_hit_rate = (cache_hit_count / total_messages * 100) if total_messages > 0 else None
+
+    return TenantDetailResponse(
+        id=str(tenant.id),
+        name=tenant.name,
+        domain=tenant.domain,
+        company_name=tenant.company_name,
+        staff_size=tenant.staff_size,
+        address=tenant.address,
+        phone=tenant.phone,
+        billing_tier=tenant.billing_tier,
+        flat_seat_count=tenant.flat_seat_count,
+        is_active=tenant.is_active,
+        created_at=tenant.created_at,
+        updated_at=tenant.updated_at,
+        total_users=total_users,
+        active_users=active_users,
+        total_messages=total_messages,
+        total_cost_usd=total_cost_usd,
+        cache_hit_rate=cache_hit_rate,
+    )
+
+
+@router.get("/users/{user_id}", response_model=UserDetailResponse)
+async def get_user_detail(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full user profile with all fields and metadata."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(User).where(
+            User.id == user_id,
+            User.tenant_id == admin.tenant_id,
+        )
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserDetailResponse.model_validate(user)
+
+
+@router.get("/cache-analytics", response_model=CacheAnalytics)
+async def get_cache_analytics(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+):
+    """Get cache performance analytics for the tenant."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    period_start = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Total requests
+    total_result = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    total_requests = total_result.scalar() or 0
+
+    # Cache hits by type
+    rag_hits = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.cache_hit_rag == True,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    rag_hit_count = rag_hits.scalar() or 0
+
+    llm_hits = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.cache_hit_llm == True,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    llm_hit_count = llm_hits.scalar() or 0
+
+    matter_hits = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.cache_hit_matter == True,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    matter_hit_count = matter_hits.scalar() or 0
+
+    # Total cache hits
+    total_hits = await db.execute(
+        select(func.count(UsageRecord.id)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            (UsageRecord.cache_hit_rag == True) |
+            (UsageRecord.cache_hit_llm == True) |
+            (UsageRecord.cache_hit_matter == True),
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    cache_hit_count = total_hits.scalar() or 0
+
+    # Percentages
+    cache_hit_rate = (cache_hit_count / total_requests * 100) if total_requests > 0 else 0
+    rag_hit_rate = (rag_hit_count / total_requests * 100) if total_requests > 0 else 0
+    llm_hit_rate = (llm_hit_count / total_requests * 100) if total_requests > 0 else 0
+    matter_hit_rate = (matter_hit_count / total_requests * 100) if total_requests > 0 else 0
+
+    # Cost savings: assume cached requests save ~70% of LLM cost
+    total_cost = await db.execute(
+        select(func.coalesce(func.sum(UsageRecord.cost_usd), 0)).where(
+            UsageRecord.tenant_id == admin.tenant_id,
+            UsageRecord.created_at >= period_start,
+        )
+    )
+    total_cost_usd = float(total_cost.scalar() or 0)
+    estimated_savings = total_cost_usd * (cache_hit_rate / 100) * 0.7
+
+    return CacheAnalytics(
+        total_requests=total_requests,
+        cache_hits=cache_hit_count,
+        cache_hit_rate=cache_hit_rate,
+        rag_hit_rate=rag_hit_rate,
+        llm_hit_rate=llm_hit_rate,
+        matter_hit_rate=matter_hit_rate,
+        estimated_cost_savings_usd=estimated_savings,
     )
