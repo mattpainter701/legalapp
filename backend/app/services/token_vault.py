@@ -1,6 +1,4 @@
-import base64
-import os
-import time as _time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from cryptography.fernet import Fernet
@@ -16,12 +14,23 @@ settings = get_settings()
 def _get_fernet() -> Fernet:
     key = settings.TOKEN_ENCRYPTION_KEY
     if not key:
-        key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY is required for OAuth token storage")
     try:
         return Fernet(key.encode() if isinstance(key, str) else key)
     except Exception:
-        encoded = base64.urlsafe_b64encode(key.encode().ljust(32, b"\x00")[:32])
-        return Fernet(encoded)
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key")
+
+
+def _expires_at(expires_in: int) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
+def _is_fresh(expires_at: datetime | None) -> bool:
+    if not expires_at:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) < expires_at - timedelta(seconds=60)
 
 
 def encrypt_token(plaintext: str) -> str:
@@ -82,7 +91,7 @@ async def refresh_microsoft_token(
         cred.encrypted_access_token = encrypt_token(new_access_token)
         if new_refresh_token:
             cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
-        cred.token_expires_at = _time.time() + expires_in
+        cred.token_expires_at = _expires_at(expires_in)
         await db.commit()
 
         return new_access_token, expires_in
@@ -134,7 +143,7 @@ async def refresh_google_token(
             return None
 
         cred.encrypted_access_token = encrypt_token(new_access_token)
-        cred.token_expires_at = _time.time() + expires_in
+        cred.token_expires_at = _expires_at(expires_in)
         await db.commit()
 
         return new_access_token, expires_in
@@ -163,7 +172,7 @@ async def get_fresh_token(
     if not cred:
         return None
 
-    if cred.token_expires_at and _time.time() < cred.token_expires_at - 60:
+    if _is_fresh(cred.token_expires_at):
         return decrypt_token(cred.encrypted_access_token)
 
     if provider == "microsoft":
@@ -191,6 +200,7 @@ async def get_fresh_user_token(
     result = await db.execute(
         select(UserOAuthToken).where(
             UserOAuthToken.user_id == user_id,
+            UserOAuthToken.tenant_id == tenant_id,
             UserOAuthToken.provider == provider,
         )
     )
@@ -199,7 +209,7 @@ async def get_fresh_user_token(
     if not token_row:
         return None
 
-    if token_row.token_expires_at and _time.time() < token_row.token_expires_at - 60:
+    if _is_fresh(token_row.token_expires_at):
         return decrypt_token(token_row.encrypted_access_token)
 
     refresh_token = None
@@ -233,7 +243,7 @@ async def get_fresh_user_token(
             token_row.encrypted_access_token = encrypt_token(new_access_token)
             if new_refresh_token:
                 token_row.encrypted_refresh_token = encrypt_token(new_refresh_token)
-            token_row.token_expires_at = _time.time() + expires_in
+            token_row.token_expires_at = _expires_at(expires_in)
             await db.commit()
             return new_access_token
 
@@ -257,7 +267,7 @@ async def get_fresh_user_token(
             if not new_access_token:
                 return None
             token_row.encrypted_access_token = encrypt_token(new_access_token)
-            token_row.token_expires_at = _time.time() + expires_in
+            token_row.token_expires_at = _expires_at(expires_in)
             await db.commit()
             return new_access_token
 

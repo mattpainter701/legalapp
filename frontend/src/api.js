@@ -43,6 +43,9 @@ export const register = (data) =>
 export const login = (data) =>
   api.post('/auth/login', data).then((r) => r.data)
 
+export const exchangeOAuthCode = (code) =>
+  api.post('/auth/oauth/exchange', { code }).then((r) => r.data)
+
 export const loginMicrosoft = () => {
   window.location.href = `${BASE_URL}/auth/microsoft/login`
 }

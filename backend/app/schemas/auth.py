@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
     full_name: Optional[str] = None
     company_name: Optional[str] = None
     staff_size: Optional[int] = None
@@ -14,17 +14,21 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    email: EmailStr
 
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    password: str
+    password: str = Field(min_length=12, max_length=128)
+
+
+class OAuthCallbackExchangeRequest(BaseModel):
+    code: str = Field(min_length=16, max_length=256)
 
 
 class TokenResponse(BaseModel):

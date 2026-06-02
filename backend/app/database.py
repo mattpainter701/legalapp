@@ -1,7 +1,8 @@
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 from typing import AsyncGenerator
+from uuid import UUID
 
 from app.config import get_settings
 
@@ -41,6 +42,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
     """Set the current tenant context for RLS policies."""
+    tenant_id = str(UUID(str(tenant_id))) if tenant_id else ""
     await session.execute(
-        text(f"SET LOCAL app.current_tenant_id = '{tenant_id}'")
+        text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+        {"tenant_id": tenant_id},
     )
