@@ -104,6 +104,10 @@ class UsageRecord(Base):
     rag_source_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Cache tracking
+    cache_hit_rag: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    cache_hit_llm: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    cache_hit_matter: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

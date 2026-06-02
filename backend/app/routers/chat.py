@@ -26,6 +26,7 @@ from app.services.billing import calculate_cost
 from app.services.pii_detection import detect_pii
 from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
+from app.services.cache import ExpertiseCacheManager
 from app.utils.guardrails import apply_guardrails, check_pii_in_input
 
 settings = get_settings()
@@ -35,6 +36,7 @@ embedding_service = EmbeddingService()
 llm_service = LLMService()
 memory_service = MemoryService(llm_service)
 matter_context_service = MatterContextService()
+cache_manager = ExpertiseCacheManager()
 
 
 def _conversation_to_response(
@@ -296,38 +298,104 @@ async def send_message(
         if str(m.id) != str(user_msg.id)
     ][-10:]
 
-    # 3a. Load matter context if provided
+    # 3a. Load matter context if provided (with caching)
     matter_context_str = ""
     matter_pii_findings = []
+    cache_hit_matter = False
     if hasattr(body, 'matter_id') and body.matter_id:
-        matter_context_str, has_pii, matter_pii_findings = await matter_context_service.get_safe_matter_context(
-            db=db,
+        # Try cache first
+        cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
-            privacy_mode=user.privacy_mode,
+            tenant_id=str(user.tenant_id),
         )
+        if cached_matter:
+            matter_context_str = cached_matter
+            cache_hit_matter = True
+        else:
+            matter_context_str, has_pii, matter_pii_findings = await matter_context_service.get_safe_matter_context(
+                db=db,
+                matter_id=body.matter_id,
+                privacy_mode=user.privacy_mode,
+            )
+            # Cache matter context
+            await cache_manager.set_cached_matter_context(
+                matter_id=body.matter_id,
+                tenant_id=str(user.tenant_id),
+                context=matter_context_str,
+                expertise_level=user.expertise_level,
+            )
 
-    # 4. RAG: embed question, search chunks, build context
-    context_str, chunks = await full_rag_query(
-        db=db,
-        embedding_service=embedding_service,
+    # 4. RAG: embed question, search chunks, build context (with caching)
+    cache_hit_rag = False
+    cached_rag = await cache_manager.get_cached_rag_results(
         question=body.content,
         tenant_id=str(user.tenant_id),
-        include_public=body.include_public,
+        user_id=str(user.id),
+        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
     )
+
+    if cached_rag:
+        context_str, chunks = cached_rag
+        cache_hit_rag = True
+    else:
+        context_str, chunks = await full_rag_query(
+            db=db,
+            embedding_service=embedding_service,
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            include_public=body.include_public,
+        )
+        # Cache RAG results
+        await cache_manager.set_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            context_str=context_str,
+            chunks=chunks,
+            expertise_level=user.expertise_level,
+            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        )
 
     # 4a. Combine matter context with RAG context
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
-    # 5. Call LLM
+    # 5. Call LLM (with caching)
+    import hashlib
+    context_hash = hashlib.md5(context_str.encode()).hexdigest()
+
     tenant_name = user.tenant.name if user.tenant else "Legal"
-    response_text, tokens_in, tokens_out = await llm_service.complete(
-        messages=history_messages,
-        tenant_name=tenant_name,
-        context=context_str,
-        use_premium=body.use_premium_llm,
-        provider=body.provider,
+    cache_hit_llm = False
+    cached_response = await cache_manager.get_cached_llm_response(
+        question=body.content,
+        tenant_id=str(user.tenant_id),
+        user_id=str(user.id),
+        context_hash=context_hash,
+        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
     )
+
+    tokens_in, tokens_out = 0, 0
+    if cached_response:
+        response_text = cached_response
+        cache_hit_llm = True
+    else:
+        response_text, tokens_in, tokens_out = await llm_service.complete(
+            messages=history_messages,
+            tenant_name=tenant_name,
+            context=context_str,
+            use_premium=body.use_premium_llm,
+            provider=body.provider,
+        )
+        # Cache LLM response
+        await cache_manager.set_cached_llm_response(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            context_hash=context_hash,
+            response=response_text,
+            expertise_level=user.expertise_level,
+            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        )
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
     cleaned_response, needs_retry, response_pii = apply_guardrails(
@@ -435,6 +503,9 @@ async def send_message(
         rag_source_ids=[c["id"] for c in chunks if c.get("id")],
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
+        cache_hit_rag=cache_hit_rag,
+        cache_hit_llm=cache_hit_llm,
+        cache_hit_matter=cache_hit_matter,
     )
     db.add(usage)
 
