@@ -16,7 +16,13 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Platform / Operator Console** | Multi-tenant admin with usage dashboards, tenant CRUD, and platform-key auth |
 | **OAuth + Email Auth** | Microsoft 365, Google, or email/password sign-in; unified signup collects firm profile |
 | **Multi-Model AI** | DeepSeek V4 Flash (primary), DeepSeek V4 Pro (premium) via OpenCode.ai; Azure OpenAI + Gemini support |
-| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent |
+| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent; error logs with resolution tracking |
+| **User Expertise Tracking** | Per-user practice areas, expertise level, memory summary, privacy preferences |
+| **Context Usage Transparency** | Explicit source attribution in chat responses; relevance scores for each context source |
+| **PII Protection** | Automatic detection and scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
+| **Skill-Based Chat Routing** | Route messages to specific legal plugins; inject matter context with privacy controls |
+| **Expertise-Aware Caching** | Cache TTLs based on user expertise level (junior paralegal ≠ senior partner); skill-based multipliers |
+| **Auto-Memory Generation** | Per-user conversation summaries; learned preferences and interaction patterns stored as UserMemory |
 | **Billing** | Stripe flat-seat and PAYG metered tiers |
 
 ---
@@ -36,9 +42,10 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
 | Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (9 migrations) |
+| Migrations | Alembic (15 migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
+| Services | PII detection (8 types), Memory service (auto-summarization), Matter context (with scrubbing), Expertise-aware cache manager (3-tier TTLs) |
 
 ### Frontend
 | Layer | Technology |
@@ -168,6 +175,12 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `005`–`007` | Platform admin, MCP keys, model settings |
 | `008_estate_mediation` | Trust & Estate + Mediation tables and routes |
 | `009_oauth_tokens` | Encrypted tenant/user OAuth token persistence |
+| `010_enhance_user_model` | User preferences (practice_areas, expertise_level, default_skill, privacy_mode, memory_summary) |
+| `011_create_user_memory_table` | Per-user memory storage (preferences, expertise, matter context, interaction patterns) |
+| `012_extend_message_context_tracking` | Message enhancements (skill_applied, context_used, context_relevance_scores, pii_flags) |
+| `013_add_cache_tracking` | UsageRecord cache hit flags (RAG, LLM, matter) |
+| `014_create_tenant_settings` | Tenant feature flags, cache config, rate limiting, defaults |
+| `015_create_error_logs` | Global error tracking with per-user rolling 72h support view |
 
 ### CourtListener public RAG
 
@@ -189,14 +202,18 @@ Full operator notes are in `scripts/courtlistener_jetson_pipeline.md`.
 legalapp/
 ├── backend/
 │   ├── app/
-│   │   ├── models/          # SQLAlchemy models
+│   │   ├── models/          # SQLAlchemy models (User, UserMemory, Message, Tenant, TenantSettings, ErrorLog, etc.)
 │   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
 │   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler
-│   │   │   └── plugins/     # 11 practice area prompts + executor
-│   │   ├── middleware/       # Tenant context + rate limiter
-│   │   ├── schemas/         # Pydantic models
+│   │   │   ├── plugins/     # 11 practice area prompts + executor
+│   │   │   ├── pii_detection.py       # PII pattern matching (8 types) + scrubbing
+│   │   │   ├── memory_service.py      # UserMemory CRUD + auto-summarization
+│   │   │   ├── matter_context.py      # Matter loading with PII scrubbing
+│   │   │   └── cache.py               # ExpertiseCacheManager (3-tier TTLs, skill multipliers)
+│   │   ├── middleware/      # Tenant context + rate limiter
+│   │   ├── schemas/         # Pydantic models (incl. AdminSchemas with UserDetail, TenantSettings, ErrorLog)
 │   │   └── main.py
-│   ├── migrations/          # Alembic (001–009)
+│   ├── migrations/          # Alembic (001–015)
 │   └── tests/
 ├── frontend/
 │   ├── src/

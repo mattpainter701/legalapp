@@ -2,6 +2,22 @@
 
 ## Completed
 
+### Enhanced User Model, Context Management & Error Logging (PR: v0.4.0)
+- [x] Phase 1: Enhanced User Model — practice_areas, expertise_level, default_skill, privacy_mode, memory_summary, last_memory_update (migration 010)
+- [x] Phase 2: UserMemory Model — type-based memory storage (preference/expertise/matter_context/interaction_pattern) with confidence scoring (migration 011)
+- [x] Phase 3: PII Detection & Scrubbing — 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) with detection and scrubbing service
+- [x] Phase 4: Context Usage Tracking — Message model extended with context_used, context_relevance_scores, skill_applied, pii_flags (migration 012)
+- [x] Phase 5: Skill-Based Chat Routing — Chat endpoint with skill/matter routing and context consolidation
+- [x] Phase 6: Auto-Memory Generation — MemoryService with LLM-based conversation summarization (every 10 messages)
+- [x] Phase 7: PII-Safe Matter Context — MatterContextService with PII scrubbing and privacy mode support
+- [x] Expertise-Aware Caching — ExpertiseCacheManager with 3-tier TTLs (junior/mid/senior) and skill-based multipliers
+- [x] Tenant Settings & Feature Flags — TenantSettings model with per-tenant cache config, rate limiting, and feature flags (migration 014)
+- [x] Enhanced Admin Console — Full tenant drill-down with analytics, user detail endpoint, cache analytics
+- [x] Error Logging Foundation — ErrorLog model for per-user 72h rolling logs and system-level error tracking (migration 015)
+- [x] Admin Error Log Schemas — ErrorLogResponse, UserErrorLogsResponse, SystemErrorLogsResponse, ErrorSummaryResponse
+
+## Completed
+
 ### CourtListener Public RAG
 - [x] Align CourtListener ingest, Jetson embedding, and RAG search around `public_chunks` BGE-384 vectors
 
@@ -53,15 +69,29 @@
 
 ## Pending
 
+### Error Logging Integration (follow-up to v0.4.0)
+- [ ] Create admin endpoints for error log querying:
+  - [ ] `GET /admin/errors/user/{user_id}?days=3` — Per-user 72-hour rolling error logs
+  - [ ] `GET /admin/errors/system?days=3&severity=error` — System-level errors with optional filters
+  - [ ] `GET /admin/errors/summary` — Error counts by severity/type, trend data
+  - [ ] `PATCH /admin/errors/{error_id}/resolve` — Mark error resolved with notes
+- [ ] Implement error capture middleware/service in main.py
+- [ ] Wire ErrorLog into exception handlers (400, 404, 500, unhandled exceptions)
+- [ ] Add error logging to chat endpoint for RAG/LLM/cache failures
+
 ### Enhancements
 - [ ] Email verification on registration (requires SMTP)
 - [ ] Rate limiting on auth endpoints
 - [ ] OAuth provider credential setup (Google, Microsoft)
 - [ ] Email notifications for password reset (currently dev-mode only)
+- [ ] User interface for setting expertise_level and practice_areas
+- [ ] User interface for privacy_mode toggle
+- [ ] User memory dashboard (view learned preferences + interaction patterns)
+- [ ] Admin console: view/delete UserMemory entries per user
 
 ### Future
 - [ ] Production static file serving (nginx directly serves Vite dist)
 - [ ] Backup strategy for postgres
-- [ ] Monitoring / observability
+- [ ] Monitoring / observability (error log dashboards, alerting)
 - [ ] CI/CD pipeline
 - [ ] HTTPS certificate automation (Let's Encrypt)
