@@ -7,27 +7,27 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Allow httpOnly cookies to be sent with requests
 })
 
-// Request interceptor: attach token from localStorage
+// Request interceptor: httpOnly cookies are now handled automatically by the browser
+// No longer injecting Authorization header — relies on browser's cookie auto-send
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
     return config
   },
   (error) => Promise.reject(error)
 )
 
-// Response interceptor: handle 401 by clearing token and redirecting
+// Response interceptor: handle 401 by clearing state and redirecting
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
+      // Clear localStorage fallback (for backward compat during transition)
       localStorage.removeItem('token')
       localStorage.removeItem('user')
+      // Cookie will be cleared by the logout endpoint
       window.location.href = '/login'
     }
     return Promise.reject(error)
