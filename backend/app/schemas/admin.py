@@ -1,7 +1,27 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from uuid import UUID
+
+
+class UserDetailResponse(BaseModel):
+    """Full user profile with all fields."""
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    # Enhanced user fields
+    practice_areas: Optional[List[str]] = None
+    expertise_level: str = "mid"
+    default_skill: Optional[str] = None
+    privacy_mode: bool = False
+    memory_summary: Optional[str] = None
+    last_memory_update: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class UserResponse(BaseModel):
@@ -83,3 +103,83 @@ class UserUsageBreakdown(BaseModel):
     users: List[UserUsageRow]
     period_start: datetime
     period_end: datetime
+
+
+class TenantSettingsResponse(BaseModel):
+    """Tenant configuration settings."""
+    id: str
+    tenant_id: str
+    # Cache settings
+    cache_enabled: bool = True
+    cache_ttl_multiplier: float = 1.0
+    # User defaults
+    default_expertise_level: str = "mid"
+    default_practice_areas: List[str] = []
+    default_privacy_mode: bool = False
+    # Feature flags
+    enable_auto_memory: bool = True
+    enable_pii_detection: bool = True
+    enable_skill_routing: bool = True
+    enable_matter_context: bool = True
+    # Rate limiting
+    max_requests_per_minute: Optional[int] = None
+    max_daily_tokens: Optional[int] = None
+    # Custom config
+    custom_config: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TenantSettingsUpdate(BaseModel):
+    """Update tenant settings."""
+    cache_enabled: Optional[bool] = None
+    cache_ttl_multiplier: Optional[float] = None
+    default_expertise_level: Optional[str] = None
+    default_practice_areas: Optional[List[str]] = None
+    default_privacy_mode: Optional[bool] = None
+    enable_auto_memory: Optional[bool] = None
+    enable_pii_detection: Optional[bool] = None
+    enable_skill_routing: Optional[bool] = None
+    enable_matter_context: Optional[bool] = None
+    max_requests_per_minute: Optional[int] = None
+    max_daily_tokens: Optional[int] = None
+    custom_config: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+
+
+class TenantDetailResponse(BaseModel):
+    """Enhanced tenant information with analytics and settings."""
+    id: str
+    name: str
+    domain: str
+    company_name: Optional[str] = None
+    staff_size: Optional[int] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    billing_tier: str
+    flat_seat_count: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    # Analytics
+    total_users: int = 0
+    active_users: int = 0
+    total_messages: int = 0
+    total_cost_usd: float = 0.0
+    cache_hit_rate: Optional[float] = None  # percentage
+    avg_response_time_ms: Optional[float] = None
+
+
+class CacheAnalytics(BaseModel):
+    """Cache performance metrics."""
+    total_requests: int
+    cache_hits: int
+    cache_hit_rate: float  # percentage
+    rag_hit_rate: float
+    llm_hit_rate: float
+    matter_hit_rate: float
+    avg_hit_latency_ms: Optional[float] = None
+    estimated_cost_savings_usd: float

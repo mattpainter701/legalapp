@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
+from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -22,13 +23,20 @@ from app.services.embeddings import EmbeddingService
 from app.services.rag import full_rag_query
 from app.services.llm import LLMService
 from app.services.billing import calculate_cost
-from app.utils.guardrails import apply_guardrails
+from app.services.pii_detection import detect_pii
+from app.services.memory_service import MemoryService
+from app.services.matter_context import MatterContextService
+from app.services.cache import ExpertiseCacheManager
+from app.utils.guardrails import apply_guardrails, check_pii_in_input
 
 settings = get_settings()
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
 embedding_service = EmbeddingService()
 llm_service = LLMService()
+memory_service = MemoryService(llm_service)
+matter_context_service = MatterContextService()
+cache_manager = ExpertiseCacheManager()
 
 
 def _conversation_to_response(
@@ -63,6 +71,41 @@ def _message_to_response(msg: Message) -> MessageResponse:
         sources=sources,
         created_at=msg.created_at,
     )
+
+
+async def _trigger_auto_memory_generation(
+    db: AsyncSession,
+    user: User,
+    conversation_id: str,
+) -> None:
+    """
+    Trigger auto-memory generation if conversation has >= 10 messages.
+    Extracts conversation summary and key facts into UserMemory.
+    """
+    # Count messages in conversation
+    count_result = await db.execute(
+        select(func.count(Message.id))
+        .where(Message.conversation_id == conversation_id)
+    )
+    message_count = count_result.scalar() or 0
+
+    # Trigger memory generation every 10 messages
+    if message_count % 10 == 0 and message_count > 0:
+        await memory_service.summarize_conversation(
+            db=db,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            conversation_id=conversation_id,
+            tenant_name=user.tenant.name if user.tenant else "Legal",
+        )
+        # Update overall user memory summary
+        await memory_service.update_user_memory_summary(
+            db=db,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            tensor_name=user.tenant.name if user.tenant else "Legal",
+        )
+        await db.commit()
 
 
 @router.get("", response_model=List[ConversationResponse])
@@ -224,7 +267,10 @@ async def send_message(
     if conv.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # 2. Save user message
+    # 2. Check for PII in user input
+    pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
+
+    # 2a. Save user message with PII flags
     user_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -232,6 +278,7 @@ async def send_message(
         role="user",
         content=body.content,
         sources=None,
+        pii_flags=pii_findings if pii_findings else None,
     )
     db.add(user_msg)
     await db.flush()
@@ -251,27 +298,109 @@ async def send_message(
         if str(m.id) != str(user_msg.id)
     ][-10:]
 
-    # 4. RAG: embed question, search chunks, build context
-    context_str, chunks = await full_rag_query(
-        db=db,
-        embedding_service=embedding_service,
+    # 3a. Load matter context if provided (with caching)
+    matter_context_str = ""
+    matter_pii_findings = []
+    cache_hit_matter = False
+    if hasattr(body, 'matter_id') and body.matter_id:
+        # Try cache first
+        cached_matter = await cache_manager.get_cached_matter_context(
+            matter_id=body.matter_id,
+            tenant_id=str(user.tenant_id),
+        )
+        if cached_matter:
+            matter_context_str = cached_matter
+            cache_hit_matter = True
+        else:
+            matter_context_str, has_pii, matter_pii_findings = await matter_context_service.get_safe_matter_context(
+                db=db,
+                matter_id=body.matter_id,
+                privacy_mode=user.privacy_mode,
+            )
+            # Cache matter context
+            await cache_manager.set_cached_matter_context(
+                matter_id=body.matter_id,
+                tenant_id=str(user.tenant_id),
+                context=matter_context_str,
+                expertise_level=user.expertise_level,
+            )
+
+    # 4. RAG: embed question, search chunks, build context (with caching)
+    cache_hit_rag = False
+    cached_rag = await cache_manager.get_cached_rag_results(
         question=body.content,
         tenant_id=str(user.tenant_id),
-        include_public=body.include_public,
+        user_id=str(user.id),
+        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
     )
 
-    # 5. Call LLM
+    if cached_rag:
+        context_str, chunks = cached_rag
+        cache_hit_rag = True
+    else:
+        context_str, chunks = await full_rag_query(
+            db=db,
+            embedding_service=embedding_service,
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            include_public=body.include_public,
+        )
+        # Cache RAG results
+        await cache_manager.set_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            context_str=context_str,
+            chunks=chunks,
+            expertise_level=user.expertise_level,
+            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        )
+
+    # 4a. Combine matter context with RAG context
+    if matter_context_str:
+        context_str = f"{matter_context_str}\n\n{context_str}"
+
+    # 5. Call LLM (with caching)
+    import hashlib
+    context_hash = hashlib.md5(context_str.encode()).hexdigest()
+
     tenant_name = user.tenant.name if user.tenant else "Legal"
-    response_text, tokens_in, tokens_out = await llm_service.complete(
-        messages=history_messages,
-        tenant_name=tenant_name,
-        context=context_str,
-        use_premium=body.use_premium_llm,
-        provider=body.provider,
+    cache_hit_llm = False
+    cached_response = await cache_manager.get_cached_llm_response(
+        question=body.content,
+        tenant_id=str(user.tenant_id),
+        user_id=str(user.id),
+        context_hash=context_hash,
+        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
     )
 
-    # 6. Apply guardrails
-    cleaned_response, needs_retry = apply_guardrails(response_text)
+    tokens_in, tokens_out = 0, 0
+    if cached_response:
+        response_text = cached_response
+        cache_hit_llm = True
+    else:
+        response_text, tokens_in, tokens_out = await llm_service.complete(
+            messages=history_messages,
+            tenant_name=tenant_name,
+            context=context_str,
+            use_premium=body.use_premium_llm,
+            provider=body.provider,
+        )
+        # Cache LLM response
+        await cache_manager.set_cached_llm_response(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            context_hash=context_hash,
+            response=response_text,
+            expertise_level=user.expertise_level,
+            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        )
+
+    # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
+    cleaned_response, needs_retry, response_pii = apply_guardrails(
+        response_text, privacy_mode=user.privacy_mode
+    )
 
     if needs_retry:
         # Retry once with an explicit instruction
@@ -289,12 +418,16 @@ async def send_message(
             use_premium=body.use_premium_llm,
             provider=body.provider,
         )
-        cleaned_response, _ = apply_guardrails(response_text2)
+        cleaned_response, _, response_pii = apply_guardrails(
+            response_text2, privacy_mode=user.privacy_mode
+        )
         tokens_in += tokens_in2
         tokens_out += tokens_out2
 
-    # Build source citations from retrieved chunks
+    # Build source citations from retrieved chunks with relevance scores
     source_dicts = []
+    context_used = []
+    context_scores = {}
     seen_citations: set = set()
     for chunk in chunks:
         citation_key = chunk.get("citation") or chunk.get("case_name") or ""
@@ -302,6 +435,9 @@ async def send_message(
             continue
         if citation_key:
             seen_citations.add(citation_key)
+        chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
+        context_used.append(chunk_id)
+        context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
         source_dicts.append(
             {
                 "case_name": chunk.get("case_name") or "Unknown Case",
@@ -311,8 +447,23 @@ async def send_message(
             }
         )
 
-    # 7. Save assistant message
+    # Track matter context usage if provided
+    if hasattr(body, 'matter_id') and body.matter_id:
+        context_used.insert(0, f"matter:{body.matter_id}")
+        context_scores[f"matter:{body.matter_id}"] = 1.0
+
+    # Combine PII findings from input, response, and matter context
+    all_pii_flags = []
+    if pii_findings:
+        all_pii_flags.extend([{"source": "input", **pf} for pf in pii_findings])
+    if response_pii:
+        all_pii_flags.extend([{"source": "response", **pf} for pf in response_pii])
+    if matter_pii_findings:
+        all_pii_flags.extend([{"source": "matter_context", **pf} for pf in matter_pii_findings])
+
+    # 7. Save assistant message with context tracking and skill info
     model_used = settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
+    skill_applied = body.skill if hasattr(body, 'skill') and body.skill else user.default_skill
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -320,6 +471,10 @@ async def send_message(
         role="assistant",
         content=cleaned_response,
         sources=source_dicts if source_dicts else None,
+        skill_applied=skill_applied,
+        context_used=context_used if context_used else None,
+        context_relevance_scores=context_scores if context_scores else None,
+        pii_flags=all_pii_flags if all_pii_flags else None,
     )
     db.add(assistant_msg)
 
@@ -348,10 +503,16 @@ async def send_message(
         rag_source_ids=[c["id"] for c in chunks if c.get("id")],
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
+        cache_hit_rag=cache_hit_rag,
+        cache_hit_llm=cache_hit_llm,
+        cache_hit_matter=cache_hit_matter,
     )
     db.add(usage)
 
     await db.commit()
     await db.refresh(assistant_msg)
+
+    # Trigger auto-memory generation if message threshold reached
+    await _trigger_auto_memory_generation(db, user, str(conv.id))
 
     return _message_to_response(assistant_msg)

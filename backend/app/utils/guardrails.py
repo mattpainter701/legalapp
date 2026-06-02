@@ -1,5 +1,7 @@
 import re
-from typing import Tuple
+from typing import Tuple, List
+
+from app.services.pii_detection import detect_pii, scrub_pii, assess_pii_risk
 
 PROHIBITED_PHRASES = [
     "as an ai",
@@ -72,22 +74,35 @@ def check_has_citation(text: str) -> bool:
     return bool(CITATION_PATTERN.search(text))
 
 
-def apply_guardrails(text: str) -> Tuple[str, bool]:
+def check_pii_in_input(text: str) -> List[dict]:
+    """Check for PII in user input. Returns list of findings."""
+    return detect_pii(text)
+
+
+def apply_guardrails(text: str, privacy_mode: bool = False) -> Tuple[str, bool, List[dict]]:
     """
     Apply all guardrails to a response.
-    Returns (cleaned_text, needs_retry).
-    needs_retry is True if prohibited phrases were found and the response
-    is so contaminated it should be regenerated.
+    Returns (cleaned_text, needs_retry, pii_findings).
+    - cleaned_text: guardrails applied
+    - needs_retry: True if contaminated with AI self-disclosure
+    - pii_findings: list of PII detected in text
     """
+    # Check for prohibited phrases
     has_prohibited = check_prohibited_phrases(text)
+    cleaned = text
 
     if has_prohibited:
         cleaned = sanitize_response(text)
-        # Only request a retry if the original had very heavy AI self-disclosure
         needs_retry = sum(
             1 for phrase in ["deepseek", "claude", "gpt", "openai", "anthropic"]
             if phrase in text.lower()
         ) >= 2
-        return cleaned, needs_retry
+    else:
+        needs_retry = False
 
-    return text, False
+    # Check for PII in output (especially in privacy mode)
+    pii_findings = detect_pii(cleaned) if privacy_mode else []
+    if pii_findings and privacy_mode:
+        cleaned = scrub_pii(cleaned)
+
+    return cleaned, needs_retry, pii_findings

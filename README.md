@@ -16,7 +16,13 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Platform / Operator Console** | Multi-tenant admin with usage dashboards, tenant CRUD, and platform-key auth |
 | **OAuth + Email Auth** | Microsoft 365, Google, or email/password sign-in; unified signup collects firm profile |
 | **Multi-Model AI** | DeepSeek V4 Flash (primary), DeepSeek V4 Pro (premium) via OpenCode.ai; Azure OpenAI + Gemini support |
-| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent |
+| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent; error logs with resolution tracking |
+| **User Expertise Tracking** | Per-user practice areas, expertise level, memory summary, privacy preferences |
+| **Context Usage Transparency** | Explicit source attribution in chat responses; relevance scores for each context source |
+| **PII Protection** | Automatic detection and scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
+| **Skill-Based Chat Routing** | Route messages to specific legal plugins; inject matter context with privacy controls |
+| **Expertise-Aware Caching** | Cache TTLs based on user expertise level (junior paralegal ≠ senior partner); skill-based multipliers |
+| **Auto-Memory Generation** | Per-user conversation summaries; learned preferences and interaction patterns stored as UserMemory |
 | **Billing** | Stripe flat-seat and PAYG metered tiers |
 
 ---
@@ -36,9 +42,10 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
 | Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (9 migrations) |
+| Migrations | Alembic (15 migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
+| Services | PII detection (8 types), Memory service (auto-summarization), Matter context (with scrubbing), Expertise-aware cache manager (3-tier TTLs) |
 
 ### Frontend
 | Layer | Technology |
@@ -57,7 +64,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Containers | Docker Compose (base + override + hypervisor + prod profiles) |
 | Reverse proxy | Nginx (HTTP dev config; TLS 1.2/1.3 prod config) |
 | SSL | Let's Encrypt via Certbot |
-| CI/CD | GitHub Actions ΓÇö lint, test, build, SSH deploy |
+| CI/CD | GitHub Actions — lint, test, build, SSH deploy |
 
 ---
 
@@ -85,22 +92,22 @@ All skill outputs include confidence tags (`[settled]` / `[verify]` / `[model kn
 
 | Path | Auth | Page |
 |-|-|-|
-| `/` | ΓÇö | Marketing homepage (unauthenticated); Chat (authenticated) |
-| `/login` | ΓÇö | OAuth + email login |
-| `/signup` | ΓÇö | Unified signup (company info + OAuth or email) |
-| `/chat` | Γ£ô | Main research chat |
-| `/plugins` | Γ£ô | Plugin gallery |
-| `/plugins/:name` | Γ£ô | Plugin detail + skills |
-| `/plugins/litigation/matters` | Γ£ô | Litigation portfolio |
-| `/plugins/litigation/matters/:id` | Γ£ô | Matter detail + timeline |
-| `/plugins/commercial/renewals` | Γ£ô | Renewal tracker |
-| `/plugins/trust-estate/estates` | Γ£ô | Trust & Estate portfolio |
-| `/plugins/trust-estate/estates/:id` | Γ£ô | Estate detail + activity log |
-| `/plugins/mediation/cases` | Γ£ô | Mediation case list |
-| `/plugins/mediation/cases/:id` | Γ£ô | Case detail + session log |
-| `/admin` | Γ£ô admin | Tenant admin (users, usage, model settings) |
-| `/billing` | Γ£ô | Stripe billing management |
-| `/mcp` | Γ£ô admin | MCP API keys + tool docs + connection guide |
+| `/` | — | Marketing homepage (unauthenticated); Chat (authenticated) |
+| `/login` | — | OAuth + email login |
+| `/signup` | — | Unified signup (company info + OAuth or email) |
+| `/chat` | ✓ | Main research chat |
+| `/plugins` | ✓ | Plugin gallery |
+| `/plugins/:name` | ✓ | Plugin detail + skills |
+| `/plugins/litigation/matters` | ✓ | Litigation portfolio |
+| `/plugins/litigation/matters/:id` | ✓ | Matter detail + timeline |
+| `/plugins/commercial/renewals` | ✓ | Renewal tracker |
+| `/plugins/trust-estate/estates` | ✓ | Trust & Estate portfolio |
+| `/plugins/trust-estate/estates/:id` | ✓ | Estate detail + activity log |
+| `/plugins/mediation/cases` | ✓ | Mediation case list |
+| `/plugins/mediation/cases/:id` | ✓ | Case detail + session log |
+| `/admin` | ✓ admin | Tenant admin (users, usage, model settings) |
+| `/billing` | ✓ | Stripe billing management |
+| `/mcp` | ✓ admin | MCP API keys + tool docs + connection guide |
 | `/platform` | platform key | Operator console (multi-tenant admin) |
 
 ---
@@ -125,7 +132,7 @@ DEEPSEEK_BASE_URL=https://opencode.ai/zen/go/v1   # or https://api.deepseek.com/
 DEEPSEEK_API_KEY=sk-...                            # OpenCode.ai or direct DeepSeek key
 PRIMARY_LLM=deepseek-v4-flash
 PREMIUM_LLM=deepseek-v4-pro
-OPENAI_API_KEY=sk-...                              # Optional ΓÇö embeddings (falls back to deepseek key)
+OPENAI_API_KEY=sk-...                              # Optional — embeddings (falls back to deepseek key)
 SECRET_KEY=<random-64-char>
 ```
 
@@ -133,36 +140,14 @@ SECRET_KEY=<random-64-char>
 docker compose up -d
 ```
 
-If Docker cannot bind mount this Windows workspace, use the no-bind local profile instead:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend
-```
-
-For a remote Docker context, set the browser-reachable API URL before building:
-
-```bash
-LOCAL_API_URL=http://172.16.16.202:8010/api docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend
-```
-
-For OAuth testing through the established tunnel (`ssh -L 8080:localhost:80 varta@172.16.16.202 -N`), build nginx and the frontend for the tunneled origin:
-
-```bash
-LOCAL_API_URL=http://localhost:8080/api docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build postgres redis vectordb backend frontend local-nginx
-```
-
 | Service | URL |
 |-|-|
 | App (via nginx) | http://localhost |
-| App (no-bind local) | http://localhost:3010 |
-| API docs (no-bind local) | http://localhost:8010/docs |
-| App (remote Docker context) | http://172.16.16.202:3010 |
-| API docs (remote Docker context) | http://172.16.16.202:8010/docs |
-| App (SSH tunnel) | http://localhost:8080 |
+| API docs | http://localhost:8000/docs |
 
 ### OAuth setup
 
-Register redirect URIs in your OAuth providers (use the URL your browser accesses ΓÇö `localhost:8080` via SSH tunnel, or public DNS):
+Register redirect URIs in your OAuth providers (use the URL your browser accesses — `localhost:8080` via SSH tunnel, or public DNS):
 
 | Provider | Redirect URI |
 |-|-|
@@ -177,6 +162,14 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 # Then access http://localhost:8080 and set FRONTEND_URL/BACKEND_URL accordingly
 ```
 
+### Auth hardening notes
+
+- Existing tenant domains require an admin invite or pre-provisioned user record; public self-registration only creates a tenant for new domains.
+- OAuth login callbacks return short-lived exchange codes instead of bearer JWTs in redirect URLs.
+- Microsoft/Google integration OAuth state is bound to the initiating user, tenant, intent, and role.
+- `TOKEN_ENCRYPTION_KEY` must be a stable Fernet key before storing OAuth tokens.
+- Backend-side limits protect login, registration, forgot-password, and reset-password endpoints even when nginx is bypassed.
+
 ---
 
 ## Database migrations
@@ -187,9 +180,15 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `002_plugins` | Practice profiles, matters, matter events, renewals |
 | `003_scheduler` | Scheduler logs |
 | `004_audit_log` | Audit columns on usage_records |
-| `005`ΓÇô`007` | Platform admin, MCP keys, model settings |
+| `005`–`007` | Platform admin, MCP keys, model settings |
 | `008_estate_mediation` | Trust & Estate + Mediation tables and routes |
 | `009_oauth_tokens` | Encrypted tenant/user OAuth token persistence |
+| `010_enhance_user_model` | User preferences (practice_areas, expertise_level, default_skill, privacy_mode, memory_summary) |
+| `011_create_user_memory_table` | Per-user memory storage (preferences, expertise, matter context, interaction patterns) |
+| `012_extend_message_context_tracking` | Message enhancements (skill_applied, context_used, context_relevance_scores, pii_flags) |
+| `013_add_cache_tracking` | UsageRecord cache hit flags (RAG, LLM, matter) |
+| `014_create_tenant_settings` | Tenant feature flags, cache config, rate limiting, defaults |
+| `015_create_error_logs` | Global error tracking with per-user rolling 72h support view |
 
 ### CourtListener public RAG
 
@@ -209,34 +208,37 @@ Full operator notes are in `scripts/courtlistener_jetson_pipeline.md`.
 
 ```
 legalapp/
-Γö£ΓöÇΓöÇ backend/
-Γöé   Γö£ΓöÇΓöÇ app/
-Γöé   Γöé   Γö£ΓöÇΓöÇ models/          # SQLAlchemy models
-Γöé   Γöé   Γö£ΓöÇΓöÇ routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
-Γöé   Γöé   Γö£ΓöÇΓöÇ services/        # LLM, RAG, embeddings, billing, scheduler
-Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ plugins/     # 11 practice area prompts + executor
-Γöé   Γöé   Γö£ΓöÇΓöÇ middleware/       # Tenant context + rate limiter
-Γöé   Γöé   Γö£ΓöÇΓöÇ schemas/         # Pydantic models
-Γöé   Γöé   ΓööΓöÇΓöÇ main.py
-Γöé   Γö£ΓöÇΓöÇ migrations/          # Alembic (001ΓÇô009)
-Γöé   ΓööΓöÇΓöÇ tests/
-Γö£ΓöÇΓöÇ frontend/
-Γöé   Γö£ΓöÇΓöÇ src/
-Γöé   Γöé   Γö£ΓöÇΓöÇ pages/           # 20 page components
-Γöé   Γöé   Γö£ΓöÇΓöÇ components/      # Sidebar, ChatMessage, FileUpload, SkillOutput, ColdStartInterview, legalMarkdown
-Γöé   Γöé   ΓööΓöÇΓöÇ assets/          # Homepage images
-Γöé   ΓööΓöÇΓöÇ public/
-Γö£ΓöÇΓöÇ nginx/
-Γö£ΓöÇΓöÇ scripts/
-Γö£ΓöÇΓöÇ docker-compose.yml
-Γö£ΓöÇΓöÇ docker-compose.override.yml
-Γö£ΓöÇΓöÇ docker-compose.local.yml
-Γö£ΓöÇΓöÇ docker-compose.hypervisor.yml
-ΓööΓöÇΓöÇ docker-compose.prod.yml
+├── backend/
+│   ├── app/
+│   │   ├── models/          # SQLAlchemy models (User, UserMemory, Message, Tenant, TenantSettings, ErrorLog, etc.)
+│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
+│   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler
+│   │   │   ├── plugins/     # 11 practice area prompts + executor
+│   │   │   ├── pii_detection.py       # PII pattern matching (8 types) + scrubbing
+│   │   │   ├── memory_service.py      # UserMemory CRUD + auto-summarization
+│   │   │   ├── matter_context.py      # Matter loading with PII scrubbing
+│   │   │   └── cache.py               # ExpertiseCacheManager (3-tier TTLs, skill multipliers)
+│   │   ├── middleware/      # Tenant context + rate limiter
+│   │   ├── schemas/         # Pydantic models (incl. AdminSchemas with UserDetail, TenantSettings, ErrorLog)
+│   │   └── main.py
+│   ├── migrations/          # Alembic (001–015)
+│   └── tests/
+├── frontend/
+│   ├── src/
+│   │   ├── pages/           # 20 page components
+│   │   ├── components/      # Sidebar, ChatMessage, FileUpload, SkillOutput, ColdStartInterview, legalMarkdown
+│   │   └── assets/          # Homepage images
+│   └── public/
+├── nginx/
+├── scripts/
+├── docker-compose.yml
+├── docker-compose.override.yml
+├── docker-compose.hypervisor.yml
+└── docker-compose.prod.yml
 ```
 
 ---
 
 ## License
 
-Private ΓÇö all rights reserved.
+Private — all rights reserved.

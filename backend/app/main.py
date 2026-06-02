@@ -27,6 +27,7 @@ from app.routers.email_agent import router as email_router
 from app.routers.document_sync import router as document_sync_router
 from app.routers.user_sync import router as user_sync_router
 from app.services.scheduler import LegalScheduler
+from app.routers.chat import cache_manager
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -68,6 +69,13 @@ async def lifespan(app: FastAPI):
         logger.error(f"Scheduler failed to start: {exc}")
         app.state.scheduler = None
 
+    # Initialize cache manager
+    try:
+        await cache_manager.init()
+        logger.info("Cache manager initialized")
+    except Exception as exc:
+        logger.warning(f"Cache manager initialization failed: {exc}")
+
     yield
 
     # Shutdown
@@ -75,6 +83,7 @@ async def lifespan(app: FastAPI):
         app.state.scheduler.shutdown()
     if getattr(app.state, "redis", None):
         await app.state.redis.aclose()
+    await cache_manager.close()
     await engine.dispose()
     logger.info("Shutdown complete")
 
