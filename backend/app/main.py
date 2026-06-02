@@ -141,6 +141,9 @@ app.include_router(integrations_router)
 app.include_router(email_router)
 app.include_router(document_sync_router)
 app.include_router(user_sync_router)
+app.include_router(qbo_router)
+app.include_router(billing_extended_router)
+app.include_router(trust_accounting_router)
 
 
 # ─────────────────────────────────────────────────────
