@@ -2,7 +2,6 @@ import stripe
 from decimal import Decimal
 
 from app.config import get_settings
-from app.models.tenant import Tenant
 
 settings = get_settings()
 
@@ -11,6 +10,10 @@ DEEPSEEK_INPUT_COST_PER_M = Decimal("0.27")
 DEEPSEEK_OUTPUT_COST_PER_M = Decimal("1.10")
 CLAUDE_INPUT_COST_PER_M = Decimal("3.00")
 CLAUDE_OUTPUT_COST_PER_M = Decimal("15.00")
+GEMINI_INPUT_COST_PER_M = Decimal("0.075")
+GEMINI_OUTPUT_COST_PER_M = Decimal("0.30")
+AZURE_INPUT_COST_PER_M = Decimal("3.00")
+AZURE_OUTPUT_COST_PER_M = Decimal("6.00")
 
 # PAYG markup multiplier
 PAYG_MARKUP = Decimal("10")
@@ -30,11 +33,24 @@ def calculate_cost(
 
     if "claude" in model_lower or "anthropic" in model_lower:
         input_cost = CLAUDE_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
-        output_cost = CLAUDE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+        output_cost = (
+            CLAUDE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+        )
+    elif "gemini" in model_lower:
+        input_cost = GEMINI_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
+        output_cost = (
+            GEMINI_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+        )
+    elif "gpt-4" in model_lower or "azure" in model_lower:
+        # Azure OpenAI (GPT-4o, etc.)
+        input_cost = AZURE_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
+        output_cost = AZURE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
     else:
         # DeepSeek or any other model defaults to DeepSeek pricing
         input_cost = DEEPSEEK_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
-        output_cost = DEEPSEEK_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+        output_cost = (
+            DEEPSEEK_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+        )
 
     base_cost = input_cost + output_cost
 
@@ -58,7 +74,9 @@ class BillingService:
         """Retrieve a Stripe subscription."""
         return stripe.Subscription.retrieve(subscription_id)
 
-    def update_customer_metadata(self, customer_id: str, metadata: dict) -> stripe.Customer:
+    def update_customer_metadata(
+        self, customer_id: str, metadata: dict
+    ) -> stripe.Customer:
         """Update Stripe customer metadata."""
         return stripe.Customer.modify(customer_id, metadata=metadata)
 

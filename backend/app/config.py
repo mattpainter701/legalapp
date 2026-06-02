@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # In prod behind nginx both URLs share the same domain so set this to
     # https://yourdomain.com. In dev set to http://localhost:8000.
     BACKEND_URL: str = "http://localhost:8000"
+    # Extra CORS origins (comma-separated); added to defaults (FRONTEND_URL, localhost)
+    EXTRA_CORS_ORIGINS: str = ""
     UPLOAD_DIR: str = "/app/uploads"
     MAX_FILE_SIZE_MB: int = 50
 
