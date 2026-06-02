@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request
@@ -27,6 +28,7 @@ from app.routers.email_agent import router as email_router
 from app.routers.document_sync import router as document_sync_router
 from app.routers.user_sync import router as user_sync_router
 from app.services.scheduler import LegalScheduler
+from app.services.error_log import schedule_error_log
 from app.routers.chat import cache_manager
 
 settings = get_settings()
@@ -178,6 +180,51 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled exception: {exc}")
+
+    # Extract request context for error logging
+    endpoint = request.url.path
+    method = request.method
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    request_id = request.headers.get("x-request-id")
+    tenant_id = getattr(request.state, "tenant_id", None)
+    user_id = getattr(request.state, "user_id", None)
+
+    # Convert string IDs to UUID if present
+    try:
+        tenant_id = UUID(tenant_id) if tenant_id else None
+        user_id = UUID(user_id) if user_id else None
+    except (ValueError, TypeError):
+        tenant_id = None
+        user_id = None
+
+    # Classify error type based on exception class
+    error_type = exc.__class__.__name__.lower()
+    if "validation" in error_type:
+        error_type = "validation_error"
+    elif "timeout" in error_type:
+        error_type = "timeout_error"
+    elif "database" in error_type or "sqlalchemy" in error_type.lower():
+        error_type = "database_error"
+    else:
+        error_type = "api_error"
+
+    # Schedule error log write as background task (fire-and-forget)
+    schedule_error_log(
+        app=app,
+        exc=exc,
+        error_type=error_type,
+        severity="error",
+        endpoint=endpoint,
+        method=method,
+        status_code=500,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
