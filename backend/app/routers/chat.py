@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
+from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -23,6 +24,8 @@ from app.services.rag import full_rag_query
 from app.services.llm import LLMService
 from app.services.billing import calculate_cost
 from app.services.pii_detection import detect_pii
+from app.services.memory_service import MemoryService
+from app.services.matter_context import MatterContextService
 from app.utils.guardrails import apply_guardrails, check_pii_in_input
 
 settings = get_settings()
@@ -30,6 +33,8 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 
 embedding_service = EmbeddingService()
 llm_service = LLMService()
+memory_service = MemoryService(llm_service)
+matter_context_service = MatterContextService()
 
 
 def _conversation_to_response(
@@ -64,6 +69,41 @@ def _message_to_response(msg: Message) -> MessageResponse:
         sources=sources,
         created_at=msg.created_at,
     )
+
+
+async def _trigger_auto_memory_generation(
+    db: AsyncSession,
+    user: User,
+    conversation_id: str,
+) -> None:
+    """
+    Trigger auto-memory generation if conversation has >= 10 messages.
+    Extracts conversation summary and key facts into UserMemory.
+    """
+    # Count messages in conversation
+    count_result = await db.execute(
+        select(func.count(Message.id))
+        .where(Message.conversation_id == conversation_id)
+    )
+    message_count = count_result.scalar() or 0
+
+    # Trigger memory generation every 10 messages
+    if message_count % 10 == 0 and message_count > 0:
+        await memory_service.summarize_conversation(
+            db=db,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            conversation_id=conversation_id,
+            tenant_name=user.tenant.name if user.tenant else "Legal",
+        )
+        # Update overall user memory summary
+        await memory_service.update_user_memory_summary(
+            db=db,
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            tensor_name=user.tenant.name if user.tenant else "Legal",
+        )
+        await db.commit()
 
 
 @router.get("", response_model=List[ConversationResponse])
@@ -256,6 +296,16 @@ async def send_message(
         if str(m.id) != str(user_msg.id)
     ][-10:]
 
+    # 3a. Load matter context if provided
+    matter_context_str = ""
+    matter_pii_findings = []
+    if hasattr(body, 'matter_id') and body.matter_id:
+        matter_context_str, has_pii, matter_pii_findings = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=body.matter_id,
+            privacy_mode=user.privacy_mode,
+        )
+
     # 4. RAG: embed question, search chunks, build context
     context_str, chunks = await full_rag_query(
         db=db,
@@ -264,6 +314,10 @@ async def send_message(
         tenant_id=str(user.tenant_id),
         include_public=body.include_public,
     )
+
+    # 4a. Combine matter context with RAG context
+    if matter_context_str:
+        context_str = f"{matter_context_str}\n\n{context_str}"
 
     # 5. Call LLM
     tenant_name = user.tenant.name if user.tenant else "Legal"
@@ -325,6 +379,20 @@ async def send_message(
             }
         )
 
+    # Track matter context usage if provided
+    if hasattr(body, 'matter_id') and body.matter_id:
+        context_used.insert(0, f"matter:{body.matter_id}")
+        context_scores[f"matter:{body.matter_id}"] = 1.0
+
+    # Combine PII findings from input, response, and matter context
+    all_pii_flags = []
+    if pii_findings:
+        all_pii_flags.extend([{"source": "input", **pf} for pf in pii_findings])
+    if response_pii:
+        all_pii_flags.extend([{"source": "response", **pf} for pf in response_pii])
+    if matter_pii_findings:
+        all_pii_flags.extend([{"source": "matter_context", **pf} for pf in matter_pii_findings])
+
     # 7. Save assistant message with context tracking and skill info
     model_used = settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
     skill_applied = body.skill if hasattr(body, 'skill') and body.skill else user.default_skill
@@ -338,7 +406,7 @@ async def send_message(
         skill_applied=skill_applied,
         context_used=context_used if context_used else None,
         context_relevance_scores=context_scores if context_scores else None,
-        pii_flags=response_pii if response_pii else None,
+        pii_flags=all_pii_flags if all_pii_flags else None,
     )
     db.add(assistant_msg)
 
@@ -372,5 +440,8 @@ async def send_message(
 
     await db.commit()
     await db.refresh(assistant_msg)
+
+    # Trigger auto-memory generation if message threshold reached
+    await _trigger_auto_memory_generation(db, user, str(conv.id))
 
     return _message_to_response(assistant_msg)
