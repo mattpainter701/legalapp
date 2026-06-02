@@ -18,6 +18,61 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # --- invoices (must exist before time_entries/expenses FK to it) ---
+    op.create_table(
+        "invoices",
+        sa.Column(
+            "id",
+            sa.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("tenant_id", sa.UUID(as_uuid=True), nullable=False),
+        sa.Column("matter_id", sa.UUID(as_uuid=True), nullable=False),
+        sa.Column("invoice_number", sa.String(50), nullable=False),
+        sa.Column("status", sa.String(50), nullable=False, server_default="draft"),
+        sa.Column("issue_date", sa.Date(), nullable=False),
+        sa.Column("due_date", sa.Date(), nullable=False),
+        sa.Column("subtotal", sa.Numeric(10, 2), nullable=False),
+        sa.Column("tax_amount", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("total", sa.Numeric(10, 2), nullable=False),
+        sa.Column("notes", sa.Text(), nullable=True),
+        sa.Column(
+            "payment_terms", sa.String(200), nullable=True, server_default="Net 30"
+        ),
+        sa.Column("stripe_payment_link", sa.String(500), nullable=True),
+        sa.Column("stripe_payment_link_id", sa.String(255), nullable=True),
+        sa.Column("qbo_invoice_id", sa.String(100), nullable=True),
+        sa.Column(
+            "qbo_sync_status", sa.String(50), nullable=False, server_default="pending"
+        ),
+        sa.Column("ledes_exported_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_by", sa.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.ForeignKeyConstraint(["matter_id"], ["matters.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="RESTRICT"),
+    )
+    op.create_index("idx_invoices_tenant_id", "invoices", ["tenant_id"])
+    op.create_index("idx_invoices_matter_id", "invoices", ["matter_id"])
+    op.create_index("idx_invoices_status", "invoices", ["status"])
+    op.create_index(
+        "uq_invoices_tenant_number",
+        "invoices",
+        ["tenant_id", "invoice_number"],
+        unique=True,
+    )
+
     # --- time_entries ---
     op.create_table(
         "time_entries",
@@ -100,61 +155,6 @@ def upgrade() -> None:
     op.create_index("idx_expenses_matter_id", "expenses", ["matter_id"])
     op.create_index("idx_expenses_invoice_id", "expenses", ["invoice_id"])
 
-    # --- invoices ---
-    op.create_table(
-        "invoices",
-        sa.Column(
-            "id",
-            sa.UUID(as_uuid=True),
-            primary_key=True,
-            server_default=sa.text("gen_random_uuid()"),
-        ),
-        sa.Column("tenant_id", sa.UUID(as_uuid=True), nullable=False),
-        sa.Column("matter_id", sa.UUID(as_uuid=True), nullable=False),
-        sa.Column("invoice_number", sa.String(50), nullable=False),
-        sa.Column("status", sa.String(50), nullable=False, server_default="draft"),
-        sa.Column("issue_date", sa.Date(), nullable=False),
-        sa.Column("due_date", sa.Date(), nullable=False),
-        sa.Column("subtotal", sa.Numeric(10, 2), nullable=False),
-        sa.Column("tax_amount", sa.Numeric(10, 2), nullable=False, server_default="0"),
-        sa.Column("total", sa.Numeric(10, 2), nullable=False),
-        sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column(
-            "payment_terms", sa.String(200), nullable=True, server_default="Net 30"
-        ),
-        sa.Column("stripe_payment_link", sa.String(500), nullable=True),
-        sa.Column("stripe_payment_link_id", sa.String(255), nullable=True),
-        sa.Column("qbo_invoice_id", sa.String(100), nullable=True),
-        sa.Column(
-            "qbo_sync_status", sa.String(50), nullable=False, server_default="pending"
-        ),
-        sa.Column("ledes_exported_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_by", sa.UUID(as_uuid=True), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.ForeignKeyConstraint(["matter_id"], ["matters.id"], ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="RESTRICT"),
-    )
-    op.create_index("idx_invoices_tenant_id", "invoices", ["tenant_id"])
-    op.create_index("idx_invoices_matter_id", "invoices", ["matter_id"])
-    op.create_index("idx_invoices_status", "invoices", ["status"])
-    op.create_index(
-        "uq_invoices_tenant_number",
-        "invoices",
-        ["tenant_id", "invoice_number"],
-        unique=True,
-    )
-
     # --- invoice_line_items ---
     op.create_table(
         "invoice_line_items",
@@ -233,18 +233,13 @@ def downgrade() -> None:
         op.execute(f"DROP POLICY IF EXISTS tenant_isolation_{table} ON {table}")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
 
+    # Drop dependents before invoices
     op.drop_index("idx_payments_invoice_id", table_name="payments")
     op.drop_index("idx_payments_tenant_id", table_name="payments")
     op.drop_table("payments")
 
     op.drop_index("idx_invoice_line_items_invoice_id", table_name="invoice_line_items")
     op.drop_table("invoice_line_items")
-
-    op.drop_index("uq_invoices_tenant_number", table_name="invoices")
-    op.drop_index("idx_invoices_status", table_name="invoices")
-    op.drop_index("idx_invoices_matter_id", table_name="invoices")
-    op.drop_index("idx_invoices_tenant_id", table_name="invoices")
-    op.drop_table("invoices")
 
     op.drop_index("idx_expenses_invoice_id", table_name="expenses")
     op.drop_index("idx_expenses_matter_id", table_name="expenses")
@@ -256,3 +251,10 @@ def downgrade() -> None:
     op.drop_index("idx_time_entries_matter_id", table_name="time_entries")
     op.drop_index("idx_time_entries_tenant_id", table_name="time_entries")
     op.drop_table("time_entries")
+
+    # invoices last (referenced by above tables)
+    op.drop_index("uq_invoices_tenant_number", table_name="invoices")
+    op.drop_index("idx_invoices_status", table_name="invoices")
+    op.drop_index("idx_invoices_matter_id", table_name="invoices")
+    op.drop_index("idx_invoices_tenant_id", table_name="invoices")
+    op.drop_table("invoices")
