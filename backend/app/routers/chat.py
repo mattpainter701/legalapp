@@ -23,7 +23,6 @@ from app.services.embeddings import EmbeddingService
 from app.services.rag import full_rag_query
 from app.services.llm import LLMService
 from app.services.billing import calculate_cost
-from app.services.pii_detection import detect_pii
 from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
@@ -84,8 +83,7 @@ async def _trigger_auto_memory_generation(
     """
     # Count messages in conversation
     count_result = await db.execute(
-        select(func.count(Message.id))
-        .where(Message.conversation_id == conversation_id)
+        select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
     )
     message_count = count_result.scalar() or 0
 
@@ -302,7 +300,7 @@ async def send_message(
     matter_context_str = ""
     matter_pii_findings = []
     cache_hit_matter = False
-    if hasattr(body, 'matter_id') and body.matter_id:
+    if hasattr(body, "matter_id") and body.matter_id:
         # Try cache first
         cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
@@ -312,7 +310,11 @@ async def send_message(
             matter_context_str = cached_matter
             cache_hit_matter = True
         else:
-            matter_context_str, has_pii, matter_pii_findings = await matter_context_service.get_safe_matter_context(
+            (
+                matter_context_str,
+                has_pii,
+                matter_pii_findings,
+            ) = await matter_context_service.get_safe_matter_context(
                 db=db,
                 matter_id=body.matter_id,
                 privacy_mode=user.privacy_mode,
@@ -331,7 +333,7 @@ async def send_message(
         question=body.content,
         tenant_id=str(user.tenant_id),
         user_id=str(user.id),
-        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        skill=body.skill if hasattr(body, "skill") else user.default_skill,
     )
 
     if cached_rag:
@@ -353,15 +355,22 @@ async def send_message(
             context_str=context_str,
             chunks=chunks,
             expertise_level=user.expertise_level,
-            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
         )
 
     # 4a. Combine matter context with RAG context
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
+    # 4b. Load user memory context for injection into system prompt
+    memory_context = await memory_service.get_memory_context_for_injection(
+        db=db,
+        user_id=user.id,
+    )
+
     # 5. Call LLM (with caching)
     import hashlib
+
     context_hash = hashlib.md5(context_str.encode()).hexdigest()
 
     tenant_name = user.tenant.name if user.tenant else "Legal"
@@ -371,7 +380,7 @@ async def send_message(
         tenant_id=str(user.tenant_id),
         user_id=str(user.id),
         context_hash=context_hash,
-        skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+        skill=body.skill if hasattr(body, "skill") else user.default_skill,
     )
 
     tokens_in, tokens_out = 0, 0
@@ -383,6 +392,7 @@ async def send_message(
             messages=history_messages,
             tenant_name=tenant_name,
             context=context_str,
+            memory_context=memory_context,
             use_premium=body.use_premium_llm,
             provider=body.provider,
         )
@@ -394,7 +404,7 @@ async def send_message(
             context_hash=context_hash,
             response=response_text,
             expertise_level=user.expertise_level,
-            skill=body.skill if hasattr(body, 'skill') else user.default_skill,
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
         )
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
@@ -448,7 +458,7 @@ async def send_message(
         )
 
     # Track matter context usage if provided
-    if hasattr(body, 'matter_id') and body.matter_id:
+    if hasattr(body, "matter_id") and body.matter_id:
         context_used.insert(0, f"matter:{body.matter_id}")
         context_scores[f"matter:{body.matter_id}"] = 1.0
 
@@ -459,11 +469,15 @@ async def send_message(
     if response_pii:
         all_pii_flags.extend([{"source": "response", **pf} for pf in response_pii])
     if matter_pii_findings:
-        all_pii_flags.extend([{"source": "matter_context", **pf} for pf in matter_pii_findings])
+        all_pii_flags.extend(
+            [{"source": "matter_context", **pf} for pf in matter_pii_findings]
+        )
 
     # 7. Save assistant message with context tracking and skill info
     model_used = settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
-    skill_applied = body.skill if hasattr(body, 'skill') and body.skill else user.default_skill
+    skill_applied = (
+        body.skill if hasattr(body, "skill") and body.skill else user.default_skill
+    )
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
