@@ -2,7 +2,6 @@ import io
 from typing import List
 
 import tiktoken
-import aiofiles
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
@@ -37,7 +36,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     return chunks
 
 
-async def extract_text_from_pdf(file_bytes: bytes) -> str:
+def extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extract text from PDF bytes using pypdf."""
     from pypdf import PdfReader
 
@@ -52,7 +51,7 @@ async def extract_text_from_pdf(file_bytes: bytes) -> str:
     return "\n\n".join(text_parts)
 
 
-async def extract_text_from_docx(file_bytes: bytes) -> str:
+def extract_text_from_docx(file_bytes: bytes) -> str:
     """Extract text from DOCX bytes using python-docx."""
     from docx import Document
 
@@ -73,13 +72,13 @@ async def extract_text_from_docx(file_bytes: bytes) -> str:
     return "\n\n".join(text_parts)
 
 
-async def extract_text(file_bytes: bytes, content_type: str, filename: str) -> str:
+def extract_text(file_bytes: bytes, content_type: str, filename: str) -> str:
     """Route to the correct text extractor based on content type or filename."""
     ct_lower = (content_type or "").lower()
     fn_lower = (filename or "").lower()
 
     if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
-        return await extract_text_from_pdf(file_bytes)
+        return extract_text_from_pdf(file_bytes)
 
     if (
         ct_lower
@@ -90,7 +89,7 @@ async def extract_text(file_bytes: bytes, content_type: str, filename: str) -> s
         or fn_lower.endswith(".docx")
         or fn_lower.endswith(".doc")
     ):
-        return await extract_text_from_docx(file_bytes)
+        return extract_text_from_docx(file_bytes)
 
     if ct_lower.startswith("text/") or fn_lower.endswith(".txt"):
         return file_bytes.decode("utf-8", errors="replace")

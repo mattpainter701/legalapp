@@ -2,8 +2,7 @@
 
 import json
 import hashlib
-from typing import Optional, Tuple, Any
-from datetime import timedelta
+from typing import Optional, Tuple
 
 import redis.asyncio as redis
 
@@ -145,9 +144,7 @@ class ExpertiseCacheManager:
             key = self._make_key("rag", tenant_id, user_id, question[:50])
             ttl = self._get_ttl(expertise_level, "rag", skill)
             data = {"context": context_str, "chunks": chunks}
-            await self.redis_client.setex(
-                key, ttl, json.dumps(data, default=str)
-            )
+            await self.redis_client.setex(key, ttl, json.dumps(data, default=str))
             return True
         except Exception as e:
             print(f"Cache set error: {e}")
@@ -249,18 +246,35 @@ class ExpertiseCacheManager:
         """
         Invalidate all cache for a user.
         cache_type: "rag" | "llm" | "matter" | None (all)
+        Uses SCAN for non-blocking iteration over large keyspaces.
         """
         if not self.cache_enabled or not self.redis_client:
             return False
 
         try:
-            pattern = f"*{tenant_id}|{user_id}*"
+            # Keys use format: {type}:{tenant_id}|{user_id}|{suffix}
+            pattern = f"*:{tenant_id}|{user_id}|*"
             if cache_type:
-                pattern = f"{cache_type}:{tenant_id}|{user_id}*"
+                pattern = f"{cache_type}:{tenant_id}|{user_id}|*"
 
-            keys = await self.redis_client.keys(pattern)
-            if keys:
-                await self.redis_client.delete(*keys)
+            # Use SCAN instead of KEYS to avoid blocking Redis event loop
+            keys_to_delete = []
+            cursor = 0
+            while True:
+                cursor, keys = await self.redis_client.scan(cursor, match=pattern)
+                if keys:
+                    keys_to_delete.extend(keys)
+                if cursor == 0:
+                    break
+
+            # Delete accumulated keys in batches
+            if keys_to_delete:
+                # Delete in chunks to avoid overwhelming Redis with huge DEL commands
+                chunk_size = 1000
+                for i in range(0, len(keys_to_delete), chunk_size):
+                    chunk = keys_to_delete[i : i + chunk_size]
+                    await self.redis_client.delete(*chunk)
+
             return True
         except Exception as e:
             print(f"Cache invalidate error: {e}")

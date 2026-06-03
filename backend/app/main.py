@@ -1,7 +1,6 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from uuid import UUID
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, Request
@@ -27,8 +26,10 @@ from app.routers.integrations import router as integrations_router
 from app.routers.email_agent import router as email_router
 from app.routers.document_sync import router as document_sync_router
 from app.routers.user_sync import router as user_sync_router
+from app.routers.qbo import router as qbo_router
+from app.routers.billing_extended import router as billing_extended_router
+from app.routers.trust_accounting import router as trust_accounting_router
 from app.services.scheduler import LegalScheduler
-from app.services.error_log import schedule_error_log
 from app.routers.chat import cache_manager
 
 settings = get_settings()
@@ -143,6 +144,9 @@ app.include_router(integrations_router)
 app.include_router(email_router)
 app.include_router(document_sync_router)
 app.include_router(user_sync_router)
+app.include_router(qbo_router)
+app.include_router(billing_extended_router)
+app.include_router(trust_accounting_router)
 
 
 # ─────────────────────────────────────────────────────
@@ -169,8 +173,53 @@ async def health_check():
 # ─────────────────────────────────────────────────────
 # Exception handlers
 # ─────────────────────────────────────────────────────
+async def _capture_exception_to_errorlog(
+    request: Request,
+    exc: Exception,
+    status_code: int,
+    error_type: str = "api_error",
+):
+    """Persist exception to ErrorLog table if database is available."""
+    try:
+        import uuid as _uuid
+
+        from app.database import async_session_maker
+        from app.services.error_tracker import capture_error
+
+        # Try to extract user/tenant from request state (set by TenantMiddleware)
+        user_id_str = getattr(request.state, "user_id", None)
+        tenant_id_str = getattr(request.state, "tenant_id", None)
+
+        user_id = _uuid.UUID(user_id_str) if user_id_str else None
+        tenant_id = _uuid.UUID(tenant_id_str) if tenant_id_str else None
+
+        async with async_session_maker() as session:
+            await capture_error(
+                db=session,
+                error_type=error_type,
+                severity="error" if status_code >= 500 else "warning",
+                message=str(exc),
+                request=request,
+                status_code=status_code,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+    except Exception:
+        pass  # Error tracking must never cascade
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    # Capture 4xx/5xx HTTP exceptions
+    if exc.status_code >= 400:
+        await _capture_exception_to_errorlog(
+            request,
+            exc,
+            exc.status_code,
+            error_type="validation_error"
+            if exc.status_code in (400, 422)
+            else "api_error",
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
@@ -180,24 +229,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled exception: {exc}")
-
-    # Extract request context for error logging
-    endpoint = request.url.path
-    method = request.method
-    ip_address = request.client.host if request.client else None
-    user_agent = request.headers.get("user-agent")
-    request_id = request.headers.get("x-request-id")
-    tenant_id = getattr(request.state, "tenant_id", None)
-    user_id = getattr(request.state, "user_id", None)
-
-    # Convert string IDs to UUID if present
-    try:
-        tenant_id = UUID(tenant_id) if tenant_id else None
-        user_id = UUID(user_id) if user_id else None
-    except (ValueError, TypeError):
-        tenant_id = None
-        user_id = None
-
     # Classify error type based on exception class
     error_type = exc.__class__.__name__.lower()
     if "validation" in error_type:
@@ -209,22 +240,12 @@ async def generic_exception_handler(request: Request, exc: Exception):
     else:
         error_type = "api_error"
 
-    # Schedule error log write as background task (fire-and-forget)
-    schedule_error_log(
-        app=app,
-        exc=exc,
+    await _capture_exception_to_errorlog(
+        request,
+        exc,
+        500,
         error_type=error_type,
-        severity="error",
-        endpoint=endpoint,
-        method=method,
-        status_code=500,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        request_id=request_id,
-        tenant_id=tenant_id,
-        user_id=user_id,
     )
-
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
