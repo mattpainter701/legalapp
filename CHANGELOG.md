@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0] — 2026-06-03
+
+### Sprint 6 — Matters, Document Management & Firm Reporting
+
+### Added
+- (to be filled during sprint)
+
+### Changed
+
+### Fixed
+
+### Tests
+
+---
+
 ## [0.6.0] — 2026-06-03
 
 ### Added — CRM, Contacts, Tasks & Client Communication
