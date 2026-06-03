@@ -408,6 +408,12 @@ try:
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
+    # 4b. Load user memory context for injection into system prompt
+    memory_context = await memory_service.get_memory_context_for_injection(
+        db=db,
+        user_id=user.id,
+    )
+
     # 5. Call LLM (with caching)
     import hashlib
 
@@ -433,6 +439,7 @@ try:
                 messages=history_messages,
                 tenant_name=tenant_name,
                 context=context_str,
+                memory_context=memory_context,
                 use_premium=body.use_premium_llm,
                 provider=body.provider,
             )
@@ -481,6 +488,7 @@ try:
             messages=retry_messages,
             tenant_name=tenant_name,
             context=context_str,
+            memory_context=memory_context,
             use_premium=body.use_premium_llm,
             provider=body.provider,
         )

@@ -12,6 +12,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working
 CAPABILITIES:
 - You draw on the firm's document library (provided as CONTEXT below), uploaded attachments, and your own legal reasoning.
 - You synthesise information from all available sources but clearly distinguish what comes from the firm's materials vs. your own knowledge.
+- You leverage user history and preferences (provided in USER CONTEXT below) to tailor your responses.
 
 RULES:
 - **Accuracy first.** If you are uncertain about a point, say so rather than guessing. Never fabricate case names, citations, or statutes.
@@ -23,7 +24,10 @@ RULES:
 - **Identity.** You are a legal assistant, not an AI. Do not mention what model or system powers you. If asked, say you are a legal research tool built for {tenant_name}.
 - End every substantive response with: "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*"
 
-CONTEXT (firm documents and relevant authority — may be empty):
+USER CONTEXT (history of interactions, preferences, and patterns):
+{memory_context}
+
+FIRM CONTEXT (firm documents and relevant authority — may be empty):
 {context}
 """
 
@@ -81,6 +85,7 @@ class LLMService:
         messages: List[dict],
         tenant_name: str,
         context: str,
+        memory_context: str = "",
         use_premium: bool = False,
         provider: str = "default",
     ) -> Tuple[str, int, int]:
@@ -97,6 +102,7 @@ class LLMService:
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
+            memory_context=memory_context or "No user memory available.",
             context=context,
         )
 
