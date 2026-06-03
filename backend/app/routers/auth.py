@@ -9,7 +9,7 @@ from typing import Optional
 import bcrypt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -654,6 +654,7 @@ async def google_callback(
 async def exchange_oauth_callback(
     body: OAuthCallbackExchangeRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     token = await _consume_callback_token(request, body.code)
@@ -673,6 +674,18 @@ async def exchange_oauth_callback(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    # Set httpOnly cookie with secure flags
+    # Only set Secure in production (https://...) — dev uses http://localhost
+    is_production = settings.BACKEND_URL.startswith("https://")
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=is_production,
+        samesite="Lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
 
     return TokenResponse(
         access_token=token,
@@ -757,6 +770,7 @@ async def register(
 @router.post("/login")
 async def login(
     body: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     body.email = body.email.lower().strip()
@@ -777,6 +791,20 @@ async def login(
 
     tenant = user.tenant
     jwt_token = _create_access_token(user, tenant)
+
+    # Set httpOnly cookie with secure flags
+    # Only set Secure in production (https://...) — dev uses http://localhost
+    is_production = settings.BACKEND_URL.startswith("https://")
+    response.set_cookie(
+        key="access_token",
+        value=jwt_token,
+        httponly=True,
+        secure=is_production,
+        samesite="Lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+    # For backward compatibility, still return token in body (but frontend will prefer cookie)
     return TokenResponse(
         access_token=jwt_token,
         user_id=str(user.id),
@@ -875,10 +903,15 @@ _fallback_reset_tokens: dict[str, tuple[str, float]] = {}
 
 
 @router.post("/logout")
-async def logout(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ", 1)[1]
+async def logout(request: Request, response: Response):
+    # Extract token from cookie (preferred) or Authorization header (fallback)
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+
+    if token:
         try:
             payload = jwt.decode(
                 token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
@@ -894,6 +927,10 @@ async def logout(request: Request):
                     request.app.state.jti_blacklist[jti] = _time.time() + ttl
         except Exception:
             pass
+
+    # Clear the httpOnly cookie
+    response.delete_cookie("access_token", httponly=True, samesite="Lax")
+
     return {"message": "Logged out successfully"}
 
 
