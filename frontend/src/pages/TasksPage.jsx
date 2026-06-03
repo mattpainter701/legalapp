@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getTasks, createTask, updateTask, deleteTask, getOverdueTasks } from '../api'
-import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle } from 'lucide-react'
+import { getTasks, createTask, updateTask, deleteTask, getOverdueTasks, sendTaskReminder } from '../api'
+import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import { useAuth } from '../App'
@@ -128,9 +128,24 @@ function CreateTaskModal({ onClose, onCreate }) {
   )
 }
 
-function TaskRow({ task, onComplete, onDelete }) {
+function TaskRow({ task, onComplete, onDelete, onRemind }) {
   const label = dueDateLabel(task.due_date)
   const isOverdue = task.due_date && new Date(task.due_date + 'T00:00:00') < new Date() && task.status !== 'completed'
+  const [remindSent, setRemindSent] = useState(false)
+  const [reminding, setReminding] = useState(false)
+
+  const handleRemind = async () => {
+    setReminding(true)
+    try {
+      await onRemind(task.id)
+      setRemindSent(true)
+      setTimeout(() => setRemindSent(false), 3000)
+    } catch {
+      // silently ignore — parent may show a toast
+    } finally {
+      setReminding(false)
+    }
+  }
 
   return (
     <div className={`flex items-center gap-3 px-4 py-3 group hover:bg-brand-bg-soft transition-colors ${isOverdue ? 'bg-brand-rose/3' : ''}`}>
@@ -161,6 +176,18 @@ function TaskRow({ task, onComplete, onDelete }) {
         )}
         <PriorityBadge priority={task.priority} />
         <span className="text-[11px] text-brand-muted uppercase hidden group-hover:inline">{task.task_type?.replace('_', ' ')}</span>
+        {remindSent ? (
+          <span className="text-[11px] text-brand-green font-semibold">Sent!</span>
+        ) : (
+          <button
+            onClick={handleRemind}
+            disabled={reminding || task.status === 'completed'}
+            title="Send reminder email"
+            className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-accent transition-all disabled:opacity-30"
+          >
+            <Bell size={13} />
+          </button>
+        )}
         <button
           onClick={() => onDelete(task.id)}
           className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
@@ -233,6 +260,10 @@ export default function TasksPage() {
       await deleteTask(taskId)
       loadTasks()
     } catch {}
+  }
+
+  const handleRemind = async (taskId) => {
+    await sendTaskReminder(taskId)
   }
 
   // Group tasks by due date bucket
@@ -313,7 +344,7 @@ export default function TasksPage() {
                 <SectionHeader title="Overdue" count={overdue.length} icon={AlertCircle} color="!bg-brand-rose/5" />
                 {overdue.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} />
+                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
                   </div>
                 ))}
               </div>
@@ -325,7 +356,7 @@ export default function TasksPage() {
                 <SectionHeader title="Due Today" count={todayTasks.length} icon={Calendar} />
                 {todayTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} />
+                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
                   </div>
                 ))}
               </div>
@@ -337,7 +368,7 @@ export default function TasksPage() {
                 <SectionHeader title="Upcoming" count={upcomingTasks.length} icon={Calendar} />
                 {upcomingTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} />
+                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
                   </div>
                 ))}
               </div>
@@ -349,7 +380,7 @@ export default function TasksPage() {
                 <SectionHeader title="No Due Date" count={noDueTasks.length} />
                 {noDueTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} />
+                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
                   </div>
                 ))}
               </div>
@@ -364,7 +395,7 @@ export default function TasksPage() {
                 </summary>
                 {completedTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : 'border-t border-brand-line/50'}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} />
+                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
                   </div>
                 ))}
               </details>

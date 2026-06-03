@@ -458,6 +458,67 @@ class EmailService:
         )
         return await self.send_email([recipient], subject, html_body, text_body)
 
+    async def send_task_reminder(
+        self,
+        to_email: str,
+        task_title: str,
+        due_date: str,
+        matter_name: Optional[str] = None,
+        assignee_name: Optional[str] = None,
+    ) -> bool:
+        """Send a task due date reminder email."""
+        subject = f"Reminder: '{task_title}' is due {due_date}"
+
+        matter_row = (
+            f"<tr><td><strong>Matter</strong></td><td>{matter_name}</td></tr>"
+            if matter_name
+            else ""
+        )
+        assignee_row = (
+            f"<tr><td><strong>Assigned To</strong></td><td>{assignee_name}</td></tr>"
+            if assignee_name
+            else ""
+        )
+
+        now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+        content = f"""
+        <div class="header">
+          <h1>Clarity Legal &mdash; Task Reminder</h1>
+          <p>This task is due soon &bull; {now_str}</p>
+        </div>
+        <div class="body">
+          <p>The following task requires your attention:</p>
+          <table>
+            <thead><tr><th>Field</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Task</strong></td><td>{task_title}</td></tr>
+              <tr><td><strong>Due Date</strong></td><td><strong>{due_date}</strong></td></tr>
+              {matter_row}
+              {assignee_row}
+            </tbody>
+          </table>
+          <p style="margin-top:20px; font-size:13px; color:#555;">
+            Please log in to review and complete this task.
+          </p>
+        </div>
+        """
+        html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+
+        text_lines = [
+            "Task Reminder",
+            "",
+            f"Task: {task_title}",
+            f"Due:  {due_date}",
+        ]
+        if matter_name:
+            text_lines.append(f"Matter: {matter_name}")
+        if assignee_name:
+            text_lines.append(f"Assigned to: {assignee_name}")
+        text_lines.append("\nPlease log in to review this task.")
+        text_body = "\n".join(text_lines)
+
+        return await self.send_email([to_email], subject, html_body, text_body)
+
     async def send_slack_webhook(
         self,
         message: str,

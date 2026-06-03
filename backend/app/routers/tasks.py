@@ -255,3 +255,51 @@ async def delete_task(
 
     await db.delete(task)
     await db.commit()
+
+
+@router.post("/{task_id}/remind", status_code=202)
+async def send_task_reminder(
+    task_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually send a reminder email for a specific task."""
+    tenant_id = current_user["tenant_id"]
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(Task).where(
+            Task.id == task_id,
+            Task.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if not task.assigned_to_user_id:
+        raise HTTPException(
+            status_code=422, detail="Task has no assigned user — cannot send reminder"
+        )
+
+    user_result = await db.execute(
+        select(User).where(User.id == task.assigned_to_user_id)
+    )
+    assignee = user_result.scalar_one_or_none()
+    if not assignee or not assignee.email:
+        raise HTTPException(
+            status_code=422, detail="Assigned user has no email address"
+        )
+
+    due_str = task.due_date.isoformat() if task.due_date else "No due date"
+    sent = await email_service.send_task_reminder(
+        to_email=assignee.email,
+        task_title=task.title,
+        due_date=due_str,
+        assignee_name=getattr(assignee, "full_name", None),
+    )
+
+    if not sent:
+        raise HTTPException(status_code=502, detail="Failed to send reminder email")
+
+    return {"sent": True, "to": assignee.email}

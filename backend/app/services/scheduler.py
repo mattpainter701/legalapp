@@ -70,14 +70,13 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def _bypass_rls(session) -> None:
     """
     Set a blank tenant context so RLS policies evaluate to true for all rows.
     This allows cross-tenant queries inside scheduled jobs.
     """
-    await session.execute(
-        text("SET LOCAL app.current_tenant_id = ''")
-    )
+    await session.execute(text("SET LOCAL app.current_tenant_id = ''"))
 
 
 async def _get_tenant_admins(session, tenant_id: uuid.UUID) -> List[User]:
@@ -128,6 +127,7 @@ def _days_until(target_date) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 # RSS Feed Fetcher
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 async def _fetch_federal_register_rss() -> List[Dict[str, str]]:
     """
@@ -200,7 +200,9 @@ async def _fetch_federal_register_rss() -> List[Dict[str, str]]:
             }
         )
 
-    logger.info("Federal Register RSS: fetched %d articles from last 7 days", len(articles))
+    logger.info(
+        "Federal Register RSS: fetched %d articles from last 7 days", len(articles)
+    )
     return articles
 
 
@@ -263,6 +265,7 @@ def _build_reg_digest_markdown(articles: List[Dict[str, str]]) -> str:
 # LegalScheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class LegalScheduler:
     """
     APScheduler-based wrapper for all legal agent cron jobs.
@@ -310,8 +313,18 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        # task-reminder: every hour
+        self.scheduler.add_job(
+            self._check_task_reminders,
+            "interval",
+            hours=1,
+            id="task-reminder",
+            name="Task Reminder",
+            replace_existing=True,
+        )
+
         self.scheduler.start()
-        logger.info("LegalScheduler started with 4 agents")
+        logger.info("LegalScheduler started with 5 agents")
 
     def shutdown(self) -> None:
         """Graceful shutdown of the scheduler."""
@@ -344,16 +357,20 @@ class LegalScheduler:
 
                 # Query all renewals within 90 days that aren't cancelled/renewed
                 result = await session.execute(
-                    select(Renewal).where(
+                    select(Renewal)
+                    .where(
                         Renewal.renewal_date <= cutoff,
                         Renewal.renewal_date >= today,
                         Renewal.status.notin_(["cancelled", "renewed", "closed"]),
-                    ).order_by(Renewal.renewal_date.asc())
+                    )
+                    .order_by(Renewal.renewal_date.asc())
                 )
                 renewals = list(result.scalars().all())
 
                 if not renewals:
-                    await _log_complete(session, log, "No renewals within 90 days — nothing to send.")
+                    await _log_complete(
+                        session, log, "No renewals within 90 days — nothing to send."
+                    )
                     logger.info("[renewal-watcher] No renewals to alert.")
                     return
 
@@ -375,8 +392,12 @@ class LegalScheduler:
                             {
                                 "contract_name": r.contract_name,
                                 "vendor": r.vendor,
-                                "value": str(r.contract_value_annual) if r.contract_value_annual else "",
-                                "cancel_by": cancel_by.strftime("%Y-%m-%d") if cancel_by else "—",
+                                "value": str(r.contract_value_annual)
+                                if r.contract_value_annual
+                                else "",
+                                "cancel_by": cancel_by.strftime("%Y-%m-%d")
+                                if cancel_by
+                                else "—",
                                 "business_owner": r.business_owner or "—",
                                 "days_until": days,
                                 "status": r.status,
@@ -387,18 +408,23 @@ class LegalScheduler:
                     admins = await _get_tenant_admins(session, tenant_id)
                     if not admins:
                         logger.warning(
-                            "[renewal-watcher] No admin users for tenant %s — skipping", tenant_id
+                            "[renewal-watcher] No admin users for tenant %s — skipping",
+                            tenant_id,
                         )
                         continue
 
                     for admin in admins:
-                        sent = await email_service.send_renewal_alert(admin.email, alerts)
+                        sent = await email_service.send_renewal_alert(
+                            admin.email, alerts
+                        )
                         if sent:
                             emails_sent += 1
 
                 # Slack notification
                 total_critical = sum(
-                    1 for r in renewals if _days_until(r.notice_deadline or r.renewal_date) <= 13
+                    1
+                    for r in renewals
+                    if _days_until(r.notice_deadline or r.renewal_date) <= 13
                 )
                 slack_msg = (
                     f":rotating_light: *Renewal Watcher*: {len(renewals)} contract(s) need attention "
@@ -442,6 +468,7 @@ class LegalScheduler:
 
                 # Find all tenants with a regulatory-legal practice profile
                 from app.models.plugin import PracticeProfile
+
                 result = await session.execute(
                     select(PracticeProfile).where(
                         PracticeProfile.plugin_name == "regulatory-legal",
@@ -469,7 +496,8 @@ class LegalScheduler:
                     admins = await _get_tenant_admins(session, tenant_id)
                     if not admins:
                         logger.warning(
-                            "[reg-monitor] No admin users for tenant %s — skipping", tenant_id
+                            "[reg-monitor] No admin users for tenant %s — skipping",
+                            tenant_id,
                         )
                         continue
 
@@ -572,7 +600,9 @@ class LegalScheduler:
                             "status": matter.status,
                             "conflicts_bypass": matter.conflicts_status == "bypass",
                             "internal_owners": internal_owners,
-                            "deadlines": sorted(imminent_deadlines, key=lambda x: x["days_until"]),
+                            "deadlines": sorted(
+                                imminent_deadlines, key=lambda x: x["days_until"]
+                            ),
                         }
                         alerts_by_tenant[matter.tenant_id].append(alert_entry)
 
@@ -597,7 +627,9 @@ class LegalScheduler:
                             emails_sent += 1
 
                 total_deadlines = sum(
-                    len(a["deadlines"]) for alerts in alerts_by_tenant.values() for a in alerts
+                    len(a["deadlines"])
+                    for alerts in alerts_by_tenant.values()
+                    for a in alerts
                 )
                 slack_msg = (
                     f":calendar: *Docket Watcher*: Found {total_deadlines} deadline(s) within 14 days "
@@ -709,9 +741,15 @@ class LegalScheduler:
                             )
                             latest_event = evt_result.scalar_one_or_none()
 
-                            if latest_event is None or latest_event.created_at < stale_cutoff:
+                            if (
+                                latest_event is None
+                                or latest_event.created_at < stale_cutoff
+                            ):
                                 days_ago = (
-                                    (datetime.now(timezone.utc) - latest_event.created_at).days
+                                    (
+                                        datetime.now(timezone.utc)
+                                        - latest_event.created_at
+                                    ).days
                                     if latest_event
                                     else None
                                 )
@@ -720,14 +758,18 @@ class LegalScheduler:
                                         "matter_name": m.matter_name,
                                         "matter_type": m.matter_type,
                                         "risk_level": m.risk_level or "unknown",
-                                        "days_since_update": days_ago if days_ago is not None else "never",
+                                        "days_since_update": days_ago
+                                        if days_ago is not None
+                                        else "never",
                                     }
                                 )
 
                     # Get tenant name from admin user's tenant relationship
                     admins = await _get_tenant_admins(session, tenant_id)
                     if not admins:
-                        logger.warning("[oc-status] No admin users for tenant %s", tenant_id)
+                        logger.warning(
+                            "[oc-status] No admin users for tenant %s", tenant_id
+                        )
                         continue
 
                     tenant_name = (
@@ -766,6 +808,88 @@ class LegalScheduler:
                 logger.exception("[oc-status] Unhandled error: %s", error_msg)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: task-reminder ─────────────────────────────────────────────────
+
+    async def _check_task_reminders(self) -> None:
+        """Email reminders for tasks due within the next 24 hours that are not completed/cancelled."""
+        logger.info("[task-reminder] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "task-reminder")
+            try:
+                await _bypass_rls(session)
+
+                now_utc = datetime.now(timezone.utc)
+                today = now_utc.date()
+                tomorrow = today + timedelta(days=1)
+
+                # Tasks due within the next 24 hours, not completed/cancelled
+                result = await session.execute(
+                    select(Task).where(
+                        Task.due_date >= today,
+                        Task.due_date <= tomorrow,
+                        Task.status.notin_(["completed", "cancelled"]),
+                    )
+                )
+                tasks = list(result.scalars().all())
+
+                if not tasks:
+                    await _log_complete(
+                        session, log, "No tasks due within 24 hours — nothing to send."
+                    )
+                    logger.info("[task-reminder] No tasks to remind.")
+                    return
+
+                emails_sent = 0
+                skipped_no_assignee = 0
+
+                for task in tasks:
+                    if not task.assigned_to_user_id:
+                        skipped_no_assignee += 1
+                        continue
+
+                    # Look up assignee
+                    user_result = await session.execute(
+                        select(User).where(User.id == task.assigned_to_user_id)
+                    )
+                    assignee = user_result.scalar_one_or_none()
+                    if not assignee or not assignee.email:
+                        skipped_no_assignee += 1
+                        continue
+
+                    due_str = task.due_date.isoformat() if task.due_date else "Unknown"
+
+                    try:
+                        sent = await email_service.send_task_reminder(
+                            to_email=assignee.email,
+                            task_title=task.title,
+                            due_date=due_str,
+                            assignee_name=assignee.full_name
+                            if hasattr(assignee, "full_name")
+                            else None,
+                        )
+                        if sent:
+                            emails_sent += 1
+                    except Exception as exc:
+                        logger.error(
+                            "[task-reminder] Failed to send reminder for task %s to %s: %s",
+                            task.id,
+                            assignee.email,
+                            exc,
+                        )
+
+                summary = (
+                    f"Found {len(tasks)} task(s) due within 24 hours. "
+                    f"Sent {emails_sent} reminder(s). "
+                    f"Skipped {skipped_no_assignee} (no assignee/email)."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[task-reminder] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[task-reminder] Unhandled error: %s", error_msg)
+                await _log_failed(session, log, error_msg)
+
     # ─── Manual trigger ───────────────────────────────────────────────────────
 
     async def run_agent_manually(self, agent_name: str) -> Dict[str, Any]:
@@ -778,6 +902,7 @@ class LegalScheduler:
             "reg-monitor": self.run_reg_monitor,
             "docket-watcher": self.run_docket_watcher,
             "oc-status": self.run_oc_status,
+            "task-reminder": self._check_task_reminders,
         }
 
         fn = agent_map.get(agent_name)
@@ -790,10 +915,16 @@ class LegalScheduler:
         logger.info("[manual-trigger] Running agent: %s", agent_name)
         try:
             await fn()
-            return {"success": True, "agent": agent_name, "triggered_at": datetime.now(timezone.utc).isoformat()}
+            return {
+                "success": True,
+                "agent": agent_name,
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+            }
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
-            logger.exception("[manual-trigger] Agent %s failed: %s", agent_name, error_msg)
+            logger.exception(
+                "[manual-trigger] Agent %s failed: %s", agent_name, error_msg
+            )
             return {"success": False, "agent": agent_name, "error": error_msg}
 
     # ─── Private helpers ──────────────────────────────────────────────────────
@@ -812,12 +943,16 @@ class LegalScheduler:
         # Sort by soonest deadline
         alerts_sorted = sorted(
             alerts,
-            key=lambda a: min(d["days_until"] for d in a["deadlines"]) if a["deadlines"] else 999,
+            key=lambda a: min(d["days_until"] for d in a["deadlines"])
+            if a["deadlines"]
+            else 999,
         )
 
         for alert in alerts_sorted:
             lines.append(f"## {alert['matter_name']}")
-            lines.append(f"**Type:** {alert['matter_type']} | **Risk:** {alert['risk_level'].title()}")
+            lines.append(
+                f"**Type:** {alert['matter_type']} | **Risk:** {alert['risk_level'].title()}"
+            )
             if alert.get("conflicts_bypass"):
                 lines.append(
                     "> **NOTE:** This matter has a conflicts check bypass — review carefully."
@@ -830,7 +965,9 @@ class LegalScheduler:
                 )
             internal = alert.get("internal_owners") or {}
             if internal:
-                lines.append(f"\n**Internal Owners:** {', '.join(str(v) for v in internal.values() if v)}")
+                lines.append(
+                    f"\n**Internal Owners:** {', '.join(str(v) for v in internal.values() if v)}"
+                )
             lines.append("---")
 
         return "\n".join(lines)

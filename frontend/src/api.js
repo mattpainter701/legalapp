@@ -299,6 +299,9 @@ export const getOverdueTasks = (params = {}) =>
 export const getUpcomingTasks = (params = {}) =>
   api.get('/tasks/upcoming', { params }).then(r => r.data)
 
+export const sendTaskReminder = (taskId) =>
+  api.post(`/tasks/${taskId}/remind`).then(r => r.data)
+
 // ── Communications ─────────────────────────────────────────────────────────
 
 export const getCommunications = (params = {}) =>
