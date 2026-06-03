@@ -10,6 +10,7 @@ from app.models.error_log import ErrorLog
 from app.models.contact import Contact, Lead
 from app.models.task import Task
 from app.models.communication_log import CommunicationLog
+from app.models.document_template import DocumentTemplate
 
 __all__ = [
     "Tenant",

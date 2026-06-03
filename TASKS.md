@@ -39,14 +39,14 @@ Files: `backend/app/routers/intake.py`, `backend/app/schemas/contact.py`, `front
 
 Files: `backend/migrations/versions/024_add_matter_budget.py`, `backend/app/routers/reports.py` (add endpoint), `frontend/src/pages/MatterDetailPage.jsx`
 
-### 805. Document Templates (P2, MEDIUM)
+### 805. Document Templates (P2, MEDIUM) — COMPLETED
 
-- [ ] `DocumentTemplate` model — title, body (Text, `{{variable}}` placeholders), category (engagement_letter/retainer/NDA/motion/other), is_active
-- [ ] Migration 025: document_templates table + RLS
-- [ ] `GET/POST /api/templates` — list/create templates
-- [ ] `GET/PATCH/DELETE /api/templates/{id}` — detail, update, delete
-- [ ] `POST /api/templates/{id}/render` — body with `{variables: {key: value}}` POST; returns rendered text; optionally creates a MatterDocument
-- [ ] Frontend: TemplatesPage.jsx — template library list + create modal; "Generate" button with variable fill-in form
+- [x] `DocumentTemplate` model — title, body (Text, `{{variable}}` placeholders), category (engagement_letter/retainer/NDA/motion/other), is_active
+- [x] Migration 025: document_templates table + RLS
+- [x] `GET/POST /api/templates` — list/create templates with category validation
+- [x] `GET/PATCH/DELETE /api/templates/{id}` — detail, update, delete; `PATCH` validates category
+- [x] `POST /api/templates/{id}/render` — `{{variable}}` substitution with `{variables: {key: value}}`; optionally creates a MatterDocument with `document_category="generated"`; verifies matter belongs to tenant
+- [x] Frontend: TemplatesPage.jsx — template library grid with category badges, active toggle; create/edit modal; generate modal with variable detection and fill-in; render preview; save-to-matter option
 
 Files: `backend/app/models/document_template.py`, `backend/app/schemas/document_template.py`, `backend/app/routers/document_templates.py`, `backend/migrations/versions/025_create_document_templates.py`, `frontend/src/pages/TemplatesPage.jsx`
 

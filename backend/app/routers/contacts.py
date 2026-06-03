@@ -33,6 +33,7 @@ from app.schemas.contact import (
     ContactUpdate,
 )
 from app.schemas.communication_log import CommunicationLogListResponse
+from app.services.conflict_check import run_conflict_check
 
 router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
@@ -122,92 +123,17 @@ async def conflict_check(
     await set_tenant_context(db, tenant_id)
     tid = uuid.UUID(tenant_id)
 
-    matches: list[ConflictMatch] = []
-
-    # Build search terms
-    terms = (
-        [(n, "name") for n in payload.names]
-        + [(e, "email") for e in payload.emails]
-        + [(o, "organization") for o in payload.organization_names]
+    result = await run_conflict_check(
+        db=db,
+        tenant_id=tid,
+        names=payload.names,
+        emails=payload.emails,
+        organization_names=payload.organization_names,
     )
 
-    for term, field_type in terms:
-        if not term:
-            continue
-        pattern = f"%{term}%"
-        stmt = select(Contact).where(
-            Contact.tenant_id == tid,
-            Contact.is_active.is_(True),
-            or_(
-                Contact.first_name.ilike(pattern),
-                Contact.last_name.ilike(pattern),
-                Contact.organization_name.ilike(pattern),
-                Contact.email.ilike(pattern),
-            ),
-        )
-        result = await db.execute(stmt)
-        found = result.scalars().all()
-        for c in found:
-            # find matters linked to this contact
-            m_stmt = select(Matter).where(
-                Matter.tenant_id == tid,
-                Matter.client_contact_id == c.id,
-            )
-            m_result = await db.execute(m_stmt)
-            matters = m_result.scalars().all()
-
-            # also search matters.counterparty string for term
-            cp_stmt = select(Matter).where(
-                Matter.tenant_id == tid,
-                Matter.counterparty.ilike(pattern),
-            )
-            cp_result = await db.execute(cp_stmt)
-            cp_matters = cp_result.scalars().all()
-            all_matters = {m.id: m for m in matters + cp_matters}
-
-            if not any(m.id == c.id for m in matches):  # avoid duplication
-                matches.append(
-                    ConflictMatch(
-                        contact_id=c.id,
-                        display_name=c.display_name,
-                        contact_type=c.contact_type,
-                        email=c.email,
-                        match_field=field_type,
-                        match_value=term,
-                        matter_ids=list(all_matters.keys()),
-                        matter_names=[m.matter_name for m in all_matters.values()],
-                    )
-                )
-
-    # Also check counterparty strings in matters for name terms
-    for term in payload.names + payload.organization_names:
-        if not term:
-            continue
-        pattern = f"%{term}%"
-        cp_stmt = select(Matter).where(
-            Matter.tenant_id == tid,
-            Matter.counterparty.ilike(pattern),
-            Matter.client_contact_id.is_(None),  # not already linked
-        )
-        cp_result = await db.execute(cp_stmt)
-        cp_matters = cp_result.scalars().all()
-        for m in cp_matters:
-            # no Contact record, surface as matter-level match
-            matches.append(
-                ConflictMatch(
-                    contact_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
-                    display_name=m.counterparty,
-                    contact_type="opposing_party",
-                    email=None,
-                    match_field="matter_counterparty",
-                    match_value=term,
-                    matter_ids=[m.id],
-                    matter_names=[m.matter_name],
-                )
-            )
-
+    matches = [ConflictMatch(**m) for m in result["matches"]]
     return ConflictCheckResult(
-        clear=len(matches) == 0,
+        clear=result["clear"],
         matches=matches,
         checked_names=payload.names,
         checked_emails=payload.emails,

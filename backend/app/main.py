@@ -168,6 +168,7 @@ app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
+app.include_router(document_templates_router)
 
 
 # ─────────────────────────────────────────────────────

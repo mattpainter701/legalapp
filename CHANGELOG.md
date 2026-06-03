@@ -28,6 +28,19 @@
 - MatterDetailPage.jsx: budget utilization badge in header (progress bar with color thresholds: green ≤70%, amber ≤90%, red >90%); budget amount and currency fields in edit form
 - `getMatterBudget(matterId)` API helper in `frontend/src/api.js`
 
+#### Task 805 — Document Templates
+- `DocumentTemplate` model: title, body (Text with `{{variable}}` placeholders), category (engagement_letter/retainer/NDA/motion/other), is_active
+- Migration 025: `document_templates` table with RLS (ENABLE + FORCE ROW LEVEL SECURITY, tenant_isolation policy)
+- `GET /api/templates` — list active templates sorted by created_at desc
+- `POST /api/templates` — create template with category validation (422 on invalid category)
+- `GET/PATCH/DELETE /api/templates/{id}` — detail, update (validates category), delete
+- `POST /api/templates/{id}/render` — `{{variable}}` regex substitution; optional `matter_id` creates a `MatterDocument` with `document_category="generated"`; verifies matter belongs to tenant (404 if not found)
+- `render_template(template_body, variables)` — pure function re.sub replacer; unused variables preserved as-is (`{{name}}`)
+- TemplatesPage.jsx — template library grid with category color badges, active/inactive toggle; create/edit modal (title, body textarea, category select); generate modal with auto-detected variable fields, preview render, option to save to a matter
+- Sidebar nav link to `/templates` (FileSignature icon)
+- Route `/templates` in App.jsx behind ProtectedRoute
+- API helpers: `getTemplates`, `createTemplate`, `getTemplate`, `updateTemplate`, `deleteTemplate`, `renderTemplate`
+
 ### Changed
 
 ### Fixed

@@ -392,6 +392,26 @@ export const getCalendarEvents = (start, end) => {
   return api.get('/calendar/events', { params }).then(r => r.data)
 }
 
+// ── Document Templates ──────────────────────────────────────────────────────
+
+export const getTemplates = () =>
+  api.get('/templates').then(r => r.data)
+
+export const createTemplate = (data) =>
+  api.post('/templates', data).then(r => r.data)
+
+export const getTemplate = (id) =>
+  api.get(`/templates/${id}`).then(r => r.data)
+
+export const updateTemplate = (id, data) =>
+  api.patch(`/templates/${id}`, data).then(r => r.data)
+
+export const deleteTemplate = (id) =>
+  api.delete(`/templates/${id}`).then(r => r.data)
+
+export const renderTemplate = (id, data) =>
+  api.post(`/templates/${id}/render`, data).then(r => r.data)
+
 // ── Reports / Budget ──────────────────────────────────────────────────────────
 
 export const getMatterBudget = (matterId) =>
