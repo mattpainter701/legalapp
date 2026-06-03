@@ -294,6 +294,7 @@ async def microsoft_login(
         f"&scope=openid+email+profile+User.Read+offline_access"
         f"&state={state}"
         f"&response_mode=query"
+        f"&prompt=select_account"
     )
     return RedirectResponse(url=authorize_url)
 
