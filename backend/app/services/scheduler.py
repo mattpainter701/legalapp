@@ -27,6 +27,7 @@ from sqlalchemy import select, text
 from app.database import async_session_maker
 from app.models.plugin import Matter, MatterEvent, Renewal
 from app.models.scheduler import SchedulerLog
+from app.models.task import Task
 from app.models.user import User
 from app.services.email import email_service
 
@@ -822,12 +823,19 @@ class LegalScheduler:
                 today = now_utc.date()
                 tomorrow = today + timedelta(days=1)
 
-                # Tasks due within the next 24 hours, not completed/cancelled
+                # Tasks due within the next 24 hours, not completed/cancelled,
+                # and no reminder sent in the last 23 hours (dedup guard).
+                reminder_cutoff = now_utc - timedelta(hours=23)
                 result = await session.execute(
                     select(Task).where(
                         Task.due_date >= today,
                         Task.due_date <= tomorrow,
                         Task.status.notin_(["completed", "cancelled"]),
+                        Task.assigned_to_user_id.isnot(None),
+                        or_(
+                            Task.reminder_sent_at.is_(None),
+                            Task.reminder_sent_at < reminder_cutoff,
+                        ),
                     )
                 )
                 tasks = list(result.scalars().all())
@@ -869,6 +877,8 @@ class LegalScheduler:
                         )
                         if sent:
                             emails_sent += 1
+                            task.reminder_sent_at = now_utc
+                            await session.commit()
                     except Exception as exc:
                         logger.error(
                             "[task-reminder] Failed to send reminder for task %s to %s: %s",

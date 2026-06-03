@@ -81,6 +81,9 @@ class Task(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # "manual" | "email_agent" | "calendar_sync"
     source: Mapped[str] = mapped_column(
