@@ -11,6 +11,8 @@ from fastapi import (
     File,
     BackgroundTasks,
 )
+import asyncio
+
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 

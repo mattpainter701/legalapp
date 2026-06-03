@@ -131,6 +131,7 @@ class LLMService:
         context: str,
         use_premium: bool = False,
         provider: str = "default",
+        memory_context: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Generate a streaming completion, yielding tokens as they arrive.

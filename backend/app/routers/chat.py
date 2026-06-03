@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
+from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
