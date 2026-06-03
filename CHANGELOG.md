@@ -42,10 +42,20 @@
 - API helpers: `getTemplates`, `createTemplate`, `getTemplate`, `updateTemplate`, `deleteTemplate`, `renderTemplate`
 
 ### Changed
+- Main.py: registered 7 new routers (contacts, tasks, communications, intake, matter_parties, matter_documents, reports, calendar, document_templates)
+- Sidebar.jsx: added Reports, Calendar, Communications, Templates nav items
+- App.jsx: added /reports, /calendar, /communications, /templates routes
 
 ### Fixed
+- Recurring fix: router imports in main.py kept in sync after each task (formatter strips unused, added manually)
+- RLS policies use correct `app.current_tenant_id` setting name with `, true` fallback
+- Path traversal protection in matter document upload (os.path.basename)
+- conflict_status uses "conflict-found" not "flagged" (standardized enum)
+- Task reminders deduplicated via reminder_sent_at column (23h cooldown)
 
 ### Tests
+- All endpoints verified with tenant isolation checks via spec/quality review cycle
+- Frontend build succeeds for all 5 tasks
 
 ---
 

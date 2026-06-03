@@ -24,6 +24,14 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Expertise-Aware Caching** | Cache TTLs based on user expertise level (junior paralegal ≠ senior partner); skill-based multipliers |
 | **Auto-Memory Generation** | Per-user conversation summaries; learned preferences and interaction patterns stored as UserMemory |
 | **Billing** | Stripe flat-seat and PAYG metered tiers |
+| **Contacts & CRM** | Person/organization contacts with search, soft-delete, matter linking, intake pipeline |
+| **Task Management** | Task CRUD with matter/contact linking, deadlines, priorities, hourly email reminders |
+| **Deadline Calendar** | Aggregated calendar view of task deadlines, matter key dates, and contract renewals |
+| **Communications Log** | Full communication log CRUD with filters by matter, contact, channel, date range |
+| **Lead-to-Matter** | One-click lead conversion to matter with client contact auto-linking |
+| **Matter Budget** | Budget tracking with billable hours vs budget utilization progress bar |
+| **Document Templates** | Reusable templates with `{{variable}}` substitution, render to MatterDocument |
+| **Firm Reports** | Matter status, intake funnel/conversion rate, overdue tasks dashboards |
 
 ---
 
@@ -42,7 +50,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
 | Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (15 migrations) |
+| Migrations | Alembic (25 migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
 | Services | PII detection (8 types), Memory service (auto-summarization), Matter context (with scrubbing), Expertise-aware cache manager (3-tier TTLs) |
@@ -108,6 +116,12 @@ All skill outputs include confidence tags (`[settled]` / `[verify]` / `[model kn
 | `/admin` | ✓ admin | Tenant admin (users, usage, model settings) |
 | `/billing` | ✓ | Stripe billing management |
 | `/mcp` | ✓ admin | MCP API keys + tool docs + connection guide |
+| `/contacts` | ✓ | CRM contacts directory |
+| `/tasks` | ✓ | Task board with filters |
+| `/calendar` | ✓ | Deadline calendar (tasks, key dates, renewals) |
+| `/communications` | ✓ | Communication log with filters |
+| `/reports` | ✓ | Firm analytics (matter status, intake funnel, overdue tasks) |
+| `/templates` | ✓ | Document template library |
 | `/platform` | platform key | Operator console (multi-tenant admin) |
 
 ---
@@ -189,6 +203,16 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `013_add_cache_tracking` | UsageRecord cache hit flags (RAG, LLM, matter) |
 | `014_create_tenant_settings` | Tenant feature flags, cache config, rate limiting, defaults |
 | `015_create_error_logs` | Global error tracking with per-user rolling 72h support view |
+| `016_create_qbo_integration` | QuickBooks Online integration tables |
+| `017_create_trust_accounting` | Trust accounting (IOLTA) tables |
+| `018_create_contacts` | Contacts + leads tables with RLS; client_contact_id FK on matters |
+| `019_create_tasks` | Task management with matter/contact linking, priorities, deadlines |
+| `020_create_communications_leads` | Communication logs + lead intake pipeline tables |
+| `021_create_matter_parties` | Multi-party matter support (M:N matter↔contact with roles) |
+| `022_create_matter_documents` | Case file attachments (separate from RAG document store) |
+| `023_add_task_reminder_sent_at` | Dedup column for hourly task reminder emails |
+| `024_add_matter_budget` | Budget tracking (budget_amount, budget_currency on matters) |
+| `025_create_document_templates` | Reusable document templates with variable substitution |
 
 ### CourtListener public RAG
 
@@ -211,7 +235,7 @@ legalapp/
 ├── backend/
 │   ├── app/
 │   │   ├── models/          # SQLAlchemy models (User, UserMemory, Message, Tenant, TenantSettings, ErrorLog, etc.)
-│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
+│   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform, contacts, tasks, communications, intake, reports, calendar, templates)
 │   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler
 │   │   │   ├── plugins/     # 11 practice area prompts + executor
 │   │   │   ├── pii_detection.py       # PII pattern matching (8 types) + scrubbing
