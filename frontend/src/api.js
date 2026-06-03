@@ -85,17 +85,10 @@ export const sendMessage = (conversationId, content, includePublic = true, usePr
     .then((r) => r.data)
 
 export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false) {
-  const token = localStorage.getItem('token')
-  const headers = {
-    'Content-Type': 'application/json',
-  }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
-
   const response = await fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
-    headers,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       content,
       include_public: includePublic,

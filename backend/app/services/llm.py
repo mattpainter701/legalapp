@@ -146,6 +146,7 @@ class LLMService:
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
             context=context,
+            memory_context=memory_context or "No user memory available.",
         )
 
         if provider == "gemini":
@@ -409,12 +410,12 @@ class LLMService:
         for msg in messages:
             anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        with self.anthropic_client.messages.stream(
+        async with self.anthropic_client.messages.stream(
             model=settings.PREMIUM_LLM,
             system=system_prompt,
             messages=anthropic_messages,
             temperature=0.1,
             max_tokens=4096,
         ) as stream:
-            for text in stream.text_stream:
+            async for text in stream.text_stream:
                 yield text

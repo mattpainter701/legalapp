@@ -703,13 +703,17 @@ async def stream_message(
         context_str, chunks = cached_rag
         cache_hit_rag = True
     else:
-        context_str, chunks = await full_rag_query(
-            db=db,
-            embedding_service=embedding_service,
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            include_public=body.include_public,
-        )
+        try:
+            context_str, chunks = await full_rag_query(
+                db=db,
+                embedding_service=embedding_service,
+                question=body.content,
+                tenant_id=str(user.tenant_id),
+                include_public=body.include_public,
+            )
+        except Exception as e:
+            logger.exception("RAG query failed in streaming path, continuing without context")
+            context_str, chunks = "", []
         await cache_manager.set_cached_rag_results(
             question=body.content,
             tenant_id=str(user.tenant_id),
