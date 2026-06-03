@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import IntegrationPanel from './IntegrationPanel'
 import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2 } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays } from 'lucide-react'
 
 function ConversationItem({
   conv,
@@ -204,6 +204,14 @@ export default function Sidebar({
         >
           <span className="flex items-center gap-2">
             <BarChart2 className="w-4 h-4" /> Reports
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/calendar')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <CalendarDays className="w-4 h-4" /> Calendar
           </span>
         </button>
       </div>

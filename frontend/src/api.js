@@ -380,4 +380,13 @@ export const getOverdueTasksReport = () =>
 export const getReportsBundle = () =>
   api.get('/reports/bundle').then(r => r.data)
 
+// ── Calendar ────────────────────────────────────────────────────────────────
+
+export const getCalendarEvents = (start, end) => {
+  const params = {}
+  if (start) params.start = start
+  if (end) params.end = end
+  return api.get('/calendar/events', { params }).then(r => r.data)
+}
+
 export default api
