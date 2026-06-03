@@ -26,7 +26,6 @@ from app.services.plugins.prompts import (
     REGULATORY_GAP_ANALYSIS_PROMPT,
     COLD_START_INTERVIEW_PROMPT,
     PLUGIN_SPECIFIC_QUESTIONS,
-    PLUGIN_SKILLS,
 )
 from app.utils.guardrails import apply_guardrails
 

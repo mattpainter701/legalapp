@@ -78,7 +78,6 @@ async def get_current_user(request: Request, db: AsyncSession):
     """Dependency that reads request.state and queries user from DB."""
     from app.models.user import User
 
-    tenant_id = getattr(request.state, "tenant_id", None)
     user_id = getattr(request.state, "user_id", None)
 
     if not user_id:
@@ -110,7 +109,6 @@ async def get_current_user(request: Request, db: AsyncSession):
                         status_code=401, detail="Token has been revoked"
                     )
             user_id = payload.get("sub")
-            tenant_id = payload.get("tenant_id")
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
