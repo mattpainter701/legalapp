@@ -5,7 +5,20 @@
 ### Sprint 7 — Calendar, Communications & Matter Operations
 
 ### Added
-- (to be filled during sprint)
+
+#### Task 801 — Deadline Calendar
+- `GET /api/calendar/events` endpoint aggregating task due_dates, matter key_dates, and renewal dates with `?start=&end=` range filter
+- CalendarPage.jsx — month/week calendar view with color-coded events by type; click to navigate to matter/task detail
+
+#### Task 802 — Communications Router
+- Full CRUD router for `communication_logs` at `/api/communications` with filters by matter_id, contact_id, channel, date range
+- CommunicationsPage.jsx — log list with filters and quick-log form (channel, subject, body, matter link)
+
+#### Task 803 — Lead-to-Matter Conversion
+- `POST /api/intake/leads/{id}/convert` — creates a Matter from a qualified Lead; sets `client_contact_id` from lead's contact; marks lead `status = matter_opened`; returns `{matter_id, matter_name, lead_id, status}`
+- `LeadConvertRequest` schema (matter_name, matter_type, role, jurisdiction, counterparty)
+- IntakePage: "Convert to Matter" button on engaged leads; modal with all required Matter fields; navigates to new matter on success
+- `convertLead(id, data)` API helper in `frontend/src/api.js`
 
 ### Changed
 

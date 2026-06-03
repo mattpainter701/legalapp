@@ -22,12 +22,14 @@ Files: `backend/app/routers/calendar.py`, `backend/app/schemas/calendar.py`, `fr
 
 Files: `backend/app/routers/communications.py` (extend or create), `backend/app/schemas/communication_log.py` (extend), `frontend/src/pages/CommunicationsPage.jsx`
 
-### 803. Lead-to-Matter Conversion (P1, SMALL)
+### 803. Lead-to-Matter Conversion (P1, SMALL) — COMPLETED
 
-- [ ] `POST /api/intake/leads/{id}/convert` — creates a Matter from a Lead; links Lead.contact_id as Matter.client_contact_id; sets lead status = "matter_opened"; returns new MatterResponse
-- [ ] Frontend: IntakePage "Convert to Matter" button on qualified/conflict-checked leads → opens confirm modal with matter_type select
+- [x] `POST /api/intake/leads/{id}/convert` — creates a Matter from a Lead; links Lead.contact_id as Matter.client_contact_id; sets lead status = "matter_opened"; returns new MatterResponse
+- [x] Frontend: IntakePage "Convert to Matter" button on engaged leads → opens confirm modal with matter_name, matter_type, role, jurisdiction, counterparty fields; navigates to new matter on success
+- [x] `convertLead` API function in `frontend/src/api.js`
+- [x] `LeadConvertRequest` schema in `backend/app/schemas/contact.py`
 
-Files: `backend/app/routers/intake.py` (add endpoint), `frontend/src/pages/IntakePage.jsx`
+Files: `backend/app/routers/intake.py`, `backend/app/schemas/contact.py`, `frontend/src/pages/IntakePage.jsx`, `frontend/src/api.js`
 
 ### 804. Matter Budget Tracking (P1, MEDIUM)
 
