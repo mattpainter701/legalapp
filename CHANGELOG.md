@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.6.0] — 2026-06-03
+
+### Added — CRM, Contacts, Tasks & Client Communication
+
+#### Contact/Client Data Model
+- `Contact` model — person or organization with entity_type, contact_type (client/opposing_party/witness/expert/vendor/referral/other), email, phone, address (JSON), tags, soft-delete
+- `Lead` model — intake pipeline with status lifecycle (new→contacted→qualified→conflict_checked→engaged→matter_opened|declined), source, conflict_check_status, estimated_value
+- Migration 018: `contacts` table with RLS; nullable `client_contact_id` FK added to `matters`
+- `GET /api/contacts` — list with search (`q=`), contact_type/entity_type filters
+- `POST /api/contacts` — create person or organization
+- `GET/PATCH /api/contacts/{id}` — detail + inline edit
+- `DELETE /api/contacts/{id}` — soft-delete (sets is_active=False)
+- `GET /api/contacts/{id}/matters` — linked matters via client_contact_id
+- `GET /api/contacts/{id}/communications` — communication history for contact
+- `POST /api/contacts/conflict-check` — fuzzy name/email match against contacts + matter counterparty strings; returns clear/matches with matter linkage
+- QBO sync: uses `Contact.display_name` when matter has `client_contact_id` set (fallback to `counterparty` string)
+
+#### Task & Deadline Management
+- `Task` model — task_type (deadline/hearing/filing/deposition/call/follow_up/review/general), status (pending/in_progress/completed/cancelled), priority (low/medium/high/urgent), due_date, matter_id, contact_id, assigned_to, source (manual/email_agent/calendar_sync)
+- Migration 019: `tasks` table with RLS + performance indexes
+- `GET /api/tasks` — list with filters: matter_id, contact_id, assigned_to, status, priority, task_type, due_before/after
+- `POST /api/tasks` — create task
+- `PATCH /api/tasks/{id}` — update; auto-sets `completed_at` on status→completed
+- `GET /api/tasks/overdue` — tasks past due date, not completed/cancelled
+- `GET /api/tasks/upcoming?days=7` — tasks due in next N days
+
+#### Communication Log
+- `CommunicationLog` model — direction (inbound/outbound), channel (email/call/letter/meeting/portal/sms/other), subject, summary, matter_id, contact_id, occurred_at, external_ref
+- Migration 020: `communication_logs` + `leads` tables with RLS
+- `GET /api/communications` — list with filters: matter_id, contact_id, channel, direction, occurred_after
+- `POST /api/communications` — log entry
+- `PATCH /api/communications/{id}` — update
+
+#### Intake Pipeline
+- `GET /api/intake` — list leads (filter by status, assigned_to, practice_area)
+- `POST /api/intake` — create lead with inline Contact creation if needed
+- `PATCH /api/intake/{id}` — update status/notes
+- `POST /api/intake/{id}/convert` — convert to Matter (creates Matter with client_contact_id, marks lead as matter_opened)
+
+#### Email Agent Integration
+- Auto-create `CommunicationLog` (inbound/email/received) for each classified email
+- Auto-create `Task` (type=deadline, source=email_agent) when classification returns `deadline_mentioned`
+- Date parsing via `python-dateutil` with fuzzy parsing
+
+#### Frontend
+- `ContactsPage` (`/contacts`) — list/search contacts with type/entity filters, quick-create modal
+- `ContactDetailPage` (`/contacts/:id`) — tabs: Profile | Matters | Communications | Tasks; inline edit
+- `ContactPicker` component — search-as-you-type autocomplete for linking contacts in forms
+- `TasksPage` (`/tasks`) — grouped sections: Overdue / Due Today / Upcoming / No Due Date / Completed; create modal with ContactPicker; filter by status/priority/type
+- `IntakePage` (`/intake`) — pipeline view with stage counters; advance/convert actions; convert-to-matter modal
+- Sidebar: added Contacts, Tasks, Intake nav links
+
+### Changed
+- `backend/app/models/plugin.py` — added nullable `client_contact_id` FK to `Matter`
+- `backend/app/services/qbo_sync.py` — prefer Contact name over counterparty string when available
+- `backend/app/services/email_agent.py` — auto-log communications and tasks on email classification
+- `backend/requirements.txt` — added `python-dateutil==2.9.0`
+- `frontend/src/api.js` — added 20 new API functions for contacts, tasks, communications, intake
+
 ## [0.5.2] — 2026-06-02
 
 ### Fixed — Security & Bug Fixes

@@ -110,7 +110,19 @@ class QBOSyncService:
         if not realm_id:
             return None
 
-        display_name = f"{matter.counterparty} — {matter.matter_name}"
+        # Prefer linked Contact name over counterparty string
+        client_name = matter.counterparty
+        if matter.client_contact_id:
+            from app.models.contact import Contact
+            from sqlalchemy import select as _select
+            c_res = await self.db.execute(
+                _select(Contact).where(Contact.id == matter.client_contact_id)
+            )
+            c = c_res.scalar_one_or_none()
+            if c:
+                client_name = c.display_name
+
+        display_name = f"{client_name} — {matter.matter_name}"
         if len(display_name) > 100:
             display_name = display_name[:97] + "..."
 
@@ -118,8 +130,8 @@ class QBOSyncService:
 
         customer_data = {
             "DisplayName": display_name,
-            "GivenName": matter.counterparty,
-            "CompanyName": matter.counterparty,
+            "GivenName": client_name,
+            "CompanyName": client_name,
             "Notes": (
                 f"Matter: {matter.matter_name}\n"
                 f"Type: {matter.matter_type}\n"

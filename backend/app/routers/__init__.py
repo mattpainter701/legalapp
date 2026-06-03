@@ -10,6 +10,10 @@ from app.routers.user_sync import router as user_sync_router
 from app.routers.qbo import router as qbo_router
 from app.routers.billing_extended import router as billing_extended_router
 from app.routers.trust_accounting import router as trust_accounting_router
+from app.routers.contacts import router as contacts_router
+from app.routers.tasks import router as tasks_router
+from app.routers.communications import router as communications_router
+from app.routers.intake import router as intake_router
 
 __all__ = [
     "auth_router",
@@ -24,4 +28,8 @@ __all__ = [
     "qbo_router",
     "billing_extended_router",
     "trust_accounting_router",
+    "contacts_router",
+    "tasks_router",
+    "communications_router",
+    "intake_router",
 ]

@@ -1,5 +1,78 @@
 # TASKS.md
 
+## Sprint 5 — CRM, Contacts, Tasks & Client Communication (v0.6.0) — COMPLETED
+
+**Goal:** Build the practice management layer: Contact/Client data model, Task & Deadline tracking, Communication Log, Intake pipeline, and conflict check — closing the gap with Clio/Tabs3 on core CRM functionality.
+
+### 601. Contact/Client Data Model (P0, LARGE) — COMPLETED
+- [x] `Contact` SQLAlchemy model (person/org, contact_type, address JSON, tags)
+- [x] `Lead` SQLAlchemy model (intake pipeline: new→contacted→qualified→conflict_checked→engaged→matter_opened|declined)
+- [x] Migration 018: contacts table + RLS; add nullable `client_contact_id` FK to matters
+- [x] Pydantic schemas: ContactCreate/Update/Response, ContactListResponse, ConflictCheckRequest/Result, LeadCreate/Update/Response, LeadConvertRequest
+- [x] Router `/api/contacts`: list (search/filter), create, detail, update, soft-delete, get_matters, get_communications
+- [x] `POST /api/contacts/conflict-check` — fuzzy name/email match against contacts + matter counterparty strings
+- [x] QBO sync updated to use Contact.display_name when client_contact_id is set (fallback to counterparty string)
+
+Files: `backend/app/models/contact.py`, `backend/app/schemas/contact.py`, `backend/app/routers/contacts.py`, `backend/migrations/versions/018_create_contacts.py`
+
+### 602. Task & Deadline Management (P0, LARGE) — COMPLETED
+- [x] `Task` SQLAlchemy model (task_type, status, priority, due_date, matter_id, contact_id, assigned_to_user_id, source)
+- [x] Migration 019: tasks table + RLS + indexes
+- [x] Pydantic schemas: TaskCreate/Update/Response, TaskListResponse
+- [x] Router `/api/tasks`: list (filters: matter_id, status, priority, task_type, due range), create, detail, update (auto-sets completed_at), delete
+- [x] `GET /api/tasks/overdue` — tasks past due date, not completed
+- [x] `GET /api/tasks/upcoming?days=7` — tasks due in next N days
+
+Files: `backend/app/models/task.py`, `backend/app/schemas/task.py`, `backend/app/routers/tasks.py`, `backend/migrations/versions/019_create_tasks.py`
+
+### 603. Communication Log (P1, MEDIUM) — COMPLETED
+- [x] `CommunicationLog` SQLAlchemy model (direction, channel, status, matter_id, contact_id, occurred_at, external_ref)
+- [x] Migration 020 (combined with leads): communication_logs + leads tables + RLS
+- [x] Pydantic schemas: CommunicationLogCreate/Update/Response/ListResponse
+- [x] Router `/api/communications`: list (filter by matter/contact/channel/direction), create, detail, update
+- [x] EmailAgent hook: auto-create CommunicationLog + Task (if deadline_mentioned) on each classified email
+
+Files: `backend/app/models/communication_log.py`, `backend/app/schemas/communication_log.py`, `backend/app/routers/communications.py`, `backend/migrations/versions/020_create_communications_leads.py`, `backend/app/services/email_agent.py`
+
+### 604. Intake Pipeline (P1, MEDIUM) — COMPLETED
+- [x] Lead model included in contact.py (contact_id FK, status, source, conflict_check_status, matter_id conversion)
+- [x] Router `/api/intake`: list (filter by status), create (+ inline Contact create), detail, update status, convert to Matter
+- [x] `POST /api/intake/{id}/convert` — creates Matter with client_contact_id set, marks lead as matter_opened
+
+Files: `backend/app/routers/intake.py`
+
+### 605. Frontend: Contacts & CRM (P0, LARGE) — COMPLETED
+- [x] `ContactsPage` — list/search with type/entity filters, inline create modal
+- [x] `ContactDetailPage` — profile tabs: Profile | Matters | Communications | Tasks, inline edit
+- [x] `ContactPicker` reusable autocomplete component
+- [x] Routes: `/contacts`, `/contacts/:id`
+- [x] Sidebar nav links: Contacts, Tasks, Intake
+
+### 606. Frontend: Tasks & Intake (P1, MEDIUM) — COMPLETED
+- [x] `TasksPage` — grouped list: Overdue / Today / Upcoming / No Due Date / Completed; create modal with ContactPicker
+- [x] `IntakePage` — pipeline kanban with stage counters, advance/convert actions
+- [x] Routes: `/tasks`, `/intake`
+- [x] api.js: all contact, task, communication, intake API functions
+
+### Backlog (from Sprint 4)
+- [ ] P3-2: Clio marketplace listing + API integration
+- [ ] P3-3: Clio data migration tool
+- [ ] P3-4: Tabs3 data migration tool
+- [ ] P3-5: LEDES XML 2.1 export
+- [ ] P3-6: QBD via unified API partner (Unified.to / Apideck)
+
+### Suggested Sprint 6
+- [ ] Matter ↔ Contact M:N junction table (MatterParty) for multi-party matters
+- [ ] Client Portal (secure document sharing + message thread per matter)
+- [ ] SMS/text communication via Twilio
+- [ ] Conflict check auto-run on matter create
+- [ ] Task reminders via email (scheduled job)
+- [ ] LEDES export using Contact.display_name as client_id
+- [ ] Document management linked to contacts/matters
+- [ ] Reporting: matter status dashboard, intake conversion funnel, task overdue rate
+
+---
+
 ## Sprint 1 — Billing & QBO Integration Foundation (v0.5.0) — COMPLETED
 
 **Goal:** Build core billing models (time tracking, expenses, invoices, payments), QBO OAuth2 integration, trust accounting foundations, Stripe payments, LEDES export.

@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2 } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Users, CheckSquare, Filter } from 'lucide-react'
 
 function ConversationItem({ conv, index, isActive, onClick, onDelete }) {
   const [hover, setHover] = useState(false)
@@ -143,6 +143,30 @@ export default function Sidebar({
         >
           <span className="flex items-center gap-2">
             <Blocks className="w-4 h-4" /> Add-on Modules
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/contacts')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Users className="w-4 h-4" /> Contacts
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/tasks')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <CheckSquare className="w-4 h-4" /> Tasks
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/intake')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Filter className="w-4 h-4" /> Intake
           </span>
         </button>
       </div>
