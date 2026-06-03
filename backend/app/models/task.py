@@ -4,7 +4,6 @@ import uuid
 from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
-    Boolean,
     Date,
     DateTime,
     ForeignKey,

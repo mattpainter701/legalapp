@@ -374,7 +374,7 @@ async def reconcile_trust_account(
         select(func.sum(TrustTransaction.amount)).where(
             TrustTransaction.trust_account_id == uuid.UUID(account_id),
             TrustTransaction.transaction_type == "deposit",
-            TrustTransaction.is_reconciled == False,
+            TrustTransaction.is_reconciled.is_(False),
         )
     )
     unallocated = unallocated_result.scalar() or Decimal("0")
@@ -395,7 +395,7 @@ async def reconcile_trust_account(
         select(TrustTransaction)
         .where(
             TrustTransaction.trust_account_id == uuid.UUID(account_id),
-            TrustTransaction.is_reconciled == False,
+            TrustTransaction.is_reconciled.is_(False),
         )
         .order_by(TrustTransaction.transaction_date)
     )
@@ -434,7 +434,7 @@ async def reconcile_trust_account(
         mark_result = await db.execute(
             select(TrustTransaction).where(
                 TrustTransaction.trust_account_id == uuid.UUID(account_id),
-                TrustTransaction.is_reconciled == False,
+                TrustTransaction.is_reconciled.is_(False),
             )
         )
         for txn in mark_result.scalars().all():
@@ -483,7 +483,7 @@ async def get_reconciliation_status(
         select(TrustTransaction)
         .where(
             TrustTransaction.trust_account_id == uuid.UUID(account_id),
-            TrustTransaction.is_reconciled == False,
+            TrustTransaction.is_reconciled.is_(False),
         )
         .order_by(TrustTransaction.transaction_date)
     )
@@ -517,7 +517,7 @@ async def get_reconciliation_status(
         select(func.sum(TrustTransaction.amount)).where(
             TrustTransaction.trust_account_id == uuid.UUID(account_id),
             TrustTransaction.transaction_type == "deposit",
-            TrustTransaction.is_reconciled == False,
+            TrustTransaction.is_reconciled.is_(False),
         )
     )
     unallocated = unallocated_result.scalar() or Decimal("0")

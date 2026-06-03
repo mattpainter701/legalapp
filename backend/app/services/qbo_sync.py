@@ -7,6 +7,7 @@ Maps:
   - Payment → QBO Payment (reconciliation back to matter balance)
 """
 
+import asyncio
 import logging
 
 import httpx
@@ -503,7 +504,7 @@ class QBOSyncService:
         entries_result = await self.db.execute(
             select(TimeEntry).where(
                 TimeEntry.tenant_id == self.tenant_id,
-                TimeEntry.is_billable == True,
+                TimeEntry.is_billable.is_(True),
                 TimeEntry.invoice_id.is_(None),
                 TimeEntry.status == "draft",
             )

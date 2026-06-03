@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User, UserMemory
-from app.models.conversation import Message, Conversation
+from app.models.conversation import Message
 from app.services.llm import LLMService
 
 

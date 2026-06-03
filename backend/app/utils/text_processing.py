@@ -2,8 +2,6 @@ import io
 from typing import List
 
 import tiktoken
-import aiofiles
-
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """

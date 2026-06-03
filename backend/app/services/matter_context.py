@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.plugin import Matter
-from app.services.pii_detection import scrub_pii, detect_pii
+from app.services.pii_detection import detect_pii
 
 
 class MatterContextService:

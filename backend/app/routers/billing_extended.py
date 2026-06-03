@@ -416,7 +416,7 @@ async def generate_invoice(
             TimeEntry.tenant_id == user.tenant_id,
             TimeEntry.matter_id == body.matter_id,
             TimeEntry.invoice_id.is_(None),
-            TimeEntry.is_billable == True,
+            TimeEntry.is_billable.is_(True),
             TimeEntry.status == "draft",
         )
     )
@@ -428,7 +428,7 @@ async def generate_invoice(
             Expense.tenant_id == user.tenant_id,
             Expense.matter_id == body.matter_id,
             Expense.invoice_id.is_(None),
-            Expense.is_billable == True,
+            Expense.is_billable.is_(True),
         )
     )
     expenses = exp_result.scalars().all()

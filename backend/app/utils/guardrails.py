@@ -1,7 +1,7 @@
 import re
 from typing import Tuple, List
 
-from app.services.pii_detection import detect_pii, scrub_pii, assess_pii_risk
+from app.services.pii_detection import detect_pii, scrub_pii
 
 PROHIBITED_PHRASES = [
     "as an ai",
