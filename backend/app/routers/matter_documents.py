@@ -123,7 +123,8 @@ async def upload_matter_document(
         str(doc_id),
     )
     os.makedirs(storage_dir, exist_ok=True)
-    storage_path = os.path.join(storage_dir, file.filename)
+    safe_filename = os.path.basename(file.filename)
+    storage_path = os.path.join(storage_dir, safe_filename)
 
     async with aiofiles.open(storage_path, "wb") as out_file:
         await out_file.write(file_bytes)
@@ -133,7 +134,7 @@ async def upload_matter_document(
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(matter_id),
         uploaded_by_user_id=user.id,
-        filename=file.filename,
+        filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),
         storage_path=storage_path,
