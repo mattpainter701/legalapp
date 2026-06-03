@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List
@@ -27,8 +28,34 @@ from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.utils.guardrails import apply_guardrails, check_pii_in_input
+from app.services.error_tracker import capture_chat_error
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+async def _safe_cache_op(db, user, request, conv_id, query_text, op_name, coro):
+    """Execute a cache operation with error capture on failure (non-fatal)."""
+    try:
+        return await coro()
+    except Exception as cache_exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning(f"Cache operation failed ({op_name}): {cache_exc}")
+        await capture_chat_error(
+            db=db,
+            error_type="cache_error",
+            message=f"Cache {op_name} failed: {cache_exc}",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request=request,
+            query_text=query_text,
+            conversation_id=conv_id,
+            severity="warning",
+        )
+        return None
+
+
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
 embedding_service = EmbeddingService()
@@ -89,21 +116,24 @@ async def _trigger_auto_memory_generation(
 
     # Trigger memory generation every 10 messages
     if message_count % 10 == 0 and message_count > 0:
-        await memory_service.summarize_conversation(
-            db=db,
-            user_id=user.id,
-            tenant_id=user.tenant_id,
-            conversation_id=conversation_id,
-            tenant_name=user.tenant.name if user.tenant else "Legal",
-        )
-        # Update overall user memory summary
-        await memory_service.update_user_memory_summary(
-            db=db,
-            user_id=user.id,
-            tenant_id=user.tenant_id,
-            tensor_name=user.tenant.name if user.tenant else "Legal",
-        )
-        await db.commit()
+        try:
+            await memory_service.summarize_conversation(
+                db=db,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                conversation_id=conversation_id,
+                tenant_name=user.tenant.name if user.tenant else "Legal",
+            )
+            # Update overall user memory summary
+            await memory_service.update_user_memory_summary(
+                db=db,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                tensor_name=user.tenant.name if user.tenant else "Legal",
+            )
+            await db.commit()
+        except Exception:
+            logger.warning("Auto-memory generation failed", exc_info=True)
 
 
 @router.get("", response_model=List[ConversationResponse])
@@ -340,23 +370,38 @@ async def send_message(
         context_str, chunks = cached_rag
         cache_hit_rag = True
     else:
-        context_str, chunks = await full_rag_query(
-            db=db,
-            embedding_service=embedding_service,
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            include_public=body.include_public,
-        )
-        # Cache RAG results
-        await cache_manager.set_cached_rag_results(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            context_str=context_str,
-            chunks=chunks,
-            expertise_level=user.expertise_level,
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-        )
+        try:
+            context_str, chunks = await full_rag_query(
+                db=db,
+                embedding_service=embedding_service,
+                question=body.content,
+                tenant_id=str(user.tenant_id),
+                include_public=body.include_public,
+            )
+            # Cache RAG results
+            await cache_manager.set_cached_rag_results(
+                question=body.content,
+                tenant_id=str(user.tenant_id),
+                user_id=str(user.id),
+                context_str=context_str,
+                chunks=chunks,
+                expertise_level=user.expertise_level,
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            )
+        except Exception as rag_exc:
+            logger.exception("RAG query failed")
+            await capture_chat_error(
+                db=db,
+                error_type="rag_query_error",
+                message=f"RAG query failed: {rag_exc}",
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                request=request,
+                query_text=body.content,
+                conversation_id=conv.id,
+                severity="error",
+            )
+            context_str, chunks = "No relevant legal context available.", []
 
     # 4a. Combine matter context with RAG context
     if matter_context_str:
@@ -388,24 +433,41 @@ async def send_message(
         response_text = cached_response
         cache_hit_llm = True
     else:
-        response_text, tokens_in, tokens_out = await llm_service.complete(
-            messages=history_messages,
-            tenant_name=tenant_name,
-            context=context_str,
-            memory_context=memory_context,
-            use_premium=body.use_premium_llm,
-            provider=body.provider,
-        )
-        # Cache LLM response
-        await cache_manager.set_cached_llm_response(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            context_hash=context_hash,
-            response=response_text,
-            expertise_level=user.expertise_level,
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-        )
+        try:
+            response_text, tokens_in, tokens_out = await llm_service.complete(
+                messages=history_messages,
+                tenant_name=tenant_name,
+                context=context_str,
+                memory_context=memory_context,
+                use_premium=body.use_premium_llm,
+                provider=body.provider,
+            )
+            # Cache LLM response
+            await cache_manager.set_cached_llm_response(
+                question=body.content,
+                tenant_id=str(user.tenant_id),
+                user_id=str(user.id),
+                context_hash=context_hash,
+                response=response_text,
+                expertise_level=user.expertise_level,
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            )
+        except Exception as llm_exc:
+            logger.exception("LLM call failed")
+            await capture_chat_error(
+                db=db,
+                error_type="llm_error",
+                message=f"LLM call failed: {llm_exc}",
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                request=request,
+                query_text=body.content,
+                conversation_id=conv.id,
+                severity="error",
+            )
+            raise HTTPException(
+                status_code=502, detail="LLM service temporarily unavailable"
+            )
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
     cleaned_response, needs_retry, response_pii = apply_guardrails(
@@ -425,6 +487,7 @@ async def send_message(
             messages=retry_messages,
             tenant_name=tenant_name,
             context=context_str,
+            memory_context=memory_context,
             use_premium=body.use_premium_llm,
             provider=body.provider,
         )
