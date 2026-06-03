@@ -353,6 +353,11 @@ async def microsoft_callback(
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if graph_response.status_code != 200:
+            logger.error(
+                "Microsoft Graph /me failed: status=%d body=%s",
+                graph_response.status_code,
+                graph_response.text,
+            )
             raise HTTPException(
                 status_code=400, detail="Failed to fetch Microsoft profile"
             )

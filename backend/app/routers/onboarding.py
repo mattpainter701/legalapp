@@ -110,7 +110,7 @@ async def get_onboarding_status(
 @router.post("/step/{step}")
 async def update_onboarding_step(
     step: int,
-    request=None,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Persist wizard progress."""
@@ -132,7 +132,7 @@ async def update_onboarding_step(
 
 @router.post("/complete", response_model=OnboardingCompleteResponse)
 async def complete_onboarding(
-    request=None,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Mark onboarding as complete and initialize cloud folders."""
@@ -174,7 +174,7 @@ async def complete_onboarding(
 
 @router.post("/skip")
 async def skip_onboarding(
-    request=None,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Skip the integration setup — mark onboarding complete without connections."""
