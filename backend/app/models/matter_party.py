@@ -54,4 +54,3 @@ class MatterParty(Base):
 
     # Relationships
     contact = relationship("Contact", foreign_keys=[contact_id], lazy="joined")
-    matter = relationship("Matter", foreign_keys=[matter_id])

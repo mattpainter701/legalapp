@@ -66,7 +66,8 @@ def upgrade() -> None:
     op.execute("ALTER TABLE matter_parties ENABLE ROW LEVEL SECURITY")
     op.execute("""
         CREATE POLICY matter_parties_tenant_isolation ON matter_parties
-        USING (tenant_id = current_setting('app.tenant_id')::uuid)
+        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     """)
 
 

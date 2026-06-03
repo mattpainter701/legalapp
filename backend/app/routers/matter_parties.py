@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.matter_party import MatterParty
+from app.models.plugin import Matter
 from app.schemas.matter_party import (
     MatterPartyCreate,
     MatterPartyListResponse,
@@ -81,6 +82,15 @@ async def add_matter_party(
 ):
     tenant_id = current_user["tenant_id"]
     await set_tenant_context(db, tenant_id)
+
+    matter_result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    if not matter_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Matter not found")
 
     party = MatterParty(
         tenant_id=uuid.UUID(tenant_id),
