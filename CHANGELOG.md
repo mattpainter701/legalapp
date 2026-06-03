@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0] — 2026-06-03
+
+### Added — Prompt Management System & Missing Skill Prompts
+
+- `PromptOverride` model + migration 021: per-tenant prompt customization with RLS
+- `PromptResolver` service: cache-aware resolution (tenant override → code default → generic fallback)
+- Redis prompt caching with invalidation on override save/reset
+- Admin prompt CRUD routes: list tree, get detail, upsert, reset, test-run prompts
+- Admin console UI: "Prompts" tab with skill tree, code editor, variable reference, test panel
+- 11 new prompt templates for previously missing skills (portfolio-status, legal-hold, renewal-tracker, reg-gap-analysis, diligence-review, closing-checklist, hire-review, marketing-claims, CND-triage, impact-assessment, vendor-ai-review, policy-diff, NPRM-comment)
+- `ALL_DEFAULT_PROMPTS` dict wiring all 44 skill entries across 9 plugins
+- Fixed: missing `run_conflict_check` import in plugins.py
+
 ## [0.8.0] — 2026-06-03
 
 ### Sprint 7 — Calendar, Communications & Matter Operations

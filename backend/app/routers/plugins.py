@@ -74,16 +74,21 @@ from app.schemas.plugin import (
     SkillResponse,
 )
 from app.services.billing import calculate_cost
+from app.services.cache import ExpertiseCacheManager
+from app.services.conflict_check import run_conflict_check
 from app.services.llm import LLMService
 from app.services.plugins.executor import PluginExecutor
 from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
+from app.services.plugins.prompt_resolver import PromptResolver
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
 # Module-level singletons (same pattern as chat router)
 llm_service = LLMService()
-plugin_executor = PluginExecutor(llm_service)
+plugin_cache_manager = ExpertiseCacheManager()
+prompt_resolver = PromptResolver(plugin_cache_manager)
+plugin_executor = PluginExecutor(llm_service, prompt_resolver)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

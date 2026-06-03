@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getAdminUsers, getAdminUsage, getAdminTenant } from '../api'
 import { useAuth } from '../App'
 import { format } from 'date-fns'
+import PromptAdminPage from './PromptAdminPage'
 
 // ── Reusable primitives ──────────────────────────────────────────────────────
 
@@ -346,6 +347,7 @@ export default function AdminPage() {
     { id: 'users', label: 'Users' },
     { id: 'usage', label: 'Usage' },
     { id: 'tenant', label: 'Tenant' },
+    { id: 'prompts', label: 'Prompts' },
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -425,6 +427,7 @@ export default function AdminPage() {
           {activeTab === 'usage' && <UsageTab />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
+          {activeTab === 'prompts' && <PromptAdminPage />}
         </div>
       </div>
     </div>

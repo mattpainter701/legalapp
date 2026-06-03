@@ -8,66 +8,24 @@ from app.services.llm import LLMService
 from app.services.plugins.prompts import (
     WORK_PRODUCT_HEADER,
     UNIVERSAL_GUARDRAILS,
-    COMMERCIAL_VENDOR_REVIEW_PROMPT,
-    COMMERCIAL_NDA_REVIEW_PROMPT,
-    COMMERCIAL_SAAS_REVIEW_PROMPT,
-    LITIGATION_MATTER_INTAKE_PROMPT,
-    LITIGATION_DEMAND_DRAFT_PROMPT,
-    LITIGATION_CLAIM_CHART_PROMPT,
-    PRIVACY_DPA_REVIEW_PROMPT,
-    PRIVACY_DSAR_PROMPT,
-    PRIVACY_PIA_PROMPT,
-    EMPLOYMENT_TERMINATION_REVIEW_PROMPT,
-    EMPLOYMENT_CLASSIFICATION_PROMPT,
-    PRODUCT_LAUNCH_REVIEW_PROMPT,
-    IP_TRADEMARK_CLEARANCE_PROMPT,
-    IP_FTO_ANALYSIS_PROMPT,
-    AI_GOV_USE_CASE_TRIAGE_PROMPT,
-    REGULATORY_GAP_ANALYSIS_PROMPT,
+    ALL_DEFAULT_PROMPTS,
     COLD_START_INTERVIEW_PROMPT,
     PLUGIN_SPECIFIC_QUESTIONS,
 )
+from app.services.plugins.prompt_resolver import PromptResolver
 from app.utils.guardrails import apply_guardrails
 
-SKILL_PROMPT_MAP = {
-    "commercial-legal": {
-        "vendor-agreement-review": COMMERCIAL_VENDOR_REVIEW_PROMPT,
-        "nda-review": COMMERCIAL_NDA_REVIEW_PROMPT,
-        "saas-msa-review": COMMERCIAL_SAAS_REVIEW_PROMPT,
-    },
-    "litigation-legal": {
-        "matter-intake": LITIGATION_MATTER_INTAKE_PROMPT,
-        "demand-draft": LITIGATION_DEMAND_DRAFT_PROMPT,
-        "claim-chart": LITIGATION_CLAIM_CHART_PROMPT,
-    },
-    "privacy-legal": {
-        "dpa-review": PRIVACY_DPA_REVIEW_PROMPT,
-        "dsar-response": PRIVACY_DSAR_PROMPT,
-        "pia-generation": PRIVACY_PIA_PROMPT,
-    },
-    "employment-legal": {
-        "termination-review": EMPLOYMENT_TERMINATION_REVIEW_PROMPT,
-        "classification-analysis": EMPLOYMENT_CLASSIFICATION_PROMPT,
-    },
-    "product-legal": {
-        "launch-review": PRODUCT_LAUNCH_REVIEW_PROMPT,
-    },
-    "ip-legal": {
-        "trademark-clearance": IP_TRADEMARK_CLEARANCE_PROMPT,
-        "fto-analysis": IP_FTO_ANALYSIS_PROMPT,
-    },
-    "ai-governance-legal": {
-        "use-case-triage": AI_GOV_USE_CASE_TRIAGE_PROMPT,
-    },
-    "regulatory-legal": {
-        "reg-gap-analysis": REGULATORY_GAP_ANALYSIS_PROMPT,
-    },
-}
+# Full mapping of (plugin, skill) -> prompt template
+# Used for resolver-based lookup; kept for backwards compatibility and introspection.
+SKILL_PROMPT_MAP: dict[str, dict[str, str]] = {}
+for (plugin, skill), prompt in ALL_DEFAULT_PROMPTS.items():
+    SKILL_PROMPT_MAP.setdefault(plugin, {})[skill] = prompt
 
 
 class PluginExecutor:
-    def __init__(self, llm_service: LLMService):
+    def __init__(self, llm_service: LLMService, resolver: PromptResolver | None = None):
         self.llm = llm_service
+        self.resolver = resolver
 
     async def get_practice_profile(
         self, db: AsyncSession, tenant_id: str, user_id: str, plugin_name: str
@@ -114,9 +72,19 @@ class PluginExecutor:
         return gates
 
     def build_system_prompt(
-        self, plugin: str, skill: str, profile: str, context: dict
+        self,
+        plugin: str,
+        skill: str,
+        profile: str,
+        context: dict,
+        prompt_template: str | None = None,
     ) -> str:
-        """Build the full system prompt for a skill execution."""
+        """Build the full system prompt for a skill execution.
+
+        Args:
+            prompt_template: Pre-resolved prompt string (from PromptResolver).
+                            If None, uses the old SKILL_PROMPT_MAP lookup or fallback.
+        """
         if skill == "cold-start-interview":
             current_step = context.get("setup_step", 1)
             plugin_questions = PLUGIN_SPECIFIC_QUESTIONS.get(plugin, "")
@@ -127,22 +95,22 @@ class PluginExecutor:
             )
             return prompt
 
-        plugin_prompts = SKILL_PROMPT_MAP.get(plugin, {})
-        prompt_template = plugin_prompts.get(skill)
+        # Fall back to SKILL_PROMPT_MAP if no resolver was used
+        if prompt_template is None:
+            plugin_prompts = SKILL_PROMPT_MAP.get(plugin, {})
+            prompt_template = plugin_prompts.get(skill)
 
-        if not prompt_template:
+        if prompt_template is None:
             # Generic fallback with guardrails
-            prompt = f"""{WORK_PRODUCT_HEADER}
-
-You are a legal assistant. {UNIVERSAL_GUARDRAILS}
-
-PRACTICE PROFILE:
-{profile or "No practice profile configured."}
-
-Answer the user's legal question carefully, citing sources with appropriate tags ([settled], [verify], [model knowledge]).
-Every output requires attorney review. This is not legal advice.
-"""
-            return prompt
+            return (
+                f"{WORK_PRODUCT_HEADER}\n\n"
+                f"You are a legal assistant. {UNIVERSAL_GUARDRAILS}\n\n"
+                f"PRACTICE PROFILE:\n"
+                f"{profile or 'No practice profile configured.'}\n\n"
+                f"Answer the user's legal question carefully, citing sources with "
+                f"appropriate tags ([settled], [verify], [model knowledge]).\n"
+                f"Every output requires attorney review. This is not legal advice."
+            )
 
         # Build safe context substitutions — only pass keys that the template uses
         format_kwargs = {
@@ -156,8 +124,17 @@ Every output requires attorney review. This is not legal advice.
             "chart_mode": context.get("chart_mode", "infringement"),
         }
 
-        prompt = prompt_template.format(**format_kwargs)
-        return prompt
+        try:
+            return prompt_template.format(**format_kwargs)
+        except KeyError as e:
+            # Surface template variable errors clearly instead of a 500
+            return (
+                f"{WORK_PRODUCT_HEADER}\n\n"
+                f"ERROR: Prompt template contains unrecognized template variable: {e}\n\n"
+                f"Please check the prompt override for '{plugin}:{skill}' and ensure all "
+                f"template variables match the supported set: "
+                f"{', '.join(sorted(format_kwargs.keys()))}."
+            )
 
     async def execute(
         self,
@@ -191,7 +168,16 @@ Every output requires attorney review. This is not legal advice.
                 "model_used": settings.PRIMARY_LLM,
             }
 
-        system_prompt = self.build_system_prompt(plugin, skill, profile, context)
+        # Resolve prompt: tenant override -> code default -> generic fallback
+        resolved_prompt = None
+        if self.resolver and skill != "cold-start-interview":
+            resolved_prompt = await self.resolver.get_prompt(
+                db, tenant_id, plugin, skill
+            )
+
+        system_prompt = self.build_system_prompt(
+            plugin, skill, profile, context, prompt_template=resolved_prompt
+        )
 
         response_text, tokens_in, tokens_out = await self.llm.complete(
             messages=[{"role": "user", "content": input_text}],

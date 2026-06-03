@@ -502,4 +502,21 @@ export const recordPayment = (data) =>
 export const exportInvoice = (id, format = 'pdf') =>
   api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
 
+// ── Prompt Management (admin) ────────────────────────────────────────────────
+
+export const getPromptList = () =>
+  api.get('/admin/prompts').then(r => r.data)
+
+export const getPromptDetail = (plugin, skill) =>
+  api.get(`/admin/prompts/${plugin}/${skill}`).then(r => r.data)
+
+export const savePromptOverride = (plugin, skill, data) =>
+  api.put(`/admin/prompts/${plugin}/${skill}`, data).then(r => r.data)
+
+export const resetPromptOverride = (plugin, skill) =>
+  api.delete(`/admin/prompts/${plugin}/${skill}`).then(r => r.data)
+
+export const testPrompt = (plugin, skill, data) =>
+  api.post(`/admin/prompts/${plugin}/${skill}/test`, data).then(r => r.data)
+
 export default api

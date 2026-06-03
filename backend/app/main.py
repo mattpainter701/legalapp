@@ -41,6 +41,8 @@ from app.routers.document_templates import router as document_templates_router
 from app.routers.matters import router as matters_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
+from app.routers.plugins import plugin_cache_manager
+from app.routers.prompt_admin import router as prompt_admin_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -82,12 +84,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Scheduler failed to start: {exc}")
         app.state.scheduler = None
 
-    # Initialize cache manager
+    # Initialize cache managers
     try:
         await cache_manager.init()
         logger.info("Cache manager initialized")
     except Exception as exc:
         logger.warning(f"Cache manager initialization failed: {exc}")
+
+    try:
+        await plugin_cache_manager.init()
+        logger.info("Plugin cache manager initialized")
+    except Exception as exc:
+        logger.warning(f"Plugin cache manager initialization failed: {exc}")
 
     yield
 
@@ -97,6 +105,7 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "redis", None):
         await app.state.redis.aclose()
     await cache_manager.close()
+    await plugin_cache_manager.close()
     await engine.dispose()
     logger.info("Shutdown complete")
 
@@ -153,6 +162,7 @@ app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
+app.include_router(prompt_admin_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev_router, prefix="/api")
 app.include_router(integrations_router)

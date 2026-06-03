@@ -292,3 +292,71 @@ class PluginInfo(BaseModel):
 
 class PluginListResponse(BaseModel):
     plugins: List[PluginInfo]
+
+
+# ── Prompt Management (admin) ────────────────────────────────────────────────
+
+
+class PromptInfo(BaseModel):
+    """Metadata for one prompt (without content — for tree listing)."""
+
+    plugin_name: str
+    skill_name: str
+    has_override: bool
+    is_active: bool = True
+    updated_at: Optional[datetime] = None
+
+
+class PromptPluginTree(BaseModel):
+    """A plugin entry in the prompt tree listing."""
+
+    plugin_name: str
+    display_name: str
+    skills: List[PromptInfo]
+
+
+class PromptListResponse(BaseModel):
+    plugins: List[PromptPluginTree]
+
+
+class PromptDetail(BaseModel):
+    """Full prompt detail including default and override content."""
+
+    plugin_name: str
+    skill_name: str
+    default_content: str
+    override_content: Optional[str] = None
+    is_active: bool = True
+    updated_at: Optional[datetime] = None
+
+
+class PromptUpdate(BaseModel):
+    """Create or update a prompt override."""
+
+    prompt_content: str
+    is_active: bool = True
+
+
+class PromptTestRequest(BaseModel):
+    """Test a prompt with sample input."""
+
+    prompt_content: str
+    sample_input: str
+    context: Optional[dict] = None
+
+
+class PromptTestResponse(BaseModel):
+    """Response from a prompt test execution."""
+
+    response_text: str
+    tokens_used: int
+    model_used: str
+    gates_triggered: List[str] = []
+
+
+class PromptResetResponse(BaseModel):
+    """Result of resetting a prompt override."""
+
+    plugin_name: str
+    skill_name: str
+    restored: bool
