@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +18,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
 
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
-    TOKEN_ENCRYPTION_KEY: str = ""
+    # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    TOKEN_ENCRYPTION_KEY: str
 
     # Azure OpenAI (Copilot backend)
     AZURE_OPENAI_ENDPOINT: str = ""
@@ -91,6 +93,28 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
 
+def validate_token_encryption_key(settings: Settings) -> None:
+    """Validate TOKEN_ENCRYPTION_KEY is set and valid. Called at startup."""
+    try:
+        from cryptography.fernet import Fernet
+
+        key = settings.TOKEN_ENCRYPTION_KEY
+        if not key:
+            raise ValueError(
+                "TOKEN_ENCRYPTION_KEY is required but not set. "
+                'Generate one with: python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"'
+            )
+        # Validate it's a valid Fernet key
+        Fernet(key.encode() if isinstance(key, str) else key)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}")
+
+
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    validate_token_encryption_key(settings)
+    return settings

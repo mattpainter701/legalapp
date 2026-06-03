@@ -1,3 +1,5 @@
+import asyncio
+
 import stripe
 from decimal import Decimal
 
@@ -64,25 +66,33 @@ class BillingService:
     def __init__(self):
         stripe.api_key = settings.STRIPE_SECRET_KEY
 
-    def construct_event(self, payload: bytes, sig_header: str) -> stripe.Event:
+    async def construct_event(self, payload: bytes, sig_header: str) -> stripe.Event:
         """Verify and construct a Stripe webhook event."""
-        return stripe.Webhook.construct_event(
-            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        return await asyncio.to_thread(
+            stripe.Webhook.construct_event,
+            payload,
+            sig_header,
+            settings.STRIPE_WEBHOOK_SECRET,
         )
 
-    def get_subscription(self, subscription_id: str) -> stripe.Subscription:
+    async def get_subscription(self, subscription_id: str) -> stripe.Subscription:
         """Retrieve a Stripe subscription."""
-        return stripe.Subscription.retrieve(subscription_id)
+        return await asyncio.to_thread(stripe.Subscription.retrieve, subscription_id)
 
-    def update_customer_metadata(
+    async def update_customer_metadata(
         self, customer_id: str, metadata: dict
     ) -> stripe.Customer:
         """Update Stripe customer metadata."""
-        return stripe.Customer.modify(customer_id, metadata=metadata)
+        return await asyncio.to_thread(
+            stripe.Customer.modify, customer_id, metadata=metadata
+        )
 
-    def create_customer(self, email: str, name: str, tenant_id: str) -> stripe.Customer:
+    async def create_customer(
+        self, email: str, name: str, tenant_id: str
+    ) -> stripe.Customer:
         """Create a new Stripe customer."""
-        return stripe.Customer.create(
+        return await asyncio.to_thread(
+            stripe.Customer.create,
             email=email,
             name=name,
             metadata={"tenant_id": tenant_id},
