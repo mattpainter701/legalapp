@@ -343,4 +343,23 @@ export const updateMatterParty = (matterId, partyId, data) =>
 export const removeMatterParty = (matterId, partyId) =>
   api.delete(`/matters/${matterId}/parties/${partyId}`).then(r => r.data)
 
+// ── Matter Documents ────────────────────────────────────────────────────────
+
+export const getMatterDocuments = (matterId) =>
+  api.get(`/matters/${matterId}/documents`).then(r => r.data)
+
+export const uploadMatterDocument = (matterId, formData) =>
+  api.post(`/matters/${matterId}/documents/upload`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const updateMatterDocument = (matterId, docId, data) =>
+  api.patch(`/matters/${matterId}/documents/${docId}`, data).then(r => r.data)
+
+export const deleteMatterDocument = (matterId, docId) =>
+  api.delete(`/matters/${matterId}/documents/${docId}`).then(r => r.data)
+
+export const getMatterDocumentDownloadUrl = (matterId, docId) =>
+  `/api/matters/${matterId}/documents/${docId}/download`
+
 export default api

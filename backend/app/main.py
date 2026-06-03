@@ -162,6 +162,7 @@ app.include_router(tasks_router)
 app.include_router(communications_router)
 app.include_router(intake_router)
 app.include_router(matter_parties_router)
+app.include_router(matter_documents_router)
 
 
 # ─────────────────────────────────────────────────────

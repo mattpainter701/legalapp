@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import { getMatter, updateMatter, addMatterEvent } from '../api'
-import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Users } from 'lucide-react'
+import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Users, FileText } from 'lucide-react'
 import MatterPartiesTab from '../components/MatterPartiesTab'
+import MatterDocumentsTab from '../components/MatterDocumentsTab'
 
 const EVENT_TYPES = [
   'filing', 'hearing', 'deposition', 'settlement_discussion',
@@ -206,6 +207,7 @@ export default function MatterDetailPage() {
           {[
             { key: 'timeline', label: 'Timeline', icon: <Clock size={15} /> },
             { key: 'parties', label: 'Parties', icon: <Users size={15} /> },
+            { key: 'documents', label: 'Documents', icon: <FileText size={15} /> },
           ].map(({ key, label, icon }) => (
             <button
               key={key}
@@ -223,6 +225,10 @@ export default function MatterDetailPage() {
 
         {activeTab === 'parties' && (
           <MatterPartiesTab matterId={id} />
+        )}
+
+        {activeTab === 'documents' && (
+          <MatterDocumentsTab matterId={id} />
         )}
 
         <div className={`grid grid-cols-1 lg:grid-cols-3 gap-8 ${activeTab !== 'timeline' ? 'hidden' : ''}`}>
