@@ -1,7 +1,7 @@
 """022 — Create matter_documents table.
 
 Revision ID: 022
-Revises: 021
+Revises: 021b
 Create Date: 2026-06-03
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 revision = "022"
-down_revision = "021"
+down_revision = "021b"
 branch_labels = None
 depends_on = None
 

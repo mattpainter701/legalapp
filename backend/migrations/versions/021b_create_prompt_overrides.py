@@ -1,7 +1,7 @@
-"""021 — Create prompt_overrides table for per-tenant prompt customization.
+"""021b — Create prompt_overrides table for per-tenant prompt customization.
 
-Revision ID: 021
-Revises: 020
+Revision ID: 021b
+Revises: 021
 Create Date: 2026-06-03
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "021"
-down_revision = "020"
+revision = "021b"
+down_revision = "021"
 branch_labels = None
 depends_on = None
 
