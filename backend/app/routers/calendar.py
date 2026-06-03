@@ -64,10 +64,14 @@ async def get_calendar_events(
         )
 
     # ── Query 2: Matter key dates in range ────────────────────────────────────
-    matter_stmt = select(Matter).where(
-        Matter.tenant_id == tid,
-        Matter.key_dates.isnot(None),
-        Matter.is_closed.is_(False),
+    matter_stmt = (
+        select(Matter)
+        .where(
+            Matter.tenant_id == tid,
+            Matter.key_dates.isnot(None),
+            Matter.is_closed.is_(False),
+        )
+        .limit(500)
     )
     matter_result = await db.execute(matter_stmt)
     matters = matter_result.scalars().all()

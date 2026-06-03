@@ -37,6 +37,8 @@ from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
+from app.routers.document_templates import router as document_templates_router
+from app.routers.matters import router as matters_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
@@ -168,6 +170,7 @@ app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
+app.include_router(matters_router)
 app.include_router(document_templates_router)
 
 

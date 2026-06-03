@@ -28,6 +28,10 @@ import ReportsPage from './pages/ReportsPage'
 import CalendarPage from './pages/CalendarPage'
 import CommunicationsPage from './pages/CommunicationsPage'
 import TemplatesPage from './pages/TemplatesPage'
+import TimeTrackingPage from './pages/TimeTrackingPage'
+import InvoicesPage from './pages/InvoicesPage'
+import InvoiceDetailPage from './pages/InvoiceDetailPage'
+import ProfilePage from './pages/ProfilePage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -311,6 +315,38 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <MCPPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/time-tracking"
+          element={
+            <ProtectedRoute>
+              <TimeTrackingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoices"
+          element={
+            <ProtectedRoute>
+              <InvoicesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/invoices/:id"
+          element={
+            <ProtectedRoute>
+              <InvoiceDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <ProfilePage />
             </ProtectedRoute>
           }
         />

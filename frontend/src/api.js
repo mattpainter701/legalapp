@@ -417,4 +417,89 @@ export const renderTemplate = (id, data) =>
 export const getMatterBudget = (matterId) =>
   api.get(`/reports/matters/${matterId}/budget`).then(r => r.data)
 
+// ── Matters V2 ─────────────────────────────────────────────────────────────────
+export const getMattersV2 = (params) =>
+  api.get('/matters', { params }).then(r => r.data)
+export const createMatterV2 = (data) =>
+  api.post('/matters', data).then(r => r.data)
+export const getMatterV2 = (id) =>
+  api.get(`/matters/${id}`).then(r => r.data)
+export const updateMatterV2 = (id, data) =>
+  api.patch(`/matters/${id}`, data).then(r => r.data)
+export const closeMatterV2 = (id) =>
+  api.delete(`/matters/${id}`)
+export const getMyMatters = () =>
+  api.get('/matters/my').then(r => r.data)
+export const getMatterStats = () =>
+  api.get('/matters/stats').then(r => r.data)
+
+// Assignments
+export const getMatterAssignments = (id) =>
+  api.get(`/matters/${id}/assignments`).then(r => r.data)
+export const addMatterAssignment = (id, data) =>
+  api.post(`/matters/${id}/assignments`, data).then(r => r.data)
+export const removeMatterAssignment = (id, aid) =>
+  api.delete(`/matters/${id}/assignments/${aid}`)
+
+// Notes & Activity
+export const getMatterNotes = (id, params) =>
+  api.get(`/matters/${id}/notes`, { params }).then(r => r.data)
+export const addMatterNote = (id, data) =>
+  api.post(`/matters/${id}/notes`, data).then(r => r.data)
+export const updateMatterNote = (id, nid, data) =>
+  api.patch(`/matters/${id}/notes/${nid}`, data).then(r => r.data)
+export const deleteMatterNote = (id, nid) =>
+  api.delete(`/matters/${id}/notes/${nid}`)
+
+// Timeline
+export const getMatterTimeline = (id, params) =>
+  api.get(`/matters/${id}/timeline`, { params }).then(r => r.data)
+
+// Budget
+export const getMatterBudgetV2 = (id) =>
+  api.get(`/matters/${id}/budget`).then(r => r.data)
+export const updateMatterBudget = (id, data) =>
+  api.patch(`/matters/${id}/budget`, null, { params: data }).then(r => r.data)
+
+// Retainers
+export const getMatterRetainers = (id) =>
+  api.get(`/matters/${id}/retainers`).then(r => r.data)
+export const createRetainer = (id, data) =>
+  api.post(`/matters/${id}/retainers`, data).then(r => r.data)
+export const drawdownRetainer = (id, rid, data) =>
+  api.post(`/matters/${id}/retainers/${rid}/drawdown`, data).then(r => r.data)
+
+// Time entries (matter-scoped)
+export const getMatterTimeEntries = (id, params) =>
+  api.get(`/matters/${id}/time-entries`, { params }).then(r => r.data)
+
+// Invoices (matter-scoped)
+export const getMatterInvoices = (id, params) =>
+  api.get(`/matters/${id}/invoices`, { params }).then(r => r.data)
+
+// ── Billing Extended ──────────────────────────────────────────────────────────
+export const getTimeEntries = (params) =>
+  api.get('/billing/time-entries', { params }).then(r => r.data)
+export const createTimeEntry = (data) =>
+  api.post('/billing/time-entries', data).then(r => r.data)
+export const getTimeEntry = (id) =>
+  api.get(`/billing/time-entries/${id}`).then(r => r.data)
+export const updateTimeEntry = (id, data) =>
+  api.patch(`/billing/time-entries/${id}`, data).then(r => r.data)
+export const deleteTimeEntry = (id) =>
+  api.delete(`/billing/time-entries/${id}`)
+
+export const getInvoices = (params) =>
+  api.get('/billing/invoices', { params }).then(r => r.data)
+export const getInvoice = (id) =>
+  api.get(`/billing/invoices/${id}`).then(r => r.data)
+export const generateInvoice = (data) =>
+  api.post('/billing/invoices/generate', data).then(r => r.data)
+export const updateInvoice = (id, data) =>
+  api.patch(`/billing/invoices/${id}`, data).then(r => r.data)
+export const recordPayment = (data) =>
+  api.post('/billing/payments', data).then(r => r.data)
+export const exportInvoice = (id, format = 'pdf') =>
+  api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
+
 export default api

@@ -817,3 +817,115 @@ async def resolve_error(
         resolved_at=error_log.resolved_at,
         resolution_notes=error_log.resolution_notes,
     )
+
+
+# ── User Billing Rate ───────────────────────────────────────────────────────
+
+
+@router.patch("/users/{user_id}/billing-rate")
+async def set_user_billing_rate(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    default_billing_rate: float | None = None,
+):
+    """Set a user's default billing rate (admin only)."""
+    admin = await _require_admin(request, db)
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
+    )
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from decimal import Decimal
+
+    target.default_billing_rate = (
+        Decimal(str(default_billing_rate)) if default_billing_rate is not None else None
+    )
+    await db.commit()
+
+    return {
+        "user_id": str(target.id),
+        "email": target.email,
+        "default_billing_rate": (
+            float(target.default_billing_rate) if target.default_billing_rate else None
+        ),
+    }
+
+
+# ── Tenant Billing Defaults ──────────────────────────────────────────────────
+
+
+@router.get("/billing-defaults")
+async def get_billing_defaults(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get tenant-wide billing defaults (admin only)."""
+    admin = await _require_admin(request, db)
+
+    result = await db.execute(
+        select(TenantSettings).where(
+            TenantSettings.tenant_id == admin.tenant_id,
+        )
+    )
+    ts = result.scalar_one_or_none()
+
+    defaults = {
+        "default_billing_cycle": "monthly",
+        "default_payment_terms": "Net 30",
+        "default_tax_rate": None,
+        "default_hourly_rate": None,
+    }
+
+    if ts and ts.custom_config:
+        config = ts.custom_config or {}
+        billing = config.get("billing", {}) or {}
+        defaults.update(billing)
+
+    return defaults
+
+
+@router.patch("/billing-defaults")
+async def update_billing_defaults(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    default_billing_cycle: str | None = None,
+    default_payment_terms: str | None = None,
+    default_tax_rate: float | None = None,
+    default_hourly_rate: float | None = None,
+):
+    """Update tenant-wide billing defaults (admin only)."""
+    admin = await _require_admin(request, db)
+
+    result = await db.execute(
+        select(TenantSettings).where(
+            TenantSettings.tenant_id == admin.tenant_id,
+        )
+    )
+    ts = result.scalar_one_or_none()
+
+    if not ts:
+        ts = TenantSettings(tenant_id=admin.tenant_id)
+        db.add(ts)
+
+    config = dict(ts.custom_config or {})
+    billing = dict(config.get("billing", {}) or {})
+
+    if default_billing_cycle is not None:
+        billing["default_billing_cycle"] = default_billing_cycle
+    if default_payment_terms is not None:
+        billing["default_payment_terms"] = default_payment_terms
+    if default_tax_rate is not None:
+        billing["default_tax_rate"] = default_tax_rate
+    if default_hourly_rate is not None:
+        billing["default_hourly_rate"] = default_hourly_rate
+
+    config["billing"] = billing
+    ts.custom_config = config
+
+    await db.commit()
+
+    return billing

@@ -1,4 +1,4 @@
-"""SQLAlchemy models for the legal practice plugin system."""
+"""SQLAlchemy models for the legal practice plugin system — matters, events, estates, mediation."""
 
 import uuid
 from datetime import datetime, timezone
@@ -127,6 +127,30 @@ class Matter(Base):
     budget_currency: Mapped[str] = mapped_column(
         String(3), default="USD", server_default="USD"
     )
+    budget_notification_threshold: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+
+    # Practice area taxonomy (added in migration 026)
+    practice_area: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # Billing configuration (added in migration 026)
+    billing_cycle: Mapped[str] = mapped_column(
+        String(50), default="monthly", server_default="monthly"
+    )
+    billing_method: Mapped[str] = mapped_column(
+        String(50), default="hourly", server_default="hourly"
+    )
+    hourly_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    contingency_percentage: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+
+    # Court / forum detail (added in migration 026)
+    court: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    judge: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    case_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Optional FK to the firm's client Contact record (added in migration 018)
     client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -147,9 +171,23 @@ class Matter(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Relationships
+    client: Mapped["Contact | None"] = relationship(
+        "Contact", foreign_keys=[client_contact_id], lazy="joined"
+    )
+    assignments: Mapped[list["MatterAssignment"]] = relationship(
+        "MatterAssignment", back_populates="matter", cascade="all, delete-orphan"
+    )
+    notes: Mapped[list["MatterNote"]] = relationship(
+        "MatterNote", back_populates="matter", cascade="all, delete-orphan"
+    )
+    retainers: Mapped[list["Retainer"]] = relationship(
+        "Retainer", back_populates="matter"
+    )
+
 
 class MatterEvent(Base):
-    """Append-only event log for a matter."""
+    """Append-only event log for a matter — system, manual, email, billing, or document."""
 
     __tablename__ = "matter_events"
 
@@ -171,6 +209,10 @@ class MatterEvent(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    note_type: Mapped[str] = mapped_column(
+        String(50), default="system", server_default="system"
+    )
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -372,4 +414,56 @@ class MediationCaseEvent(Base):
     )
     case: Mapped["MediationCase"] = relationship(
         "MediationCase", back_populates="events"
+    )
+
+
+class PromptOverride(Base):
+    """Per-tenant prompt customization — overrides the code-default prompt for a skill."""
+
+    __tablename__ = "prompt_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "plugin_name",
+            "skill_name",
+            name="uq_prompt_overrides_tenant_plugin_skill",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+    )
+    plugin_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    skill_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
     )

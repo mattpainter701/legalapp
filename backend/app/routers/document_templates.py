@@ -9,6 +9,7 @@ Document Templates router — CRUD + variable substitution rendering.
   POST   /api/templates/{id}/render  render template with variables
 """
 
+import os
 import re
 import uuid
 
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.document_template import DocumentTemplate
@@ -32,6 +34,7 @@ from app.schemas.document_template import (
 )
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
+settings = get_settings()
 
 
 def render_template(template_body: str, variables: dict[str, str]) -> str:
@@ -213,14 +216,31 @@ async def render_template_endpoint(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
+        doc_id = uuid.uuid4()
+        storage_dir = os.path.join(
+            settings.UPLOAD_DIR,
+            tenant_id,
+            "matters",
+            payload.matter_id,
+            str(doc_id),
+        )
+        os.makedirs(storage_dir, exist_ok=True)
+        safe_filename = f"{template.title}.md"
+        storage_path = os.path.join(storage_dir, safe_filename)
+
+        rendered_bytes = rendered.encode("utf-8")
+        with open(storage_path, "w", encoding="utf-8") as out_file:
+            out_file.write(rendered)
+
         doc = MatterDocument(
+            id=doc_id,
             matter_id=uuid.UUID(payload.matter_id),
             tenant_id=uuid.UUID(tenant_id),
             uploaded_by_user_id=uuid.UUID(current_user["user_id"]),
-            filename=f"{template.title}.md",
+            filename=safe_filename,
             content_type="text/markdown",
-            file_size=len(rendered.encode("utf-8")),
-            storage_path=None,
+            file_size=len(rendered_bytes),
+            storage_path=storage_path,
             description=f"Generated from template: {template.title}",
             document_category="generated",
         )

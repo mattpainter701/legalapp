@@ -280,6 +280,77 @@ class ExpertiseCacheManager:
             print(f"Cache invalidate error: {e}")
             return False
 
+    # ── Prompt Cache ────────────────────────────────────────────────────────────
+
+    PROMPT_CACHE_TTL = 3600  # 1 hour for tenant overrides
+    DEFAULT_PROMPT_CACHE_TTL = 300  # 5 min for code defaults
+
+    async def get_cached_prompt(
+        self, tenant_id: str, plugin: str, skill: str
+    ) -> Optional[str]:
+        """Retrieve cached prompt text."""
+        if not self.cache_enabled or not self.redis_client:
+            return None
+        try:
+            key = self._make_key("prompt", tenant_id, plugin, skill)
+            return await self.redis_client.get(key)
+        except Exception:
+            return None
+
+    async def set_cached_prompt(
+        self,
+        tenant_id: str,
+        plugin: str,
+        skill: str,
+        prompt: str,
+        ttl: int = PROMPT_CACHE_TTL,
+    ) -> bool:
+        """Cache prompt text with TTL."""
+        if not self.cache_enabled or not self.redis_client:
+            return False
+        try:
+            key = self._make_key("prompt", tenant_id, plugin, skill)
+            await self.redis_client.setex(key, ttl, prompt)
+            return True
+        except Exception:
+            return False
+
+    async def invalidate_prompt_cache(
+        self, tenant_id: str, plugin: Optional[str] = None, skill: Optional[str] = None
+    ) -> bool:
+        """Invalidate prompt cache entries for a tenant.
+
+        If plugin omitted, invalidates all prompt caches for the tenant.
+        If skill omitted, invalidates all prompt caches for the plugin.
+        """
+        if not self.cache_enabled or not self.redis_client:
+            return False
+        try:
+            pattern = f"prompt:{tenant_id}|"
+            if plugin:
+                pattern += f"{plugin}|"
+                if skill:
+                    pattern += f"{skill}"
+                else:
+                    pattern += "*"
+            else:
+                pattern += "*"
+
+            cursor = 0
+            keys_to_delete = []
+            while True:
+                cursor, keys = await self.redis_client.scan(cursor, match=pattern)
+                if keys:
+                    keys_to_delete.extend(keys)
+                if cursor == 0:
+                    break
+            if keys_to_delete:
+                for i in range(0, len(keys_to_delete), 1000):
+                    await self.redis_client.delete(*keys_to_delete[i : i + 1000])
+            return True
+        except Exception:
+            return False
+
     def get_cache_config(self, expertise_level: str) -> dict:
         """Get cache configuration for expertise level."""
         return CACHE_CONFIG.get(expertise_level, CACHE_CONFIG["mid"])

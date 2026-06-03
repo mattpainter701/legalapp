@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import IntegrationPanel from './IntegrationPanel'
 import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User } from 'lucide-react'
 
 function ConversationItem({
   conv,
@@ -223,6 +223,30 @@ export default function Sidebar({
           </span>
         </button>
         <button
+          onClick={() => navigate('/plugins/litigation/matters')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4" /> Matters
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/time-tracking')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Clock className="w-4 h-4" /> Time Tracking
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/invoices')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Receipt className="w-4 h-4" /> Invoices
+          </span>
+        </button>
+        <button
           onClick={() => navigate('/templates')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
@@ -343,8 +367,15 @@ export default function Sidebar({
           </p>
         </div>
         <button
-          onClick={onLogout}
+          onClick={() => navigate('/profile')}
           className="text-brand-muted hover:text-brand-ink transition-colors shrink-0"
+          title="Profile"
+        >
+          <User className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onLogout}
+          className="text-brand-muted hover:text-brand-ink transition-colors shrink-0 ml-2"
           title="Sign out"
         >
           <Settings className="w-4 h-4" />

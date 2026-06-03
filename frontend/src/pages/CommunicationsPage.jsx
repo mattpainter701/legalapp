@@ -6,6 +6,7 @@ import {
   updateCommunication,
   deleteCommunication,
 } from '../api'
+import ContactPicker from '../components/ContactPicker'
 import {
   ArrowLeft,
   ArrowRight,
@@ -266,31 +267,27 @@ function LogFormModal({ initial, onClose, onSaved }) {
 
           {!isEdit && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
-                    Matter ID (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={form.matter_id}
-                    onChange={set('matter_id')}
-                    placeholder="UUID"
-                    className="w-full bg-brand-bg border border-brand-line px-3 py-2 text-sm text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
-                    Contact ID (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={form.contact_id}
-                    onChange={set('contact_id')}
-                    placeholder="UUID"
-                    className="w-full bg-brand-bg border border-brand-line px-3 py-2 text-sm text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono text-xs"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+                  Matter ID (optional)
+                </label>
+                <input
+                  type="text"
+                  value={form.matter_id}
+                  onChange={set('matter_id')}
+                  placeholder="UUID"
+                  className="w-full bg-brand-bg border border-brand-line px-3 py-2 text-sm text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+                  Contact (optional)
+                </label>
+                <ContactPicker
+                  value={null}
+                  onChange={(contact) => setForm((f) => ({ ...f, contact_id: contact?.id || '' }))}
+                  placeholder="Search contacts..."
+                />
               </div>
 
               <div>

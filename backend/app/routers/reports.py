@@ -11,18 +11,20 @@ Reports router — firm-level analytics.
 import uuid
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
+from app.models.billing import TimeEntry
 from app.models.contact import Lead
 from app.models.plugin import Matter
 from app.models.task import Task
 from app.schemas.reports import (
     FirmReportBundle,
     IntakeFunnelReport,
+    MatterBudgetReport,
     MatterStatusReport,
     OverdueTasksReport,
 )
@@ -231,7 +233,7 @@ async def get_matter_budget_report(
         ).where(
             TimeEntry.matter_id == matter.id,
             TimeEntry.tenant_id == tenant_id,
-            TimeEntry.is_billable == True,
+            TimeEntry.is_billable.is_(True),
         )
     )
     total_hours_decimal, total_billed_decimal = agg_result.one()

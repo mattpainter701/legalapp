@@ -44,7 +44,8 @@ async def list_communications(
     await set_tenant_context(db, tenant_id)
 
     stmt = select(CommunicationLog).where(
-        CommunicationLog.tenant_id == uuid.UUID(tenant_id)
+        CommunicationLog.tenant_id == uuid.UUID(tenant_id),
+        CommunicationLog.status != "deleted",
     )
     if matter_id:
         stmt = stmt.where(CommunicationLog.matter_id == matter_id)
@@ -163,5 +164,5 @@ async def delete_communication_log(
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
 
-    await db.delete(log)
+    log.status = "deleted"
     await db.commit()

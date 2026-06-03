@@ -1,5 +1,7 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
+
 from sqlalchemy import (
     String,
     Boolean,
@@ -7,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     JSON,
+    Numeric,
     Text,
     Float,
     Index,
@@ -42,6 +45,10 @@ class User(Base):
     oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
+    )
+    # Billing (added in migration 026)
+    default_billing_rate: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
     )
     # Enhanced user model
     practice_areas: Mapped[list | None] = mapped_column(

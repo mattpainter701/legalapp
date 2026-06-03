@@ -20,7 +20,7 @@ async def run_conflict_check(
     tenant_id: uuid.UUID,
     names: list[str],
     emails: list[str],
-    organization_names: list[str] = [],
+    organization_names: list[str] | None = None,
 ) -> dict:
     """
     Run a fuzzy conflict check across contacts and matter counterparties.
@@ -31,7 +31,13 @@ async def run_conflict_check(
                   contact_id, display_name, contact_type, email,
                   match_field, match_value, matter_ids, matter_names
     """
+    if organization_names is None:
+        organization_names = []
     matches: list[dict] = []
+
+    def _escape_ilike(text: str) -> str:
+        """Escape % and _ wildcards for ILIKE patterns."""
+        return text.replace("%", "\\%").replace("_", "\\_")
 
     # Build (search_term, field_type) pairs
     terms = (
@@ -42,7 +48,7 @@ async def run_conflict_check(
 
     # ── Phase 1: contact-based matches ───────────────────────────────────────
     for term, field_type in terms:
-        pattern = f"%{term}%"
+        pattern = f"%{_escape_ilike(term)}%"
         stmt = select(Contact).where(
             Contact.tenant_id == tenant_id,
             Contact.is_active.is_(True),
@@ -95,7 +101,7 @@ async def run_conflict_check(
     for term in list(names) + list(organization_names):
         if not term:
             continue
-        pattern = f"%{term}%"
+        pattern = f"%{_escape_ilike(term)}%"
         cp_stmt = select(Matter).where(
             Matter.tenant_id == tenant_id,
             Matter.counterparty.ilike(pattern),

@@ -19,15 +19,19 @@ async def _auto_log_and_task(
     email: dict,
     classification: dict,
 ) -> None:
-    """Persist a CommunicationLog entry and optionally a Task for each classified email."""
+    """Persist a CommunicationLog, optionally a Task, and link to matters."""
     try:
         from app.database import set_tenant_context
         from app.models.communication_log import CommunicationLog
+        from app.models.matter_note import MatterNote
         from app.models.task import Task
 
         await set_tenant_context(db, tenant_id)
         tid = uuid_mod.UUID(tenant_id)
         uid = uuid_mod.UUID(user_id)
+
+        # Match email to matters by sender/recipient
+        matched_matter_ids = await _match_email_to_matters(db, tid, email)
 
         log = CommunicationLog(
             tenant_id=tid,
@@ -36,12 +40,33 @@ async def _auto_log_and_task(
             status="received",
             subject=email.get("subject") or "(no subject)",
             summary=classification.get("summary"),
+            body=email.get("body_preview"),
             created_by_user_id=uid,
             occurred_at=datetime.now(timezone.utc),
             external_ref=email.get("id"),
+            matter_id=matched_matter_ids[0] if matched_matter_ids else None,
         )
         db.add(log)
 
+        # Create MatterNote for each matched matter
+        for matter_id in matched_matter_ids:
+            note = MatterNote(
+                tenant_id=tid,
+                matter_id=matter_id,
+                author_id=uid,
+                note_type="email",
+                title=f"Email: {email.get('subject', '(no subject)')[:500]}",
+                content=(
+                    f"**From:** {email.get('from', 'Unknown')}\n"
+                    f"**To:** {email.get('to', 'Unknown')}\n"
+                    f"**Received:** {email.get('receivedDateTime', '')}\n\n"
+                    f"{email.get('body_preview', '')}"
+                ),
+                is_billable=False,
+            )
+            db.add(note)
+
+        # Create task for deadlines
         deadline_str = classification.get("deadline_mentioned")
         if deadline_str:
             try:
@@ -62,6 +87,7 @@ async def _auto_log_and_task(
                     assigned_to_user_id=uid,
                     source="email_agent",
                     external_ref=email.get("id"),
+                    matter_id=matched_matter_ids[0] if matched_matter_ids else None,
                 )
                 db.add(task)
             except Exception as parse_err:
@@ -72,6 +98,79 @@ async def _auto_log_and_task(
         await db.commit()
     except Exception as exc:
         logger.warning("Auto log/task creation failed: %s", exc)
+
+
+async def _match_email_to_matters(
+    db: AsyncSession,
+    tenant_id: uuid_mod.UUID,
+    email: dict,
+) -> list[uuid_mod.UUID]:
+    """Find matters linked to contacts whose email matches sender/recipient."""
+    from sqlalchemy import select, or_
+
+    from app.models.contact import Contact
+    from app.models.matter_party import MatterParty
+    from app.models.plugin import Matter
+
+    # Extract email addresses from sender and recipients
+    addresses = set()
+    sender = email.get("from", "") or ""
+    for addr in _extract_email_addresses(sender):
+        addresses.add(addr.lower())
+    for field in ("to", "cc", "bcc"):
+        val = email.get(field, "") or ""
+        for addr in _extract_email_addresses(val):
+            addresses.add(addr.lower())
+
+    if not addresses:
+        return []
+
+    # Find contacts matching any of these emails
+    contact_q = await db.execute(
+        select(Contact.id, Contact.email).where(
+            Contact.tenant_id == tenant_id,
+            Contact.is_active.is_(True),
+            or_(*[Contact.email.ilike(f"%{a}%") for a in addresses]),
+        )
+    )
+    contacts = contact_q.all()
+    contact_ids = [c[0] for c in contacts]
+
+    if not contact_ids:
+        return []
+
+    # Find active matters linked to these contacts via MatterParty or client_contact_id
+    party_q = await db.execute(
+        select(MatterParty.matter_id).where(
+            MatterParty.tenant_id == tenant_id,
+            MatterParty.contact_id.in_(contact_ids),
+        )
+    )
+    matter_ids_from_parties = [row[0] for row in party_q.all()]
+
+    client_q = await db.execute(
+        select(Matter.id).where(
+            Matter.tenant_id == tenant_id,
+            Matter.client_contact_id.in_(contact_ids),
+            Matter.is_closed.is_(False),
+        )
+    )
+    matter_ids_from_client = [row[0] for row in client_q.all()]
+
+    # Combine and deduplicate
+    all_ids = list(set(matter_ids_from_parties + matter_ids_from_client))
+    return all_ids
+
+
+def _extract_email_addresses(text: str) -> list[str]:
+    """Extract email addresses from a header string like 'Name <email@domain.com>'."""
+    import re
+
+    if not text:
+        return []
+    # Match email patterns
+    pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+    return re.findall(pattern, str(text))
 
 
 class EmailAgent:
