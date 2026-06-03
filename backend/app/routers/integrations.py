@@ -158,7 +158,9 @@ async def microsoft_callback(
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
-                "scope": MICROSOFT_ADMIN_SCOPES if intent == "admin" else "offline_access Mail.Read Files.Read.All",
+                "scope": MICROSOFT_ADMIN_SCOPES
+                if intent == "admin"
+                else "offline_access Mail.Read Files.Read.All",
             },
         )
         if token_resp.status_code != 200:
@@ -399,6 +401,7 @@ async def google_callback(
 
 # ── Status endpoints ─────────────────────────────────────────────────────
 
+
 @router.get("/status")
 async def integration_status(
     request: Request,
@@ -457,6 +460,7 @@ async def integration_status(
 
 
 # ── Disconnect endpoints ─────────────────────────────────────────────────
+
 
 @router.post("/microsoft/disconnect")
 async def microsoft_disconnect(

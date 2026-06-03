@@ -3,6 +3,7 @@ from typing import List
 
 import tiktoken
 
+
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """
     Chunk text into overlapping token-based segments using tiktoken.

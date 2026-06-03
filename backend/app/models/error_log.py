@@ -72,8 +72,12 @@ class ErrorLog(Base):
     query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Resolution tracking
-    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_resolved: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     resolution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

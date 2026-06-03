@@ -116,6 +116,7 @@ class QBOSyncService:
         if matter.client_contact_id:
             from app.models.contact import Contact
             from sqlalchemy import select as _select
+
             c_res = await self.db.execute(
                 _select(Contact).where(Contact.id == matter.client_contact_id)
             )

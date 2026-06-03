@@ -169,9 +169,7 @@ Summary:"""
 
         if preferences:
             memory_text += "\n\nPreferences:\n"
-            memory_text += "\n".join(
-                [f"- {p.key}: {p.value}" for p in preferences]
-            )
+            memory_text += "\n".join([f"- {p.key}: {p.value}" for p in preferences])
 
         # Update user record
         result = await db.execute(select(User).where(User.id == user_id))

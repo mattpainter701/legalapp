@@ -43,8 +43,13 @@ class ContactCreate(BaseModel):
     @classmethod
     def validate_contact_type(cls, v: str) -> str:
         allowed = {
-            "client", "opposing_party", "witness", "expert",
-            "vendor", "referral", "other",
+            "client",
+            "opposing_party",
+            "witness",
+            "expert",
+            "vendor",
+            "referral",
+            "other",
         }
         if v not in allowed:
             raise ValueError(f"contact_type must be one of {allowed}")
@@ -121,6 +126,7 @@ class ConflictCheckResult(BaseModel):
 
 
 # --- Lead / Intake schemas ---
+
 
 class LeadCreate(BaseModel):
     contact_id: Optional[uuid.UUID] = None

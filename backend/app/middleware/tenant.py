@@ -99,7 +99,9 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
                     ts = blacklist.get(jti)
                     blacklisted = ts and _time.time() < ts
                 if blacklisted:
-                    raise HTTPException(status_code=401, detail="Token has been revoked")
+                    raise HTTPException(
+                        status_code=401, detail="Token has been revoked"
+                    )
             user_id = payload.get("sub")
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")

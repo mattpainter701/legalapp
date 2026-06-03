@@ -27,9 +27,7 @@ class MatterContextService:
         Load matter and return its context data.
         Returns: (matter_data, has_pii, pii_findings)
         """
-        result = await db.execute(
-            select(Matter).where(Matter.id == matter_id)
-        )
+        result = await db.execute(select(Matter).where(Matter.id == matter_id))
         matter = result.scalar_one_or_none()
 
         if not matter:
@@ -125,8 +123,6 @@ class MatterContextService:
             return "", False, []
 
         scrubbed_data = self.scrub_matter_context(matter_data, privacy_mode)
-        context_str = self.format_matter_context(
-            scrubbed_data, scrubbed=privacy_mode
-        )
+        context_str = self.format_matter_context(scrubbed_data, scrubbed=privacy_mode)
 
         return context_str, has_pii, pii_findings

@@ -2,7 +2,15 @@ import os
 import uuid
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    UploadFile,
+    File,
+    BackgroundTasks,
+)
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,9 +254,7 @@ async def delete_document(
             pass
 
     # Chunks are cascade-deleted via FK, but we delete explicitly for clarity
-    await db.execute(
-        delete(Chunk).where(Chunk.document_id == doc.id)
-    )
+    await db.execute(delete(Chunk).where(Chunk.document_id == doc.id))
     await db.delete(doc)
     await db.commit()
 

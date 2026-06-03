@@ -24,8 +24,14 @@ class TaskCreate(BaseModel):
     @classmethod
     def validate_task_type(cls, v: str) -> str:
         allowed = {
-            "deadline", "hearing", "filing", "deposition",
-            "call", "follow_up", "review", "general",
+            "deadline",
+            "hearing",
+            "filing",
+            "deposition",
+            "call",
+            "follow_up",
+            "review",
+            "general",
         }
         if v not in allowed:
             raise ValueError(f"task_type must be one of {allowed}")

@@ -28,9 +28,7 @@ class SchedulerLog(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     # running | completed | failed
-    status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="running"
-    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="running")
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # null = ran across all tenants

@@ -46,13 +46,17 @@ async def _auto_log_and_task(
         if deadline_str:
             try:
                 from dateutil import parser as dateutil_parser
+
                 due_date = dateutil_parser.parse(str(deadline_str), fuzzy=True).date()
                 task = Task(
                     tenant_id=tid,
                     title=f"Deadline from email: {email.get('subject', '')[:200]}",
-                    description=classification.get("action_needed") or classification.get("summary"),
+                    description=classification.get("action_needed")
+                    or classification.get("summary"),
                     task_type="deadline",
-                    priority="high" if classification.get("urgency") in ("critical", "high") else "medium",
+                    priority="high"
+                    if classification.get("urgency") in ("critical", "high")
+                    else "medium",
                     due_date=due_date,
                     created_by_user_id=uid,
                     assigned_to_user_id=uid,
@@ -61,7 +65,9 @@ async def _auto_log_and_task(
                 )
                 db.add(task)
             except Exception as parse_err:
-                logger.debug("Could not parse deadline '%s': %s", deadline_str, parse_err)
+                logger.debug(
+                    "Could not parse deadline '%s': %s", deadline_str, parse_err
+                )
 
         await db.commit()
     except Exception as exc:
@@ -103,6 +109,7 @@ Body: {body}
 CLASSIFICATION: {classification}
 
 Draft a professional response email. The attorney will review before sending. Do not include placeholder greetings like "[Your Name]". End with the attorney's standard signature block."""
+
     async def classify_email(
         self,
         email: dict,
@@ -176,10 +183,16 @@ Draft a professional response email. The attorney will review before sending. Do
 
         if provider == "microsoft":
             from app.services.microsoft_mail import ms_read_mail_user
-            emails = await ms_read_mail_user(db, tenant_id, user_id, max_results=max_emails)
+
+            emails = await ms_read_mail_user(
+                db, tenant_id, user_id, max_results=max_emails
+            )
         elif provider == "google":
             from app.services.google_mail import gmail_read_mail
-            emails = await gmail_read_mail(db, tenant_id, user_id, max_results=max_emails)
+
+            emails = await gmail_read_mail(
+                db, tenant_id, user_id, max_results=max_emails
+            )
         else:
             raise ValueError(f"Unknown email provider: {provider}")
 
@@ -194,14 +207,16 @@ Draft a professional response email. The attorney will review before sending. Do
 
             await _auto_log_and_task(db, tenant_id, user_id, email, classification)
 
-            results.append({
-                "email_id": email.get("id"),
-                "subject": email.get("subject"),
-                "from": email.get("from"),
-                "received": email.get("received") or email.get("date"),
-                "classification": classification,
-                "draft_response": draft_response,
-            })
+            results.append(
+                {
+                    "email_id": email.get("id"),
+                    "subject": email.get("subject"),
+                    "from": email.get("from"),
+                    "received": email.get("received") or email.get("date"),
+                    "classification": classification,
+                    "draft_response": draft_response,
+                }
+            )
 
         return results
 

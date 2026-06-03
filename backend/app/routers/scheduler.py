@@ -72,9 +72,7 @@ async def list_agents(
 ):
     """List all scheduled agents with their last run info."""
     result = await db.execute(
-        select(SchedulerLog)
-        .order_by(desc(SchedulerLog.run_at))
-        .limit(100)
+        select(SchedulerLog).order_by(desc(SchedulerLog.run_at)).limit(100)
     )
     logs = result.scalars().all()
 
@@ -141,6 +139,7 @@ async def trigger_agent(
         raise HTTPException(status_code=503, detail="Scheduler not running")
 
     import asyncio
+
     asyncio.create_task(scheduler.run_agent_manually(agent_name))
 
     return {

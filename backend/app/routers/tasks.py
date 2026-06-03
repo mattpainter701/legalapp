@@ -52,11 +52,13 @@ async def get_overdue_tasks(
     tasks = result.scalars().all()
 
     count_stmt = select(func.count()).select_from(
-        select(Task).where(
+        select(Task)
+        .where(
             Task.tenant_id == uuid.UUID(tenant_id),
             Task.due_date < today,
             Task.status.notin_(["completed", "cancelled"]),
-        ).subquery()
+        )
+        .subquery()
     )
     total = (await db.execute(count_stmt)).scalar_one()
 

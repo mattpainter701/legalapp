@@ -30,8 +30,13 @@ from app.schemas.contact import (
 router = APIRouter(prefix="/api/intake", tags=["intake"])
 
 VALID_LEAD_STATUSES = {
-    "new", "contacted", "qualified",
-    "conflict_checked", "engaged", "matter_opened", "declined",
+    "new",
+    "contacted",
+    "qualified",
+    "conflict_checked",
+    "engaged",
+    "matter_opened",
+    "declined",
 }
 
 
@@ -41,9 +46,7 @@ def _make_slug(matter_name: str, tenant_id: str) -> str:
     return f"{base}-{suffix}"
 
 
-async def _load_lead(
-    db: AsyncSession, lead_id: uuid.UUID, tenant_id: str
-) -> Lead:
+async def _load_lead(db: AsyncSession, lead_id: uuid.UUID, tenant_id: str) -> Lead:
     result = await db.execute(
         select(Lead).where(
             Lead.id == lead_id,
@@ -73,8 +76,11 @@ async def _load_contact(
 
 async def _lead_to_response(db: AsyncSession, lead: Lead, tenant_id: str) -> dict:
     from app.schemas.contact import ContactResponse
+
     contact = await _load_contact(db, lead.contact_id, tenant_id)
-    contact_data = {col.name: getattr(contact, col.name) for col in contact.__table__.columns}
+    contact_data = {
+        col.name: getattr(contact, col.name) for col in contact.__table__.columns
+    }
     contact_data["display_name"] = contact.display_name
     lead_data = {col.name: getattr(lead, col.name) for col in lead.__table__.columns}
     lead_data["contact"] = ContactResponse(**contact_data)

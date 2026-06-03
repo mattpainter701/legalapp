@@ -1,6 +1,16 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, JSON, Text, UniqueConstraint, Index
+from sqlalchemy import (
+    String,
+    Integer,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    JSON,
+    Text,
+    UniqueConstraint,
+    Index,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -23,11 +33,17 @@ class Tenant(Base):
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    billing_tier: Mapped[str] = mapped_column(String(50), default="payg", server_default="payg")
+    billing_tier: Mapped[str] = mapped_column(
+        String(50), default="payg", server_default="payg"
+    )
     api_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     flat_seat_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    stripe_subscription_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -62,7 +78,9 @@ class TenantSettings(Base):
     )
 
     # Cache configuration overrides
-    cache_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    cache_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     cache_ttl_multiplier: Mapped[float] = mapped_column(
         default=1.0, server_default="1.0"
     )  # 0.5-2.0 to adjust all TTLs
@@ -74,13 +92,23 @@ class TenantSettings(Base):
     default_practice_areas: Mapped[list | None] = mapped_column(
         JSON, default=list, server_default="[]", nullable=False
     )
-    default_privacy_mode: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    default_privacy_mode: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
 
     # Feature flags
-    enable_auto_memory: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    enable_pii_detection: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    enable_skill_routing: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    enable_matter_context: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    enable_auto_memory: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    enable_pii_detection: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    enable_skill_routing: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    enable_matter_context: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
 
     # Rate limiting
     max_requests_per_minute: Mapped[int | None] = mapped_column(nullable=True)

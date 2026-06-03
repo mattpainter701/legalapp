@@ -7,7 +7,9 @@ from typing import List
 PATTERNS = {
     "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
     "credit_card": re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b"),
-    "phone": re.compile(r"\b(?:\+?1[-.]?)?(?:\()?(\d{3})(?:\))?[-.\s]?(\d{3})[-.\s]?(\d{4})\b"),
+    "phone": re.compile(
+        r"\b(?:\+?1[-.]?)?(?:\()?(\d{3})(?:\))?[-.\s]?(\d{3})[-.\s]?(\d{4})\b"
+    ),
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
     "ip_address": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     "passport": re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),
@@ -44,7 +46,11 @@ def detect_pii(text: str) -> List[dict]:
     findings = []
     for pii_type, pattern in PATTERNS.items():
         for match in pattern.finditer(text):
-            risk = "high" if pii_type in ["ssn", "credit_card", "bank_account"] else "medium"
+            risk = (
+                "high"
+                if pii_type in ["ssn", "credit_card", "bank_account"]
+                else "medium"
+            )
             # Mask sensitive parts
             value = match.group()
             if pii_type == "ssn":

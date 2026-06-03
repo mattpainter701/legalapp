@@ -79,7 +79,9 @@ async def list_contacts(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
 
-    stmt = stmt.order_by(Contact.last_name, Contact.first_name, Contact.organization_name)
+    stmt = stmt.order_by(
+        Contact.last_name, Contact.first_name, Contact.organization_name
+    )
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     contacts = result.scalars().all()
@@ -346,6 +348,8 @@ async def contact_communications(
     total = (await db.execute(count_stmt)).scalar_one()
 
     return CommunicationLogListResponse(
-        items=[CommunicationLogResponse.model_validate(log_entry) for log_entry in logs],
+        items=[
+            CommunicationLogResponse.model_validate(log_entry) for log_entry in logs
+        ],
         total=total,
     )

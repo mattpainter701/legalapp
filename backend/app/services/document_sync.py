@@ -24,7 +24,6 @@ LEGAL_MIME_TYPES = {
 
 
 class DocumentSyncService:
-
     async def sync_onedrive(
         self,
         db: AsyncSession,
@@ -50,9 +49,15 @@ class DocumentSyncService:
         results = []
         async with httpx.AsyncClient() as client:
             url = child_url
-            params = {"$top": min(max_files, 100), "$select": "id,name,file,size,lastModifiedDateTime,webUrl,parentReference", "$expand": "thumbnails"}
+            params = {
+                "$top": min(max_files, 100),
+                "$select": "id,name,file,size,lastModifiedDateTime,webUrl,parentReference",
+                "$expand": "thumbnails",
+            }
 
-            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {token}"}, params=params
+            )
             if resp.status_code != 200:
                 raise RuntimeError(f"OneDrive listing failed: {resp.status_code}")
 
@@ -66,15 +71,17 @@ class DocumentSyncService:
                 mime = (file_info or {}).get("mimeType", "")
 
                 if ext in LEGAL_EXTENSIONS or mime in LEGAL_MIME_TYPES:
-                    results.append({
-                        "id": item["id"],
-                        "name": name,
-                        "size": item.get("size", 0),
-                        "modified": item.get("lastModifiedDateTime"),
-                        "url": item.get("webUrl"),
-                        "drive": "onedrive",
-                        "mime_type": mime,
-                    })
+                    results.append(
+                        {
+                            "id": item["id"],
+                            "name": name,
+                            "size": item.get("size", 0),
+                            "modified": item.get("lastModifiedDateTime"),
+                            "url": item.get("webUrl"),
+                            "drive": "onedrive",
+                            "mime_type": mime,
+                        }
+                    )
 
             return results[:max_files]
 
@@ -107,7 +114,9 @@ class DocumentSyncService:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if drives_resp.status_code != 200:
-                raise RuntimeError(f"SharePoint drives listing failed: {drives_resp.status_code}")
+                raise RuntimeError(
+                    f"SharePoint drives listing failed: {drives_resp.status_code}"
+                )
 
             for drive in drives_resp.json().get("value", []):
                 drive_id = drive["id"]
@@ -116,7 +125,10 @@ class DocumentSyncService:
                 items_resp = await client.get(
                     f"{GRAPH_BASE}/drives/{drive_id}/root/children",
                     headers={"Authorization": f"Bearer {token}"},
-                    params={"$top": min(max_files, 100), "$select": "id,name,file,size,lastModifiedDateTime,webUrl"},
+                    params={
+                        "$top": min(max_files, 100),
+                        "$select": "id,name,file,size,lastModifiedDateTime,webUrl",
+                    },
                 )
                 if items_resp.status_code != 200:
                     continue
@@ -131,16 +143,18 @@ class DocumentSyncService:
                     mime = (file_info or {}).get("mimeType", "")
 
                     if ext in LEGAL_EXTENSIONS or mime in LEGAL_MIME_TYPES:
-                        results.append({
-                            "id": item["id"],
-                            "name": name,
-                            "size": item.get("size", 0),
-                            "modified": item.get("lastModifiedDateTime"),
-                            "url": item.get("webUrl"),
-                            "drive": "sharepoint",
-                            "drive_name": drive_name,
-                            "mime_type": mime,
-                        })
+                        results.append(
+                            {
+                                "id": item["id"],
+                                "name": name,
+                                "size": item.get("size", 0),
+                                "modified": item.get("lastModifiedDateTime"),
+                                "url": item.get("webUrl"),
+                                "drive": "sharepoint",
+                                "drive_name": drive_name,
+                                "mime_type": mime,
+                            }
+                        )
 
             return results[:max_files]
 
@@ -157,8 +171,16 @@ class DocumentSyncService:
         if not token:
             raise RuntimeError("No Google OAuth token available")
 
-        query_parts = ["(" + " or ".join(f"mimeType='{m}'" for m in LEGAL_MIME_TYPES) + ")"]
-        query_parts.append("(" + " or ".join(f"name contains '.{ext.strip('.')}'" for ext in LEGAL_EXTENSIONS) + ")")
+        query_parts = [
+            "(" + " or ".join(f"mimeType='{m}'" for m in LEGAL_MIME_TYPES) + ")"
+        ]
+        query_parts.append(
+            "("
+            + " or ".join(
+                f"name contains '.{ext.strip('.')}'" for ext in LEGAL_EXTENSIONS
+            )
+            + ")"
+        )
         q = " and ".join(query_parts)
         q = f"({q}) and trashed=false"
 
@@ -178,15 +200,17 @@ class DocumentSyncService:
                 raise RuntimeError(f"Google Drive listing failed: {resp.status_code}")
 
             for item in resp.json().get("files", []):
-                results.append({
-                    "id": item["id"],
-                    "name": item.get("name", ""),
-                    "size": int(item.get("size", 0)),
-                    "modified": item.get("modifiedTime"),
-                    "url": item.get("webViewLink"),
-                    "drive": "google_drive",
-                    "mime_type": item.get("mimeType", ""),
-                })
+                results.append(
+                    {
+                        "id": item["id"],
+                        "name": item.get("name", ""),
+                        "size": int(item.get("size", 0)),
+                        "modified": item.get("modifiedTime"),
+                        "url": item.get("webViewLink"),
+                        "drive": "google_drive",
+                        "mime_type": item.get("mimeType", ""),
+                    }
+                )
 
         return results[:max_files]
 
@@ -200,6 +224,7 @@ class DocumentSyncService:
         """Download a file from the remote drive, save locally, return the local path."""
         if file_info["drive"] in ("onedrive", "sharepoint"):
             from app.services.token_vault import get_fresh_user_token
+
             if user_id:
                 token = await get_fresh_user_token(db, tenant_id, user_id, "microsoft")
             else:
@@ -213,16 +238,26 @@ class DocumentSyncService:
                 download_url = f"{GRAPH_BASE}/drives/{file_info.get('drive_id', '')}/items/{file_info['id']}/content"
 
             async with httpx.AsyncClient() as client:
-                resp = await client.get(download_url, headers={"Authorization": f"Bearer {token}"})
+                resp = await client.get(
+                    download_url, headers={"Authorization": f"Bearer {token}"}
+                )
                 if resp.status_code != 200:
-                    logger.warning("Download failed for %s: %s", file_info["name"], resp.status_code)
+                    logger.warning(
+                        "Download failed for %s: %s",
+                        file_info["name"],
+                        resp.status_code,
+                    )
                     return None
                 content = resp.content
 
         elif file_info["drive"] == "google_drive":
             from app.services.token_vault import get_fresh_user_token
 
-            token = await get_fresh_user_token(db, tenant_id, user_id, "google") if user_id else None
+            token = (
+                await get_fresh_user_token(db, tenant_id, user_id, "google")
+                if user_id
+                else None
+            )
             if not token:
                 return None
 
@@ -232,7 +267,11 @@ class DocumentSyncService:
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 if resp.status_code != 200:
-                    logger.warning("Download failed for %s: %s", file_info["name"], resp.status_code)
+                    logger.warning(
+                        "Download failed for %s: %s",
+                        file_info["name"],
+                        resp.status_code,
+                    )
                     return None
                 content = resp.content
         else:

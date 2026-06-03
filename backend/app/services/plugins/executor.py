@@ -137,7 +137,7 @@ class PluginExecutor:
 You are a legal assistant. {UNIVERSAL_GUARDRAILS}
 
 PRACTICE PROFILE:
-{profile or 'No practice profile configured.'}
+{profile or "No practice profile configured."}
 
 Answer the user's legal question carefully, citing sources with appropriate tags ([settled], [verify], [model knowledge]).
 Every output requires attorney review. This is not legal advice.
@@ -148,7 +148,8 @@ Every output requires attorney review. This is not legal advice.
         format_kwargs = {
             "work_product_header": WORK_PRODUCT_HEADER,
             "universal_guardrails": UNIVERSAL_GUARDRAILS,
-            "practice_profile": profile or "No practice profile configured. Proceed with general best practices.",
+            "practice_profile": profile
+            or "No practice profile configured. Proceed with general best practices.",
             "matter_context": context.get("matter_context", ""),
             "dsar_context": context.get("dsar_context", ""),
             "jurisdiction": context.get("jurisdiction", "Jurisdiction not specified"),
@@ -171,6 +172,7 @@ Every output requires attorney review. This is not legal advice.
     ) -> dict:
         """Execute a plugin skill and return structured response."""
         from app.config import get_settings
+
         settings = get_settings()
 
         profile = await self.get_practice_profile(db, tenant_id, user_id, plugin)

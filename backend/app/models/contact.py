@@ -119,9 +119,7 @@ class Lead(Base):
     )
 
     # "new" | "contacted" | "qualified" | "conflict_checked" | "engaged" | "matter_opened" | "declined"
-    status: Mapped[str] = mapped_column(
-        String(50), default="new", server_default="new"
-    )
+    status: Mapped[str] = mapped_column(String(50), default="new", server_default="new")
 
     # "referral" | "website" | "cold_call" | "existing_client" | "bar_referral" | "other"
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)

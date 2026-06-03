@@ -8,7 +8,13 @@ from app.schemas.chat import (
     ConversationDetail,
 )
 from app.schemas.document import DocumentResponse, DocumentList
-from app.schemas.admin import UserResponse, UserList, UsageStats, BillingUpdate, TenantInfo
+from app.schemas.admin import (
+    UserResponse,
+    UserList,
+    UsageStats,
+    BillingUpdate,
+    TenantInfo,
+)
 from app.schemas.contact import (
     ContactCreate,
     ContactUpdate,

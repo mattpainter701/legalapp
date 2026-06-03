@@ -1,6 +1,15 @@
 import uuid
 from datetime import datetime, timezone, date as date_type
-from sqlalchemy import String, Integer, BigInteger, Text, DateTime, Date, ForeignKey, Index
+from sqlalchemy import (
+    String,
+    Integer,
+    BigInteger,
+    Text,
+    DateTime,
+    Date,
+    ForeignKey,
+    Index,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
@@ -44,9 +53,7 @@ class Document(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
-    __table_args__ = (
-        Index("ix_chunks_tenant_id", "tenant_id"),
-    )
+    __table_args__ = (Index("ix_chunks_tenant_id", "tenant_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

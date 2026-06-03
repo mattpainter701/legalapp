@@ -17,7 +17,6 @@ GOOGLE_CAL_BASE = "https://www.googleapis.com/calendar/v3"
 
 
 class CalendarSyncService:
-
     async def ms_get_events(
         self,
         db: AsyncSession,
@@ -56,20 +55,29 @@ class CalendarSyncService:
 
             events = []
             for evt in resp.json().get("value", []):
-                events.append({
-                    "id": evt.get("id"),
-                    "provider": "microsoft",
-                    "subject": evt.get("subject", ""),
-                    "start": evt.get("start", {}).get("dateTime"),
-                    "end": evt.get("end", {}).get("dateTime"),
-                    "location": (evt.get("location", {}) or {}).get("displayName", ""),
-                    "body": (evt.get("bodyPreview") or "")[:500],
-                    "organizer": (evt.get("organizer", {}) or {}).get("emailAddress", {}).get("name", ""),
-                    "attendees": [
-                        {"name": a.get("emailAddress", {}).get("name", ""), "email": a.get("emailAddress", {}).get("address", "")}
-                        for a in (evt.get("attendees") or [])
-                    ],
-                })
+                events.append(
+                    {
+                        "id": evt.get("id"),
+                        "provider": "microsoft",
+                        "subject": evt.get("subject", ""),
+                        "start": evt.get("start", {}).get("dateTime"),
+                        "end": evt.get("end", {}).get("dateTime"),
+                        "location": (evt.get("location", {}) or {}).get(
+                            "displayName", ""
+                        ),
+                        "body": (evt.get("bodyPreview") or "")[:500],
+                        "organizer": (evt.get("organizer", {}) or {})
+                        .get("emailAddress", {})
+                        .get("name", ""),
+                        "attendees": [
+                            {
+                                "name": a.get("emailAddress", {}).get("name", ""),
+                                "email": a.get("emailAddress", {}).get("address", ""),
+                            }
+                            for a in (evt.get("attendees") or [])
+                        ],
+                    }
+                )
             return events
 
     async def ms_create_event(
@@ -108,16 +116,25 @@ class CalendarSyncService:
         if location:
             event["location"] = {"displayName": location}
         if attendees:
-            event["attendees"] = [{"emailAddress": {"address": a}, "type": "required"} for a in attendees]
+            event["attendees"] = [
+                {"emailAddress": {"address": a}, "type": "required"} for a in attendees
+            ]
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{GRAPH_BASE}/me/events",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
                 json=event,
             )
             if resp.status_code not in (200, 201):
-                logger.warning("MS Calendar create event failed: %s %s", resp.status_code, resp.text[:200])
+                logger.warning(
+                    "MS Calendar create event failed: %s %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
                 return None
             return resp.json()
 
@@ -155,20 +172,29 @@ class CalendarSyncService:
 
             events = []
             for evt in resp.json().get("items", []):
-                events.append({
-                    "id": evt.get("id"),
-                    "provider": "google",
-                    "subject": evt.get("summary", ""),
-                    "start": evt.get("start", {}).get("dateTime") or evt.get("start", {}).get("date"),
-                    "end": evt.get("end", {}).get("dateTime") or evt.get("end", {}).get("date"),
-                    "location": evt.get("location", ""),
-                    "body": (evt.get("description") or "")[:500],
-                    "organizer": (evt.get("organizer", {}) or {}).get("displayName", ""),
-                    "attendees": [
-                        {"name": a.get("displayName", ""), "email": a.get("email", "")}
-                        for a in (evt.get("attendees") or [])
-                    ],
-                })
+                events.append(
+                    {
+                        "id": evt.get("id"),
+                        "provider": "google",
+                        "subject": evt.get("summary", ""),
+                        "start": evt.get("start", {}).get("dateTime")
+                        or evt.get("start", {}).get("date"),
+                        "end": evt.get("end", {}).get("dateTime")
+                        or evt.get("end", {}).get("date"),
+                        "location": evt.get("location", ""),
+                        "body": (evt.get("description") or "")[:500],
+                        "organizer": (evt.get("organizer", {}) or {}).get(
+                            "displayName", ""
+                        ),
+                        "attendees": [
+                            {
+                                "name": a.get("displayName", ""),
+                                "email": a.get("email", ""),
+                            }
+                            for a in (evt.get("attendees") or [])
+                        ],
+                    }
+                )
             return events
 
     async def google_create_event(
@@ -208,11 +234,18 @@ class CalendarSyncService:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{GOOGLE_CAL_BASE}/calendars/primary/events",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
                 json=event,
             )
             if resp.status_code not in (200, 201):
-                logger.warning("Google Calendar create event failed: %s %s", resp.status_code, resp.text[:200])
+                logger.warning(
+                    "Google Calendar create event failed: %s %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
                 return None
             return resp.json()
 
@@ -271,7 +304,11 @@ class CalendarSyncService:
                         if result_ev:
                             created += 1
                     except Exception as exc:
-                        logger.warning("Failed to create calendar event for matter %s: %s", matter.id, exc)
+                        logger.warning(
+                            "Failed to create calendar event for matter %s: %s",
+                            matter.id,
+                            exc,
+                        )
 
         return {"created": created, "provider": provider}
 

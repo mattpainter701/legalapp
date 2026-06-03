@@ -84,7 +84,9 @@ class EmbeddingService:
             if model is None:
                 return None
 
-            prefixed = "Represent this sentence for searching relevant passages: " + text
+            prefixed = (
+                "Represent this sentence for searching relevant passages: " + text
+            )
             embedding = await asyncio.to_thread(
                 model.encode,
                 prefixed,

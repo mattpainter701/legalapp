@@ -661,7 +661,9 @@ async def exchange_oauth_callback(
         )
 
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid OAuth callback token")
 
