@@ -12,6 +12,7 @@ from app.middleware.tenant import get_current_user
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.tenant import Tenant, TenantSettings
+from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.schemas.admin import (
     AuditLog,

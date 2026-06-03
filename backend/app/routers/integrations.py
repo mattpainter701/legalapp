@@ -1,3 +1,4 @@
+import base64
 import json as _json
 import secrets
 import time as _time
@@ -130,7 +131,7 @@ async def microsoft_connect(
         f"&response_mode=query"
         f"&prompt=consent"
     )
-    return RedirectResponse(authorize_url, status_code=302)
+    return RedirectResponse(url=authorize_url)
 
 
 @router.get("/microsoft/callback")
@@ -181,20 +182,21 @@ async def microsoft_callback(
             admin_user_id = _user_id
             await set_tenant_context(db, tenant_id)
 
-            # Resolve service account email from MS Graph
+            # Resolve service account email from id_token (same approach as auth callback)
             service_email = None
-            try:
-                me_resp = await client.get(
-                    "https://graph.microsoft.com/v1.0/me",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-                if me_resp.status_code == 200:
-                    me_data = me_resp.json()
-                    service_email = me_data.get("mail") or me_data.get(
-                        "userPrincipalName"
+            id_token_raw = token_data.get("id_token")
+            if id_token_raw:
+                try:
+                    payload_b64 = id_token_raw.split(".")[1]
+                    payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                    claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                    service_email = (
+                        claims.get("email")
+                        or claims.get("preferred_username")
+                        or claims.get("upn")
                     )
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             result = await db.execute(
                 select(TenantCredential).where(
@@ -312,7 +314,7 @@ async def google_connect(
         "&prompt=consent"
         f"&state={state}"
     )
-    return RedirectResponse(authorize_url, status_code=302)
+    return RedirectResponse(url=authorize_url)
 
 
 @router.get("/google/callback")
