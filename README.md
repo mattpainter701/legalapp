@@ -158,7 +158,7 @@ cd legalapp
 Copy and edit `.env`:
 
 ```env
-DEEPSEEK_BASE_URL=https://opencode.ai/zen/go/v1   # or https://api.deepseek.com/v1
+DEEPSEEK_BASE_URL=https://opencode.ai/go/v1   # or https://api.deepseek.com/v1
 DEEPSEEK_API_KEY=sk-...                            # OpenCode.ai or direct DeepSeek key
 PRIMARY_LLM=deepseek-v4-flash
 PREMIUM_LLM=deepseek-v4-pro
