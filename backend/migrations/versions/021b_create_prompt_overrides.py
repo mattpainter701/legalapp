@@ -72,7 +72,7 @@ def upgrade() -> None:
         "idx_prompt_overrides_lookup",
         "prompt_overrides",
         ["tenant_id", "plugin_name", "skill_name"],
-        postgresql_using="hash",
+        postgresql_using="btree",
     )
 
     # RLS
