@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -129,7 +130,7 @@ async def microsoft_connect(
         f"&response_mode=query"
         f"&prompt=consent"
     )
-    return {"redirect_url": authorize_url}
+    return RedirectResponse(authorize_url, status_code=302)
 
 
 @router.get("/microsoft/callback")
@@ -141,7 +142,7 @@ async def microsoft_callback(
 ):
     valid, meta = await _consume_state(request, state)
     if not valid:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+        return _error_redirect("microsoft", "invalid_state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
     ms_tenant = settings.MICROSOFT_TENANT_ID
@@ -164,10 +165,7 @@ async def microsoft_callback(
             },
         )
         if token_resp.status_code != 200:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Token exchange failed: {token_resp.text[:200]}",
-            )
+            return _error_redirect("microsoft", "token_exchange_failed")
 
         token_data = token_resp.json()
         access_token = token_data.get("access_token")
@@ -176,7 +174,7 @@ async def microsoft_callback(
         scope_str = token_data.get("scope", "")
 
         if not access_token:
-            raise HTTPException(status_code=400, detail="No access token received")
+            return _error_redirect("microsoft", "no_access_token")
 
         if intent == "admin":
             _user_id, tenant_id = _require_state_user(meta, "admin")
@@ -271,7 +269,7 @@ async def microsoft_callback(
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "microsoft")
 
-    return {"status": "connected", "provider": "microsoft", "scopes": scope_str}
+    return await _post_connect_redirect(db, tenant_id, "microsoft")
 
 
 @router.get("/google/connect")
@@ -314,7 +312,7 @@ async def google_connect(
         "&prompt=consent"
         f"&state={state}"
     )
-    return {"redirect_url": authorize_url}
+    return RedirectResponse(authorize_url, status_code=302)
 
 
 @router.get("/google/callback")
@@ -326,7 +324,7 @@ async def google_callback(
 ):
     valid, meta = await _consume_state(request, state)
     if not valid:
-        raise HTTPException(status_code=400, detail="Invalid or expired state")
+        return _error_redirect("google", "invalid_state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/google/callback"
     intent = meta.get("intent", "user") if meta else "user"
@@ -343,10 +341,7 @@ async def google_callback(
             },
         )
         if token_resp.status_code != 200:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Token exchange failed: {token_resp.text[:200]}",
-            )
+            return _error_redirect("google", "token_exchange_failed")
 
         token_data = token_resp.json()
         access_token = token_data.get("access_token")
@@ -355,7 +350,7 @@ async def google_callback(
         scope_str = token_data.get("scope", "")
 
         if not access_token:
-            raise HTTPException(status_code=400, detail="No access token received")
+            return _error_redirect("google", "no_access_token")
 
         if intent == "admin":
             _user_id, tenant_id = _require_state_user(meta, "admin")
@@ -451,7 +446,7 @@ async def google_callback(
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "google")
 
-    return {"status": "connected", "provider": "google", "scopes": scope_str}
+    return await _post_connect_redirect(db, tenant_id, "google")
 
 
 # ── Onboarding hook ─────────────────────────────────────────────────────
@@ -502,6 +497,42 @@ async def _onboarding_post_connect(
             await db.commit()
     except Exception as exc:
         _logger.warning("Onboarding post-connect hook failed: %s", exc)
+
+
+async def _post_connect_redirect(
+    db: AsyncSession, tenant_id: str, provider: str
+) -> RedirectResponse:
+    """Build the success redirect back into the app after OAuth connect.
+
+    Lands on the onboarding wizard while onboarding is in progress, otherwise
+    the admin cloud-search settings tab. The ``connected`` query param is a UX
+    hint the frontend can use to refresh integration status.
+    """
+    from app.models.tenant import Tenant
+
+    completed = False
+    try:
+        result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = result.scalar_one_or_none()
+        completed = bool(tenant and tenant.onboarding_completed)
+    except Exception:
+        pass
+
+    base = settings.FRONTEND_URL.rstrip("/")
+    if completed:
+        target = f"{base}/admin?tab=cloud-search&connected={provider}"
+    else:
+        target = f"{base}/onboarding?connected={provider}"
+    return RedirectResponse(target, status_code=302)
+
+
+def _error_redirect(provider: str, code: str) -> RedirectResponse:
+    """Redirect back to the app's onboarding wizard with an error hint instead
+    of stranding the user on a raw-JSON error page."""
+    base = settings.FRONTEND_URL.rstrip("/")
+    return RedirectResponse(
+        f"{base}/onboarding?error={code}&provider={provider}", status_code=302
+    )
 
 
 # ── Status endpoints ─────────────────────────────────────────────────────

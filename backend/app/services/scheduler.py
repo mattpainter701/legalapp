@@ -22,14 +22,19 @@ from typing import Any, Dict, List, Optional
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
+from app.config import get_settings
 from app.database import async_session_maker
 from app.models.plugin import Matter, MatterEvent, Renewal
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
+from app.models.tenant_credential import TenantCredential
 from app.models.user import User
+from app.services.cloud_sync import CloudSyncService
 from app.services.email import email_service
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Portfolio Status",
         "description": "Sends weekly portfolio status summary to tenant administrators.",
         "schedule": "Every Monday at 9:00 AM ET",
+    },
+    {
+        "name": "cloud-sync",
+        "display_name": "Cloud Metadata Sync",
+        "description": "Syncs file/email metadata from connected Google and Microsoft accounts into the cloud index.",
+        "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
     },
 ]
 
@@ -324,8 +335,22 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        agent_count = 5
+
+        # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
+        if settings.CLOUD_SEARCH_ENABLED:
+            self.scheduler.add_job(
+                self.run_cloud_sync,
+                "interval",
+                minutes=settings.CLOUD_METADATA_SYNC_INTERVAL_MIN,
+                id="cloud-sync",
+                name="Cloud Metadata Sync",
+                replace_existing=True,
+            )
+            agent_count += 1
+
         self.scheduler.start()
-        logger.info("LegalScheduler started with 5 agents")
+        logger.info("LegalScheduler started with %d agents", agent_count)
 
     def shutdown(self) -> None:
         """Graceful shutdown of the scheduler."""
@@ -551,7 +576,7 @@ class LegalScheduler:
                 await _bypass_rls(session)
 
                 result = await session.execute(
-                    select(Matter).where(not Matter.is_closed)
+                    select(Matter).where(Matter.is_closed.is_(False))
                 )
                 matters = list(result.scalars().all())
 
@@ -670,7 +695,7 @@ class LegalScheduler:
 
                 # All active matters across all tenants
                 result = await session.execute(
-                    select(Matter).where(not Matter.is_closed)
+                    select(Matter).where(Matter.is_closed.is_(False))
                 )
                 matters = list(result.scalars().all())
 
@@ -900,6 +925,69 @@ class LegalScheduler:
                 logger.exception("[task-reminder] Unhandled error: %s", error_msg)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: cloud-sync ────────────────────────────────────────────────────
+
+    async def run_cloud_sync(self) -> None:
+        """Sync cloud file/email metadata for every tenant with active credentials.
+
+        Iterates tenants that have at least one active TenantCredential and calls
+        CloudSyncService.sync_all for each. Per-tenant failures are isolated so one
+        tenant cannot abort the whole run.
+        """
+        logger.info("[cloud-sync] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "cloud-sync")
+            try:
+                await _bypass_rls(session)
+
+                result = await session.execute(
+                    select(TenantCredential.tenant_id)
+                    .where(TenantCredential.is_active)
+                    .distinct()
+                )
+                tenant_ids = [row[0] for row in result.all()]
+
+                if not tenant_ids:
+                    await _log_complete(
+                        session, log, "No tenants with active credentials — nothing to sync."
+                    )
+                    logger.info("[cloud-sync] No connected tenants.")
+                    return
+
+                sync_svc = CloudSyncService()
+                tenants_synced = 0
+                total_records = 0
+
+                for tenant_id in tenant_ids:
+                    try:
+                        counts = await sync_svc.sync_all(session, str(tenant_id))
+                        tenants_synced += 1
+                        for provider_counts in counts.values():
+                            total_records += sum(provider_counts.values())
+                    except Exception as tenant_err:
+                        logger.warning(
+                            "[cloud-sync] Sync failed for tenant %s: %s",
+                            tenant_id,
+                            tenant_err,
+                        )
+
+                # Restore bypass context for the final log commit (sync_all set a
+                # tenant-scoped context on the shared session).
+                await _bypass_rls(session)
+
+                summary = (
+                    f"Synced {tenants_synced}/{len(tenant_ids)} tenant(s); "
+                    f"{total_records} record(s) upserted."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[cloud-sync] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[cloud-sync] Unhandled error: %s", error_msg)
+                await _bypass_rls(session)
+                await _log_failed(session, log, error_msg)
+
     # ─── Manual trigger ───────────────────────────────────────────────────────
 
     async def run_agent_manually(self, agent_name: str) -> Dict[str, Any]:
@@ -913,6 +1001,7 @@ class LegalScheduler:
             "docket-watcher": self.run_docket_watcher,
             "oc-status": self.run_oc_status,
             "task-reminder": self._check_task_reminders,
+            "cloud-sync": self.run_cloud_sync,
         }
 
         fn = agent_map.get(agent_name)

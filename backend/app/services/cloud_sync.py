@@ -126,58 +126,73 @@ class CloudSyncService:
         q = f"(({mime_clause}) or ({ext_clause})) and trashed=false"
 
         count = 0
+        page_token: str | None = None
         async with httpx.AsyncClient() as client:
             try:
-                resp = await client.get(
-                    f"{GOOGLE_DRIVE_BASE}/files",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={
+                while count < MAX_FILES:
+                    params = {
                         "q": q,
                         "pageSize": 100,
                         "fields": (
-                            "files(id,name,mimeType,webViewLink,modifiedTime,"
-                            "createdTime,size,owners,parents)"
+                            "nextPageToken,files(id,name,mimeType,webViewLink,"
+                            "modifiedTime,createdTime,size,owners,parents)"
                         ),
                         "orderBy": "modifiedTime desc",
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Google Drive listing failed: status=%d body=%.200s",
-                        resp.status_code,
-                        resp.text,
-                    )
-                    return 0
+                    }
+                    if page_token:
+                        params["pageToken"] = page_token
 
-                files = resp.json().get("files", [])
-                for item in files[:MAX_FILES]:
-                    owner_email = None
-                    owners = item.get("owners")
-                    if owners:
-                        owner_email = owners[0].get("emailAddress")
-
-                    snippet = _make_snippet(
-                        item.get("name", ""),
-                        item.get("mimeType"),
+                    resp = await client.get(
+                        f"{GOOGLE_DRIVE_BASE}/files",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=params,
                     )
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "Google Drive listing failed: status=%d body=%.200s",
+                            resp.status_code,
+                            resp.text,
+                        )
+                        break
 
-                    await self._upsert(
-                        db,
-                        tenant_id,
-                        provider="google",
-                        object_type="file",
-                        object_id=item["id"],
-                        title=item.get("name"),
-                        parent_id=(item["parents"][0] if item.get("parents") else None),
-                        owner_email=owner_email,
-                        modified_time=_parse_dt(item.get("modifiedTime")),
-                        created_time=_parse_dt(item.get("createdTime")),
-                        mime_type=item.get("mimeType"),
-                        snippet=snippet,
-                        size_bytes=_int_or_none(item.get("size")),
-                        web_url=item.get("webViewLink"),
-                    )
-                    count += 1
+                    body = resp.json()
+                    files = body.get("files", [])
+                    for item in files:
+                        if count >= MAX_FILES:
+                            break
+                        owner_email = None
+                        owners = item.get("owners")
+                        if owners:
+                            owner_email = owners[0].get("emailAddress")
+
+                        snippet = _make_snippet(
+                            item.get("name", ""),
+                            item.get("mimeType"),
+                        )
+
+                        await self._upsert(
+                            db,
+                            tenant_id,
+                            provider="google",
+                            object_type="file",
+                            object_id=item["id"],
+                            title=item.get("name"),
+                            parent_id=(
+                                item["parents"][0] if item.get("parents") else None
+                            ),
+                            owner_email=owner_email,
+                            modified_time=_parse_dt(item.get("modifiedTime")),
+                            created_time=_parse_dt(item.get("createdTime")),
+                            mime_type=item.get("mimeType"),
+                            snippet=snippet,
+                            size_bytes=_int_or_none(item.get("size")),
+                            web_url=item.get("webViewLink"),
+                        )
+                        count += 1
+
+                    page_token = body.get("nextPageToken")
+                    if not page_token:
+                        break
 
                 await db.commit()
             except Exception as exc:
@@ -207,23 +222,41 @@ class CloudSyncService:
 
         since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y/%m/%d")
         count = 0
+        page_token: str | None = None
 
         async with httpx.AsyncClient() as client:
             try:
-                list_resp = await client.get(
-                    f"{GMAIL_BASE}/users/me/messages",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"q": f"after:{since}", "maxResults": MAX_EMAILS},
-                )
-                if list_resp.status_code != 200:
-                    logger.warning(
-                        "Gmail listing failed: status=%d body=%.200s",
-                        list_resp.status_code,
-                        list_resp.text,
-                    )
-                    return 0
+                # Page through the message list (Gmail returns up to 500 ids/page)
+                messages: list[dict] = []
+                while len(messages) < MAX_EMAILS:
+                    list_params: dict = {
+                        "q": f"after:{since}",
+                        "maxResults": min(500, MAX_EMAILS - len(messages)),
+                    }
+                    if page_token:
+                        list_params["pageToken"] = page_token
 
-                messages = list_resp.json().get("messages", [])
+                    list_resp = await client.get(
+                        f"{GMAIL_BASE}/users/me/messages",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=list_params,
+                    )
+                    if list_resp.status_code != 200:
+                        logger.warning(
+                            "Gmail listing failed: status=%d body=%.200s",
+                            list_resp.status_code,
+                            list_resp.text,
+                        )
+                        if not messages:
+                            return 0
+                        break
+
+                    list_body = list_resp.json()
+                    messages.extend(list_body.get("messages", []))
+                    page_token = list_body.get("nextPageToken")
+                    if not page_token:
+                        break
+
                 for msg in messages[:MAX_EMAILS]:
                     msg_id = msg["id"]
 
@@ -369,8 +402,8 @@ class CloudSyncService:
                         drive_name=drive_name,
                     )
                     count += item_count
-
-                await db.commit()
+                    # _sync_graph_files commits each page internally; no extra
+                    # commit needed here.
             except Exception as exc:
                 await db.rollback()
                 logger.warning("SharePoint sync error: %s", exc)
@@ -398,29 +431,40 @@ class CloudSyncService:
             return 0
 
         count = 0
+        next_url: str | None = f"{GRAPH_BASE}/users/me/messages"
+        first_params: dict | None = {
+            "$select": (
+                "id,subject,bodyPreview,from,toRecipients,"
+                "ccRecipients,receivedDateTime,hasAttachments,conversationId"
+            ),
+            "$top": 100,
+            "$orderby": "receivedDateTime desc",
+        }
         async with httpx.AsyncClient() as client:
             try:
-                resp = await client.get(
-                    f"{GRAPH_BASE}/users/me/messages",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={
-                        "$select": (
-                            "id,subject,bodyPreview,from,toRecipients,"
-                            "ccRecipients,receivedDateTime,hasAttachments,conversationId"
-                        ),
-                        "$top": 100,
-                        "$orderby": "receivedDateTime desc",
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Outlook mail listing failed: status=%d body=%.200s",
-                        resp.status_code,
-                        resp.text,
+                # Page through messages (following @odata.nextLink) up to MAX_EMAILS
+                messages: list[dict] = []
+                while next_url and len(messages) < MAX_EMAILS:
+                    resp = await client.get(
+                        next_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=first_params,
                     )
-                    return 0
+                    first_params = None
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "Outlook mail listing failed: status=%d body=%.200s",
+                            resp.status_code,
+                            resp.text,
+                        )
+                        if not messages:
+                            return 0
+                        break
 
-                messages = resp.json().get("value", [])
+                    body = resp.json()
+                    messages.extend(body.get("value", []))
+                    next_url = body.get("@odata.nextLink")
+
                 for msg in messages[:MAX_EMAILS]:
                     from_field = msg.get("from", {}) or {}
                     from_email = from_field.get("emailAddress", {}).get("address", "")
@@ -540,82 +584,92 @@ class CloudSyncService:
         Filters to ``LEGAL_EXTENSIONS`` and ``LEGAL_MIME_TYPES``.
         """
         count = 0
+        next_url: str | None = children_url
+        first_params: dict | None = {
+            "$top": 100,
+            "$select": (
+                "id,name,file,size,lastModifiedDateTime,"
+                "createdDateTime,webUrl,parentReference,createdBy"
+            ),
+        }
         async with httpx.AsyncClient() as client:
             try:
-                resp = await client.get(
-                    children_url,
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={
-                        "$top": 100,
-                        "$select": (
-                            "id,name,file,size,lastModifiedDateTime,"
-                            "createdDateTime,webUrl,parentReference,createdBy"
-                        ),
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Graph files listing failed (%s): status=%d",
-                        children_url,
-                        resp.status_code,
+                while next_url and count < MAX_FILES:
+                    resp = await client.get(
+                        next_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=first_params,
                     )
-                    return 0
-
-                items = resp.json().get("value", [])
-                for item in items:
-                    if count >= MAX_FILES:
+                    # Subsequent pages use the @odata.nextLink (params baked in)
+                    first_params = None
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "Graph files listing failed (%s): status=%d",
+                            next_url,
+                            resp.status_code,
+                        )
                         break
 
-                    file_info = item.get("file")
-                    if not file_info:
-                        continue
+                    body = resp.json()
+                    items = body.get("value", [])
+                    next_url = body.get("@odata.nextLink")
+                    for item in items:
+                        if count >= MAX_FILES:
+                            break
 
-                    name = item.get("name", "")
-                    ext = Path(name).suffix.lower()
-                    mime = file_info.get("mimeType", "")
+                        file_info = item.get("file")
+                        if not file_info:
+                            continue
 
-                    if ext not in LEGAL_EXTENSIONS and mime not in LEGAL_MIME_TYPES:
-                        continue
+                        name = item.get("name", "")
+                        ext = Path(name).suffix.lower()
+                        mime = file_info.get("mimeType", "")
 
-                    owner_email = None
-                    created_by = item.get("createdBy", {})
-                    if created_by:
-                        user_info = created_by.get("user", {})
-                        if user_info:
-                            owner_email = user_info.get("email")
+                        if (
+                            ext not in LEGAL_EXTENSIONS
+                            and mime not in LEGAL_MIME_TYPES
+                        ):
+                            continue
 
-                    parent_ref = item.get("parentReference", {})
-                    parent_id = parent_ref.get("id")
+                        owner_email = None
+                        created_by = item.get("createdBy", {})
+                        if created_by:
+                            user_info = created_by.get("user", {})
+                            if user_info:
+                                owner_email = user_info.get("email")
 
-                    # Build a logical path from parent path + drive name
-                    raw_path = (parent_ref.get("path") or "").replace(
-                        "/drive/root:", "/"
-                    )
-                    if drive_name:
-                        path_segments = f"/{drive_name}{raw_path}/{name}"
-                    else:
-                        path_segments = f"{raw_path}/{name}"
+                        parent_ref = item.get("parentReference", {})
+                        parent_id = parent_ref.get("id")
 
-                    snippet = _make_snippet(name, mime)
+                        # Build a logical path from parent path + drive name
+                        raw_path = (parent_ref.get("path") or "").replace(
+                            "/drive/root:", "/"
+                        )
+                        if drive_name:
+                            path_segments = f"/{drive_name}{raw_path}/{name}"
+                        else:
+                            path_segments = f"{raw_path}/{name}"
 
-                    await self._upsert(
-                        db,
-                        tenant_id,
-                        provider="microsoft",
-                        object_type=object_type,
-                        object_id=item["id"],
-                        title=name,
-                        parent_id=parent_id,
-                        path=path_segments,
-                        owner_email=owner_email,
-                        modified_time=_parse_dt(item.get("lastModifiedDateTime")),
-                        created_time=_parse_dt(item.get("createdDateTime")),
-                        mime_type=mime,
-                        snippet=snippet,
-                        size_bytes=item.get("size"),
-                        web_url=item.get("webUrl"),
-                    )
-                    count += 1
+                        snippet = _make_snippet(name, mime)
+
+                        await self._upsert(
+                            db,
+                            tenant_id,
+                            provider="microsoft",
+                            object_type=object_type,
+                            object_id=item["id"],
+                            title=name,
+                            parent_id=parent_id,
+                            path=path_segments,
+                            owner_email=owner_email,
+                            modified_time=_parse_dt(item.get("lastModifiedDateTime")),
+                            created_time=_parse_dt(item.get("createdDateTime")),
+                            mime_type=mime,
+                            snippet=snippet,
+                            size_bytes=item.get("size"),
+                            web_url=item.get("webUrl"),
+                        )
+                        count += 1
 
                 await db.commit()
             except Exception as exc:

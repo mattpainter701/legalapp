@@ -1,11 +1,46 @@
 from typing import List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.config import get_settings
 from app.services.embeddings import EmbeddingService
 
 settings = get_settings()
+
+
+async def _connected_providers(
+    db: AsyncSession,
+    tenant_id: str,
+    user_id: str | None,
+) -> list[str]:
+    """Return the list of cloud providers this tenant/user can actually search.
+
+    Combines active tenant-wide credentials with the calling user's own OAuth
+    tokens so the planner only targets providers that are connected.
+    """
+    from app.models.tenant_credential import TenantCredential
+    from app.models.user_oauth_token import UserOAuthToken
+
+    providers: set[str] = set()
+
+    cred_rows = await db.execute(
+        select(TenantCredential.provider).where(
+            TenantCredential.tenant_id == tenant_id,
+            TenantCredential.is_active,
+        )
+    )
+    providers.update(p for (p,) in cred_rows.all() if p)
+
+    if user_id:
+        user_rows = await db.execute(
+            select(UserOAuthToken.provider).where(
+                UserOAuthToken.tenant_id == tenant_id,
+                UserOAuthToken.user_id == user_id,
+            )
+        )
+        providers.update(p for (p,) in user_rows.all() if p)
+
+    return [p for p in ("google", "microsoft") if p in providers]
 
 
 class RAGService:
@@ -247,11 +282,16 @@ async def hybrid_rag_query(
         _settings = _get_settings()
         if _settings.CLOUD_SEARCH_ENABLED:
             try:
-                plan = await retrieval_planner.plan(
-                    user_question=question,
-                    tenant_name=tenant_name,
-                    matter_context=matter_context_str,
-                )
+                # Only plan/search providers the tenant (or user) has connected.
+                connected = await _connected_providers(db, tenant_id, user_id)
+                plan = None
+                if connected:
+                    plan = await retrieval_planner.plan(
+                        user_question=question,
+                        tenant_name=tenant_name,
+                        matter_context=matter_context_str,
+                        active_providers=connected,
+                    )
                 if plan and plan.get("should_search"):
                     cloud_hits = await cloud_search_service.search(
                         db=db,

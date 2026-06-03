@@ -8,13 +8,25 @@ snippets + metadata.
 import base64
 import logging
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.database import set_tenant_context
+from app.models.cloud_metadata import CloudMetadata
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
+
+# Map index (provider, object_type) → CloudHit.source used by fetch_content.
+_INDEX_SOURCE_MAP = {
+    ("google", "file"): "drive",
+    ("google", "email"): "gmail",
+    ("microsoft", "file"): "onedrive",
+    ("microsoft", "email"): "outlook",
+}
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -112,6 +124,11 @@ class CloudSearchService:
                     )
                 )
 
+        # Always include the locally-synced metadata index. It is a reliable
+        # fallback when live tokens are limited and gives the sync subsystem a
+        # consumer.
+        tasks.append(self.search_index(db, plan, tenant_id))
+
         for batch in tasks:
             try:
                 hits = await batch
@@ -130,7 +147,97 @@ class CloudSearchService:
 
         # Re-sort by relevance
         deduped.sort(key=lambda x: x.relevance_score, reverse=True)
-        return deduped[: max_hits * 3]
+        return deduped[:max_hits]
+
+    async def search_index(
+        self,
+        db: AsyncSession,
+        plan: dict,
+        tenant_id: str,
+    ) -> list[CloudHit]:
+        """Search the locally-synced ``cloud_metadata_index`` for matching items.
+
+        Filters by the plan's sources/keywords/date and returns CloudHits ranked
+        by keyword-match count and recency. Full content is still fetched live by
+        ``fetch_content`` when needed — only metadata is read here.
+        """
+        keywords = [k for k in plan.get("keywords", []) if k]
+        date_after = plan.get("date_after") or ""
+        sources = plan.get("sources", None)
+        max_hits = plan.get("max_hits", settings.CLOUD_SEARCH_MAX_HITS)
+
+        # Restrict to the (provider, object_type) pairs the plan asked for.
+        allowed: set[tuple[str, str]] = set()
+        for (provider, object_type), source in _INDEX_SOURCE_MAP.items():
+            if sources is None or source in sources:
+                allowed.add((provider, object_type))
+        if not allowed:
+            return []
+
+        await set_tenant_context(db, tenant_id)
+
+        stmt = select(CloudMetadata).where(CloudMetadata.tenant_id == tenant_id)
+        stmt = stmt.where(
+            or_(
+                *[
+                    (CloudMetadata.provider == p) & (CloudMetadata.object_type == t)
+                    for (p, t) in allowed
+                ]
+            )
+        )
+        if keywords:
+            kw_clauses = []
+            for kw in keywords:
+                like = f"%{kw}%"
+                kw_clauses.append(CloudMetadata.title.ilike(like))
+                kw_clauses.append(CloudMetadata.snippet.ilike(like))
+            stmt = stmt.where(or_(*kw_clauses))
+        if date_after:
+            parsed = _parse_index_date(date_after)
+            if parsed:
+                stmt = stmt.where(CloudMetadata.modified_time >= parsed)
+
+        stmt = stmt.order_by(CloudMetadata.modified_time.desc().nullslast()).limit(
+            max_hits * 3
+        )
+
+        rows = (await db.execute(stmt)).scalars().all()
+
+        hits: list[CloudHit] = []
+        for row in rows:
+            source = _INDEX_SOURCE_MAP.get((row.provider, row.object_type), "drive")
+            # Score: keyword-match density (title weighted) lightly biased recent.
+            title_l = (row.title or "").lower()
+            snippet_l = (row.snippet or "").lower()
+            matches = sum(
+                (2 if kw.lower() in title_l else 0)
+                + (1 if kw.lower() in snippet_l else 0)
+                for kw in keywords
+            )
+            score = 0.5 + min(matches, 10) * 0.05  # 0.5–1.0 band, below live hits
+            participants = (
+                list(row.participants.values())
+                if isinstance(row.participants, dict)
+                else []
+            )
+            hits.append(
+                CloudHit(
+                    provider=row.provider,
+                    source=source,
+                    object_id=row.object_id,
+                    title=row.title or "",
+                    snippet=row.snippet or "",
+                    url=row.web_url or "",
+                    modified_time=row.modified_time.isoformat()
+                    if row.modified_time
+                    else "",
+                    mime_type=row.mime_type or "",
+                    participants=[p for p in participants if p],
+                    relevance_score=min(score, 0.99),
+                )
+            )
+
+        return hits
 
     async def fetch_content(
         self,
@@ -300,7 +407,7 @@ class CloudSearchService:
         for kw in keywords:
             sanitised = kw.replace('"', '\\"')
             if "@" in sanitised:
-                query_parts.append(f"from:{{{sanitised}}} OR subject:{{{sanitised}}}")
+                query_parts.append(f"from:{sanitised} OR to:{sanitised}")
             else:
                 query_parts.append(f"subject:{sanitised} OR {sanitised}")
         if date_after:
@@ -742,3 +849,14 @@ def _source_enabled(sources: list[str] | None, name: str) -> bool:
     if sources is None:
         return True
     return name in sources
+
+
+def _parse_index_date(value: str) -> datetime | None:
+    """Parse a planner ``date_after`` (e.g. ``2026-01-01``) into a tz-aware datetime."""
+    try:
+        dt = datetime.fromisoformat(value[:19])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
