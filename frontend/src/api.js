@@ -161,6 +161,10 @@ export const getAdminUsage = () =>
 
 export const getAdminTenant = () =>
   api.get('/admin/tenant').then((r) => r.data)
+export const getAdminSettings = () =>
+  api.get('/admin/settings').then((r) => r.data)
+export const updateAdminSettings = (body) =>
+  api.put('/admin/settings', body).then((r) => r.data)
 
 // Onboarding
 export const getOnboardingStatus = () =>

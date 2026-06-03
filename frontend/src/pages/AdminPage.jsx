@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAdminUsers, getAdminUsage, getAdminTenant, configureCustomerLLM, resetCustomerLLM } from '../api'
+import { getAdminUsers, getAdminUsage, getAdminTenant, getAdminSettings, updateAdminSettings, configureCustomerLLM, resetCustomerLLM } from '../api'
 import { useAuth } from '../App'
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
@@ -266,20 +266,57 @@ function TenantTab() {
   )
 }
 
-// ── Tab: Settings (case law + model) ─────────────────────────────────────────
+// ── Tab: Settings (case law + LLM provider) ──────────────────────────────────
+
+const PROVIDERS = [
+  { value: 'deepseek', label: 'DeepSeek (via OpenCode Go)', desc: 'DeepSeek V4 Flash/Pro — fast, affordable' },
+  { value: 'opencode', label: 'OpenCode Zen (free)', desc: 'Free-tier models via zen.opencode.ai' },
+  { value: 'openrouter', label: 'OpenRouter', desc: 'Multi-model gateway — Gemma, Llama, Qwen free tiers' },
+  { value: 'gemini', label: 'Google Gemini', desc: 'Gemini 2.0 Flash — requires GEMINI_API_KEY' },
+  { value: 'azure', label: 'Azure OpenAI (Copilot)', desc: 'GPT-4o — requires Azure credentials' },
+  { value: 'anthropic', label: 'Anthropic Claude', desc: 'Claude Opus/Sonnet — requires ANTHROPIC_API_KEY' },
+]
 
 function SettingsTab() {
   const [includePublic, setIncludePublic] = useState(() => {
     const stored = localStorage.getItem('clarity_include_public')
     return stored === null ? true : stored === 'true'
   })
-  const [usePremium, setUsePremium] = useState(
-    () => localStorage.getItem('clarity_use_premium') === 'true'
-  )
+  const [provider, setProvider] = useState('')
+  const [modelOverride, setModelOverride] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    getAdminSettings()
+      .then((s) => {
+        setProvider(s.default_llm_provider || '')
+        setModelOverride(s.default_llm_model || '')
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
+  }, [])
 
   const persist = (key, setter) => (val) => {
     setter(val)
     localStorage.setItem(key, String(val))
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await updateAdminSettings({
+        default_llm_provider: provider || null,
+        default_llm_model: modelOverride || null,
+      })
+      setMsg({ type: 'success', text: 'Settings saved.' })
+    } catch (err) {
+      setMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to save.' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setMsg(null), 4000)
+    }
   }
 
   return (
@@ -311,27 +348,69 @@ function SettingsTab() {
         </div>
       </div>
 
-      {/* Model Settings */}
+      {/* LLM Provider Settings */}
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
         <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
-          <h3 className="font-serif font-bold text-xl text-brand-ink">Model Settings</h3>
+          <h3 className="font-serif font-bold text-xl text-brand-ink">LLM Provider</h3>
           <p className="text-sm text-brand-ink-2 font-sans mt-1">
-            Configure the default AI model behaviour for new conversations in your tenant.
+            Choose the default AI provider and model for your tenant. The backend falls back to the platform default when nothing is selected.
           </p>
         </div>
-        <div className="divide-y divide-brand-line">
-          <div className="flex items-center justify-between px-8 py-5">
-            <div>
-              <p className="text-sm font-sans font-semibold text-brand-ink">Premium model</p>
-              <p className="text-xs text-brand-ink-2 font-sans mt-1">
-                Use the premium LLM for new conversations (higher cost)
+        <div className="divide-y divide-brand-line px-8 py-5 space-y-5">
+          {/* Provider dropdown */}
+          <div>
+            <label className="block text-sm font-sans font-semibold text-brand-ink mb-2">
+              Provider
+            </label>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+            >
+              <option value="">Platform default</option>
+              {PROVIDERS.map((p) => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+            {provider && (
+              <p className="text-xs text-brand-ink-2 mt-1.5 ml-1 font-sans">
+                {PROVIDERS.find((p) => p.value === provider)?.desc}
               </p>
-            </div>
-            <Toggle
-              checked={usePremium}
-              onChange={persist('clarity_use_premium', setUsePremium)}
-              label="Premium model"
+            )}
+          </div>
+
+          {/* Model override */}
+          <div>
+            <label className="block text-sm font-sans font-semibold text-brand-ink mb-2">
+              Model override{' '}
+              <span className="text-brand-ink-2 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={modelOverride}
+              onChange={(e) => setModelOverride(e.target.value)}
+              placeholder="e.g. deepseek-v4-flash, claude-opus-4-8"
+              className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20 placeholder:text-brand-muted"
             />
+            <p className="text-xs text-brand-ink-2 mt-1.5 ml-1 font-sans">
+              Override the default model for the selected provider. Leave blank to use the provider's default.
+            </p>
+          </div>
+
+          {/* Save */}
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              onClick={handleSave}
+              disabled={saving || !loaded}
+              className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink/90 disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            {msg && (
+              <span className={`text-sm font-sans ${msg.type === 'success' ? 'text-brand-green' : 'text-brand-rose'}`}>
+                {msg.text}
+              </span>
+            )}
           </div>
         </div>
       </div>
