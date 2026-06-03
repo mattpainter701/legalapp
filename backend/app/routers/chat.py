@@ -370,7 +370,7 @@ async def send_message(
         context_str, chunks = cached_rag
         cache_hit_rag = True
     else:
-try:
+        try:
             context_str, chunks = await full_rag_query(
                 db=db,
                 embedding_service=embedding_service,
@@ -433,7 +433,7 @@ try:
         response_text = cached_response
         cache_hit_llm = True
     else:
-try:
+        try:
             response_text, tokens_in, tokens_out = await llm_service.complete(
                 messages=history_messages,
                 tenant_name=tenant_name,
