@@ -74,6 +74,42 @@ class MemoryService:
         result = await db.execute(query)
         return result.scalars().all()
 
+    async def get_memory_context_for_injection(
+        self,
+        db: AsyncSession,
+        user_id: str,
+    ) -> str:
+        """
+        Format user memory summary and top 3 recent interaction patterns for injection into system prompt.
+        Returns formatted string or empty string if no memory available.
+        """
+        # Get the user's memory summary
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+
+        if not user or not user.memory_summary:
+            return ""
+
+        memory_parts = [f"User Memory Summary:\n{user.memory_summary}"]
+
+        # Get top 3 recent interaction patterns
+        memories = await self.get_memory(
+            db=db,
+            user_id=user_id,
+            memory_type="interaction_pattern",
+        )
+
+        if memories:
+            recent_interactions = memories[-3:] if len(memories) >= 3 else memories
+            memory_parts.append("\nRecent Interactions:")
+            for i, m in enumerate(recent_interactions, 1):
+                interaction_text = str(m.value)[
+                    :200
+                ]  # Limit to 200 chars per interaction
+                memory_parts.append(f"{i}. {interaction_text}")
+
+        return "\n".join(memory_parts)
+
     async def summarize_conversation(
         self,
         db: AsyncSession,

@@ -44,6 +44,7 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
     """
     Background task: extract text, chunk, embed, and store chunks.
     Uses a fresh DB session since this runs outside the request context.
+    Offloads CPU-bound work (text extraction, chunking) to thread pool via asyncio.to_thread().
     """
     async with async_session_maker() as db:
         try:
@@ -70,8 +71,9 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             async with aiofiles.open(doc.storage_path, "rb") as f:
                 file_bytes = await f.read()
 
-            # Extract text
-            text = await extract_text(
+            # Extract text (CPU-bound) in thread pool
+            text = await asyncio.to_thread(
+                extract_text,
                 file_bytes=file_bytes,
                 content_type=doc.content_type or "",
                 filename=doc.filename,
@@ -83,8 +85,8 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
                 await db.commit()
                 return
 
-            # Chunk text
-            chunks_text = chunk_text(text, chunk_size=500, overlap=50)
+            # Chunk text (CPU-bound) in thread pool
+            chunks_text = await asyncio.to_thread(chunk_text, text, 500, 50)
 
             if not chunks_text:
                 doc.status = "error"

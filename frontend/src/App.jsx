@@ -60,6 +60,8 @@ export function AuthProvider({ children }) {
   }, [token, fetchUser])
 
   const login = useCallback(async (newToken) => {
+    // DEPRECATED: No longer storing token in localStorage (now using httpOnly cookie)
+    // Keep this line for backward compatibility during transition, but new tokens come from cookies
     localStorage.setItem('token', newToken)
     setToken(newToken)
     const me = await fetchUser(newToken)

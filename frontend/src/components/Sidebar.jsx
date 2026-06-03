@@ -1,10 +1,19 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
+import IntegrationPanel from './IntegrationPanel'
 import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Users, CheckSquare, Filter } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X } from 'lucide-react'
 
-function ConversationItem({ conv, index, isActive, onClick, onDelete }) {
+function ConversationItem({
+  conv,
+  index,
+  isActive,
+  isPinned,
+  onClick,
+  onDelete,
+  onTogglePin,
+}) {
   const [hover, setHover] = useState(false)
 
   return (
@@ -27,22 +36,38 @@ function ConversationItem({ conv, index, isActive, onClick, onDelete }) {
       }}
     >
       <span className="font-mono text-[10px] pt-[3px] text-brand-muted shrink-0">
-        {String(index + 1).padStart(2, '0')}
+        {isPinned ? '📌' : String(index + 1).padStart(2, '0')}
       </span>
       <span className="flex-1 truncate leading-tight" title={conv.title || 'Untitled conversation'}>
         {conv.title || 'Untitled conversation'}
       </span>
       {(hover || isActive) && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(conv.id)
-          }}
-          className="shrink-0 p-1 text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose transition-colors"
-          title="Delete conversation"
-        >
-          <Trash2 size={13} />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onTogglePin?.(conv.id)
+            }}
+            className={`p-1 transition-colors ${
+              isPinned
+                ? 'text-brand-accent hover:bg-brand-accent/10'
+                : 'text-brand-muted hover:bg-brand-accent/10 hover:text-brand-accent'
+            }`}
+            title={isPinned ? 'Unpin conversation' : 'Pin conversation'}
+          >
+            <Pin size={13} fill={isPinned ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(conv.id)
+            }}
+            className="p-1 text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose transition-colors"
+            title="Delete conversation"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
       )}
     </div>
   )
@@ -99,6 +124,8 @@ export default function Sidebar({
   onLogout,
 }) {
   const navigate = useNavigate()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [pinnedConvIds, setPinnedConvIds] = useState([])
 
   const handleDeleteConv = async (id) => {
     try {
@@ -117,6 +144,32 @@ export default function Sidebar({
       console.error('Failed to delete document', err)
     }
   }
+
+  const handleTogglePin = (id) => {
+    setPinnedConvIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+  }
+
+  // Filter and sort conversations
+  const filteredConversations = useMemo(() => {
+    const filtered = conversations.filter((conv) =>
+      (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
+    )
+
+    // Separate pinned and unpinned
+    const pinned = filtered.filter((c) => pinnedConvIds.includes(c.id))
+    const unpinned = filtered.filter((c) => !pinnedConvIds.includes(c.id))
+
+    // Sort unpinned by date (newest first)
+    unpinned.sort(
+      (a, b) =>
+        new Date(b.updated_at || b.created_at).getTime() -
+        new Date(a.updated_at || a.created_at).getTime()
+    )
+
+    return [...pinned, ...unpinned]
+  }, [conversations, searchQuery, pinnedConvIds])
 
   return (
     <div className="w-[300px] flex-shrink-0 border-r border-brand-line flex flex-col h-full bg-brand-surface-2 relative z-20">
@@ -145,52 +198,55 @@ export default function Sidebar({
             <Blocks className="w-4 h-4" /> Add-on Modules
           </span>
         </button>
-        <button
-          onClick={() => navigate('/contacts')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Users className="w-4 h-4" /> Contacts
-          </span>
-        </button>
-        <button
-          onClick={() => navigate('/tasks')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <CheckSquare className="w-4 h-4" /> Tasks
-          </span>
-        </button>
-        <button
-          onClick={() => navigate('/intake')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Filter className="w-4 h-4" /> Intake
-          </span>
-        </button>
       </div>
 
       {/* Scrollable areas */}
       <div className="flex-1 overflow-y-auto">
         {/* Conversations */}
         <div className="py-4">
-          <div className="px-4 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
+          <div className="px-4 mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
             <span>Conversations</span>
-            <span className="font-mono text-[10px]">{conversations.length}</span>
+            <span className="font-mono text-[10px]">{filteredConversations.length}</span>
           </div>
+
+          {/* Search */}
+          {conversations.length > 0 && (
+            <div className="px-4 mb-3 relative">
+              <Search className="absolute left-6 top-2.5 w-3.5 h-3.5 text-brand-muted pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-brand-bg border border-brand-line rounded text-xs text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-2.5 text-brand-muted hover:text-brand-ink"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          )}
+
           {conversations.length === 0 ? (
             <p className="px-4 text-[13px] text-brand-muted italic font-sans">No history yet</p>
+          ) : filteredConversations.length === 0 ? (
+            <p className="px-4 text-[13px] text-brand-muted italic font-sans">No matching conversations</p>
           ) : (
             <div className="flex flex-col">
-              {conversations.map((conv, index) => (
+              {filteredConversations.map((conv, index) => (
                 <ConversationItem
                   key={conv.id}
                   conv={conv}
                   index={index}
                   isActive={conv.id === activeConvId}
+                  isPinned={pinnedConvIds.includes(conv.id)}
                   onClick={() => onSelectConversation(conv.id)}
                   onDelete={handleDeleteConv}
+                  onTogglePin={handleTogglePin}
                 />
               ))}
             </div>
@@ -217,6 +273,27 @@ export default function Sidebar({
           <div className="px-4">
             <FileUpload onUploadComplete={onDocumentUploaded} />
           </div>
+        </div>
+
+        <div className="w-full h-px bg-brand-line my-2"></div>
+
+        {/* Cloud Integrations */}
+        <div className="py-4 px-4">
+          <IntegrationPanel
+            integrationStatus={{
+              google_drive: { connected: false, fileCount: 0 },
+              onedrive: { connected: false, fileCount: 0 },
+              sharepoint: { connected: false, fileCount: 0 },
+            }}
+            onConnect={(serviceId) => {
+              // TODO: Implement OAuth flow for each service
+              console.log('Connect to:', serviceId)
+            }}
+            onDisconnect={(serviceId) => {
+              // TODO: Implement disconnect
+              console.log('Disconnect from:', serviceId)
+            }}
+          />
         </div>
       </div>
 

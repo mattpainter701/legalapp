@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import stripe
@@ -24,7 +25,8 @@ async def ensure_stripe_customer(tenant: Tenant, db: AsyncSession) -> None:
         return
     stripe.api_key = settings.STRIPE_SECRET_KEY
     try:
-        customer = stripe.Customer.create(
+        customer = await asyncio.to_thread(
+            stripe.Customer.create,
             name=tenant.company_name or tenant.name,
             metadata={"tenant_id": str(tenant.id), "domain": tenant.domain},
         )
@@ -95,7 +97,8 @@ async def create_checkout_session(
     )
 
     try:
-        session = stripe.checkout.Session.create(
+        session = await asyncio.to_thread(
+            stripe.checkout.Session.create,
             customer=tenant.stripe_customer_id,
             mode="subscription",
             line_items=[
@@ -145,7 +148,8 @@ async def create_portal_session(
     return_url = f"{settings.FRONTEND_URL}/billing"
 
     try:
-        portal = stripe.billing_portal.Session.create(
+        portal = await asyncio.to_thread(
+            stripe.billing_portal.Session.create,
             customer=tenant.stripe_customer_id,
             return_url=return_url,
         )
@@ -179,8 +183,11 @@ async def stripe_webhook(
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        event = await asyncio.to_thread(
+            stripe.Webhook.construct_event,
+            payload,
+            sig_header,
+            settings.STRIPE_WEBHOOK_SECRET,
         )
     except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -7,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import set_tenant_context
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -78,6 +81,11 @@ async def refresh_microsoft_token(
             },
         )
         if resp.status_code != 200:
+            logger.error(
+                "Microsoft token refresh failed: status=%d body=%s",
+                resp.status_code,
+                resp.text,
+            )
             return None
 
         data = resp.json()
