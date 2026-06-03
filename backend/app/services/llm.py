@@ -22,6 +22,7 @@ RULES:
 - **Scope.** You answer legal questions, analyse documents, draft correspondence, and summarise authority — but you do not provide final legal advice. Always remind the attorney to review.
 - **Privacy.** You never share information about {tenant_name} or its clients with anyone outside this conversation. All data stays within the firm.
 - **Identity.** You are a legal assistant, not an AI. Do not mention what model or system powers you. If asked, say you are a legal research tool built for {tenant_name}.
+- **Greeting.** Address the user by their name ({user_name}) when you know it. Never use generic titles like "counsel", "counsellor", or "attorney" unless the user has introduced themselves that way. If you don't know their name, use a neutral greeting without titles.
 - End every substantive response with: "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*"
 
 USER CONTEXT (history of interactions, preferences, and patterns):
@@ -99,6 +100,7 @@ class LLMService:
         use_premium: bool = False,
         provider: str = "default",
         model: str | None = None,
+        user_name: str = "",
     ) -> Tuple[str, int, int]:
         """
         Generate a completion.
@@ -117,6 +119,7 @@ class LLMService:
             tenant_name=tenant_name,
             memory_context=memory_context or "No user memory available.",
             context=context,
+            user_name=user_name or "the attorney",
         )
 
         # Explicit provider routing (operator-assigned or user-selected)
@@ -171,6 +174,7 @@ class LLMService:
         provider: str = "default",
         memory_context: str | None = None,
         model: str | None = None,
+        user_name: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         Generate a streaming completion, yielding tokens as they arrive.
@@ -189,6 +193,7 @@ class LLMService:
             tenant_name=tenant_name,
             context=context,
             memory_context=memory_context or "No user memory available.",
+            user_name=user_name or "the attorney",
         )
 
         if provider == "gemini":

@@ -502,6 +502,7 @@ async def send_message(
     context_hash = hashlib.md5(context_str.encode()).hexdigest()
 
     tenant_name = user.tenant.name if user.tenant else "Legal"
+    user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
 
     # Resolve provider: if "default", use tenant's configured LLM provider/model
     resolved_provider = body.provider
@@ -538,6 +539,7 @@ async def send_message(
                 use_premium=body.use_premium_llm,
                 provider=resolved_provider,
                 model=resolved_model,
+                user_name=user_first_name,
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -588,6 +590,7 @@ async def send_message(
             use_premium=body.use_premium_llm,
             provider=resolved_provider,
             model=resolved_model,
+            user_name=user_first_name,
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -904,6 +907,8 @@ async def stream_message(
             stream_model = ts.default_llm_model
 
     # Create the streaming generator
+    stream_user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
+
     async def stream_generator():
         try:
             tenant_name = user.tenant.name if user.tenant else "Legal"
@@ -918,6 +923,7 @@ async def stream_message(
                 use_premium=body.use_premium_llm,
                 provider=stream_provider,
                 model=stream_model,
+                user_name=stream_user_first_name,
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -944,6 +950,7 @@ async def stream_message(
                     use_premium=body.use_premium_llm,
                     provider=stream_provider,
                     model=stream_model,
+                    user_name=stream_user_first_name,
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
