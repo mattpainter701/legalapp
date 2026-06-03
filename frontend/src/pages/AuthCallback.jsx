@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { exchangeOAuthCode } from '../api'
+import { exchangeOAuthCode, getOnboardingStatus } from '../api'
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams()
@@ -22,8 +22,21 @@ export default function AuthCallback() {
 
     exchangeOAuthCode(code)
       .then((result) => login(result.access_token))
-      .then(() => {
-        navigate('/chat', { replace: true })
+      .then((userObj) => {
+        // If admin and onboarding not complete, redirect to wizard
+        if (userObj?.role === 'admin') {
+          getOnboardingStatus()
+            .then((s) => {
+              if (!s.onboarding_completed) {
+                navigate('/onboarding', { replace: true })
+              } else {
+                navigate('/chat', { replace: true })
+              }
+            })
+            .catch(() => navigate('/chat', { replace: true }))
+        } else {
+          navigate('/chat', { replace: true })
+        }
       })
       .catch(() => {
         setError('Sign-in failed. Please try again.')

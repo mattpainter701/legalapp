@@ -1,8 +1,59 @@
 # TASKS.md
 
-## Sprint 8 — TBD
+## Sprint 8 — Tenant Onboarding & Integration Hub (v0.10.0)
 
-**Goal:** TBD
+**Goal:** Guided admin onboarding wizard, license/seat management, service account safety, cloud folder initialization, customer LLM configuration, and permission audit.
+
+### 801. Admin Onboarding Wizard (P0, LARGE) — COMPLETED
+- [x] Migration 027: onboarding_completed, onboarding_step, cloud_root_folder, service_account_email, license_active, granted_by_user_id, customer LLM fields
+- [x] `backend/app/routers/onboarding.py`: GET /status, POST /complete, POST /skip, POST /step/{step}
+- [x] `backend/app/schemas/onboarding.py`: OnboardingStatusResponse, OnboardingCompleteResponse
+- [x] Post-connect hooks in `integrations.py`: store granted_by_user_id + service_account_email, auto-advance step + trigger user sync
+- [x] `user_sync.py`: auto-advance onboarding_step after manual sync
+- [x] `frontend/src/pages/OnboardingWizard.jsx`: 5-step wizard (Welcome → Connect → Sync → Review → Complete)
+- [x] `AuthCallback.jsx`: redirect admin to /onboarding if not completed
+- [x] `App.jsx`: /onboarding route (adminOnly)
+
+Files: `backend/app/routers/onboarding.py`, `backend/app/schemas/onboarding.py`, `backend/migrations/versions/027_sprint8_onboarding.py`, `frontend/src/pages/OnboardingWizard.jsx`
+
+### 802. License/Seat Management (P0, MEDIUM) — COMPLETED
+- [x] `backend/app/routers/licensing.py`: GET /licensing, PUT /users/{id}/license, PUT /licensing/seats
+- [x] `frontend/src/components/LicensingPanel.jsx`: seat slider, progress bar, per-user license toggles, PAYG cost display
+- [x] AdminPage: "Licensing" tab added
+
+Files: `backend/app/routers/licensing.py`, `frontend/src/components/LicensingPanel.jsx`
+
+### 803. Service Account Safety (P1, MEDIUM) — COMPLETED
+- [x] `integrations.py`: store granted_by_user_id on admin consent, resolve service_account_email from MS Graph / Google id_token
+- [x] `admin.py`: GET /integrations/health (grantor info, warnings for deactivated users, expired tokens)
+- [x] `admin.py` deactivate_user: check for service account grants before deactivating; require ?force=true
+
+Files: `backend/app/routers/integrations.py`, `backend/app/routers/admin.py`
+
+### 804. Cloud Folder Init & Matter Auto-Folders (P1, MEDIUM) — COMPLETED
+- [x] `backend/app/services/cloud_init.py`: initialize_cloud_root_folder (creates "claritylegal-records"), initialize_matter_folders (emails/documents/pleadings/correspondence/billing)
+- [x] `plugins.py` create_matter: auto-create cloud matter folders after matter commit (non-fatal)
+- [x] onboarding.py complete: triggers cloud_root_folder creation
+
+Files: `backend/app/services/cloud_init.py`, `backend/app/routers/plugins.py`
+
+### 805. Customer LLM Access (P2, MEDIUM) — COMPLETED
+- [x] `admin.py`: POST /customer-llm/configure, DELETE /customer-llm/configure (encrypted API key storage)
+- [x] AdminPage SettingsTab: Customer LLM section with toggle, provider dropdown, API key, endpoint inputs
+
+Files: `backend/app/routers/admin.py`, `frontend/src/pages/AdminPage.jsx`
+
+### 806. Permission Audit (P1, SMALL) — COMPLETED
+- [x] `admin.py`: GET /permissions — granted vs required scope comparison
+- [x] `frontend/src/components/PermissionsAudit.jsx`: provider cards with scope checkmarks, missing scope warnings, re-authorize buttons
+- [x] AdminPage: "Permissions" tab added
+
+Files: `backend/app/routers/admin.py`, `frontend/src/components/PermissionsAudit.jsx`
+
+### 807. Integration Tests & Polish (P1, SMALL) — COMPLETED
+- [x] `backend/tests/test_onboarding.py`: onboarding flow, license toggle, service account deactivation guard, permission audit
+
+Files: `backend/tests/test_onboarding.py`
 
 ---
 

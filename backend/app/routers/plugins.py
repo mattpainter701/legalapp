@@ -396,6 +396,23 @@ async def create_matter(
         # Non-fatal: conflict check failure must not block matter creation
         pass
 
+    # Auto-create cloud folders for this matter (non-fatal)
+    try:
+        from app.models.tenant import Tenant
+
+        tenant_result = await db.execute(
+            select(Tenant).where(Tenant.id == user.tenant_id)
+        )
+        tenant = tenant_result.scalar_one_or_none()
+        if tenant and tenant.cloud_root_folder:
+            from app.services.cloud_init import initialize_matter_folders
+
+            await initialize_matter_folders(
+                db, str(user.tenant_id), matter.slug, tenant.cloud_root_folder
+            )
+    except Exception:
+        pass
+
     return _matter_to_response(matter)
 
 

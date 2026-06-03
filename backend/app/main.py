@@ -39,6 +39,8 @@ from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
 from app.routers.matters import router as matters_router
+from app.routers.onboarding import router as onboarding_router
+from app.routers.licensing import router as licensing_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
@@ -182,6 +184,8 @@ app.include_router(reports_router)
 app.include_router(calendar_router)
 app.include_router(matters_router)
 app.include_router(document_templates_router)
+app.include_router(onboarding_router)
+app.include_router(licensing_router)
 
 
 # ─────────────────────────────────────────────────────

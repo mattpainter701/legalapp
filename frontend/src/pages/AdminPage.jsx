@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAdminUsers, getAdminUsage, getAdminTenant } from '../api'
+import { getAdminUsers, getAdminUsage, getAdminTenant, configureCustomerLLM, resetCustomerLLM } from '../api'
 import { useAuth } from '../App'
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
+import LicensingPanel from '../components/LicensingPanel'
+import PermissionsAudit from '../components/PermissionsAudit'
 
 // ── Reusable primitives ──────────────────────────────────────────────────────
 
@@ -332,6 +334,84 @@ function SettingsTab() {
           </div>
         </div>
       </div>
+
+      {/* Customer LLM */}
+      <CustomerLLMSection />
+    </div>
+  )
+}
+
+function CustomerLLMSection() {
+  const [config, setConfig] = useState({ use_customer_llm: false, customer_llm_provider: '', api_key: '', endpoint: '', deployment: '' })
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => { getAdminTenant().catch(() => {}) }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await configureCustomerLLM(config)
+      setMsg({ type: 'success', text: 'Saved.' })
+    } catch (err) {
+      setMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed.' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setMsg(null), 4000)
+    }
+  }
+
+  const handleReset = async () => {
+    setSaving(true)
+    try {
+      await resetCustomerLLM()
+      setConfig({ use_customer_llm: false, customer_llm_provider: '', api_key: '', endpoint: '', deployment: '' })
+      setMsg({ type: 'success', text: 'Reset to platform LLM.' })
+    } catch {
+      setMsg({ type: 'error', text: 'Failed.' })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setMsg(null), 4000)
+    }
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+      <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
+        <h3 className="font-serif font-bold text-xl text-brand-ink">Customer LLM</h3>
+        <p className="text-sm text-brand-ink-2 font-sans mt-1">
+          Use your firm's own Gemini or Microsoft Copilot subscription instead of the platform LLM.
+        </p>
+      </div>
+      <div className="px-8 py-5 space-y-4">
+        {msg && (
+          <div className={`px-4 py-2 rounded-lg text-xs font-medium ${msg.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>
+        )}
+        <label className="flex items-center gap-3">
+          <input type="checkbox" checked={config.use_customer_llm} onChange={(e) => setConfig({ ...config, use_customer_llm: e.target.checked })} className="w-4 h-4 rounded border-brand-line" />
+          <span className="text-sm font-sans text-brand-ink">Use firm's own LLM subscription</span>
+        </label>
+        {config.use_customer_llm && (
+          <>
+            <select value={config.customer_llm_provider} onChange={(e) => setConfig({ ...config, customer_llm_provider: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm">
+              <option value="">Select provider...</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="copilot">Microsoft Copilot (Azure OpenAI)</option>
+            </select>
+            <input type="password" placeholder="API Key" value={config.api_key} onChange={(e) => setConfig({ ...config, api_key: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
+            <input type="text" placeholder="Endpoint URL" value={config.endpoint} onChange={(e) => setConfig({ ...config, endpoint: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
+            <input type="text" placeholder="Deployment name" value={config.deployment} onChange={(e) => setConfig({ ...config, deployment: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
+          </>
+        )}
+        <div className="flex gap-3 pt-2">
+          <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40">
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          <button onClick={handleReset} disabled={saving} className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft">
+            Reset to Platform LLM
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -345,9 +425,11 @@ export default function AdminPage() {
 
   const tabs = [
     { id: 'users', label: 'Users' },
+    { id: 'licensing', label: 'Licensing' },
     { id: 'usage', label: 'Usage' },
     { id: 'tenant', label: 'Tenant' },
     { id: 'prompts', label: 'Prompts' },
+    { id: 'permissions', label: 'Permissions' },
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -424,10 +506,12 @@ export default function AdminPage() {
         {/* Tab content */}
         <div className="animate-in fade-in duration-300">
           {activeTab === 'users' && <UsersTab />}
+          {activeTab === 'licensing' && <LicensingPanel />}
           {activeTab === 'usage' && <UsageTab />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
+          {activeTab === 'permissions' && <PermissionsAudit />}
         </div>
       </div>
     </div>

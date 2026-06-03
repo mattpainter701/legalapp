@@ -180,7 +180,24 @@ async def microsoft_callback(
 
         if intent == "admin":
             _user_id, tenant_id = _require_state_user(meta, "admin")
+            admin_user_id = _user_id
             await set_tenant_context(db, tenant_id)
+
+            # Resolve service account email from MS Graph
+            service_email = None
+            try:
+                me_resp = await client.get(
+                    "https://graph.microsoft.com/v1.0/me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if me_resp.status_code == 200:
+                    me_data = me_resp.json()
+                    service_email = me_data.get("mail") or me_data.get(
+                        "userPrincipalName"
+                    )
+            except Exception:
+                pass
+
             result = await db.execute(
                 select(TenantCredential).where(
                     TenantCredential.tenant_id == tenant_id,
@@ -196,6 +213,9 @@ async def microsoft_callback(
                 existing.token_expires_at = _expires_at(expires_in)
                 existing.scopes = scope_str
                 existing.is_active = True
+                existing.granted_by_user_id = uuid.UUID(admin_user_id)
+                if service_email:
+                    existing.service_account_email = service_email
             else:
                 db.add(
                     TenantCredential(
@@ -207,6 +227,8 @@ async def microsoft_callback(
                         ),
                         token_expires_at=_expires_at(expires_in),
                         scopes=scope_str,
+                        granted_by_user_id=uuid.UUID(admin_user_id),
+                        service_account_email=service_email,
                     )
                 )
         else:
@@ -243,6 +265,11 @@ async def microsoft_callback(
                 )
 
         await db.commit()
+
+        # Onboarding hook: if admin just connected an integration during onboarding,
+        # auto-advance step and trigger user sync
+        if intent == "admin":
+            await _onboarding_post_connect(db, tenant_id, "microsoft")
 
     return {"status": "connected", "provider": "microsoft", "scopes": scope_str}
 
@@ -332,7 +359,25 @@ async def google_callback(
 
         if intent == "admin":
             _user_id, tenant_id = _require_state_user(meta, "admin")
+            admin_user_id = _user_id
             await set_tenant_context(db, tenant_id)
+
+            # Resolve service account email from Google id_token
+            service_email = None
+            id_token = token_data.get("id_token")
+            if id_token:
+                try:
+                    import base64
+                    import json as _json
+
+                    payload = id_token.split(".")[1]
+                    # Add padding
+                    payload += "=" * (4 - len(payload) % 4)
+                    decoded = _json.loads(base64.urlsafe_b64decode(payload))
+                    service_email = decoded.get("email")
+                except Exception:
+                    pass
+
             existing = await db.execute(
                 select(TenantCredential).where(
                     TenantCredential.tenant_id == tenant_id,
@@ -348,6 +393,9 @@ async def google_callback(
                 row.token_expires_at = _expires_at(expires_in)
                 row.scopes = scope_str
                 row.is_active = True
+                row.granted_by_user_id = uuid.UUID(admin_user_id)
+                if service_email:
+                    row.service_account_email = service_email
             else:
                 db.add(
                     TenantCredential(
@@ -359,6 +407,8 @@ async def google_callback(
                         ),
                         token_expires_at=_expires_at(expires_in),
                         scopes=scope_str,
+                        granted_by_user_id=uuid.UUID(admin_user_id),
+                        service_account_email=service_email,
                     )
                 )
         else:
@@ -396,7 +446,62 @@ async def google_callback(
 
         await db.commit()
 
+        # Onboarding hook: if admin just connected an integration during onboarding,
+        # auto-advance step and trigger user sync
+        if intent == "admin":
+            await _onboarding_post_connect(db, tenant_id, "google")
+
     return {"status": "connected", "provider": "google", "scopes": scope_str}
+
+
+# ── Onboarding hook ─────────────────────────────────────────────────────
+
+
+async def _onboarding_post_connect(
+    db: AsyncSession, tenant_id: str, provider: str
+) -> None:
+    """After admin connects an integration during onboarding, advance the step
+    and auto-trigger user directory sync."""
+    import logging
+
+    _logger = logging.getLogger(__name__)
+    try:
+        from sqlalchemy import select as _sel
+
+        from app.models.tenant import Tenant
+
+        tenant_result = await db.execute(_sel(Tenant).where(Tenant.id == tenant_id))
+        tenant = tenant_result.scalar_one_or_none()
+        if not tenant or tenant.onboarding_completed:
+            return
+
+        # Advance from step 1 (consent) to step 2 (syncing)
+        if tenant.onboarding_step < 2:
+            tenant.onboarding_step = 2
+
+            # Auto-trigger user directory sync
+            try:
+                from app.services.user_sync import UserSyncService
+
+                sync_svc = UserSyncService()
+                if provider == "microsoft":
+                    await sync_svc.sync_microsoft_users(db, tenant_id)
+                elif provider == "google":
+                    await sync_svc.sync_google_users(db, tenant_id)
+
+                # After sync, advance to step 3 (review)
+                tenant.onboarding_step = 3
+            except Exception as sync_err:
+                _logger.warning(
+                    "Auto user sync failed during onboarding for tenant %s: %s",
+                    tenant_id,
+                    sync_err,
+                )
+                # Stay at step 2 so admin can retry
+
+            await db.commit()
+    except Exception as exc:
+        _logger.warning("Onboarding post-connect hook failed: %s", exc)
 
 
 # ── Status endpoints ─────────────────────────────────────────────────────

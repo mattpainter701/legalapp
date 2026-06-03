@@ -32,6 +32,7 @@ import TimeTrackingPage from './pages/TimeTrackingPage'
 import InvoicesPage from './pages/InvoicesPage'
 import InvoiceDetailPage from './pages/InvoiceDetailPage'
 import ProfilePage from './pages/ProfilePage'
+import OnboardingWizard from './pages/OnboardingWizard'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -150,6 +151,14 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route
+          path="/onboarding"
+          element={
+            <ProtectedRoute adminOnly>
+              <OnboardingWizard />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/chat"
           element={

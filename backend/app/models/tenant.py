@@ -44,6 +44,19 @@ class Tenant(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Onboarding (Sprint 8)
+    onboarding_completed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    onboarding_step: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )  # 0=not started, 1=consent, 2=syncing, 3=review, 4=complete
+    cloud_root_folder: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True
+    )  # {onedrive: {id, url}, google_drive: {id, url}}
+    service_account_email: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -116,6 +129,13 @@ class TenantSettings(Base):
 
     # Custom configuration (JSON for extensibility)
     custom_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Customer LLM (Sprint 8) — allows firm to use their own Gemini/Copilot subscription
+    use_customer_llm: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    customer_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    customer_llm_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Notes/audit info
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

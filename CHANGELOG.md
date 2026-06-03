@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.10.0] — 2026-06-03
+
+### Sprint 8 — Tenant Onboarding & Integration Hub
+
+### Added
+
+#### Task 801 — Admin Onboarding Wizard
+- 5-step guided wizard after first admin login: Welcome → Connect Integrations → Sync Users → Review → Complete
+- `GET/POST /api/admin/onboarding/status|complete|skip|step/{step}` endpoints
+- Post-connect hooks in integration callbacks: auto-store granted_by_user_id + service_account_email, auto-trigger user sync
+- `OnboardingWizard.jsx` with step indicator, skip option, progress persistence
+- AuthCallback redirects new admins to /onboarding if not completed
+- Migration 027: +onboarding_completed, onboarding_step, cloud_root_folder, service_account_email, license_active, granted_by_user_id, customer LLM fields
+
+#### Task 802 — License/Seat Management
+- `GET /api/admin/licensing` — per-user license status, seat counts, PAYG usage
+- `PUT /api/admin/users/{id}/license` — toggle per-user license_active
+- `PUT /api/admin/licensing/seats` — flat seat count with over-limit warning
+- `LicensingPanel.jsx` — seat slider, usage progress bar, per-user toggle switches
+
+#### Task 803 — Service Account Safety
+- Integration callbacks store granted_by_user_id + service_account_email
+- `GET /api/admin/integrations/health` — grantor info, deactivation warnings, expiry alerts
+- Deactivate user now checks for service account grants; requires ?force=true
+
+#### Task 804 — Cloud Folder Init & Matter Auto-Folders
+- `cloud_init.py` — creates "claritylegal-records" root folder in OneDrive/Google Drive
+- Auto-creates per-matter subfolders: emails/, documents/, pleadings/, correspondence/, billing/
+- Hooked into matter creation (non-fatal) and onboarding completion
+
+#### Task 805 — Customer LLM Configuration
+- `POST/DELETE /api/admin/customer-llm/configure` — encrypted API key storage
+- AdminPage Settings: Customer LLM section with toggle, provider, key, endpoint
+
+#### Task 806 — Permission Audit
+- `GET /api/admin/permissions` — granted vs required scope comparison per provider
+- `PermissionsAudit.jsx` — provider cards with scope checkmarks, missing scope warnings
+
+### Changed
+- `Tenant` model: +onboarding_completed, onboarding_step, cloud_root_folder (JSON), service_account_email
+- `TenantCredential` model: +granted_by_user_id (FK users.id)
+- `User` model: +license_active (bool, default true)
+- `TenantSettings` model: +use_customer_llm, customer_llm_provider, customer_llm_config (JSON)
+- AdminPage: +Licensing tab, +Permissions tab
+
 ## [0.9.0] — 2026-06-03
 
 ### Added — Prompt Management System & Missing Skill Prompts

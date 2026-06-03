@@ -31,6 +31,11 @@ class TenantCredential(Base):
     service_account_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
+    granted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

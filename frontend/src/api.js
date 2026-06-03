@@ -162,6 +162,36 @@ export const getAdminUsage = () =>
 export const getAdminTenant = () =>
   api.get('/admin/tenant').then((r) => r.data)
 
+// Onboarding
+export const getOnboardingStatus = () =>
+  api.get('/admin/onboarding/status').then((r) => r.data)
+export const completeOnboarding = () =>
+  api.post('/admin/onboarding/complete').then((r) => r.data)
+export const skipOnboarding = () =>
+  api.post('/admin/onboarding/skip').then((r) => r.data)
+export const updateOnboardingStep = (step) =>
+  api.post(`/admin/onboarding/step/${step}`).then((r) => r.data)
+
+// Licensing
+export const getLicensingInfo = () =>
+  api.get('/admin/licensing').then((r) => r.data)
+export const toggleUserLicense = (userId, licenseActive) =>
+  api.put(`/admin/users/${userId}/license`, { license_active: licenseActive }).then((r) => r.data)
+export const updateSeatCount = (count) =>
+  api.put('/admin/licensing/seats', { flat_seat_count: count }).then((r) => r.data)
+
+// Integrations & Permissions
+export const getIntegrationsHealth = () =>
+  api.get('/admin/integrations/health').then((r) => r.data)
+export const getAdminPermissions = () =>
+  api.get('/admin/permissions').then((r) => r.data)
+
+// Customer LLM
+export const configureCustomerLLM = (config) =>
+  api.post('/admin/customer-llm/configure', config).then((r) => r.data)
+export const resetCustomerLLM = () =>
+  api.delete('/admin/customer-llm/configure').then((r) => r.data)
+
 // ── Plugin API ────────────────────────────────────────────────────────────────
 export const getPlugins = () => api.get('/plugins').then((r) => r.data)
 export const getPluginProfile = (plugin) => api.get(`/plugins/${plugin}/profile`).then((r) => r.data)

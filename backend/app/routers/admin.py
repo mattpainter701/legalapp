@@ -85,6 +85,9 @@ async def list_users(
 async def deactivate_user(
     user_id: str,
     request: Request,
+    force: bool = Query(
+        False, description="Force deactivate even if user granted integrations"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """Deactivate a user (set is_active=False). Cannot deactivate yourself."""
@@ -107,8 +110,97 @@ async def deactivate_user(
     if target_user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Check if this user granted org-wide OAuth consent
+    if not force:
+        cred_result = await db.execute(
+            select(TenantCredential).where(
+                TenantCredential.granted_by_user_id == user_id,
+                TenantCredential.is_active == True,
+            )
+        )
+        service_creds = cred_result.scalars().all()
+        if service_creds:
+            providers = [c.provider for c in service_creds]
+            raise HTTPException(
+                status_code=400,
+                detail=f"This user granted org-wide OAuth consent for {', '.join(providers)}. Deactivating will break integrations. Re-authorize with another admin first, or use ?force=true.",
+            )
+
     target_user.is_active = False
     await db.commit()
+
+
+@router.get("/integrations/health")
+async def integration_health(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return integration health status including who granted consent and warnings."""
+    _ = await _require_admin(request, db)
+    tenant_id = str(request.state.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    cred_result = await db.execute(
+        select(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
+    )
+    creds = cred_result.scalars().all()
+
+    providers = {}
+    for provider in ("microsoft", "google"):
+        match = next((c for c in creds if c.provider == provider), None)
+        if not match:
+            providers[provider] = {
+                "connected": False,
+                "service_account_email": None,
+                "granted_by_user_id": None,
+                "granted_by_user_email": None,
+                "granted_by_user_active": None,
+                "warning": None,
+            }
+            continue
+
+        # Resolve grantor user info
+        grantor_email = None
+        grantor_active = None
+        if match.granted_by_user_id:
+            grantor_result = await db.execute(
+                select(User).where(User.id == match.granted_by_user_id)
+            )
+            grantor = grantor_result.scalar_one_or_none()
+            if grantor:
+                grantor_email = grantor.email
+                grantor_active = grantor.is_active
+
+        warning = None
+        if grantor_active is False:
+            warning = f"User {grantor_email} who granted consent is deactivated — integrations may break. Re-authorize with another admin."
+        elif match.token_expires_at and match.token_expires_at < datetime.now(
+            timezone.utc
+        ):
+            warning = "OAuth token has expired. Re-connect to refresh."
+
+        providers[provider] = {
+            "connected": True,
+            "service_account_email": match.service_account_email,
+            "granted_by_user_id": str(match.granted_by_user_id)
+            if match.granted_by_user_id
+            else None,
+            "granted_by_user_email": grantor_email,
+            "granted_by_user_active": grantor_active,
+            "granted_at": match.created_at.isoformat() if match.created_at else None,
+            "expires_at": match.token_expires_at.isoformat()
+            if match.token_expires_at
+            else None,
+            "warning": warning,
+        }
+
+    overall_health = "healthy"
+    if any(p.get("warning") for p in providers.values()):
+        overall_health = "attention_needed"
+    if not any(p["connected"] for p in providers.values()):
+        overall_health = "disconnected"
+
+    return {"providers": providers, "overall_health": overall_health}
 
 
 @router.get("/usage", response_model=UsageStats)
@@ -929,3 +1021,160 @@ async def update_billing_defaults(
     await db.commit()
 
     return billing
+
+
+# ── Customer LLM Configuration ──────────────────────────────────────────
+
+
+from pydantic import BaseModel as _PydanticBase
+
+
+class CustomerLLMConfigRequest(_PydanticBase):
+    use_customer_llm: bool = False
+    customer_llm_provider: str | None = None  # "gemini" | "copilot"
+    api_key: str | None = None
+    endpoint: str | None = None
+    deployment: str | None = None
+
+
+@router.post("/customer-llm/configure")
+async def configure_customer_llm(
+    body: CustomerLLMConfigRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Configure the tenant to use their own LLM subscription (Gemini/Copilot)."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    ts = result.scalar_one_or_none()
+    if not ts:
+        ts = TenantSettings(tenant_id=admin.tenant_id)
+        db.add(ts)
+
+    ts.use_customer_llm = body.use_customer_llm
+    ts.customer_llm_provider = body.customer_llm_provider
+
+    # Store sensitive fields in JSON config
+    config = {
+        "endpoint": body.endpoint,
+        "deployment": body.deployment,
+    }
+    if body.api_key:
+        from app.services.token_vault import encrypt_token
+
+        config["encrypted_api_key"] = encrypt_token(body.api_key)
+
+    ts.customer_llm_config = config
+    await db.commit()
+
+    return {
+        "status": "ok",
+        "use_customer_llm": ts.use_customer_llm,
+        "customer_llm_provider": ts.customer_llm_provider,
+    }
+
+
+@router.delete("/customer-llm/configure")
+async def reset_customer_llm(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset to platform LLM (remove customer LLM config)."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    ts = result.scalar_one_or_none()
+    if ts:
+        ts.use_customer_llm = False
+        ts.customer_llm_provider = None
+        ts.customer_llm_config = None
+        await db.commit()
+
+    return {"status": "ok", "use_customer_llm": False}
+
+
+# ── Permission Audit ────────────────────────────────────────────────────
+
+
+SCOPES_REQUIRED_MS = [
+    "offline_access",
+    "User.Read.All",
+    "Mail.Read",
+    "Files.Read.All",
+    "Sites.Read.All",
+    "Calendars.ReadWrite",
+]
+
+SCOPES_REQUIRED_GOOGLE = [
+    "https://www.googleapis.com/auth/admin.directory.user.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/calendar",
+]
+
+
+@router.get("/permissions")
+async def get_permissions_audit(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Audit granted OAuth scopes vs required scopes for each provider."""
+    _ = await _require_admin(request, db)
+    tenant_id = str(request.state.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    cred_result = await db.execute(
+        select(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
+    )
+    creds = cred_result.scalars().all()
+
+    def audit_provider(provider: str, required: list[str]) -> dict:
+        match = next((c for c in creds if c.provider == provider), None)
+        if not match or not match.scopes:
+            return {
+                "connected": False,
+                "granted_scopes": [],
+                "missing_required": required,
+                "extra_scopes": [],
+                "all_required": False,
+                "health": "disconnected",
+            }
+        granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
+        missing = [s for s in required if s not in granted]
+        extra = [s for s in granted if s not in required]
+        return {
+            "connected": True,
+            "granted_scopes": granted,
+            "missing_required": missing,
+            "extra_scopes": extra,
+            "all_required": len(missing) == 0,
+            "health": "healthy" if len(missing) == 0 else "missing_scopes",
+        }
+
+    ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS)
+    google_audit = audit_provider("google", SCOPES_REQUIRED_GOOGLE)
+
+    overall = "healthy"
+    if (
+        ms_audit["health"] == "disconnected"
+        and google_audit["health"] == "disconnected"
+    ):
+        overall = "disconnected"
+    elif (
+        ms_audit["health"] == "missing_scopes"
+        or google_audit["health"] == "missing_scopes"
+    ):
+        overall = "attention_needed"
+
+    return {
+        "microsoft": ms_audit,
+        "google": google_audit,
+        "overall_health": overall,
+    }
