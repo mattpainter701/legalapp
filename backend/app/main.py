@@ -36,6 +36,7 @@ from app.routers.intake import router as intake_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
 from app.routers.reports import router as reports_router
+from app.routers.calendar import router as calendar_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
