@@ -33,6 +33,7 @@ from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
 from app.routers.intake import router as intake_router
+from app.routers.matter_parties import router as matter_parties_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
