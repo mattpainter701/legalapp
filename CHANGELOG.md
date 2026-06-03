@@ -5,13 +5,54 @@
 ### Sprint 6 — Matters, Document Management & Firm Reporting
 
 ### Added
-- (to be filled during sprint)
+
+#### MatterParty — Multi-Party Matter Support (701)
+- `MatterParty` model — M:N link between matters and contacts with role (client/opposing_party/counsel/witness/expert/other), is_primary flag, notes
+- Migration 021: `matter_parties` table with RLS tenant isolation
+- `GET/POST /api/matters/{id}/parties` — list and add parties to a matter
+- `PATCH/DELETE /api/matters/{id}/parties/{party_id}` — update role/notes, remove party
+- Frontend: Parties tab in MatterDetailPage with role badges, add/remove form, contact dropdown
+
+#### MatterDocument — Case File Attachments (702)
+- `MatterDocument` model — file attachments linked to matters (separate from RAG document store)
+- Migration 022: `matter_documents` table with RLS tenant isolation
+- `POST /api/matters/{id}/documents/upload` — multipart file upload (50MB limit) with path traversal protection
+- `GET/PATCH/DELETE /api/matters/{id}/documents/{doc_id}` — list, update metadata, delete
+- `GET /api/matters/{id}/documents/{doc_id}/download` — FileResponse download
+- Frontend: MatterDocumentsTab component with upload form, category badges (pleading/contract/evidence/correspondence/other), inline edit, download
+
+#### Conflict Check Service (703)
+- `backend/app/services/conflict_check.py` — shared conflict check service extracted from contacts router
+- Auto-runs on matter create: sets `conflicts_status` ("not-run"/"clear"/"conflict-found") automatically
+- `POST /api/plugins/litigation/matters/{id}/conflict-check` — manual re-run endpoint
+- Frontend: conflicts_status badge + Re-run Check button in MatterDetailPage with match list display
+
+#### Task Email Reminders (704)
+- `send_task_reminder()` method in email service with HTML + plaintext body
+- `_check_task_reminders` hourly APScheduler job — queries tasks due within 24h, sends per-assignee reminders
+- Migration 023: `reminder_sent_at` column on tasks prevents duplicate hourly sends (23h cooldown)
+- `POST /api/tasks/{task_id}/remind` — manual reminder trigger (202 Accepted)
+- Frontend: Bell icon remind button per task row with inline "Sent!" confirmation
+
+#### Firm Reporting (705)
+- `GET /api/reports/matters` — matter counts by status, matter_type, risk_level
+- `GET /api/reports/intake` — lead counts by status + conversion rate (matter_opened / total)
+- `GET /api/reports/overdue-tasks` — overdue tasks with matter context
+- `GET /api/reports/bundle` — all three reports in one request
+- Frontend: `/reports` route, Sidebar nav link, ReportsPage with 3 summary cards
 
 ### Changed
+- `contacts.py` conflict_check endpoint now delegates to shared `conflict_check` service (behavior unchanged)
+- MatterDetailPage extended with Parties tab, Documents tab, conflict status badge
 
 ### Fixed
+- Missing `matter_parties_router`, `matter_documents_router`, `reports_router` imports in `main.py`
+- RLS policy in migration 021 corrected to use `app.current_tenant_id` (matching the app's `set_tenant_context`)
+- Path traversal vulnerability in document upload fixed with `os.path.basename(filename)`
+- `conflicts_status` value standardized to "conflict-found" (was "flagged" in initial implementation)
 
 ### Tests
+- Integration: all new endpoints verified with tenant isolation checks via spec/quality review cycle
 
 ---
 

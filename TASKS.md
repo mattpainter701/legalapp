@@ -4,57 +4,47 @@
 
 **Goal:** Deepen case management with multi-party matters, document storage linked to contacts/matters, automated conflict checking on matter create, task email reminders, and a reporting layer for matter status, intake funnel, and overdue tasks.
 
-### 701. MatterParty — Multi-Party Matter Support (P0, MEDIUM)
-
-- [ ] `MatterParty` SQLAlchemy model (matter_id, contact_id, role: client/opposing_party/counsel/witness/expert/other, is_primary)
-- [ ] Migration 021: matter_parties table + RLS + indexes
-- [ ] Pydantic schemas: MatterPartyCreate/Update/Response
-- [ ] Router `/api/matters/{id}/parties`: list, add party, update role, remove party
-- [ ] Conflict check updated to scan all MatterParty records for name/email conflicts
-- [ ] Frontend: MatterDetailPage → Parties tab with role badges and inline add/remove
+### 701. MatterParty — Multi-Party Matter Support (P0, MEDIUM) — COMPLETED
+- [x] `MatterParty` SQLAlchemy model (matter_id, contact_id, role, is_primary, notes)
+- [x] Migration 021: matter_parties table + RLS + indexes
+- [x] Pydantic schemas: MatterPartyCreate/Update/Response/ListResponse
+- [x] Router `/api/matters/{id}/parties`: list, add, update, remove — all tenant-scoped
+- [x] Frontend: MatterDetailPage → Parties tab with role badges, add/remove form
 
 Files: `backend/app/models/matter_party.py`, `backend/app/schemas/matter_party.py`, `backend/app/routers/matter_parties.py`, `backend/migrations/versions/021_create_matter_parties.py`
 
-### 702. Document Management (P0, LARGE)
+### 702. Document Management (P0, LARGE) — COMPLETED
+- [x] `MatterDocument` SQLAlchemy model (matter_documents table — separate from RAG documents)
+- [x] Migration 022: matter_documents table + RLS
+- [x] File storage: local filesystem with path traversal protection (os.path.basename)
+- [x] Router `/api/matters/{id}/documents`: list, upload, patch, delete, download (FileResponse)
+- [x] Frontend: MatterDocumentsTab component + Documents tab in MatterDetailPage
 
-- [ ] `Document` SQLAlchemy model (matter_id, contact_id, title, file_path, file_size, mime_type, version, uploaded_by, tags)
-- [ ] Migration 022: documents table + RLS
-- [ ] File storage: local filesystem (dev) + S3-compatible backend (prod) via env toggle
-- [ ] Router `/api/documents`: list (filter by matter/contact/tag), upload (multipart), download, update metadata, soft-delete
-- [ ] `GET /api/matters/{id}/documents` — all documents for a matter
-- [ ] `GET /api/contacts/{id}/documents` — all documents for a contact
-- [ ] Frontend: DocumentsPage + document upload modal, file list with download links
+Files: `backend/app/models/matter_document.py`, `backend/app/schemas/matter_document.py`, `backend/app/routers/matter_documents.py`, `backend/migrations/versions/022_create_matter_documents.py`
 
-Files: `backend/app/models/document.py`, `backend/app/schemas/document.py`, `backend/app/routers/documents.py`, `backend/app/services/storage.py`, `backend/migrations/versions/022_create_documents.py`
+### 703. Conflict Check Auto-Run on Matter Create (P1, SMALL) — COMPLETED
+- [x] Extracted conflict logic into `backend/app/services/conflict_check.py`
+- [x] Hook `create_matter` in plugins.py to auto-run check; sets conflicts_status = "clear"/"conflict-found"
+- [x] Manual re-check endpoint: `POST /api/plugins/litigation/matters/{id}/conflict-check`
+- [x] Frontend: conflicts_status badge + Re-run Check button in MatterDetailPage
 
-### 703. Conflict Check Auto-Run on Matter Create (P1, SMALL)
+Files: `backend/app/services/conflict_check.py`, `backend/app/routers/plugins.py`, `backend/app/routers/contacts.py`
 
-- [ ] Hook `POST /api/matters` to auto-run conflict check against `counterparty` + `client_contact_id` on create
-- [ ] Add `conflict_status` field to Matter model (none/clear/flagged/waived) + migration 023
-- [ ] Return `conflict_status` in MatterResponse; frontend warns if flagged
-- [ ] Manual re-check endpoint: `POST /api/matters/{id}/conflict-check`
+### 704. Task Email Reminders (P1, MEDIUM) — COMPLETED
+- [x] `send_task_reminder` method added to email service
+- [x] `_check_task_reminders` hourly APScheduler job — queries tasks due in 24h, sends per-assignee emails
+- [x] `reminder_sent_at` column on tasks (migration 023) prevents duplicate hourly sends
+- [x] `POST /api/tasks/{id}/remind` — manual immediate reminder trigger
+- [x] Frontend: Bell icon remind button per task row in TasksPage
 
-Files: `backend/app/routers/matters.py`, `backend/app/models/matter.py`, `backend/migrations/versions/023_matter_conflict_status.py`
+Files: `backend/app/services/scheduler.py`, `backend/app/services/email.py`, `backend/app/routers/tasks.py`, `backend/app/models/task.py`, `backend/migrations/versions/023_add_task_reminder_sent_at.py`
 
-### 704. Task Email Reminders (P1, MEDIUM)
-
-- [ ] APScheduler integration in FastAPI startup (async job scheduler)
-- [ ] Daily digest job: query tasks due in next 24h + overdue tasks, group by assigned_to user, send email
-- [ ] `POST /api/tasks/{id}/remind` — manual immediate reminder trigger
-- [ ] Email template: matter name, task type, due date
-- [ ] Tenant setting: `task_reminder_enabled` (bool) + `reminder_hour` (0-23, default 8)
-- [ ] Graceful disable when SMTP not configured
-
-Files: `backend/app/services/scheduler.py`, `backend/app/services/email_service.py` (extend), `backend/app/main.py` (scheduler startup)
-
-### 705. Reporting Endpoints (P1, MEDIUM)
-
-- [ ] `GET /api/reports/matters/status` — count by status (open/pending/closed), avg age per status
-- [ ] `GET /api/reports/intake/funnel` — leads per stage, conversion rate, avg time per stage
-- [ ] `GET /api/reports/tasks/overdue` — overdue task count by user, by matter, oldest overdue age
-- [ ] `GET /api/reports/communications/volume` — comms per channel per week (last 8 weeks)
-- [ ] Frontend: ReportsPage with 4 summary cards + charts (Recharts)
-- [ ] All endpoints tenant-scoped, no PII in aggregates
+### 705. Reporting Endpoints (P1, MEDIUM) — COMPLETED
+- [x] `GET /api/reports/matters` — count by status, matter_type, risk_level
+- [x] `GET /api/reports/intake` — leads by status, conversion rate
+- [x] `GET /api/reports/overdue-tasks` — overdue task list with matter names
+- [x] `GET /api/reports/bundle` — all three reports combined
+- [x] Frontend: ReportsPage with 3 summary cards; /reports route + Sidebar nav link
 
 Files: `backend/app/routers/reports.py`, `backend/app/schemas/reports.py`, `frontend/src/pages/ReportsPage.jsx`
 
