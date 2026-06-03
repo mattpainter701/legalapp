@@ -2,7 +2,6 @@
 Test fixtures for Clarity Legal backend.
 """
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -20,16 +19,7 @@ from app.models.user import User
 
 settings = get_settings()
 
-TEST_DB_URL = (
-    "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
-)
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+TEST_DB_URL = "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -131,8 +121,13 @@ def mock_llm():
 @pytest.fixture
 def mock_embeddings():
     vec = [0.01] * 1536
-    with patch("app.services.embeddings.EmbeddingService.embed_text", new_callable=AsyncMock) as mt:
+    with patch(
+        "app.services.embeddings.EmbeddingService.embed_text", new_callable=AsyncMock
+    ) as mt:
         mt.return_value = vec
-        with patch("app.services.embeddings.EmbeddingService.embed_batch", new_callable=AsyncMock) as mb:
+        with patch(
+            "app.services.embeddings.EmbeddingService.embed_batch",
+            new_callable=AsyncMock,
+        ) as mb:
             mb.return_value = [vec]
             yield mt, mb
