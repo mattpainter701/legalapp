@@ -81,6 +81,11 @@ async def refresh_microsoft_token(
             },
         )
         if resp.status_code != 200:
+            logger.error(
+                "Microsoft token refresh failed: status=%d body=%s",
+                resp.status_code,
+                resp.text,
+            )
             return None
 
         data = resp.json()
