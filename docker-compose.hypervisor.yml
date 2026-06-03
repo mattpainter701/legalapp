@@ -60,7 +60,9 @@ services:
       start_period: 20s
 
   nginx:
-    build: ./nginx
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.local
     depends_on:
       frontend:
         condition: service_healthy
@@ -68,9 +70,6 @@ services:
         condition: service_healthy
     ports:
       - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/ssl:/etc/nginx/ssl
 
 volumes:
   postgres_data:

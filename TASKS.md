@@ -1,5 +1,125 @@
 # TASKS.md
 
+## Sprint 1 — Billing & QBO Integration Foundation (v0.5.0) — COMPLETED
+
+**Goal:** Build core billing models (time tracking, expenses, invoices, payments), QBO OAuth2 integration, trust accounting foundations, Stripe payments, LEDES export.
+
+### 501. Billing Models (P0, LARGE) — COMPLETED
+- [x] TimeEntry, Expense, Invoice, InvoiceLineItem, Payment SQLAlchemy models
+- [x] 23 billing Pydantic schemas (Create/Update/Response + list/exports)
+- [x] Migration 015 for billing tables with RLS policies
+- [x] Migration 016 for qbo_integrations table
+- [x] Migration 017 for trust_accounts + trust_transactions tables
+- [x] Wire models, schemas, QBO config into __init__.py and config.py
+
+### 502. QBO OAuth2 Connect + Time Tracking CRUD (P0, LARGE) — COMPLETED
+- [x] QBO OAuth2 connect/callback/disconnect/status endpoints
+- [x] QBOSyncService — Customer sync, TimeActivity sync, Invoice sync, Payment sync
+- [x] QBO sync with token refresh, sandbox/production toggle, sync_all()
+- [x] TimeEntry CRUD (create, list by matter/status/unbilled, edit, soft-delete)
+- [x] Expense CRUD (create, list by matter/category/unbilled, edit, delete)
+- [x] Invoice generation from unbilled time+expenses with auto-numbering
+- [x] Invoice CRUD (list, detail with line items/payments, status transitions)
+- [x] Payment endpoints (record payment, list by invoice, auto status update)
+- [x] Stripe Payment Link generation on invoice
+- [x] Invoice export (CSV + LEDES 1998B formats)
+- [x] LEDES 1998B export service with UTBMS task/activity code maps
+
+### 503. Invoice Generation + Stripe Payments (P0, LARGE) — COMPLETED
+- [x] Invoice generation from unbilled time+expenses
+- [x] Invoice CRUD endpoints
+- [x] Stripe Payment Link generation on invoice
+- [x] Payment endpoints
+- [x] CSV invoice export (P1)
+- [x] PDF invoice export (P1)
+
+### 504. Legal Billing Compliance (P1, MEDIUM) — COMPLETED
+- [x] LEDES 1998B export service
+- [x] UTBMS task/activity code mapping
+- [x] Trust accounting CRUD + three-way reconciliation endpoint
+
+## Sprint 2 — Webhooks, QBO Push Sync & Error Tracking (v0.5.2) — COMPLETED
+
+**Goal:** Close the billing loop — Stripe webhook for auto-reconciliation, QBO push sync on invoice/ payment events, error logging admin endpoints + capture middleware.
+
+### 507. Stripe Webhook Handler (P0, SMALL) — COMPLETED
+- [x] `POST /api/billing/webhooks/stripe` — verify Stripe signature, handle `payment_intent.succeeded` → auto-create Payment + update invoice status
+- [x] Handle `payment_intent.payment_failed` → log, optionally mark invoice for follow-up
+- [x] Handle `checkout.session.completed` → reconcile Payment Link checkout against invoice
+- [x] Idempotency: skip duplicate events via `stripe_payment_intent_id` lookup on Payment table
+
+Files: `backend/app/routers/billing_extended.py` (+webhook endpoint)
+
+### 508. QBO Auto-Push Sync (P0, MEDIUM) — COMPLETED
+- [x] Trigger `QBOSyncService.sync_invoice()` on invoice status change (draft→sent, sent→paid)
+- [x] Trigger `QBOSyncService.sync_payment()` on payment create
+- [x] Background sync queue — fire-and-forget via `asyncio.create_task()`, log failures to ErrorLog
+- [x] Sync retry on failure — exponential backoff, max 3 attempts
+- [x] Invoice qbo_sync_status lifecycle: pending→syncing→synced | failed
+
+Files: `backend/app/routers/billing_extended.py` (hook into invoice update + payment create), `backend/app/services/qbo_sync.py` (+retry logic)
+
+### 509. Error Log Admin Endpoints (P1, MEDIUM) — COMPLETED
+- [x] `GET /admin/errors/user/{user_id}?days=3&severity=error` — Per-user 72h rolling error logs
+- [x] `GET /admin/errors/system?days=7&severity=error` — System-level errors with optional filters
+- [x] `GET /admin/errors/summary?days=30` — Error counts by severity/type, trend data (daily buckets)
+- [x] `PATCH /admin/errors/{error_id}/resolve` — Mark error resolved with notes
+- [x] All endpoints tenant-scoped + admin-only
+
+Files: `backend/app/routers/admin.py` (+error endpoints), `backend/app/schemas/admin.py` (+error response schemas)
+
+### 510. Error Capture Middleware (P1, MEDIUM) — COMPLETED
+- [x] ErrorLog capture in `generic_exception_handler` (500s already caught — just persist)
+- [x] ErrorLog capture in `http_exception_handler` (400, 401, 403, 404 — record with severity mapping)
+- [x] ErrorLog capture in chat endpoint (RAG failures, LLM timeouts, cache errors)
+- [x] Request context capture: endpoint, method, status_code, user_id, tenant_id, IP, user_agent
+- [x] 72h rolling window — ErrorLog model already has composite indexes for this
+
+Files: `backend/app/main.py` (exception handlers), `backend/app/routers/chat.py` (error capture), `backend/app/services/error_tracker.py` (NEW — helper)
+
+## Sprint 3 — Trust Accounting + PDF Export (v0.5.1) — COMPLETED
+
+**Goal:** Trust accounting CRUD, three-way reconciliation, PDF invoice export.
+
+### 505. Trust Accounting Endpoints (P1, MEDIUM) — COMPLETED
+- [x] TrustAccount CRUD (create, get, list by matter, update, close)
+- [x] TrustTransaction endpoints (create deposit/disbursement/transfer, list by account)
+- [x] Three-way reconciliation endpoint (bank balance vs trust liability vs unallocated)
+- [x] Reconciliation report endpoint
+
+Files: `backend/app/schemas/trust_accounting.py`, `backend/app/routers/trust_accounting.py`
+
+### 506. PDF Invoice Export (P1, SMALL) — COMPLETED
+- [x] Invoice PDF generation service (professional legal invoice layout via ReportLab)
+- [x] PDF support in export endpoint
+
+Files: `backend/app/services/invoice_pdf.py`
+
+### Backlog (P3)
+- [ ] P3-1: QBD migration path (CSV import for firms moving to QBO)
+
+## Sprint 4 — Security & Bug Fixes (v0.5.2) — COMPLETED
+
+### 511. Critical Bug Fixes (P0, MEDIUM) — COMPLETED
+- [x] Fix SQL injection in QBO sync queries (escape single quotes in display_name, item_name, customer_name)
+- [x] Add `set_tenant_context` to all billing list endpoints (time entries, expenses, invoices, payments) for RLS correctness
+- [x] Fix delete_time_entry to hard-delete unbilled entries (was soft-deleting with wrong 204 status)
+- [x] Fix unbounded QBO OAuth fallback state dicts (add TTL-based eviction on write)
+- [x] Fix cache invalidation key-pattern mismatch (`invalidate_user_cache` pattern now matches actual key format)
+- [x] Tighten PII detection regexes (driver_license: require 9+ digits; bank_account: use lookahead to exclude phone-like sequences)
+
+### 512. Sprint 2 Code Audit Fixes (P0, MEDIUM) — COMPLETED
+- [x] Add missing `import asyncio` and `async_session_maker` to billing_extended.py (QBO sync was broken)
+- [x] Fix SQL injection in rag.py — parameterized embedding vector in pgvector queries
+- [x] Add logging to silent `except Exception: pass` in QBO sync fire-and-forget tasks
+- [x] Add missing error schema imports in admin.py (ErrorLogResponse, SystemErrorLogsResponse, etc.)
+- [x] Add try/except error handling to `_trigger_auto_memory_generation` in chat.py
+- [ ] P3-2: Clio marketplace listing + API integration
+- [ ] P3-3: Clio data migration tool
+- [ ] P3-4: Tabs3 data migration tool
+- [ ] P3-5: LEDES XML 2.1 export
+- [ ] P3-6: QBD via unified API partner (Unified.to / Apideck)
+
 ## Completed
 
 ### Enhanced User Model, Context Management & Error Logging (PR: v0.4.0)

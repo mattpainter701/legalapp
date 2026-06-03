@@ -17,6 +17,7 @@ package-lock.json
 .env.prod
 *.env
 .env.*
+!.env.hypervisor     # tracked template — no real secrets, safe to commit
 
 # Claude Code session memory (local only)
 memory/
