@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0] — 2026-06-03
+
+### Sprint 7 — Calendar, Communications & Matter Operations
+
+### Added
+- (to be filled during sprint)
+
+### Changed
+
+### Fixed
+
+### Tests
+
+---
+
 ## [0.7.0] — 2026-06-03
 
 ### Sprint 6 — Matters, Document Management & Firm Reporting
