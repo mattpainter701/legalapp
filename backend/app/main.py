@@ -107,10 +107,15 @@ origins = list(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://localhost:3000",
-        "https://172.16.16.202",
-        "http://172.16.16.202:3000",
     }
 )
+
+# Add extra CORS origins from environment variable (comma-separated)
+if settings.EXTRA_CORS_ORIGINS:
+    extra_origins = [
+        o.strip() for o in settings.EXTRA_CORS_ORIGINS.split(",") if o.strip()
+    ]
+    origins.extend(extra_origins)
 
 app.add_middleware(
     CORSMiddleware,
