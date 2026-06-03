@@ -711,8 +711,10 @@ async def stream_message(
                 tenant_id=str(user.tenant_id),
                 include_public=body.include_public,
             )
-        except Exception as e:
-            logger.exception("RAG query failed in streaming path, continuing without context")
+        except Exception:
+            logger.exception(
+                "RAG query failed in streaming path, continuing without context"
+            )
             context_str, chunks = "", []
         await cache_manager.set_cached_rag_results(
             question=body.content,
@@ -728,6 +730,12 @@ async def stream_message(
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
+    # 4b. Load user memory context for system prompt
+    memory_context = await memory_service.get_memory_context_for_injection(
+        db=db,
+        user_id=user.id,
+    )
+
     # Create the streaming generator
     async def stream_generator():
         try:
@@ -739,6 +747,7 @@ async def stream_message(
                 messages=history_messages,
                 tenant_name=tenant_name,
                 context=context_str,
+                memory_context=memory_context,
                 use_premium=body.use_premium_llm,
                 provider=body.provider,
             ):
