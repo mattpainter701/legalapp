@@ -316,6 +316,9 @@ export const getCommunication = (id) =>
 export const updateCommunication = (id, data) =>
   api.patch(`/communications/${id}`, data).then(r => r.data)
 
+export const deleteCommunication = (id) =>
+  api.delete(`/communications/${id}`).then(r => r.data)
+
 // ── Intake / Leads ─────────────────────────────────────────────────────────
 
 export const getLeads = (params = {}) =>

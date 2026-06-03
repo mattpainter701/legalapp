@@ -26,6 +26,7 @@ import TasksPage from './pages/TasksPage'
 import IntakePage from './pages/IntakePage'
 import ReportsPage from './pages/ReportsPage'
 import CalendarPage from './pages/CalendarPage'
+import CommunicationsPage from './pages/CommunicationsPage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -285,6 +286,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <CalendarPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/communications"
+          element={
+            <ProtectedRoute>
+              <CommunicationsPage />
             </ProtectedRoute>
           }
         />

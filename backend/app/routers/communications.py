@@ -142,3 +142,26 @@ async def update_communication_log(
     await db.commit()
     await db.refresh(log)
     return CommunicationLogResponse.model_validate(log)
+
+
+@router.delete("/{log_id}", status_code=204)
+async def delete_communication_log(
+    log_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user["tenant_id"]
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(CommunicationLog).where(
+            CommunicationLog.id == log_id,
+            CommunicationLog.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    log = result.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Communication log not found")
+
+    await db.delete(log)
+    await db.commit()
