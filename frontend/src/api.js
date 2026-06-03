@@ -256,4 +256,84 @@ export const getPlatformUsage = (key) =>
 export const getPlatformHealth = (key) =>
   platformApi(key).get('/platform/health').then((r) => r.data)
 
+// ── Contacts ───────────────────────────────────────────────────────────────
+
+export const getContacts = (params = {}) =>
+  api.get('/contacts', { params }).then(r => r.data)
+
+export const createContact = (data) =>
+  api.post('/contacts', data).then(r => r.data)
+
+export const getContact = (id) =>
+  api.get(`/contacts/${id}`).then(r => r.data)
+
+export const updateContact = (id, data) =>
+  api.patch(`/contacts/${id}`, data).then(r => r.data)
+
+export const deleteContact = (id) =>
+  api.delete(`/contacts/${id}`)
+
+export const getContactMatters = (id) =>
+  api.get(`/contacts/${id}/matters`).then(r => r.data)
+
+export const getContactCommunications = (id, params = {}) =>
+  api.get(`/contacts/${id}/communications`, { params }).then(r => r.data)
+
+export const conflictCheck = (data) =>
+  api.post('/contacts/conflict-check', data).then(r => r.data)
+
+// ── Tasks ──────────────────────────────────────────────────────────────────
+
+export const getTasks = (params = {}) =>
+  api.get('/tasks', { params }).then(r => r.data)
+
+export const createTask = (data) =>
+  api.post('/tasks', data).then(r => r.data)
+
+export const getTask = (id) =>
+  api.get(`/tasks/${id}`).then(r => r.data)
+
+export const updateTask = (id, data) =>
+  api.patch(`/tasks/${id}`, data).then(r => r.data)
+
+export const deleteTask = (id) =>
+  api.delete(`/tasks/${id}`)
+
+export const getOverdueTasks = (params = {}) =>
+  api.get('/tasks/overdue', { params }).then(r => r.data)
+
+export const getUpcomingTasks = (params = {}) =>
+  api.get('/tasks/upcoming', { params }).then(r => r.data)
+
+// ── Communications ─────────────────────────────────────────────────────────
+
+export const getCommunications = (params = {}) =>
+  api.get('/communications', { params }).then(r => r.data)
+
+export const createCommunication = (data) =>
+  api.post('/communications', data).then(r => r.data)
+
+export const getCommunication = (id) =>
+  api.get(`/communications/${id}`).then(r => r.data)
+
+export const updateCommunication = (id, data) =>
+  api.patch(`/communications/${id}`, data).then(r => r.data)
+
+// ── Intake / Leads ─────────────────────────────────────────────────────────
+
+export const getLeads = (params = {}) =>
+  api.get('/intake', { params }).then(r => r.data)
+
+export const createLead = (data) =>
+  api.post('/intake', data).then(r => r.data)
+
+export const getLead = (id) =>
+  api.get(`/intake/${id}`).then(r => r.data)
+
+export const updateLead = (id, data) =>
+  api.patch(`/intake/${id}`, data).then(r => r.data)
+
+export const convertLead = (id, data) =>
+  api.post(`/intake/${id}/convert`, data).then(r => r.data)
+
 export default api

@@ -35,7 +35,7 @@ AUTH_LIMITS = {
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
-    "/api/platform/",   # platform auth is key-based, not JWT
+    "/api/platform/",  # platform auth is key-based, not JWT
     "/health",
     "/docs",
     "/openapi.json",
@@ -63,8 +63,14 @@ def _extract_jwt_claims(request: Request) -> tuple[Optional[str], Optional[str],
         return None, None, "payg"
     token = auth.split(" ", 1)[1]
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload.get("sub"), payload.get("tenant_id"), payload.get("billing_tier", "payg")
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
+        return (
+            payload.get("sub"),
+            payload.get("tenant_id"),
+            payload.get("billing_tier", "payg"),
+        )
     except JWTError:
         return None, None, "payg"
 
@@ -78,7 +84,11 @@ def _client_ip(request: Request) -> str:
 
 def _fallback_auth_increment(key: str, window_seconds: int) -> int:
     now = time.time()
-    expired = [hit_key for hit_key, (_, expires_at) in _fallback_auth_hits.items() if expires_at <= now]
+    expired = [
+        hit_key
+        for hit_key, (_, expires_at) in _fallback_auth_hits.items()
+        if expires_at <= now
+    ]
     for hit_key in expired:
         _fallback_auth_hits.pop(hit_key, None)
 
@@ -114,7 +124,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     if count > limit:
                         return JSONResponse(
                             status_code=429,
-                            content={"detail": "Authentication rate limit exceeded. Please retry later."},
+                            content={
+                                "detail": "Authentication rate limit exceeded. Please retry later."
+                            },
                             headers={"Retry-After": str(window_seconds)},
                         )
                     break
@@ -136,7 +148,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     if count > USER_HOURLY_LIMIT:
                         return JSONResponse(
                             status_code=429,
-                            content={"detail": "Hourly request limit exceeded. Please retry in a few minutes."},
+                            content={
+                                "detail": "Hourly request limit exceeded. Please retry in a few minutes."
+                            },
                             headers={"Retry-After": "60"},
                         )
             except aioredis.RedisError:
@@ -144,7 +158,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # ── Per-tenant daily limit (LLM-heavy paths only) ─────────────────────
         if tenant_id and any(path.startswith(p) for p in RATE_LIMITED_PREFIXES):
-            daily_limit = TENANT_DAILY_LIMITS.get(billing_tier, TENANT_DAILY_LIMITS["payg"])
+            daily_limit = TENANT_DAILY_LIMITS.get(
+                billing_tier, TENANT_DAILY_LIMITS["payg"]
+            )
             tenant_key = f"rate:tenant:{tenant_id}:{_current_day_key()}"
             try:
                 if self._redis:

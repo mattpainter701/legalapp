@@ -7,6 +7,9 @@ from app.models.scheduler import SchedulerLog
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.error_log import ErrorLog
+from app.models.contact import Contact, Lead
+from app.models.task import Task
+from app.models.communication_log import CommunicationLog
 
 __all__ = [
     "Tenant",
@@ -26,4 +29,8 @@ __all__ = [
     "TenantCredential",
     "UserOAuthToken",
     "ErrorLog",
+    "Contact",
+    "Lead",
+    "Task",
+    "CommunicationLog",
 ]

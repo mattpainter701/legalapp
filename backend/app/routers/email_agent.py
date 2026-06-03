@@ -111,7 +111,9 @@ async def sync_calendar(
     elif body.provider == "google":
         events = await calendar_sync.google_get_events(db, tenant_id, user_id)
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported provider: {body.provider}")
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported provider: {body.provider}"
+        )
 
     deadlines_created = 0
     if body.sync_deadlines:

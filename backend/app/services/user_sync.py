@@ -18,7 +18,6 @@ GOOGLE_DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1"
 
 
 class UserSyncService:
-
     async def sync_microsoft_users(
         self,
         db: AsyncSession,
@@ -56,7 +55,11 @@ class UserSyncService:
             await set_tenant_context(db, tenant_id)
 
             for ms_user in all_users:
-                email = (ms_user.get("mail") or ms_user.get("userPrincipalName") or "").lower().strip()
+                email = (
+                    (ms_user.get("mail") or ms_user.get("userPrincipalName") or "")
+                    .lower()
+                    .strip()
+                )
                 if not email:
                     skipped += 1
                     continue
@@ -93,7 +96,12 @@ class UserSyncService:
 
             await db.commit()
 
-        return {"created": created, "updated": updated, "skipped": skipped, "total": len(all_users)}
+        return {
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "total": len(all_users),
+        }
 
     async def sync_google_users(
         self,
@@ -129,7 +137,9 @@ class UserSyncService:
                     params=params,
                 )
                 if resp.status_code != 200:
-                    raise RuntimeError(f"Google Directory sync failed: {resp.status_code}")
+                    raise RuntimeError(
+                        f"Google Directory sync failed: {resp.status_code}"
+                    )
 
                 data = resp.json()
                 all_users.extend(data.get("users", []))
@@ -177,7 +187,12 @@ class UserSyncService:
 
             await db.commit()
 
-        return {"created": created, "updated": updated, "skipped": skipped, "total": len(all_users)}
+        return {
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "total": len(all_users),
+        }
 
     async def sync_all(
         self,

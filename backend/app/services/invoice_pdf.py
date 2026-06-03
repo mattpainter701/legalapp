@@ -48,7 +48,6 @@ def generate_invoice_pdf(invoice_response) -> bytes:
     """
     try:
         from reportlab.lib.pagesizes import letter
-        from reportlab.lib.units import inch
         from reportlab.platypus import (
             SimpleDocTemplate,
             Paragraph,
@@ -59,7 +58,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
         )
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib import colors
-        from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+        from reportlab.lib.enums import TA_RIGHT, TA_CENTER
     except ImportError:
         raise ImportError(
             "reportlab is required for PDF generation. Install with: pip install reportlab"

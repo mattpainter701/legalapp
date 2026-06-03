@@ -10,7 +10,9 @@ from app.database import Base
 class UserOAuthToken(Base):
     __tablename__ = "user_oauth_tokens"
     __table_args__ = (
-        UniqueConstraint("user_id", "provider", name="uq_user_oauth_tokens_user_provider"),
+        UniqueConstraint(
+            "user_id", "provider", name="uq_user_oauth_tokens_user_provider"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

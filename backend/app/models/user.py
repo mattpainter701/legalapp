@@ -1,6 +1,16 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, UniqueConstraint, JSON, Text, Float, Index
+from sqlalchemy import (
+    String,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    JSON,
+    Text,
+    Float,
+    Index,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -30,7 +40,9 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     # Enhanced user model
     practice_areas: Mapped[list | None] = mapped_column(
         JSON, default=list, server_default="[]", nullable=False
@@ -39,7 +51,9 @@ class User(Base):
         String(50), default="mid", server_default="mid"
     )
     default_skill: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    privacy_mode: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    privacy_mode: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     memory_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_memory_update: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -57,7 +71,9 @@ class User(Base):
     )
 
     tenant = relationship("Tenant", lazy="selectin")
-    user_memories = relationship("UserMemory", back_populates="user", cascade="all, delete-orphan")
+    user_memories = relationship(
+        "UserMemory", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserMemory(Base):
@@ -83,9 +99,7 @@ class UserMemory(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
     )
-    memory_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )
+    memory_type: Mapped[str] = mapped_column(String(50), nullable=False)
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[str | dict | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5")

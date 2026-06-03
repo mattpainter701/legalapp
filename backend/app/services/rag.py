@@ -7,6 +7,7 @@ from app.services.embeddings import EmbeddingService
 
 settings = get_settings()
 
+
 class RAGService:
     pass
 
@@ -43,7 +44,9 @@ async def search_chunks(
         LIMIT :top_k
     """)
 
-    result = await db.execute(sql, {"tenant_id": tenant_id, "top_k": top_k, "vec": vec_str})
+    result = await db.execute(
+        sql, {"tenant_id": tenant_id, "top_k": top_k, "vec": vec_str}
+    )
     rows = result.fetchall()
 
     return [

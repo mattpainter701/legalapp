@@ -117,11 +117,11 @@ def _build_renewal_alert_html(alerts: List[dict]) -> str:
 
         rows_html += f"""
         <tr class="{row_cls}">
-          <td>{alert.get('contract_name', '—')}</td>
-          <td>{alert.get('vendor', '—')}</td>
-          <td>{value or '—'}</td>
+          <td>{alert.get("contract_name", "—")}</td>
+          <td>{alert.get("vendor", "—")}</td>
+          <td>{value or "—"}</td>
           <td><strong>{cancel_by}</strong></td>
-          <td>{alert.get('business_owner', '—')}</td>
+          <td>{alert.get("business_owner", "—")}</td>
           <td>{badge}<br/><small>{days} days</small></td>
         </tr>"""
 
@@ -204,20 +204,20 @@ def _build_oc_status_html(
     for d in upcoming_deadlines:
         deadline_rows += f"""
         <tr>
-          <td>{d.get('matter_name', '—')}</td>
-          <td>{d.get('deadline_label', '—')}</td>
-          <td><strong>{d.get('deadline_date', '—')}</strong></td>
-          <td>{d.get('days_until', '?')} days</td>
+          <td>{d.get("matter_name", "—")}</td>
+          <td>{d.get("deadline_label", "—")}</td>
+          <td><strong>{d.get("deadline_date", "—")}</strong></td>
+          <td>{d.get("days_until", "?")} days</td>
         </tr>"""
 
     stale_rows = ""
     for m in stale_matters:
         stale_rows += f"""
         <tr>
-          <td>{m.get('matter_name', '—')}</td>
-          <td>{m.get('matter_type', '—')}</td>
-          <td>{m.get('risk_level', '—')}</td>
-          <td>{m.get('days_since_update', '?')} days ago</td>
+          <td>{m.get("matter_name", "—")}</td>
+          <td>{m.get("matter_type", "—")}</td>
+          <td>{m.get("risk_level", "—")}</td>
+          <td>{m.get("days_since_update", "?")} days ago</td>
         </tr>"""
 
     content = f"""
@@ -228,7 +228,7 @@ def _build_oc_status_html(
     <div class="body">
       <div class="stat-row">
         <div class="stat-box"><div class="num">{total_active}</div><div class="lbl">Active Matters</div></div>
-        <div class="stat-box"><div class="num">{by_risk.get('critical', 0) + by_risk.get('high', 0)}</div><div class="lbl">Critical/High Risk</div></div>
+        <div class="stat-box"><div class="num">{by_risk.get("critical", 0) + by_risk.get("high", 0)}</div><div class="lbl">Critical/High Risk</div></div>
         <div class="stat-box"><div class="num">{len(upcoming_deadlines)}</div><div class="lbl">Deadlines (14 days)</div></div>
         <div class="stat-box"><div class="num">{len(stale_matters)}</div><div class="lbl">Stale Matters</div></div>
       </div>
@@ -255,7 +255,10 @@ def _markdown_to_html(text: str) -> str:
     Minimal markdown-to-HTML renderer (no external deps).
     Handles: headings (#, ##, ###), bold (**), italic (*), bullet lists, code blocks, blockquotes.
     """
+<<<<<<< HEAD
+=======
 
+>>>>>>> origin/main
     lines = text.split("\n")
     html_lines: list[str] = []
     in_ul = False
@@ -339,6 +342,7 @@ def _inline_md(text: str) -> str:
 # EmailService
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class EmailService:
     """Async email notification service with SMTP + optional Slack webhook."""
 
@@ -384,7 +388,7 @@ class EmailService:
                 port=settings.EMAIL_PORT,
                 username=settings.EMAIL_USER or None,
                 password=settings.EMAIL_PASS or None,
-                use_tls=False,   # STARTTLS on port 587
+                use_tls=False,  # STARTTLS on port 587
                 start_tls=settings.EMAIL_PORT == 587,
             )
             logger.info("Email sent to %s — Subject: %s", ", ".join(to), subject)
@@ -399,9 +403,7 @@ class EmailService:
             )
             return False
 
-    async def send_renewal_alert(
-        self, recipient: str, alerts: List[dict]
-    ) -> bool:
+    async def send_renewal_alert(self, recipient: str, alerts: List[dict]) -> bool:
         """
         Send a renewal alert email with a table of upcoming renewals.
 
@@ -444,8 +446,12 @@ class EmailService:
         """Send weekly OC portfolio status email."""
         subject = f"Clarity Legal — Weekly Portfolio Status: {tenant_name}"
         html_body = _build_oc_status_html(
-            tenant_name, total_active, by_risk, by_type,
-            upcoming_deadlines, stale_matters
+            tenant_name,
+            total_active,
+            by_risk,
+            by_type,
+            upcoming_deadlines,
+            stale_matters,
         )
         text_body = (
             f"Weekly Portfolio Status — {tenant_name}\n\n"

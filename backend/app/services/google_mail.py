@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1"
 
 
-async def _google_get_user_token(db: AsyncSession, tenant_id: str, user_id: str) -> str | None:
+async def _google_get_user_token(
+    db: AsyncSession, tenant_id: str, user_id: str
+) -> str | None:
     return await get_fresh_user_token(db, tenant_id, user_id, "google")
 
 
@@ -41,7 +43,9 @@ async def gmail_read_mail(
     async with httpx.AsyncClient() as client:
         list_resp = await client.get(url, headers=headers, params=params)
         if list_resp.status_code != 200:
-            logger.warning("Gmail list failed: %s %s", list_resp.status_code, list_resp.text[:200])
+            logger.warning(
+                "Gmail list failed: %s %s", list_resp.status_code, list_resp.text[:200]
+            )
             raise RuntimeError(f"Gmail API list failed: {list_resp.status_code}")
 
         msg_ids = [m["id"] for m in list_resp.json().get("messages", [])]
@@ -53,10 +57,17 @@ async def gmail_read_mail(
             detail_resp = await client.get(
                 f"{GMAIL_BASE}/users/me/messages/{msg_id}",
                 headers=headers,
-                params={"format": "metadata", "metadataHeaders": "From,To,Subject,Date"},
+                params={
+                    "format": "metadata",
+                    "metadataHeaders": "From,To,Subject,Date",
+                },
             )
             if detail_resp.status_code != 200:
-                logger.debug("Gmail message detail failed for %s: %s", msg_id, detail_resp.status_code)
+                logger.debug(
+                    "Gmail message detail failed for %s: %s",
+                    msg_id,
+                    detail_resp.status_code,
+                )
                 continue
 
             msg = detail_resp.json()
@@ -68,17 +79,19 @@ async def gmail_read_mail(
             snippet = msg.get("snippet", "")[:2000]
             label_ids = msg.get("labelIds", [])
 
-            messages.append({
-                "id": msg.get("id"),
-                "thread_id": msg.get("threadId"),
-                "subject": headers_dict.get("subject", ""),
-                "body_preview": snippet,
-                "from": headers_dict.get("from", ""),
-                "to": headers_dict.get("to", ""),
-                "date": headers_dict.get("date", ""),
-                "is_read": "UNREAD" not in label_ids,
-                "labels": label_ids,
-                "importance": "high" if "IMPORTANT" in label_ids else "normal",
-            })
+            messages.append(
+                {
+                    "id": msg.get("id"),
+                    "thread_id": msg.get("threadId"),
+                    "subject": headers_dict.get("subject", ""),
+                    "body_preview": snippet,
+                    "from": headers_dict.get("from", ""),
+                    "to": headers_dict.get("to", ""),
+                    "date": headers_dict.get("date", ""),
+                    "is_read": "UNREAD" not in label_ids,
+                    "labels": label_ids,
+                    "importance": "high" if "IMPORTANT" in label_ids else "normal",
+                }
+            )
 
     return messages

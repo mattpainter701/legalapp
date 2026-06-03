@@ -1,7 +1,7 @@
 import re
 from typing import Tuple, List
 
-from app.services.pii_detection import detect_pii, scrub_pii, assess_pii_risk
+from app.services.pii_detection import detect_pii, scrub_pii
 
 PROHIBITED_PHRASES = [
     "as an ai",
@@ -79,7 +79,9 @@ def check_pii_in_input(text: str) -> List[dict]:
     return detect_pii(text)
 
 
-def apply_guardrails(text: str, privacy_mode: bool = False) -> Tuple[str, bool, List[dict]]:
+def apply_guardrails(
+    text: str, privacy_mode: bool = False
+) -> Tuple[str, bool, List[dict]]:
     """
     Apply all guardrails to a response.
     Returns (cleaned_text, needs_retry, pii_findings).
@@ -93,10 +95,14 @@ def apply_guardrails(text: str, privacy_mode: bool = False) -> Tuple[str, bool, 
 
     if has_prohibited:
         cleaned = sanitize_response(text)
-        needs_retry = sum(
-            1 for phrase in ["deepseek", "claude", "gpt", "openai", "anthropic"]
-            if phrase in text.lower()
-        ) >= 2
+        needs_retry = (
+            sum(
+                1
+                for phrase in ["deepseek", "claude", "gpt", "openai", "anthropic"]
+                if phrase in text.lower()
+            )
+            >= 2
+        )
     else:
         needs_retry = False
 

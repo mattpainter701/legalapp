@@ -46,6 +46,7 @@ def _mint_token(user: User, tenant: Tenant) -> str:
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 
+
 class DevLoginRequest(BaseModel):
     email: str
     full_name: Optional[str] = None
@@ -72,6 +73,7 @@ class SetAllPaygResponse(BaseModel):
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.post("/login", response_model=TokenResponse)
 async def dev_login(
@@ -109,9 +111,7 @@ async def dev_login(
     user = result.scalar_one_or_none()
     if user is None:
         # First user in tenant gets admin
-        count_result = await db.execute(
-            select(User).where(User.tenant_id == tenant.id)
-        )
+        count_result = await db.execute(select(User).where(User.tenant_id == tenant.id))
         is_first = len(count_result.scalars().all()) == 0
         user = User(
             id=uuid.uuid4(),

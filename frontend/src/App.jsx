@@ -20,6 +20,10 @@ import MediationDetailPage from './pages/MediationDetailPage'
 import BillingPage from './pages/BillingPage'
 import MCPPage from './pages/MCPPage'
 import PlatformPage from './pages/PlatformPage'
+import ContactsPage from './pages/ContactsPage'
+import ContactDetailPage from './pages/ContactDetailPage'
+import TasksPage from './pages/TasksPage'
+import IntakePage from './pages/IntakePage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -231,6 +235,38 @@ export default function App() {
           element={
             <ProtectedRoute>
               <BillingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/contacts"
+          element={
+            <ProtectedRoute>
+              <ContactsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/contacts/:id"
+          element={
+            <ProtectedRoute>
+              <ContactDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <ProtectedRoute>
+              <TasksPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/intake"
+          element={
+            <ProtectedRoute>
+              <IntakePage />
             </ProtectedRoute>
           }
         />

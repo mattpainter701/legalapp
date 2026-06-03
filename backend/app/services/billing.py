@@ -38,6 +38,8 @@ def calculate_cost(
         output_cost = (
             CLAUDE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
         )
+<<<<<<< HEAD
+=======
     elif "gemini" in model_lower:
         input_cost = GEMINI_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
         output_cost = (
@@ -47,6 +49,7 @@ def calculate_cost(
         # Azure OpenAI (GPT-4o, etc.)
         input_cost = AZURE_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
         output_cost = AZURE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
+>>>>>>> origin/main
     else:
         # DeepSeek or any other model defaults to DeepSeek pricing
         input_cost = DEEPSEEK_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
@@ -79,7 +82,11 @@ class BillingService:
         """Retrieve a Stripe subscription."""
         return await asyncio.to_thread(stripe.Subscription.retrieve, subscription_id)
 
+<<<<<<< HEAD
+    def update_customer_metadata(
+=======
     async def update_customer_metadata(
+>>>>>>> origin/main
         self, customer_id: str, metadata: dict
     ) -> stripe.Customer:
         """Update Stripe customer metadata."""

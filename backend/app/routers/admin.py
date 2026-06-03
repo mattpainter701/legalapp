@@ -441,7 +441,7 @@ async def get_tenant_detailed(
     active_users_result = await db.execute(
         select(func.count(User.id)).where(
             User.tenant_id == admin.tenant_id,
-            User.is_active == True,
+            User.is_active.is_(True),
         )
     )
     active_users = active_users_result.scalar() or 0
@@ -469,9 +469,9 @@ async def get_tenant_detailed(
         select(func.count(UsageRecord.id)).where(
             UsageRecord.tenant_id == admin.tenant_id,
             UsageRecord.created_at >= period_start,
-            (UsageRecord.cache_hit_rag == True)
-            | (UsageRecord.cache_hit_llm == True)
-            | (UsageRecord.cache_hit_matter == True),
+            (UsageRecord.cache_hit_rag.is_(True))
+            | (UsageRecord.cache_hit_llm.is_(True))
+            | (UsageRecord.cache_hit_matter.is_(True)),
         )
     )
     cache_hit_count = cache_hits.scalar() or 0
@@ -549,7 +549,7 @@ async def get_cache_analytics(
     rag_hits = await db.execute(
         select(func.count(UsageRecord.id)).where(
             UsageRecord.tenant_id == admin.tenant_id,
-            UsageRecord.cache_hit_rag == True,
+            UsageRecord.cache_hit_rag.is_(True),
             UsageRecord.created_at >= period_start,
         )
     )
@@ -558,7 +558,7 @@ async def get_cache_analytics(
     llm_hits = await db.execute(
         select(func.count(UsageRecord.id)).where(
             UsageRecord.tenant_id == admin.tenant_id,
-            UsageRecord.cache_hit_llm == True,
+            UsageRecord.cache_hit_llm.is_(True),
             UsageRecord.created_at >= period_start,
         )
     )
@@ -567,7 +567,7 @@ async def get_cache_analytics(
     matter_hits = await db.execute(
         select(func.count(UsageRecord.id)).where(
             UsageRecord.tenant_id == admin.tenant_id,
-            UsageRecord.cache_hit_matter == True,
+            UsageRecord.cache_hit_matter.is_(True),
             UsageRecord.created_at >= period_start,
         )
     )
@@ -577,9 +577,9 @@ async def get_cache_analytics(
     total_hits = await db.execute(
         select(func.count(UsageRecord.id)).where(
             UsageRecord.tenant_id == admin.tenant_id,
-            (UsageRecord.cache_hit_rag == True)
-            | (UsageRecord.cache_hit_llm == True)
-            | (UsageRecord.cache_hit_matter == True),
+            (UsageRecord.cache_hit_rag.is_(True))
+            | (UsageRecord.cache_hit_llm.is_(True))
+            | (UsageRecord.cache_hit_matter.is_(True)),
             UsageRecord.created_at >= period_start,
         )
     )

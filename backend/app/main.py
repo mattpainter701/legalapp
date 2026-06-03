@@ -29,6 +29,10 @@ from app.routers.user_sync import router as user_sync_router
 from app.routers.qbo import router as qbo_router
 from app.routers.billing_extended import router as billing_extended_router
 from app.routers.trust_accounting import router as trust_accounting_router
+from app.routers.contacts import router as contacts_router
+from app.routers.tasks import router as tasks_router
+from app.routers.communications import router as communications_router
+from app.routers.intake import router as intake_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
@@ -152,6 +156,10 @@ app.include_router(user_sync_router)
 app.include_router(qbo_router)
 app.include_router(billing_extended_router)
 app.include_router(trust_accounting_router)
+app.include_router(contacts_router)
+app.include_router(tasks_router)
+app.include_router(communications_router)
+app.include_router(intake_router)
 
 
 # ─────────────────────────────────────────────────────

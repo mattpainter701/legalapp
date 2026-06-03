@@ -634,49 +634,41 @@ PLUGIN_SPECIFIC_QUESTIONS = {
     - Term/termination defaults?
     - The "one hard-no" term (deal-breaker)?
     - Dollar threshold for auto-escalation?""",
-
     "privacy-legal": """- Regulatory footprint (GDPR Y/N, CCPA Y/N, sectoral)?
     - DPA positions as processor (subprocessors, security standard, breach notification)?
     - DPA positions as controller (audit rights, deletion, transfer mechanism)?
     - PIA triggers and house format?
     - DSAR SLA and handler?
     - Policy consistency audit schedule?""",
-
     "litigation-legal": """- Risk calibration (what's 'critical' vs 'high' for you)?
     - Outside counsel bench (firms, specialties, rate ranges)?
     - Legal hold process (how issued, refreshed, custodians notified)?
     - Materiality thresholds (what triggers reserve vs. disclose)?
     - House memo style?""",
-
     "corporate-legal": """- Typical deal size range?
     - Diligence materiality thresholds by category?
     - VDR system used?
     - Consent matrix defaults?
     - Disclosure schedule triggers?""",
-
     "employment-legal": """- Non-compete enforceability by key states (operate in)?
     - Exempt salary threshold?
     - Severance formula?
     - Final paycheck timing by state?
     - Reference call policy?""",
-
     "product-legal": """- Launch review framework categories and risk thresholds?
     - Sector overlays applicable (COPPA, GLBA, HIPAA, EEOC AI)?
     - Privilege conventions for launch memos?
     - Ticket tracker system (for redacted output routing)?""",
-
     "ip-legal": """- Primary trademark registrations?
     - Patent portfolio summary?
     - Open source license policy (permitted vs. restricted)?
     - C&D threshold (what triggers enforcement)?
     - Outside IP counsel?""",
-
     "ai-governance-legal": """- AI use case red lines (absolutely prohibited)?
     - Approved use case registry?
     - Impact assessment triggers and format?
     - Vendor AI terms positions?
     - Human oversight requirements?""",
-
     "regulatory-legal": """- Watched regulatory agencies (federal + state)?
     - Materiality threshold definition?
     - Policy library location and owner?
@@ -697,13 +689,60 @@ PLUGIN_DISPLAY_NAMES = {
 }
 
 PLUGIN_SKILLS = {
-    "commercial-legal": ["vendor-agreement-review", "nda-review", "saas-msa-review", "renewal-tracker", "cold-start-interview"],
-    "privacy-legal": ["dpa-review", "dsar-response", "pia-generation", "reg-gap-analysis", "cold-start-interview"],
-    "litigation-legal": ["matter-intake", "portfolio-status", "demand-draft", "claim-chart", "legal-hold", "cold-start-interview"],
-    "corporate-legal": ["diligence-review", "closing-checklist", "cold-start-interview"],
-    "employment-legal": ["hire-review", "termination-review", "classification-analysis", "cold-start-interview"],
-    "product-legal": ["launch-review", "marketing-claims-check", "cold-start-interview"],
-    "ip-legal": ["trademark-clearance", "fto-analysis", "cnd-triage", "cold-start-interview"],
-    "ai-governance-legal": ["use-case-triage", "impact-assessment", "vendor-ai-review", "cold-start-interview"],
-    "regulatory-legal": ["reg-gap-analysis", "policy-diff", "nprm-comment", "cold-start-interview"],
+    "commercial-legal": [
+        "vendor-agreement-review",
+        "nda-review",
+        "saas-msa-review",
+        "renewal-tracker",
+        "cold-start-interview",
+    ],
+    "privacy-legal": [
+        "dpa-review",
+        "dsar-response",
+        "pia-generation",
+        "reg-gap-analysis",
+        "cold-start-interview",
+    ],
+    "litigation-legal": [
+        "matter-intake",
+        "portfolio-status",
+        "demand-draft",
+        "claim-chart",
+        "legal-hold",
+        "cold-start-interview",
+    ],
+    "corporate-legal": [
+        "diligence-review",
+        "closing-checklist",
+        "cold-start-interview",
+    ],
+    "employment-legal": [
+        "hire-review",
+        "termination-review",
+        "classification-analysis",
+        "cold-start-interview",
+    ],
+    "product-legal": [
+        "launch-review",
+        "marketing-claims-check",
+        "cold-start-interview",
+    ],
+    "ip-legal": [
+        "trademark-clearance",
+        "fto-analysis",
+        "cnd-triage",
+        "cold-start-interview",
+    ],
+    "ai-governance-legal": [
+        "use-case-triage",
+        "impact-assessment",
+        "vendor-ai-review",
+        "cold-start-interview",
+    ],
+    "regulatory-legal": [
+        "reg-gap-analysis",
+        "policy-diff",
+        "nprm-comment",
+        "cold-start-interview",
+    ],
 }

@@ -1,5 +1,8 @@
 import time as _time
+<<<<<<< HEAD
+=======
 
+>>>>>>> origin/main
 from fastapi import Depends, Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +77,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def get_current_user(request: Request, db: AsyncSession):
+async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
     """Dependency that reads request.state and queries user from DB."""
     from app.models.user import User
 

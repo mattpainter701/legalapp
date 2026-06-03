@@ -12,6 +12,7 @@ Endpoints:
   GET  /api/platform/usage           — aggregate usage across all tenants
   GET  /api/platform/health          — row counts and index info
 """
+
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -32,6 +33,7 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
+
 def _require_platform_key(request: Request) -> None:
     key = request.headers.get("X-Platform-Key", "")
     if not settings.PLATFORM_SECRET_KEY or key != settings.PLATFORM_SECRET_KEY:
@@ -39,6 +41,7 @@ def _require_platform_key(request: Request) -> None:
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
+
 
 class TenantSummary(BaseModel):
     id: str
@@ -74,6 +77,7 @@ class PlatformUsage(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+
 def _mask(val: str | None) -> str | None:
     if not val:
         return None
@@ -81,6 +85,7 @@ def _mask(val: str | None) -> str | None:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @router.get("/tenants")
 async def list_tenants(
@@ -94,7 +99,10 @@ async def list_tenants(
     period_start = datetime.now(timezone.utc) - timedelta(days=30)
 
     tenants_result = await db.execute(
-        select(Tenant).order_by(Tenant.created_at.desc()).offset((page - 1) * limit).limit(limit)
+        select(Tenant)
+        .order_by(Tenant.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
     )
     tenants = tenants_result.scalars().all()
     tenant_ids = [t.id for t in tenants]
@@ -120,7 +128,9 @@ async def list_tenants(
         )
         .group_by(UsageRecord.tenant_id)
     )
-    usage = {str(r.tenant_id): (r.requests, float(r.cost)) for r in usage_result.fetchall()}
+    usage = {
+        str(r.tenant_id): (r.requests, float(r.cost)) for r in usage_result.fetchall()
+    }
 
     total_result = await db.execute(select(func.count(Tenant.id)))
     total = total_result.scalar_one()
@@ -234,7 +244,9 @@ async def update_tenant(
 
     if body.billing_tier is not None:
         if body.billing_tier not in ("flat", "payg"):
-            raise HTTPException(status_code=400, detail="billing_tier must be 'flat' or 'payg'")
+            raise HTTPException(
+                status_code=400, detail="billing_tier must be 'flat' or 'payg'"
+            )
         tenant.billing_tier = body.billing_tier
 
     if body.is_active is not None:

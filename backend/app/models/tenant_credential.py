@@ -28,8 +28,12 @@ class TenantCredential(Base):
         DateTime(timezone=True), nullable=True
     )
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    service_account_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    service_account_email: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

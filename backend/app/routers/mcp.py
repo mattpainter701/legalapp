@@ -11,6 +11,7 @@ Endpoints:
   POST /api/mcp/tools/call   — invoke a tool by name
   POST /api/mcp/api-key      — regenerate the tenant's API key (admin only)
 """
+
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -73,6 +74,7 @@ _TOOLS = [
 
 # ── Auth helper (JWT or API key) ──────────────────────────────────────────────
 
+
 async def _get_user_and_tenant(
     request: Request,
     db: AsyncSession,
@@ -86,11 +88,15 @@ async def _get_user_and_tenant(
             raise HTTPException(status_code=401, detail="Invalid API key")
         # Return a synthetic user-like object for downstream use
         user_result = await db.execute(
-            select(User).where(User.tenant_id == tenant.id, User.role == "admin").limit(1)
+            select(User)
+            .where(User.tenant_id == tenant.id, User.role == "admin")
+            .limit(1)
         )
         user = user_result.scalar_one_or_none()
         if not user:
-            raise HTTPException(status_code=403, detail="No admin user found for this tenant")
+            raise HTTPException(
+                status_code=403, detail="No admin user found for this tenant"
+            )
         return user, tenant
 
     user = await get_current_user(request, db)
@@ -102,6 +108,7 @@ async def _get_user_and_tenant(
 
 
 # ── Manifest ──────────────────────────────────────────────────────────────────
+
 
 @router.get("")
 async def mcp_manifest():
@@ -119,6 +126,7 @@ async def mcp_manifest():
 
 
 # ── Tool invocation ───────────────────────────────────────────────────────────
+
 
 class ToolCallRequest(BaseModel):
     name: str
@@ -168,6 +176,7 @@ async def call_tool(
             raise HTTPException(status_code=400, detail="chunk_id is required")
 
         from sqlalchemy import text as sa_text
+
         result = await db.execute(
             sa_text("""
                 SELECT id::text, content, case_name, citation, court, decision_date
@@ -216,6 +225,7 @@ def _format_chunk(index: int, chunk: dict) -> str:
 
 
 # ── API key management ────────────────────────────────────────────────────────
+
 
 @router.post("/api-key")
 async def regenerate_api_key(
