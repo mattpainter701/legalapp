@@ -348,27 +348,41 @@ async def microsoft_callback(
                 status_code=400, detail="No access token from Microsoft"
             )
 
-        graph_response = await client.get(
-            "https://graph.microsoft.com/v1.0/me",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if graph_response.status_code != 200:
-            logger.error(
-                "Microsoft Graph /me failed: status=%d body=%s",
-                graph_response.status_code,
-                graph_response.text,
-            )
+        # Extract user profile from id_token (always available, no Graph call needed)
+        id_token_raw = token_data.get("id_token")
+        if not id_token_raw:
+            logger.error("Microsoft token response missing id_token")
             raise HTTPException(
-                status_code=400, detail="Failed to fetch Microsoft profile"
+                status_code=400,
+                detail="No id_token in Microsoft token response",
             )
 
-        profile = graph_response.json()
+        # id_token is a JWT: header.payload.signature
+        # We trust the payload because it just arrived from MS over HTTPS
+        try:
+            payload_b64 = id_token_raw.split(".")[1]
+            # Add padding if needed
+            payload_b64 += "=" * (4 - len(payload_b64) % 4)
+            payload_bytes = base64.urlsafe_b64decode(payload_b64)
+            claims = _json.loads(payload_bytes)
+        except Exception:
+            logger.exception("Failed to decode Microsoft id_token")
+            raise HTTPException(
+                status_code=400, detail="Failed to decode Microsoft id_token"
+            )
+
+        logger.info(
+            "Microsoft id_token claims: sub=%s email=%s name=%s",
+            claims.get("sub"),
+            claims.get("email"),
+            claims.get("name"),
+        )
 
     email = (
-        (profile.get("mail") or profile.get("userPrincipalName") or "").lower().strip()
+        (claims.get("email") or claims.get("preferred_username") or "").lower().strip()
     )
-    full_name = profile.get("displayName")
-    ms_sub = profile.get("id", "")
+    full_name = claims.get("name")
+    ms_sub = claims.get("sub") or claims.get("oid", "")
 
     if not email:
         raise HTTPException(status_code=400, detail="No email in Microsoft profile")
