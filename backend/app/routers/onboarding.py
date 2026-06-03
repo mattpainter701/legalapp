@@ -10,7 +10,7 @@ Steps:
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,7 +57,7 @@ async def _get_integration_status(
 
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
-    request: Request = None,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Get current onboarding state for the tenant."""
