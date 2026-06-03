@@ -12,7 +12,7 @@ Contacts router — CRUD + conflict check.
 """
 
 import uuid
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select, func
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.communication_log import CommunicationLog
-from app.models.contact import Contact, Lead
+from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.schemas.contact import (
     ConflictCheckRequest,
@@ -31,10 +31,6 @@ from app.schemas.contact import (
     ContactListResponse,
     ContactResponse,
     ContactUpdate,
-    LeadConvertRequest,
-    LeadCreate,
-    LeadResponse,
-    LeadUpdate,
 )
 from app.schemas.communication_log import CommunicationLogListResponse
 
@@ -350,6 +346,6 @@ async def contact_communications(
     total = (await db.execute(count_stmt)).scalar_one()
 
     return CommunicationLogListResponse(
-        items=[CommunicationLogResponse.model_validate(l) for l in logs],
+        items=[CommunicationLogResponse.model_validate(log_entry) for log_entry in logs],
         total=total,
     )

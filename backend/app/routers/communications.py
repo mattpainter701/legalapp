@@ -66,7 +66,7 @@ async def list_communications(
     logs = result.scalars().all()
 
     return CommunicationLogListResponse(
-        items=[CommunicationLogResponse.model_validate(l) for l in logs],
+        items=[CommunicationLogResponse.model_validate(entry) for entry in logs],
         total=total,
     )
 

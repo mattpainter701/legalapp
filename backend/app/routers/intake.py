@@ -13,7 +13,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -106,7 +106,7 @@ async def list_leads(
     result = await db.execute(stmt)
     leads = result.scalars().all()
 
-    return [await _lead_to_response(db, l, tenant_id) for l in leads]
+    return [await _lead_to_response(db, lead_item, tenant_id) for lead_item in leads]
 
 
 @router.post("", response_model=LeadResponse, status_code=201)
