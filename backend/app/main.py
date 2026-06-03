@@ -229,11 +229,22 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled exception: {exc}")
+    # Classify error type based on exception class
+    error_type = exc.__class__.__name__.lower()
+    if "validation" in error_type:
+        error_type = "validation_error"
+    elif "timeout" in error_type:
+        error_type = "timeout_error"
+    elif "database" in error_type or "sqlalchemy" in error_type.lower():
+        error_type = "database_error"
+    else:
+        error_type = "api_error"
+
     await _capture_exception_to_errorlog(
         request,
         exc,
         500,
-        error_type="api_error",
+        error_type=error_type,
     )
     return JSONResponse(
         status_code=500,
