@@ -374,6 +374,61 @@ async def create_matter(
 
     await db.commit()
     await db.refresh(matter)
+
+    # Auto-run conflict check against counterparty name
+    try:
+        names = [body.counterparty] if body.counterparty else []
+        check = await run_conflict_check(
+            db=db,
+            tenant_id=user.tenant_id,
+            names=names,
+            emails=[],
+        )
+        matter.conflicts_status = "clear" if check["clear"] else "flagged"
+        await db.commit()
+        await db.refresh(matter)
+    except Exception:
+        # Non-fatal: conflict check failure must not block matter creation
+        pass
+
+    return _matter_to_response(matter)
+
+
+@router.post(
+    "/litigation/matters/{matter_id}/conflict-check",
+    response_model=MatterResponse,
+)
+async def run_matter_conflict_check(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually re-run the conflict check for a matter and update conflicts_status."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == user.tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    names = [matter.counterparty] if matter.counterparty else []
+    check = await run_conflict_check(
+        db=db,
+        tenant_id=user.tenant_id,
+        names=names,
+        emails=[],
+    )
+    matter.conflicts_status = "clear" if check["clear"] else "flagged"
+    matter.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(matter)
     return _matter_to_response(matter)
 
 
