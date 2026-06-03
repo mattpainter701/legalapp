@@ -23,6 +23,16 @@ services:
       timeout: 5s
       retries: 5
 
+  # Init service: runs migrations once, exits when complete.
+  migrator:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    command: alembic upgrade head
+    restart: "no"
+
   backend:
     build: ./backend
     depends_on:
@@ -30,10 +40,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     env_file: .env
     volumes:
       - uploads:/app/uploads
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
       interval: 15s

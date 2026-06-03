@@ -6,9 +6,8 @@
 #   1. Push current branch to git remote (if not already pushed)
 #   2. SSH to VPS, git pull main
 #   3. docker compose pull (if using registry) or build
-#   4. Run DB migrations
-#   5. Restart services with zero-downtime rolling update
-#   6. Health check
+#   4. Restart services (migrator init container runs migrations automatically)
+#   5. Health check
 #
 # Usage:
 #   bash scripts/deploy_prod.sh [--build | --pull]
@@ -68,10 +67,7 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
     docker compose $COMPOSE_FILES build --no-cache backend frontend
   fi
 
-  echo "==> Running DB migrations"
-  docker compose $COMPOSE_FILES run --rm backend alembic upgrade head
-
-  echo "==> Rolling restart"
+  echo "==> Rolling restart (migrator init container will run migrations)"
   docker compose $COMPOSE_FILES up -d --remove-orphans
 
   echo "==> Waiting for health check…"

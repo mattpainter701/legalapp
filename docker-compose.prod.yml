@@ -3,14 +3,31 @@
 # Removes dev ports, adds restart policies, tightens resources, no hot reload
 
 services:
+  # Init service: runs migrations once, exits when complete.
+  # Backend depends on migrator health, ensuring migrations run before app starts.
+  migrator:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    command: alembic upgrade head
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
   backend:
     restart: unless-stopped
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
     volumes:
       - /data/legalapp/uploads:/app/uploads   # host-mounted encrypted volume
     command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000
-             --workers 4 --log-level info"
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      --workers 4 --log-level info
     deploy:
       resources:
         limits:
