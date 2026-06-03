@@ -330,6 +330,11 @@ async def microsoft_callback(
         )
 
         if token_response.status_code != 200:
+            logger.error(
+                "Microsoft token exchange failed: status=%d body=%s",
+                token_response.status_code,
+                token_response.text,
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Failed to exchange Microsoft authorization code",
