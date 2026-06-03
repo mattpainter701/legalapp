@@ -392,4 +392,9 @@ export const getCalendarEvents = (start, end) => {
   return api.get('/calendar/events', { params }).then(r => r.data)
 }
 
+// ── Reports / Budget ──────────────────────────────────────────────────────────
+
+export const getMatterBudget = (matterId) =>
+  api.get(`/reports/matters/${matterId}/budget`).then(r => r.data)
+
 export default api

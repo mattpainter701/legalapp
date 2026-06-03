@@ -23,6 +23,16 @@ class OverdueTasksReport(BaseModel):
     tasks: list[dict[str, Any]]  # [{id, title, due_date, matter_name}]
 
 
+class MatterBudgetReport(BaseModel):
+    matter_id: str
+    matter_name: str
+    budget_amount: float | None
+    budget_currency: str
+    total_hours: float
+    total_billed: float
+    utilization_pct: float | None  # None when budget_amount is null/zero
+
+
 class FirmReportBundle(BaseModel):
     matter_status: MatterStatusReport
     intake_funnel: IntakeFunnelReport

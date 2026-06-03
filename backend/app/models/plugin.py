@@ -122,6 +122,12 @@ class Matter(Base):
     outcome: Mapped[str | None] = mapped_column(String(200), nullable=True)
     final_cost: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Budget tracking (added in migration 024)
+    budget_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    budget_currency: Mapped[str] = mapped_column(
+        String(3), default="USD", server_default="USD"
+    )
+
     # Optional FK to the firm's client Contact record (added in migration 018)
     client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

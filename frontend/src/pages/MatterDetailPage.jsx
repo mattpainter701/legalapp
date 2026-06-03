@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
-import { getMatter, updateMatter, addMatterEvent, runMatterConflictCheck } from '../api'
+import { getMatter, updateMatter, addMatterEvent, runMatterConflictCheck, getMatterBudget } from '../api'
 import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Users, FileText } from 'lucide-react'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
@@ -91,6 +91,7 @@ export default function MatterDetailPage() {
   const [addEventError, setAddEventError] = useState(null)
   const [conflictResult, setConflictResult] = useState(null)
   const [conflictLoading, setConflictLoading] = useState(false)
+  const [budget, setBudget] = useState(null)
 
   useEffect(() => {
     getMatter(id)
@@ -101,6 +102,7 @@ export default function MatterDetailPage() {
       })
       .catch(() => setError('Failed to load matter.'))
       .finally(() => setLoading(false))
+    getMatterBudget(id).then(setBudget).catch(() => {})
   }, [id])
 
   const handleSave = async () => {
@@ -110,6 +112,7 @@ export default function MatterDetailPage() {
       const updated = await updateMatter(id, editData)
       setMatter(updated.matter || updated)
       setEditing(false)
+      getMatterBudget(id).then(setBudget).catch(() => {})
     } catch {
       setSaveError('Failed to save changes.')
     } finally {
@@ -242,6 +245,29 @@ export default function MatterDetailPage() {
               )
             })()}
           </div>
+          {budget && (
+            <div className="bg-brand-surface border border-brand-line rounded-xl p-4 text-right min-w-[160px]">
+              <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Budget</div>
+              {budget.budget_amount ? (
+                <>
+                  <div className="text-[22px] font-serif font-bold text-brand-ink">
+                    {budget.utilization_pct ?? 0}%
+                  </div>
+                  <div className="text-[12px] text-brand-muted font-sans">
+                    ${budget.total_billed.toLocaleString()} / ${budget.budget_amount.toLocaleString()}
+                  </div>
+                  <div className="mt-1 h-1.5 rounded-full bg-brand-line overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${(budget.utilization_pct ?? 0) > 90 ? 'bg-brand-rose' : (budget.utilization_pct ?? 0) > 70 ? 'bg-brand-amber' : 'bg-brand-green'}`}
+                      style={{ width: `${Math.min(budget.utilization_pct ?? 0, 100)}%` }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="text-[13px] text-brand-muted font-sans">No budget set</div>
+              )}
+            </div>
+          )}
         </div>
 
         {saveError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-8 text-brand-rose text-sm font-sans">{saveError}</div>}
@@ -304,6 +330,19 @@ export default function MatterDetailPage() {
                     <label className={labelClasses}>Status</label>
                     <select value={editData.status || 'active'} onChange={(e) => setEditData((p) => ({ ...p, status: e.target.value }))} className={inputClasses}>
                       {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelClasses}>Budget Amount</label>
+                    <input type="number" step="0.01" min="0" value={editData.budget_amount || ''} onChange={(e) => setEditData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputClasses} placeholder="e.g. 50000" />
+                  </div>
+                  <div>
+                    <label className={labelClasses}>Budget Currency</label>
+                    <select value={editData.budget_currency || 'USD'} onChange={(e) => setEditData(p => ({ ...p, budget_currency: e.target.value }))} className={inputClasses}>
+                      <option value="USD">USD</option>
+                      <option value="EUR">EUR</option>
+                      <option value="GBP">GBP</option>
+                      <option value="CAD">CAD</option>
                     </select>
                   </div>
                 </div>

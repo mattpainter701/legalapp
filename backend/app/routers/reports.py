@@ -1,10 +1,11 @@
 """
 Reports router — firm-level analytics.
 
-  GET /api/reports/matters        Matter status breakdown
-  GET /api/reports/intake         Intake funnel stats
-  GET /api/reports/overdue-tasks  Overdue task list
-  GET /api/reports/bundle         All three in one response
+  GET /api/reports/matters              Matter status breakdown
+  GET /api/reports/intake               Intake funnel stats
+  GET /api/reports/overdue-tasks        Overdue task list
+  GET /api/reports/bundle               All three in one response
+  GET /api/reports/matters/{id}/budget  Matter budget vs actuals
 """
 
 import uuid
@@ -198,4 +199,57 @@ async def get_reports_bundle(
         intake_funnel=intake_funnel,
         overdue_tasks=overdue_tasks,
         generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+@router.get("/matters/{matter_id}/budget", response_model=MatterBudgetReport)
+async def get_matter_budget_report(
+    matter_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return budget utilization for a single matter."""
+    tenant_id = uuid.UUID(current_user["tenant_id"])
+    await set_tenant_context(db, str(tenant_id))
+
+    # Verify matter belongs to tenant
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    # Sum billable hours and amounts
+    agg_result = await db.execute(
+        select(
+            func.coalesce(func.sum(TimeEntry.hours), 0),
+            func.coalesce(func.sum(TimeEntry.amount), 0),
+        ).where(
+            TimeEntry.matter_id == matter.id,
+            TimeEntry.tenant_id == tenant_id,
+            TimeEntry.is_billable == True,
+        )
+    )
+    total_hours_decimal, total_billed_decimal = agg_result.one()
+
+    total_hours = float(total_hours_decimal)
+    total_billed = float(total_billed_decimal)
+    budget_amt = float(matter.budget_amount) if matter.budget_amount else None
+
+    utilization_pct = None
+    if budget_amt and budget_amt > 0:
+        utilization_pct = round(total_billed / budget_amt * 100, 1)
+
+    return MatterBudgetReport(
+        matter_id=str(matter.id),
+        matter_name=matter.matter_name,
+        budget_amount=budget_amt,
+        budget_currency=matter.budget_currency,
+        total_hours=total_hours,
+        total_billed=total_billed,
+        utilization_pct=utilization_pct,
     )

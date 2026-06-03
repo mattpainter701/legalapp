@@ -20,6 +20,14 @@
 - IntakePage: "Convert to Matter" button on engaged leads; modal with all required Matter fields; navigates to new matter on success
 - `convertLead(id, data)` API helper in `frontend/src/api.js`
 
+#### Task 804 — Matter Budget Tracking
+- Migration 024: added `budget_amount` (Numeric 12,2) and `budget_currency` (String 3, default "USD") to `matters` table
+- `GET /api/reports/matters/{id}/budget` — sums billable time entries (hours + amount) vs budget; returns utilization percentage
+- `MatterBudgetReport` Pydantic schema (matter_id, matter_name, budget_amount, budget_currency, total_hours, total_billed, utilization_pct)
+- `MatterResponse` and `MatterUpdate` schemas now include `budget_amount` and `budget_currency` fields
+- MatterDetailPage.jsx: budget utilization badge in header (progress bar with color thresholds: green ≤70%, amber ≤90%, red >90%); budget amount and currency fields in edit form
+- `getMatterBudget(matterId)` API helper in `frontend/src/api.js`
+
 ### Changed
 
 ### Fixed

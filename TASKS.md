@@ -31,11 +31,11 @@ Files: `backend/app/routers/communications.py` (extend or create), `backend/app/
 
 Files: `backend/app/routers/intake.py`, `backend/app/schemas/contact.py`, `frontend/src/pages/IntakePage.jsx`, `frontend/src/api.js`
 
-### 804. Matter Budget Tracking (P1, MEDIUM)
+### 804. Matter Budget Tracking (P1, MEDIUM) — COMPLETED
 
-- [ ] Migration 024: add `budget_amount` (Numeric 12,2), `budget_currency` (String 3, default "USD") to matters table
-- [ ] `GET /api/reports/matters/{id}/budget` — billable hours × default_rate vs budget_amount; % utilization
-- [ ] Frontend: budget utilization badge in MatterDetailPage header; budget amount editable inline
+- [x] Migration 024: add `budget_amount` (Numeric 12,2), `budget_currency` (String 3, default "USD") to matters table
+- [x] `GET /api/reports/matters/{id}/budget` — billable hours × default_rate vs budget_amount; % utilization
+- [x] Frontend: budget utilization badge in MatterDetailPage header; budget amount editable inline
 
 Files: `backend/migrations/versions/024_add_matter_budget.py`, `backend/app/routers/reports.py` (add endpoint), `frontend/src/pages/MatterDetailPage.jsx`
 

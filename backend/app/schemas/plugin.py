@@ -91,6 +91,8 @@ class MatterResponse(BaseModel):
     conflicts_status: str
     legal_hold_issued: bool
     is_closed: bool
+    budget_amount: Optional[float] = None
+    budget_currency: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -122,6 +124,8 @@ class MatterUpdate(BaseModel):
     is_closed: Optional[bool] = None
     outcome: Optional[str] = None
     final_cost: Optional[str] = None
+    budget_amount: Optional[float] = None
+    budget_currency: Optional[str] = None
 
 
 class MatterEventCreate(BaseModel):
