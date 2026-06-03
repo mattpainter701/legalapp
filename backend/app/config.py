@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    # Comma-separated list of free models available via OpenRouter
+    OPENROUTER_FREE_MODELS: str = (
+        "google/gemma-4-31b-it:free,"
+        "meta-llama/llama-4-maverick:free,"
+        "deepseek/deepseek-r1:free,"
+        "qwen/qwen3-235b-a22b:free"
+    )
+
+    # OpenCode Zen — free-tier LLM access (OpenAI-compatible)
+    OPENCODE_ZEN_BASE_URL: str = "https://zen.opencode.ai/v1"
 
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
@@ -89,6 +99,13 @@ class Settings(BaseSettings):
 
     # Never set True in production — enables /dev/* endpoints
     DEV_MODE: bool = False
+
+    # ── Cloud Search (Live RAG) ──────────────────────────────────────────────
+    CLOUD_SEARCH_ENABLED: bool = True  # Master feature flag
+    CLOUD_SEARCH_MAX_HITS: int = 10  # Cap results per source
+    CLOUD_SEARCH_HIT_CONTENT_CHARS: int = 2000  # Max chars per fetched hit
+    CLOUD_SEARCH_CACHE_TTL: int = 300  # 5 min for search results
+    CLOUD_METADATA_SYNC_INTERVAL_MIN: int = 15  # Cron interval
 
     model_config = SettingsConfigDict(env_file=".env")
 

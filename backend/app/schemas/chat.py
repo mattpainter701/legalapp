@@ -24,6 +24,9 @@ class MessageCreate(BaseModel):
     provider: str = "default"  # "default" | "openrouter" | "gemini" | "azure"
     skill: Optional[str] = None  # e.g., "commercial-legal", "litigation-legal"
     matter_id: Optional[str] = None  # UUID of related matter for context injection
+    attachment_ids: list[
+        str
+    ] = []  # UUIDs of uploaded documents to inject inline (no embeddings needed)
 
 
 class SourceCitation(BaseModel):

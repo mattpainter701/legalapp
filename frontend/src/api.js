@@ -280,6 +280,9 @@ export const getPlatformUsage = (key) =>
 export const getPlatformHealth = (key) =>
   platformApi(key).get('/platform/health').then((r) => r.data)
 
+export const getPlatformLLMProviders = (key) =>
+  platformApi(key).get('/platform/llm-providers').then((r) => r.data)
+
 // ── Contacts ───────────────────────────────────────────────────────────────
 
 export const getContacts = (params = {}) =>
@@ -548,5 +551,22 @@ export const resetPromptOverride = (plugin, skill) =>
 
 export const testPrompt = (plugin, skill, data) =>
   api.post(`/admin/prompts/${plugin}/${skill}/test`, data).then(r => r.data)
+
+// ── Cloud Search Admin ──────────────────────────────────────────────────────
+
+export const getCloudSearchStatus = () =>
+  api.get('/admin/cloud-search/status').then(r => r.data)
+
+export const testCloudSearch = (data) =>
+  api.post('/admin/cloud-search/test', data).then(r => r.data)
+
+export const triggerCloudSync = () =>
+  api.post('/admin/cloud-search/sync').then(r => r.data)
+
+export const getCloudMetadata = (params) =>
+  api.get('/admin/cloud-search/metadata', { params }).then(r => r.data)
+
+export const invalidateCloudCache = () =>
+  api.delete('/admin/cloud-search/cache').then(r => r.data)
 
 export default api

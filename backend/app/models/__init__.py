@@ -24,6 +24,7 @@ from app.models.contact import Contact, Lead
 from app.models.task import Task
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
+from app.models.cloud_metadata import CloudMetadata
 
 __all__ = [
     "Tenant",
@@ -57,4 +58,5 @@ __all__ = [
     "CommunicationLog",
     "DocumentTemplate",
     "PromptOverride",
+    "CloudMetadata",
 ]

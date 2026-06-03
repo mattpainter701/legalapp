@@ -4,6 +4,7 @@ import { getAdminUsers, getAdminUsage, getAdminTenant, configureCustomerLLM, res
 import { useAuth } from '../App'
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
+import CloudSearchAdmin from './CloudSearchAdmin'
 import LicensingPanel from '../components/LicensingPanel'
 import PermissionsAudit from '../components/PermissionsAudit'
 
@@ -429,6 +430,7 @@ export default function AdminPage() {
     { id: 'usage', label: 'Usage' },
     { id: 'tenant', label: 'Tenant' },
     { id: 'prompts', label: 'Prompts' },
+    { id: 'cloud-search', label: 'Cloud Search' },
     { id: 'permissions', label: 'Permissions' },
     { id: 'settings', label: 'Settings' },
   ]
@@ -511,6 +513,7 @@ export default function AdminPage() {
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
+          {activeTab === 'cloud-search' && <CloudSearchAdmin />}
           {activeTab === 'permissions' && <PermissionsAudit />}
         </div>
       </div>

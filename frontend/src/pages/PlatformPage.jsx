@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders } from '../api'
 import { Activity, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -70,12 +70,100 @@ function LoginScreen({ onLogin }) {
   )
 }
 
+function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpdate, saving, setSaving }) {
+  const currentProvider = tenantDetail?.llm_config?.provider || ''
+  const currentModel = tenantDetail?.llm_config?.model || ''
+  const [selectedProvider, setSelectedProvider] = useState(currentProvider)
+  const [selectedModel, setSelectedModel] = useState(currentModel)
+  const [saved, setSaved] = useState(false)
+
+  // Sync when tenantDetail changes (e.g. switching expanded tenant)
+  useEffect(() => {
+    setSelectedProvider(currentProvider)
+    setSelectedModel(currentModel)
+    setSaved(false)
+  }, [tenantDetail?.llm_config?.provider, tenantDetail?.llm_config?.model])
+
+  const selectedProviderObj = providers.find((p) => p.key === selectedProvider)
+  const models = selectedProviderObj?.models || []
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaved(false)
+    try {
+      const payload = {}
+      if (selectedProvider) {
+        payload.llm_provider = selectedProvider
+        payload.llm_model = selectedModel || null
+      }
+      await updatePlatformTenant(platformKey, tenant.id, payload)
+      onUpdate(tenant.id, payload)
+      setSaved(true)
+    } catch { /* save error silently */ }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="flex flex-wrap items-end gap-4">
+      <div className="flex-1 min-w-[200px]">
+        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+        <select
+          value={selectedProvider}
+          onChange={(e) => {
+            setSelectedProvider(e.target.value)
+            setSelectedModel('')
+            setSaved(false)
+          }}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        >
+          <option value="">Platform default (DeepSeek)</option>
+          {providers.map((p) => (
+            <option key={p.key} value={p.key} disabled={!p.configured}>
+              {p.label} {p.free_tier ? '(free)' : ''} {!p.configured ? '— not configured' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      {models.length > 0 && selectedProvider && (
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
+          <select
+            value={selectedModel}
+            onChange={(e) => { setSelectedModel(e.target.value); setSaved(false) }}
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+          >
+            <option value="">Default</option>
+            {models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <button
+        onClick={handleSave}
+        disabled={saving || (selectedProvider === currentProvider && selectedModel === currentModel)}
+        className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
+          saved
+            ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
+            : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
+        }`}
+      >
+        {saved ? '✓ Saved' : saving ? 'Saving…' : 'Apply'}
+      </button>
+      {selectedProvider && !selectedProviderObj?.configured && (
+        <p className="text-xs text-brand-rose font-sans w-full">This provider is not configured at the platform level. Set the required API key in the environment.</p>
+      )}
+    </div>
+  )
+}
+
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(() => sessionStorage.getItem('platform_key') || null)
   const [tab, setTab] = useState('dashboard')
   const [tenants, setTenants] = useState([])
   const [usage, setUsage] = useState(null)
   const [health, setHealth] = useState(null)
+  const [providers, setProviders] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
@@ -84,7 +172,7 @@ export default function PlatformPage() {
   const [expandedTenant, setExpandedTenant] = useState(null)
   const [tenantDetail, setTenantDetail] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
-  const LIMIT = 20
+  const [savingProvider, setSavingProvider] = useState(false)
 
   const handleLogin = (key) => {
     sessionStorage.setItem('platform_key', key)
@@ -96,13 +184,14 @@ export default function PlatformPage() {
     setLoading(true)
     setError(null)
     try {
-      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey)]
+      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey), getPlatformLLMProviders(platformKey)]
       if (tab === 'health') promises.push(getPlatformHealth(platformKey))
       const results = await Promise.all(promises)
       setTenants(results[0].tenants)
       setTotal(results[0].total)
       setUsage(results[1])
-      if (results[2]) setHealth(results[2])
+      setProviders(results[2].providers)
+      if (results[3]) setHealth(results[3])
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load')
       if (e?.response?.status === 403) { sessionStorage.removeItem('platform_key'); setPlatformKey(null) }
@@ -341,6 +430,11 @@ export default function PlatformPage() {
                                       </div>
                                     </div>
                                   </div>
+                                  {/* LLM Provider override — full-width row */}
+                                  <div className="mt-4 pt-4 border-t border-brand-line">
+                                    <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">LLM Provider</h4>
+                                    <LLMProviderSelect tenant={t} tenantDetail={tenantDetail} platformKey={platformKey} providers={providers} onUpdate={handleUpdate} saving={savingProvider} setSaving={setSavingProvider} />
+                                  </div>
                                 ) : (
                                   <p className="text-sm text-brand-rose font-sans">Failed to load tenant detail</p>
                                 )}
@@ -409,21 +503,24 @@ export default function PlatformPage() {
                   <h2 className="font-serif font-bold text-brand-ink flex items-center gap-2"><Server size={18} /> Service Status</h2>
                 </div>
                 <div className="p-5 space-y-4">
-                  {[
-                    { name: 'PostgreSQL', check: health?.tables?.length > 0 },
-                    { name: 'Redis', check: true },
-                    { name: 'API Server', check: true },
-                    { name: 'Migrations', check: health?.tables?.some(t => t.table === 'estates' || t.table === 'mediation_cases') },
-                    { name: 'OpenCode.ai', check: !!platformKey },
-                    { name: 'OpenRouter', check: false },
-                    { name: 'Azure OpenAI', check: false },
-                    { name: 'Google Gemini', check: false },
-                  ].map((s) => (
+                  {(health?.services || providers.length > 0 ? (
+                    health?.services || [
+                      { name: 'PostgreSQL', online: health?.tables?.length > 0 },
+                      { name: 'Redis', online: true },
+                      { name: 'API Server', online: true },
+                    ].concat(
+                      providers.map((p) => ({ name: p.label, online: p.configured }))
+                    )
+                  ) : [
+                    { name: 'PostgreSQL', online: health?.tables?.length > 0 },
+                    { name: 'Redis', online: true },
+                    { name: 'API Server', online: true },
+                  ]).map((s) => (
                     <div key={s.name} className="flex items-center justify-between">
                       <span className="text-sm font-sans text-brand-ink">{s.name}</span>
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${s.check ? 'text-brand-accent' : 'text-brand-rose'}`}>
-                        <span className={`w-2 h-2 rounded-full ${s.check ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
-                        {s.check ? 'Online' : 'Offline'}
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${s.online ? 'text-brand-accent' : 'text-brand-rose'}`}>
+                        <span className={`w-2 h-2 rounded-full ${s.online ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+                        {s.online ? 'Online' : 'Offline'}
                       </span>
                     </div>
                   ))}

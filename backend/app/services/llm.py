@@ -66,6 +66,16 @@ class LLMService:
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url=settings.OPENROUTER_BASE_URL,
             )
+        # OpenCode Zen — free-tier OpenAI-compatible endpoint
+        opencode_key = settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY
+        self.opencode_client = (
+            AsyncOpenAI(
+                api_key=opencode_key,
+                base_url=settings.OPENCODE_ZEN_BASE_URL,
+            )
+            if opencode_key
+            else None
+        )
 
     def _build_messages(
         self,
@@ -88,17 +98,20 @@ class LLMService:
         memory_context: str = "",
         use_premium: bool = False,
         provider: str = "default",
+        model: str | None = None,
     ) -> Tuple[str, int, int]:
         """
         Generate a completion.
         Returns (response_text, tokens_in, tokens_out).
 
         Provider routing:
-          - "openrouter" → OpenRouter (free models: google/gemma-4-31b-it:free etc.)
-          - "gemini" → Google Gemini
-          - "azure" → Azure OpenAI (GPT-4o)
-          - premium/Claude → Anthropic
-          - default → DeepSeek/OpenCode
+          - "deepseek"  → DeepSeek
+          - "opencode"  → OpenCode Zen (free tier)
+          - "openrouter" → OpenRouter (free models)
+          - "gemini"    → Google Gemini
+          - "azure"     → Azure OpenAI (GPT-4o)
+          - "anthropic" / premium → Anthropic Claude
+          - "default"   → DeepSeek (backward compat)
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
@@ -106,23 +119,48 @@ class LLMService:
             context=context,
         )
 
+        # Explicit provider routing (operator-assigned or user-selected)
         if provider == "gemini":
             return await self._complete_gemini(messages, system_prompt)
         if provider == "azure":
             return await self._complete_azure(messages, system_prompt)
         if provider == "openrouter":
-            model = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
-            return await self._complete_openrouter(messages, system_prompt, model)
-
-        if use_premium:
-            model = settings.PREMIUM_LLM.lower()
-            if model.startswith("claude") or model.startswith("anthropic"):
-                return await self._complete_anthropic(messages, system_prompt)
+            resolved_model = (
+                model or settings.OPENROUTER_FREE_MODELS.split(",")[0].strip()
+            )
+            return await self._complete_openrouter(
+                messages, system_prompt, resolved_model
+            )
+        if provider == "opencode":
+            resolved_model = model or settings.PRIMARY_LLM
+            return await self._complete_opencode(
+                messages, system_prompt, resolved_model
+            )
+        if provider == "deepseek":
+            resolved_model = model or settings.PRIMARY_LLM
             return await self._complete_deepseek(
-                messages, system_prompt, model=settings.PREMIUM_LLM
+                messages, system_prompt, resolved_model
+            )
+        if provider == "anthropic":
+            resolved_model = model or settings.PREMIUM_LLM
+            return await self._complete_anthropic(
+                messages, system_prompt, resolved_model
+            )
+
+        # Legacy / default routing
+        if use_premium:
+            resolved_model = model or settings.PREMIUM_LLM
+            if resolved_model.lower().startswith(("claude", "anthropic")):
+                return await self._complete_anthropic(
+                    messages, system_prompt, resolved_model
+                )
+            return await self._complete_deepseek(
+                messages, system_prompt, resolved_model
             )
         else:
-            return await self._complete_deepseek(messages, system_prompt)
+            return await self._complete_deepseek(
+                messages, system_prompt, model or settings.PRIMARY_LLM
+            )
 
     async def stream_complete(
         self,
@@ -132,17 +170,20 @@ class LLMService:
         use_premium: bool = False,
         provider: str = "default",
         memory_context: str | None = None,
+        model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Generate a streaming completion, yielding tokens as they arrive.
         Yields chunks of text as strings.
 
         Provider routing:
-          - "openrouter" → OpenRouter
-          - "gemini" → Google Gemini (fallback to non-streaming)
-          - "azure" → Azure OpenAI (GPT-4o)
-          - premium/Claude → Anthropic
-          - default → DeepSeek/OpenCode
+          - "deepseek"  → DeepSeek
+          - "opencode"  → OpenCode Zen (free tier)
+          - "openrouter" → OpenRouter (free models)
+          - "gemini"    → Google Gemini (fallback to non-streaming)
+          - "azure"     → Azure OpenAI (GPT-4o)
+          - "anthropic" / premium → Anthropic Claude
+          - "default"   → DeepSeek (backward compat)
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
@@ -160,23 +201,53 @@ class LLMService:
                 yield chunk
             return
         if provider == "openrouter":
-            model = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
-            async for chunk in self._stream_openrouter(messages, system_prompt, model):
+            resolved_model = (
+                model or settings.OPENROUTER_FREE_MODELS.split(",")[0].strip()
+            )
+            async for chunk in self._stream_openrouter(
+                messages, system_prompt, resolved_model
+            ):
+                yield chunk
+            return
+        if provider == "opencode":
+            resolved_model = model or settings.PRIMARY_LLM
+            async for chunk in self._stream_opencode(
+                messages, system_prompt, resolved_model
+            ):
+                yield chunk
+            return
+        if provider == "deepseek":
+            resolved_model = model or settings.PRIMARY_LLM
+            async for chunk in self._stream_deepseek(
+                messages, system_prompt, resolved_model
+            ):
+                yield chunk
+            return
+        if provider == "anthropic":
+            resolved_model = model or settings.PREMIUM_LLM
+            async for chunk in self._stream_anthropic(
+                messages, system_prompt, resolved_model
+            ):
                 yield chunk
             return
 
+        # Legacy / default routing
         if use_premium:
-            model = settings.PREMIUM_LLM.lower()
-            if model.startswith("claude") or model.startswith("anthropic"):
-                async for chunk in self._stream_anthropic(messages, system_prompt):
+            resolved_model = model or settings.PREMIUM_LLM
+            if resolved_model.lower().startswith(("claude", "anthropic")):
+                async for chunk in self._stream_anthropic(
+                    messages, system_prompt, resolved_model
+                ):
                     yield chunk
             else:
                 async for chunk in self._stream_deepseek(
-                    messages, system_prompt, model=settings.PREMIUM_LLM
+                    messages, system_prompt, resolved_model
                 ):
                     yield chunk
         else:
-            async for chunk in self._stream_deepseek(messages, system_prompt):
+            async for chunk in self._stream_deepseek(
+                messages, system_prompt, model or settings.PRIMARY_LLM
+            ):
                 yield chunk
 
     async def _complete_deepseek(
@@ -189,6 +260,30 @@ class LLMService:
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
         response = await self.deepseek_client.chat.completions.create(
+            model=model or settings.PRIMARY_LLM,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+        )
+
+        response_text = response.choices[0].message.content or ""
+        tokens_in = response.usage.prompt_tokens if response.usage else 0
+        tokens_out = response.usage.completion_tokens if response.usage else 0
+
+        return response_text, tokens_in, tokens_out
+
+    async def _complete_opencode(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> Tuple[str, int, int]:
+        """Call OpenCode Zen via OpenAI-compatible endpoint (free tier)."""
+        if not self.opencode_client:
+            raise ValueError("OpenCode Zen not configured — set OPENCODE_KEY")
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        response = await self.opencode_client.chat.completions.create(
             model=model or settings.PRIMARY_LLM,
             messages=all_messages,
             temperature=0.1,
@@ -312,6 +407,7 @@ class LLMService:
         self,
         messages: List[dict],
         system_prompt: str,
+        model: str | None = None,
     ) -> Tuple[str, int, int]:
         """Call Anthropic Claude for premium responses."""
         # Convert messages to Anthropic format — system is passed separately
@@ -320,7 +416,7 @@ class LLMService:
             anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
         response = await self.anthropic_client.messages.create(
-            model=settings.PREMIUM_LLM,
+            model=model or settings.PREMIUM_LLM,
             system=system_prompt,
             messages=anthropic_messages,
             temperature=0.1,
@@ -343,6 +439,30 @@ class LLMService:
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
         stream = await self.deepseek_client.chat.completions.create(
+            model=model or settings.PRIMARY_LLM,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def _stream_opencode(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream OpenCode Zen via OpenAI-compatible endpoint."""
+        if not self.opencode_client:
+            raise ValueError("OpenCode Zen not configured — set OPENCODE_KEY")
+
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        stream = await self.opencode_client.chat.completions.create(
             model=model or settings.PRIMARY_LLM,
             messages=all_messages,
             temperature=0.1,
@@ -405,6 +525,7 @@ class LLMService:
         self,
         messages: List[dict],
         system_prompt: str,
+        model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream Anthropic Claude."""
         anthropic_messages = []
@@ -412,7 +533,7 @@ class LLMService:
             anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
         async with self.anthropic_client.messages.stream(
-            model=settings.PREMIUM_LLM,
+            model=model or settings.PREMIUM_LLM,
             system=system_prompt,
             messages=anthropic_messages,
             temperature=0.1,

@@ -125,6 +125,9 @@ class TenantSettingsResponse(BaseModel):
     # Rate limiting
     max_requests_per_minute: Optional[int] = None
     max_daily_tokens: Optional[int] = None
+    # LLM provider (operator-assigned)
+    default_llm_provider: Optional[str] = None
+    default_llm_model: Optional[str] = None
     # Custom config
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
@@ -148,6 +151,8 @@ class TenantSettingsUpdate(BaseModel):
     enable_matter_context: Optional[bool] = None
     max_requests_per_minute: Optional[int] = None
     max_daily_tokens: Optional[int] = None
+    default_llm_provider: Optional[str] = None
+    default_llm_model: Optional[str] = None
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 

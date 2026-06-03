@@ -63,6 +63,10 @@ class TenantUpdate(BaseModel):
     billing_tier: Optional[str] = None
     is_active: Optional[bool] = None
     seat_count: Optional[int] = None
+    llm_provider: Optional[str] = (
+        None  # "deepseek"|"opencode"|"openrouter"|"anthropic"|"azure"|"gemini"
+    )
+    llm_model: Optional[str] = None  # optional model override
 
 
 class PlatformUsage(BaseModel):
@@ -192,6 +196,12 @@ async def get_tenant_detail(
     )
     u = usage_result.one()
 
+    # Fetch tenant settings (LLM provider, etc.)
+    ts_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+    )
+    ts = ts_result.scalar_one_or_none()
+
     return {
         "tenant": TenantSummary(
             id=str(tenant.id),
@@ -225,6 +235,10 @@ async def get_tenant_detail(
             "tokens_out": int(u.tokens_out),
             "cost_usd": float(u.cost),
         },
+        "llm_config": {
+            "provider": ts.default_llm_provider if ts else None,
+            "model": ts.default_llm_model if ts else None,
+        },
     }
 
 
@@ -256,6 +270,34 @@ async def update_tenant(
         if body.seat_count < 0:
             raise HTTPException(status_code=400, detail="seat_count must be >= 0")
         tenant.flat_seat_count = body.seat_count
+
+    # LLM provider / model — stored on TenantSettings
+    if body.llm_provider is not None or body.llm_model is not None:
+        VALID_PROVIDERS = {
+            "deepseek",
+            "opencode",
+            "openrouter",
+            "anthropic",
+            "azure",
+            "gemini",
+        }
+        if body.llm_provider is not None and body.llm_provider not in VALID_PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"llm_provider must be one of: {', '.join(sorted(VALID_PROVIDERS))}",
+            )
+
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if not ts:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+        if body.llm_provider is not None:
+            ts.default_llm_provider = body.llm_provider
+        if body.llm_model is not None:
+            ts.default_llm_model = body.llm_model
 
     await db.commit()
     return {"status": "updated", "tenant_id": tenant_id}
@@ -300,6 +342,63 @@ async def platform_usage(
     )
 
 
+@router.get("/llm-providers")
+async def list_llm_providers(request: Request):
+    """List available LLM providers and their status (checks env vars)."""
+    _require_platform_key(request)
+
+    def _provider(key: str, label: str, free_tier: bool, models: list[str]) -> dict:
+        configured = bool(
+            (key == "deepseek" and (settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY))
+            or (
+                key == "opencode"
+                and (settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY)
+            )
+            or (key == "openrouter" and settings.OPENROUTER_API_KEY)
+            or (key == "anthropic" and settings.ANTHROPIC_API_KEY)
+            or (
+                key == "azure"
+                and settings.AZURE_OPENAI_ENDPOINT
+                and settings.AZURE_OPENAI_KEY
+            )
+            or (key == "gemini" and settings.GEMINI_API_KEY)
+        )
+        return {
+            "key": key,
+            "label": label,
+            "configured": configured,
+            "free_tier": free_tier,
+            "models": models,
+        }
+
+    openrouter_models = [
+        m.strip() for m in settings.OPENROUTER_FREE_MODELS.split(",") if m.strip()
+    ]
+
+    providers = [
+        _provider("deepseek", "DeepSeek", False, [settings.PRIMARY_LLM]),
+        _provider("opencode", "OpenCode Zen", True, [settings.PRIMARY_LLM]),
+        _provider(
+            "openrouter",
+            "OpenRouter",
+            True,
+            openrouter_models if openrouter_models else ["google/gemma-4-31b-it:free"],
+        ),
+        _provider("anthropic", "Anthropic Claude", False, [settings.PREMIUM_LLM]),
+        _provider(
+            "azure",
+            "Azure OpenAI",
+            False,
+            [settings.AZURE_OPENAI_DEPLOYMENT]
+            if settings.AZURE_OPENAI_DEPLOYMENT
+            else [],
+        ),
+        _provider("gemini", "Google Gemini", True, ["gemini-2.0-flash"]),
+    ]
+
+    return {"providers": providers}
+
+
 @router.get("/health")
 async def platform_health(
     request: Request,
@@ -322,4 +421,50 @@ async def platform_health(
         for r in rows.fetchall()
     ]
 
-    return {"tables": tables, "checked_at": datetime.now(timezone.utc).isoformat()}
+    # Real provider health from env vars
+    services = [
+        {
+            "name": "PostgreSQL",
+            "online": len(tables) > 0,
+        },
+        {
+            "name": "Redis",
+            "online": bool(settings.REDIS_URL),
+        },
+        {
+            "name": "API Server",
+            "online": True,
+        },
+        {
+            "name": "DeepSeek / OpenCode",
+            "online": bool(settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY),
+        },
+        {
+            "name": "OpenCode Zen",
+            "online": bool(settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY),
+        },
+        {
+            "name": "OpenRouter",
+            "online": bool(settings.OPENROUTER_API_KEY),
+        },
+        {
+            "name": "Anthropic Claude",
+            "online": bool(settings.ANTHROPIC_API_KEY),
+        },
+        {
+            "name": "Azure OpenAI",
+            "online": bool(
+                settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_KEY
+            ),
+        },
+        {
+            "name": "Google Gemini",
+            "online": bool(settings.GEMINI_API_KEY),
+        },
+    ]
+
+    return {
+        "tables": tables,
+        "services": services,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }

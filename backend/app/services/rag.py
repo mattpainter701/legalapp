@@ -176,3 +176,109 @@ async def full_rag_query(
 
     context_str = await build_rag_context(chunks)
     return context_str, chunks
+
+
+async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
+    """Format cloud search hits into a context string for the LLM."""
+    if not cloud_hits_with_content:
+        return ""
+
+    parts = []
+    for i, item in enumerate(cloud_hits_with_content, start=1):
+        hit = item.get("hit", {})
+        content = item.get("content", "")
+        if not content:
+            content = hit.get("snippet", "")
+
+        source_label = f"{hit.get('provider', 'cloud')}/{hit.get('source', 'unknown')}"
+        title = hit.get("title", "Untitled")
+        url = hit.get("url", "")
+        modified = hit.get("modified_time", "")
+
+        header = f"[C{i}] {source_label}: {title}"
+        if url:
+            header += f"\n    URL: {url}"
+        if modified:
+            header += f"\n    Modified: {modified}"
+
+        parts.append(
+            f"{header}\nContent:\n{content[:2000]}\n" + "-" * 60,
+        )
+
+    return "\n\n".join(parts)
+
+
+async def hybrid_rag_query(
+    db: AsyncSession,
+    embedding_service: EmbeddingService,
+    question: str,
+    tenant_id: str,
+    user_id: str | None = None,
+    include_public: bool = True,
+    cloud_search_service=None,  # CloudSearchService | None
+    retrieval_planner=None,  # RetrievalPlanner | None
+    tenant_name: str = "Legal",
+    matter_context_str: str | None = None,
+) -> tuple[str, list[dict], list[dict]]:
+    """
+    Hybrid RAG pipeline: pgvector search + cloud search.
+
+    Runs both paths in parallel (pgvector is always attempted; cloud search
+    only if services are provided and tenant has integrations).
+
+    Returns (context_string, chunks_list, cloud_hits_list).
+    The caller is responsible for merging context strings if both return results.
+    """
+    # 1. Standard pgvector RAG (always run)
+    pgvector_context, chunks = await full_rag_query(
+        db=db,
+        embedding_service=embedding_service,
+        question=question,
+        tenant_id=tenant_id,
+        include_public=include_public,
+    )
+
+    # 2. Cloud search (only if services are wired and cloud search is enabled)
+    cloud_hits = []
+    cloud_context = ""
+    if cloud_search_service and retrieval_planner:
+        from app.config import get_settings as _get_settings
+
+        _settings = _get_settings()
+        if _settings.CLOUD_SEARCH_ENABLED:
+            try:
+                plan = await retrieval_planner.plan(
+                    user_question=question,
+                    tenant_name=tenant_name,
+                    matter_context=matter_context_str,
+                )
+                if plan and plan.get("should_search"):
+                    cloud_hits = await cloud_search_service.search(
+                        db=db,
+                        plan=plan,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                    )
+                    if cloud_hits:
+                        hits_with_content = await cloud_search_service.fetch_contents(
+                            db=db,
+                            hits=cloud_hits,
+                            tenant_id=tenant_id,
+                            max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                        )
+                        cloud_context = await build_cloud_context(
+                            hits_with_content,
+                        )
+            except Exception:
+                # Cloud search is additive — failure must not break chat
+                pass
+
+    # 3. Merge contexts — cloud results after pgvector
+    if cloud_context:
+        context_str = (
+            f"{pgvector_context}\n\n--- Cloud Search Results ---\n\n{cloud_context}"
+        )
+    else:
+        context_str = pgvector_context
+
+    return context_str, chunks, cloud_hits

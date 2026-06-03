@@ -45,6 +45,7 @@ from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
+from app.routers.cloud_admin import router as cloud_admin_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(prompt_admin_router, prefix="/api")
+app.include_router(cloud_admin_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev_router, prefix="/api")
 app.include_router(integrations_router)

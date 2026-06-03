@@ -285,6 +285,46 @@ legalapp/
 
 ---
 
-## License
+## Data architecture: three-tier retrieval
 
-Private — all rights reserved.
+```
+                         ┌──────────────────────────┐
+                         │     User asks question    │
+                         └────────────┬─────────────┘
+                                      │
+              ┌───────────────────────┼───────────────────────┐
+              │                       │                       │
+    ┌─────────▼─────────┐  ┌─────────▼─────────┐  ┌─────────▼─────────┐
+    │ Session Attachments│  │  Project / Matter  │  │   Cloud Search     │
+    │ (drag & drop)      │  │  (saved documents) │  │   (Live RAG)       │
+    ├───────────────────┤  ├───────────────────┤  ├───────────────────┤
+    │ Extract text       │  │ Extract → chunk   │  │ LLM → search plan │
+    │ → inject to context│  │ → embed → pgvector│  │ → Drive/Gmail/    │
+    │ → discard          │  │ → permanent RAG   │  │   Graph API call  │
+    │                     │  │                    │  │ → fetch top N     │
+    │ Stored: file on disk│  │ Stored: db + vector│  │ → stream → discard│
+    │                     │  │                    │  │                    │
+    │ Zero embeddings     │  │ Full embeddings    │  │ Metadata only      │
+    │ Session-scoped      │  │ Cross-session      │  │ 500-char snippets  │
+    └─────────┬───────────┘  └─────────┬───────────┘  └─────────┬───────────┘
+              │                       │                       │
+              └───────────────────────┼───────────────────────┘
+                                      │
+                            ┌─────────▼─────────┐
+                            │  Merged context →  │
+                            │  LLM → answer      │
+                            └───────────────────┘
+                                      │
+                            ┌─────────▼─────────┐
+                            │  Memory harvest    │
+                            │  (every 10 msgs)   │
+                            │  → UserMemory      │
+                            │  → cross-session   │
+                            └───────────────────┘
+```
+
+**Core principle:** Don't ingest terabytes of customer cloud data. Store only routing metadata locally. Search the customer's own Google/Microsoft cloud at query time, fetch only the top few results, stream them into context, and discard. Customer data stays in the customer's tenant.
+
+Full details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+---

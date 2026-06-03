@@ -351,6 +351,56 @@ class ExpertiseCacheManager:
         except Exception:
             return False
 
+    # ── Cloud Search Cache ─────────────────────────────────────────────────────
+
+    CLOUD_SEARCH_CACHE_TTL = 300  # 5 min for search results
+
+    async def get_cached_cloud_search(
+        self, tenant_id: str, question_hash: str
+    ) -> Optional[str]:
+        """Retrieve cached cloud search results."""
+        if not self.cache_enabled or not self.redis_client:
+            return None
+        try:
+            key = self._make_key("cloud_search", tenant_id, question_hash)
+            return await self.redis_client.get(key)
+        except Exception:
+            return None
+
+    async def set_cached_cloud_search(
+        self, tenant_id: str, question_hash: str, results_json: str, ttl: int = 300
+    ) -> bool:
+        """Cache cloud search results."""
+        if not self.cache_enabled or not self.redis_client:
+            return False
+        try:
+            key = self._make_key("cloud_search", tenant_id, question_hash)
+            await self.redis_client.setex(key, ttl, results_json)
+            return True
+        except Exception:
+            return False
+
+    async def invalidate_cloud_search_cache(self, tenant_id: str) -> bool:
+        """Invalidate all cloud search cache for a tenant."""
+        if not self.cache_enabled or not self.redis_client:
+            return False
+        try:
+            pattern = f"cloud_search:{tenant_id}|*"
+            cursor = 0
+            keys_to_delete = []
+            while True:
+                cursor, keys = await self.redis_client.scan(cursor, match=pattern)
+                if keys:
+                    keys_to_delete.extend(keys)
+                if cursor == 0:
+                    break
+            if keys_to_delete:
+                for i in range(0, len(keys_to_delete), 1000):
+                    await self.redis_client.delete(*keys_to_delete[i : i + 1000])
+            return True
+        except Exception:
+            return False
+
     def get_cache_config(self, expertise_level: str) -> dict:
         """Get cache configuration for expertise level."""
         return CACHE_CONFIG.get(expertise_level, CACHE_CONFIG["mid"])

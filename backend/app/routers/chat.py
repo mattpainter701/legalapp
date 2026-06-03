@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
+from app.models.document import Document
 from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
@@ -22,7 +24,7 @@ from app.schemas.chat import (
     SourceCitation,
 )
 from app.services.embeddings import EmbeddingService
-from app.services.rag import full_rag_query
+from app.services.rag import hybrid_rag_query
 from app.services.llm import LLMService
 from app.services.billing import calculate_cost
 from app.services.memory_service import MemoryService
@@ -64,6 +66,28 @@ llm_service = LLMService()
 memory_service = MemoryService(llm_service)
 matter_context_service = MatterContextService()
 cache_manager = ExpertiseCacheManager()
+
+# Cloud search (lazy-init — only used when CLOUD_SEARCH_ENABLED and tenant has integrations)
+_cloud_search_service = None
+_retrieval_planner = None
+
+
+def _get_cloud_search_service():
+    global _cloud_search_service
+    if _cloud_search_service is None:
+        from app.services.cloud_search import CloudSearchService
+
+        _cloud_search_service = CloudSearchService()
+    return _cloud_search_service
+
+
+def _get_retrieval_planner():
+    global _retrieval_planner
+    if _retrieval_planner is None:
+        from app.services.retrieval_planner import RetrievalPlanner
+
+        _retrieval_planner = RetrievalPlanner(llm_service)
+    return _retrieval_planner
 
 
 def _conversation_to_response(
@@ -358,6 +382,55 @@ async def send_message(
                 expertise_level=user.expertise_level,
             )
 
+    # 3b. Session attachments — inject file text directly into context (no embeddings)
+    attachment_context = ""
+    if hasattr(body, "attachment_ids") and body.attachment_ids:
+        try:
+            from app.utils.text_processing import extract_text as _extract_text
+
+            attachment_parts = []
+            for aid in body.attachment_ids:
+                doc_result = await db.execute(
+                    select(Document).where(
+                        Document.id == aid,
+                        Document.tenant_id == user.tenant_id,
+                    )
+                )
+                doc = doc_result.scalar_one_or_none()
+                if doc is None:
+                    continue
+
+                text = ""
+                if doc.chunk_count and doc.chunk_count > 0:
+                    from sqlalchemy import text as _sa_text
+
+                    chunk_result = await db.execute(
+                        _sa_text(
+                            "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
+                            "ORDER BY chunk_index LIMIT 100"
+                        ),
+                        {"doc_id": str(doc.id)},
+                    )
+                    text = "\n\n".join(row[0] for row in chunk_result.fetchall())
+                else:
+                    file_path = doc.file_path or (
+                        f"{settings.UPLOAD_DIR}/{user.tenant_id}/{doc.id}/{doc.filename}"
+                    )
+                    text = await asyncio.to_thread(_extract_text, file_path)
+
+                if text:
+                    attachment_parts.append(
+                        f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
+                    )
+
+            if attachment_parts:
+                attachment_context = (
+                    "--- Attached Files (session-only, not saved to project) ---\n\n"
+                    + "\n\n---\n\n".join(attachment_parts)
+                )
+        except Exception:
+            pass  # Non-fatal
+
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
     cached_rag = await cache_manager.get_cached_rag_results(
@@ -372,12 +445,17 @@ async def send_message(
         cache_hit_rag = True
     else:
         try:
-            context_str, chunks = await full_rag_query(
+            context_str, chunks, cloud_hits = await hybrid_rag_query(
                 db=db,
                 embedding_service=embedding_service,
                 question=body.content,
                 tenant_id=str(user.tenant_id),
+                user_id=str(user.id),
                 include_public=body.include_public,
+                cloud_search_service=_get_cloud_search_service(),
+                retrieval_planner=_get_retrieval_planner(),
+                tenant_name=user.tenant.name if user.tenant else "Legal",
+                matter_context_str=matter_context_str,
             )
             # Cache RAG results
             await cache_manager.set_cached_rag_results(
@@ -408,6 +486,9 @@ async def send_message(
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
+    if attachment_context:
+        context_str = f"{attachment_context}\n\n{context_str}"
+
     # 4b. Load user memory context for injection into system prompt
     memory_context = await memory_service.get_memory_context_for_injection(
         db=db,
@@ -420,6 +501,19 @@ async def send_message(
     context_hash = hashlib.md5(context_str.encode()).hexdigest()
 
     tenant_name = user.tenant.name if user.tenant else "Legal"
+
+    # Resolve provider: if "default", use tenant's configured LLM provider/model
+    resolved_provider = body.provider
+    resolved_model = None
+    if body.provider == "default":
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts and ts.default_llm_provider:
+            resolved_provider = ts.default_llm_provider
+            resolved_model = ts.default_llm_model
+
     cache_hit_llm = False
     cached_response = await cache_manager.get_cached_llm_response(
         question=body.content,
@@ -441,7 +535,8 @@ async def send_message(
                 context=context_str,
                 memory_context=memory_context,
                 use_premium=body.use_premium_llm,
-                provider=body.provider,
+                provider=resolved_provider,
+                model=resolved_model,
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -490,7 +585,8 @@ async def send_message(
             context=context_str,
             memory_context=memory_context,
             use_premium=body.use_premium_llm,
-            provider=body.provider,
+            provider=resolved_provider,
+            model=resolved_model,
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -691,6 +787,55 @@ async def stream_message(
                 expertise_level=user.expertise_level,
             )
 
+    # 3b. Session attachments — inject file text directly into context (no embeddings)
+    attachment_context = ""
+    if hasattr(body, "attachment_ids") and body.attachment_ids:
+        try:
+            from app.utils.text_processing import extract_text as _extract_text
+
+            attachment_parts = []
+            for aid in body.attachment_ids:
+                doc_result = await db.execute(
+                    select(Document).where(
+                        Document.id == aid,
+                        Document.tenant_id == user.tenant_id,
+                    )
+                )
+                doc = doc_result.scalar_one_or_none()
+                if doc is None:
+                    continue
+
+                text = ""
+                if doc.chunk_count and doc.chunk_count > 0:
+                    from sqlalchemy import text as _sa_text
+
+                    chunk_result = await db.execute(
+                        _sa_text(
+                            "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
+                            "ORDER BY chunk_index LIMIT 100"
+                        ),
+                        {"doc_id": str(doc.id)},
+                    )
+                    text = "\n\n".join(row[0] for row in chunk_result.fetchall())
+                else:
+                    file_path = doc.file_path or (
+                        f"{settings.UPLOAD_DIR}/{user.tenant_id}/{doc.id}/{doc.filename}"
+                    )
+                    text = await asyncio.to_thread(_extract_text, file_path)
+
+                if text:
+                    attachment_parts.append(
+                        f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
+                    )
+
+            if attachment_parts:
+                attachment_context = (
+                    "--- Attached Files (session-only, not saved to project) ---\n\n"
+                    + "\n\n---\n\n".join(attachment_parts)
+                )
+        except Exception:
+            pass  # Non-fatal
+
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
     cached_rag = await cache_manager.get_cached_rag_results(
@@ -705,12 +850,17 @@ async def stream_message(
         cache_hit_rag = True
     else:
         try:
-            context_str, chunks = await full_rag_query(
+            context_str, chunks, _ = await hybrid_rag_query(
                 db=db,
                 embedding_service=embedding_service,
                 question=body.content,
                 tenant_id=str(user.tenant_id),
+                user_id=str(user.id),
                 include_public=body.include_public,
+                cloud_search_service=_get_cloud_search_service(),
+                retrieval_planner=_get_retrieval_planner(),
+                tenant_name=user.tenant.name if user.tenant else "Legal",
+                matter_context_str=matter_context_str,
             )
         except Exception:
             logger.exception(
@@ -731,11 +881,26 @@ async def stream_message(
     if matter_context_str:
         context_str = f"{matter_context_str}\n\n{context_str}"
 
+    if attachment_context:
+        context_str = f"{attachment_context}\n\n{context_str}"
+
     # 4b. Load user memory context for system prompt
     memory_context = await memory_service.get_memory_context_for_injection(
         db=db,
         user_id=user.id,
     )
+
+    # Resolve provider: if "default", use tenant's configured LLM provider/model
+    stream_provider = body.provider
+    stream_model = None
+    if body.provider == "default":
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts and ts.default_llm_provider:
+            stream_provider = ts.default_llm_provider
+            stream_model = ts.default_llm_model
 
     # Create the streaming generator
     async def stream_generator():
@@ -750,7 +915,8 @@ async def stream_message(
                 context=context_str,
                 memory_context=memory_context,
                 use_premium=body.use_premium_llm,
-                provider=body.provider,
+                provider=stream_provider,
+                model=stream_model,
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -775,7 +941,8 @@ async def stream_message(
                     tenant_name=tenant_name,
                     context=context_str,
                     use_premium=body.use_premium_llm,
-                    provider=body.provider,
+                    provider=stream_provider,
+                    model=stream_model,
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
