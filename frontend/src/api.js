@@ -366,4 +366,18 @@ export const deleteMatterDocument = (matterId, docId) =>
 export const getMatterDocumentDownloadUrl = (matterId, docId) =>
   `/api/matters/${matterId}/documents/${docId}/download`
 
+// ── Reports ─────────────────────────────────────────────────────────────────
+
+export const getMatterStatusReport = () =>
+  api.get('/reports/matters').then(r => r.data)
+
+export const getIntakeFunnelReport = () =>
+  api.get('/reports/intake').then(r => r.data)
+
+export const getOverdueTasksReport = () =>
+  api.get('/reports/overdue-tasks').then(r => r.data)
+
+export const getReportsBundle = () =>
+  api.get('/reports/bundle').then(r => r.data)
+
 export default api

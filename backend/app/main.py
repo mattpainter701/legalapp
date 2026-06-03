@@ -34,6 +34,7 @@ from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
 from app.routers.intake import router as intake_router
 from app.routers.matter_parties import router as matter_parties_router
+from app.routers.matter_documents import router as matter_documents_router
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 
@@ -163,6 +164,7 @@ app.include_router(communications_router)
 app.include_router(intake_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
+app.include_router(reports_router)
 
 
 # ─────────────────────────────────────────────────────
