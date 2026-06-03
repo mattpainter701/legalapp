@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import { getMatter, updateMatter, addMatterEvent } from '../api'
-import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock } from 'lucide-react'
+import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Users } from 'lucide-react'
+import MatterPartiesTab from '../components/MatterPartiesTab'
 
 const EVENT_TYPES = [
   'filing', 'hearing', 'deposition', 'settlement_discussion',
@@ -82,6 +83,7 @@ export default function MatterDetailPage() {
   const [editData, setEditData] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const [activeTab, setActiveTab] = useState('timeline')
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [newEvent, setNewEvent] = useState({ event_type: 'other', title: '', content: '' })
   const [addingEvent, setAddingEvent] = useState(false)
@@ -199,7 +201,31 @@ export default function MatterDetailPage() {
 
         {saveError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-8 text-brand-rose text-sm font-sans">{saveError}</div>}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Tab bar */}
+        <div className="flex gap-1 mb-8 border-b border-brand-line">
+          {[
+            { key: 'timeline', label: 'Timeline', icon: <Clock size={15} /> },
+            { key: 'parties', label: 'Parties', icon: <Users size={15} /> },
+          ].map(({ key, label, icon }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`flex items-center gap-1.5 px-5 py-3 text-[13px] font-sans font-semibold transition-colors border-b-2 -mb-px ${
+                activeTab === key
+                  ? 'border-brand-ink text-brand-ink'
+                  : 'border-transparent text-brand-muted hover:text-brand-ink-2'
+              }`}
+            >
+              {icon} {label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'parties' && (
+          <MatterPartiesTab matterId={id} />
+        )}
+
+        <div className={`grid grid-cols-1 lg:grid-cols-3 gap-8 ${activeTab !== 'timeline' ? 'hidden' : ''}`}>
           <div className="lg:col-span-1 space-y-6">
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
               <h2 className="font-serif font-bold text-xl text-brand-ink mb-6 flex items-center gap-2">

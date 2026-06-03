@@ -329,4 +329,18 @@ export const updateLead = (id, data) =>
 export const convertLead = (id, data) =>
   api.post(`/intake/${id}/convert`, data).then(r => r.data)
 
+// ── Matter Parties ──────────────────────────────────────────────────────────
+
+export const getMatterParties = (matterId) =>
+  api.get(`/matters/${matterId}/parties`).then(r => r.data)
+
+export const addMatterParty = (matterId, data) =>
+  api.post(`/matters/${matterId}/parties`, data).then(r => r.data)
+
+export const updateMatterParty = (matterId, partyId, data) =>
+  api.patch(`/matters/${matterId}/parties/${partyId}`, data).then(r => r.data)
+
+export const removeMatterParty = (matterId, partyId) =>
+  api.delete(`/matters/${matterId}/parties/${partyId}`).then(r => r.data)
+
 export default api
