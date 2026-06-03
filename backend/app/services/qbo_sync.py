@@ -34,6 +34,13 @@ class QBOSyncService:
         self.access_token = access_token
         self.base_url = QBO_API_BASE if sandbox else QBO_PROD_API_BASE
 
+    @staticmethod
+    def _safe_qbo_string(value: str | None) -> str:
+        """Escape single quotes for safe QBO query interpolation."""
+        if value is None:
+            return ""
+        return value.replace("'", "''")
+
     @property
     def _headers(self) -> dict:
         return {
@@ -107,6 +114,8 @@ class QBOSyncService:
         if len(display_name) > 100:
             display_name = display_name[:97] + "..."
 
+        safe_display = self._safe_qbo_string(display_name)
+
         customer_data = {
             "DisplayName": display_name,
             "GivenName": matter.counterparty,
@@ -121,7 +130,7 @@ class QBOSyncService:
 
         # Check if customer already exists (by DisplayName)
         url = self._api_url(realm_id, "query")
-        query = f"SELECT * FROM Customer WHERE DisplayName = '{display_name}'"
+        query = f"SELECT * FROM Customer WHERE DisplayName = '{safe_display}'"
         existing = await self._request("GET", url, params={"query": query})
 
         if existing and existing.get("QueryResponse", {}).get("Customer"):
@@ -177,7 +186,11 @@ class QBOSyncService:
 
         time_data = {
             "NameOf": "Employee",  # or "Vendor"
-            "CustomerRef": {"name": f"{matter.counterparty} — {matter.matter_name}"},
+            "CustomerRef": {
+                "name": self._safe_qbo_string(
+                    f"{matter.counterparty} — {matter.matter_name}"
+                )
+            },
             "ItemRef": {"value": item_ref["Id"], "name": "Legal Services"},
             "HourlyRate": float(entry.hourly_rate),
             "Hours": float(entry.hours),
@@ -192,8 +205,9 @@ class QBOSyncService:
 
     async def _ensure_service_item(self, realm_id: str, item_name: str) -> dict:
         """Find or create a service-type Item in QBO."""
+        safe_item = self._safe_qbo_string(item_name)
         url = self._api_url(realm_id, "query")
-        query = f"SELECT * FROM Item WHERE Name = '{item_name}' AND Type = 'Service'"
+        query = f"SELECT * FROM Item WHERE Name = '{safe_item}' AND Type = 'Service'"
         existing = await self._request("GET", url, params={"query": query})
 
         if existing and existing.get("QueryResponse", {}).get("Item"):
@@ -266,11 +280,13 @@ class QBOSyncService:
         if len(customer_name) > 100:
             customer_name = customer_name[:97] + "..."
 
+        safe_customer = self._safe_qbo_string(customer_name)
+
         invoice_data = {
             "DocNumber": invoice.invoice_number,
             "TxnDate": invoice.issue_date.isoformat(),
             "DueDate": invoice.due_date.isoformat(),
-            "CustomerRef": {"name": customer_name},
+            "CustomerRef": {"name": safe_customer},
             "Line": qbo_lines,
             "PrivateNote": invoice.notes or "",
             "TotalAmt": float(invoice.total),
@@ -360,6 +376,97 @@ class QBOSyncService:
             "other": "7",  # Other
         }
         return mapping.get(method, "7")
+
+    # ── Retry Logic ───────────────────────────────────────────────────────────
+
+    async def _retry_with_backoff(
+        self, coro, operation_name: str, max_attempts: int = 3
+    ):
+        """Execute with exponential backoff retry. Logs failures to ErrorLog."""
+        from app.services.error_tracker import capture_error
+
+        last_exception = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = await coro()
+                if result is not None:
+                    return result
+                # QBO returned None (API error) — treat as retryable
+                last_exception = Exception(
+                    f"QBO API returned null for {operation_name}"
+                )
+            except Exception as exc:
+                last_exception = exc
+
+            if attempt < max_attempts:
+                delay = 2**attempt  # 2s, 4s
+                logger.warning(
+                    f"QBO {operation_name} attempt {attempt}/{max_attempts} failed: {last_exception}. "
+                    f"Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    f"QBO {operation_name} failed after {max_attempts} attempts: {last_exception}"
+                )
+                try:
+                    await capture_error(
+                        db=self.db,
+                        error_type="qbo_sync_error",
+                        severity="error",
+                        message=f"QBO {operation_name} failed after {max_attempts} retries: {str(last_exception)[:500]}",
+                        tenant_id=self.tenant_id,
+                    )
+                except Exception:
+                    pass
+
+        return None
+
+    async def sync_invoice_with_retry(self, invoice_id: str) -> dict | None:
+        """Sync invoice with retry and status lifecycle management."""
+        from app.models.billing import Invoice
+
+        # Set status to syncing
+        await set_tenant_context(self.db, self.tenant_id)
+        inv_result = await self.db.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_id,
+                Invoice.tenant_id == self.tenant_id,
+            )
+        )
+        invoice = inv_result.scalar_one_or_none()
+        if not invoice:
+            return None
+
+        invoice.qbo_sync_status = "syncing"
+        await self.db.commit()
+
+        result = await self._retry_with_backoff(
+            lambda: self.sync_invoice(invoice_id),
+            f"sync_invoice({invoice_id})",
+        )
+
+        # Update status based on result
+        await set_tenant_context(self.db, self.tenant_id)
+        inv_result = await self.db.execute(
+            select(Invoice).where(Invoice.id == invoice_id)
+        )
+        invoice = inv_result.scalar_one_or_none()
+        if invoice:
+            if result:
+                invoice.qbo_sync_status = "synced"
+            else:
+                invoice.qbo_sync_status = "failed"
+            await self.db.commit()
+
+        return result
+
+    async def sync_payment_with_retry(self, payment_id: str) -> dict | None:
+        """Sync payment with retry."""
+        return await self._retry_with_backoff(
+            lambda: self.sync_payment(payment_id),
+            f"sync_payment({payment_id})",
+        )
 
     # ── Full Sync ───────────────────────────────────────────────────────────
 

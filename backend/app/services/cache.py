@@ -252,9 +252,10 @@ class ExpertiseCacheManager:
             return False
 
         try:
-            pattern = f"*{tenant_id}|{user_id}*"
+            # Keys use format: {type}:{tenant_id}|{user_id}|{suffix}
+            pattern = f"*:{tenant_id}|{user_id}|*"
             if cache_type:
-                pattern = f"{cache_type}:{tenant_id}|{user_id}*"
+                pattern = f"{cache_type}:{tenant_id}|{user_id}|*"
 
             # Use SCAN instead of KEYS to avoid blocking Redis event loop
             keys_to_delete = []

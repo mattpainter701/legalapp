@@ -10,7 +10,7 @@ QBO uses OAuth 2.0 with the following flow:
 
 import logging
 import secrets
-import time as _time
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -55,7 +55,13 @@ async def _save_state(request: Request, state: str, data: dict) -> None:
         await redis.setex(f"qbo:state:{state}", _STATE_TTL, "1")
         await redis.setex(f"qbo:statedata:{state}", _STATE_TTL, _json.dumps(data))
     else:
-        _fallback_states[state] = _time.time()
+        now = time.time()
+        # Evict expired entries to prevent unbounded growth
+        expired = [k for k, ts in _fallback_states.items() if now - ts > _STATE_TTL]
+        for k in expired:
+            _fallback_states.pop(k, None)
+            _fallback_state_data.pop(k, None)
+        _fallback_states[state] = now
         _fallback_state_data[state] = data
 
 
@@ -76,7 +82,7 @@ async def _consume_state(request: Request, state: str) -> tuple[bool, dict | Non
     if ts is None:
         return False, None
     data = _fallback_state_data.pop(state, None)
-    if _time.time() - ts > _STATE_TTL:
+    if time.time() - ts > _STATE_TTL:
         return False, None
     return True, data
 

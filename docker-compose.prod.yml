@@ -36,6 +36,8 @@ services:
 
   frontend:
     restart: unless-stopped
+    volumes:
+      - frontend_dist:/app/dist
     environment:
       - VITE_API_URL=/api
     deploy:
@@ -72,3 +74,4 @@ services:
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro           # cert files (written by renew-cert.sh)
       - ./nginx/webroot:/var/www/certbot:ro     # ACME challenge files (written by certbot)
+      - frontend_dist:/usr/share/nginx/html/dist:ro   # frontend static assets

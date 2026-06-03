@@ -107,10 +107,15 @@ origins = list(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://localhost:3000",
-        "https://172.16.16.202",
-        "http://172.16.16.202:3000",
     }
 )
+
+# Add extra CORS origins from environment variable (comma-separated)
+if settings.EXTRA_CORS_ORIGINS:
+    extra_origins = [
+        o.strip() for o in settings.EXTRA_CORS_ORIGINS.split(",") if o.strip()
+    ]
+    origins.extend(extra_origins)
 
 app.add_middleware(
     CORSMiddleware,
@@ -173,8 +178,53 @@ async def health_check():
 # ─────────────────────────────────────────────────────
 # Exception handlers
 # ─────────────────────────────────────────────────────
+async def _capture_exception_to_errorlog(
+    request: Request,
+    exc: Exception,
+    status_code: int,
+    error_type: str = "api_error",
+):
+    """Persist exception to ErrorLog table if database is available."""
+    try:
+        import uuid as _uuid
+
+        from app.database import async_session_maker
+        from app.services.error_tracker import capture_error
+
+        # Try to extract user/tenant from request state (set by TenantMiddleware)
+        user_id_str = getattr(request.state, "user_id", None)
+        tenant_id_str = getattr(request.state, "tenant_id", None)
+
+        user_id = _uuid.UUID(user_id_str) if user_id_str else None
+        tenant_id = _uuid.UUID(tenant_id_str) if tenant_id_str else None
+
+        async with async_session_maker() as session:
+            await capture_error(
+                db=session,
+                error_type=error_type,
+                severity="error" if status_code >= 500 else "warning",
+                message=str(exc),
+                request=request,
+                status_code=status_code,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+    except Exception:
+        pass  # Error tracking must never cascade
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    # Capture 4xx/5xx HTTP exceptions
+    if exc.status_code >= 400:
+        await _capture_exception_to_errorlog(
+            request,
+            exc,
+            exc.status_code,
+            error_type="validation_error"
+            if exc.status_code in (400, 422)
+            else "api_error",
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
@@ -184,6 +234,23 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Unhandled exception: {exc}")
+    # Classify error type based on exception class
+    error_type = exc.__class__.__name__.lower()
+    if "validation" in error_type:
+        error_type = "validation_error"
+    elif "timeout" in error_type:
+        error_type = "timeout_error"
+    elif "database" in error_type or "sqlalchemy" in error_type.lower():
+        error_type = "database_error"
+    else:
+        error_type = "api_error"
+
+    await _capture_exception_to_errorlog(
+        request,
+        exc,
+        500,
+        error_type=error_type,
+    )
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},

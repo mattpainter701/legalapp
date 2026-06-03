@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import AsyncGenerator, List, Tuple
 
 import anthropic
 from openai import AsyncOpenAI
@@ -12,6 +12,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working
 CAPABILITIES:
 - You draw on the firm's document library (provided as CONTEXT below), uploaded attachments, and your own legal reasoning.
 - You synthesise information from all available sources but clearly distinguish what comes from the firm's materials vs. your own knowledge.
+- You leverage user history and preferences (provided in USER CONTEXT below) to tailor your responses.
 
 RULES:
 - **Accuracy first.** If you are uncertain about a point, say so rather than guessing. Never fabricate case names, citations, or statutes.
@@ -23,7 +24,10 @@ RULES:
 - **Identity.** You are a legal assistant, not an AI. Do not mention what model or system powers you. If asked, say you are a legal research tool built for {tenant_name}.
 - End every substantive response with: "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*"
 
-CONTEXT (firm documents and relevant authority — may be empty):
+USER CONTEXT (history of interactions, preferences, and patterns):
+{memory_context}
+
+FIRM CONTEXT (firm documents and relevant authority — may be empty):
 {context}
 """
 
@@ -81,6 +85,7 @@ class LLMService:
         messages: List[dict],
         tenant_name: str,
         context: str,
+        memory_context: str = "",
         use_premium: bool = False,
         provider: str = "default",
     ) -> Tuple[str, int, int]:
@@ -97,6 +102,7 @@ class LLMService:
         """
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
+            memory_context=memory_context or "No user memory available.",
             context=context,
         )
 
@@ -117,6 +123,59 @@ class LLMService:
             )
         else:
             return await self._complete_deepseek(messages, system_prompt)
+
+    async def stream_complete(
+        self,
+        messages: List[dict],
+        tenant_name: str,
+        context: str,
+        use_premium: bool = False,
+        provider: str = "default",
+    ) -> AsyncGenerator[str, None]:
+        """
+        Generate a streaming completion, yielding tokens as they arrive.
+        Yields chunks of text as strings.
+
+        Provider routing:
+          - "openrouter" → OpenRouter
+          - "gemini" → Google Gemini (fallback to non-streaming)
+          - "azure" → Azure OpenAI (GPT-4o)
+          - premium/Claude → Anthropic
+          - default → DeepSeek/OpenCode
+        """
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            tenant_name=tenant_name,
+            context=context,
+        )
+
+        if provider == "gemini":
+            # Gemini doesn't have reliable streaming yet, fall back to non-streaming
+            response_text, _, _ = await self._complete_gemini(messages, system_prompt)
+            yield response_text
+            return
+        if provider == "azure":
+            async for chunk in self._stream_azure(messages, system_prompt):
+                yield chunk
+            return
+        if provider == "openrouter":
+            model = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
+            async for chunk in self._stream_openrouter(messages, system_prompt, model):
+                yield chunk
+            return
+
+        if use_premium:
+            model = settings.PREMIUM_LLM.lower()
+            if model.startswith("claude") or model.startswith("anthropic"):
+                async for chunk in self._stream_anthropic(messages, system_prompt):
+                    yield chunk
+            else:
+                async for chunk in self._stream_deepseek(
+                    messages, system_prompt, model=settings.PREMIUM_LLM
+                ):
+                    yield chunk
+        else:
+            async for chunk in self._stream_deepseek(messages, system_prompt):
+                yield chunk
 
     async def _complete_deepseek(
         self,
@@ -271,3 +330,91 @@ class LLMService:
         tokens_out = response.usage.output_tokens if response.usage else 0
 
         return response_text, tokens_in, tokens_out
+
+    async def _stream_deepseek(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str = None,
+    ) -> AsyncGenerator[str, None]:
+        """Stream DeepSeek via OpenAI-compatible endpoint."""
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        stream = await self.deepseek_client.chat.completions.create(
+            model=model or settings.PRIMARY_LLM,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def _stream_azure(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream Azure OpenAI (GPT-4o)."""
+        if not self.azure_client:
+            raise ValueError("Azure OpenAI not configured")
+
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        stream = await self.azure_client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def _stream_openrouter(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream OpenRouter."""
+        if not self.openrouter_client:
+            raise ValueError("OpenRouter not configured — set OPENROUTER_API_KEY")
+
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        stream = await self.openrouter_client.chat.completions.create(
+            model=model,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def _stream_anthropic(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream Anthropic Claude."""
+        anthropic_messages = []
+        for msg in messages:
+            anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        with self.anthropic_client.messages.stream(
+            model=settings.PREMIUM_LLM,
+            system=system_prompt,
+            messages=anthropic_messages,
+            temperature=0.1,
+            max_tokens=4096,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text

@@ -7,27 +7,27 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Allow httpOnly cookies to be sent with requests
 })
 
-// Request interceptor: attach token from localStorage
+// Request interceptor: httpOnly cookies are now handled automatically by the browser
+// No longer injecting Authorization header — relies on browser's cookie auto-send
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
     return config
   },
   (error) => Promise.reject(error)
 )
 
-// Response interceptor: handle 401 by clearing token and redirecting
+// Response interceptor: handle 401 by clearing state and redirecting
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
+      // Clear localStorage fallback (for backward compat during transition)
       localStorage.removeItem('token')
       localStorage.removeItem('user')
+      // Cookie will be cleared by the logout endpoint
       window.location.href = '/login'
     }
     return Promise.reject(error)
@@ -83,6 +83,61 @@ export const sendMessage = (conversationId, content, includePublic = true, usePr
       use_premium_llm: usePremium,
     })
     .then((r) => r.data)
+
+export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false) {
+  const token = localStorage.getItem('token')
+  const headers = {
+    'Content-Type': 'application/json',
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      content,
+      include_public: includePublic,
+      use_premium_llm: usePremium,
+    }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      const chunk = decoder.decode(value)
+      const lines = chunk.split('\n')
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6)
+          if (data && data !== '[STREAM_COMPLETE]' && !data.startsWith('[ERROR]')) {
+            yield data
+          } else if (data === '[STREAM_COMPLETE]' || data.startsWith('[ERROR]')) {
+            yield data
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
 
 export const deleteConversation = (id) =>
   api.delete(`/conversations/${id}`).then((r) => r.data)

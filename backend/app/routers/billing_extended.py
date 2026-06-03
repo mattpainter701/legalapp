@@ -1,5 +1,6 @@
 """Extended billing router — time entries, expenses, invoice generation, payments."""
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -10,7 +11,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
@@ -101,6 +102,7 @@ async def list_time_entries(
 ) -> TimeEntryListResponse:
     """List time entries with optional filters."""
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
 
     stmt = select(TimeEntry).where(TimeEntry.tenant_id == user.tenant_id)
 
@@ -212,7 +214,7 @@ async def delete_time_entry(
             detail="Cannot delete a billed time entry. Write it off instead.",
         )
 
-    entry.status = "written_off"
+    await db.delete(entry)
     await db.commit()
 
 
@@ -266,6 +268,7 @@ async def list_expenses(
 ) -> ExpenseListResponse:
     """List expenses with optional filters."""
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
 
     stmt = select(Expense).where(Expense.tenant_id == user.tenant_id)
 
@@ -597,6 +600,7 @@ async def list_invoices(
 ) -> InvoiceListResponse:
     """List invoices with optional filters."""
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
 
     stmt = select(Invoice).where(Invoice.tenant_id == user.tenant_id)
     if matter_id:
@@ -657,6 +661,28 @@ async def get_invoice(
     return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
 
+async def _trigger_qbo_sync_invoice(
+    invoice_id: str, tenant_id: str, access_token: str, sandbox: bool = True
+):
+    """Fire-and-forget QBO invoice sync with retry."""
+    from app.services.qbo_sync import QBOSyncService
+
+    async with async_session_maker() as session:
+        service = QBOSyncService(session, tenant_id, access_token, sandbox)
+        await service.sync_invoice_with_retry(invoice_id)
+
+
+async def _trigger_qbo_sync_payment(
+    payment_id: str, tenant_id: str, access_token: str, sandbox: bool = True
+):
+    """Fire-and-forget QBO payment sync with retry."""
+    from app.services.qbo_sync import QBOSyncService
+
+    async with async_session_maker() as session:
+        service = QBOSyncService(session, tenant_id, access_token, sandbox)
+        await service.sync_payment_with_retry(payment_id)
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str,
@@ -677,11 +703,37 @@ async def update_invoice(
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
+    old_status = invoice.status
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(invoice, key, value)
 
     await db.commit()
+
+    # Trigger QBO sync on status transitions that need it
+    new_status = update_data.get("status", old_status)
+    if old_status != new_status and new_status in ("sent", "paid", "partially_paid"):
+        try:
+            from app.models.qbo import QBOIntegration
+
+            qbo_result = await db.execute(
+                select(QBOIntegration).where(
+                    QBOIntegration.tenant_id == user.tenant_id,
+                    QBOIntegration.is_active,
+                )
+            )
+            qbo = qbo_result.scalar_one_or_none()
+            if qbo:
+                invoice.qbo_sync_status = "syncing"
+                await db.commit()
+                asyncio.create_task(
+                    _trigger_qbo_sync_invoice(
+                        invoice_id, str(user.tenant_id), qbo.access_token, qbo.sandbox
+                    )
+                )
+        except Exception:
+            logger.warning("QBO invoice sync task failed", exc_info=True)
+
     return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
 
@@ -739,6 +791,28 @@ async def create_payment(
     await db.commit()
     await db.refresh(payment)
 
+    # Trigger QBO payment sync (fire-and-forget)
+    payment_id_str = str(payment.id)
+    tenant_id_str = str(user.tenant_id)
+    try:
+        from app.models.qbo import QBOIntegration
+
+        qbo_result = await db.execute(
+            select(QBOIntegration).where(
+                QBOIntegration.tenant_id == user.tenant_id,
+                QBOIntegration.is_active,
+            )
+        )
+        qbo = qbo_result.scalar_one_or_none()
+        if qbo:
+            asyncio.create_task(
+                _trigger_qbo_sync_payment(
+                    payment_id_str, tenant_id_str, qbo.access_token, qbo.sandbox
+                )
+            )
+    except Exception:
+        logger.warning("QBO payment sync task failed", exc_info=True)
+
     return PaymentResponse.model_validate(payment)
 
 
@@ -750,6 +824,7 @@ async def list_payments(
 ) -> list[PaymentResponse]:
     """List payments with optional invoice filter."""
     user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
 
     stmt = select(Payment).where(Payment.tenant_id == user.tenant_id)
     if invoice_id:
@@ -908,3 +983,197 @@ async def export_invoice(
             status_code=400,
             detail=f"Unsupported export format: {body.format}. Use 'csv', 'pdf', or 'ledes1998b'.",
         )
+
+
+# ── Stripe Webhook ─────────────────────────────────────────────────────────
+
+
+@router.post("/webhooks/stripe")
+async def stripe_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle Stripe webhook events for payment reconciliation.
+
+    Events handled:
+      - payment_intent.succeeded → auto-create Payment + update invoice status
+      - payment_intent.payment_failed → log warning
+      - checkout.session.completed → reconcile Payment Link checkout
+    """
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=501, detail="Stripe webhook not configured")
+
+    import stripe
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    if not sig_header:
+        raise HTTPException(status_code=400, detail="Missing stripe-signature header")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        )
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    event_type = event["type"]
+    event_data = event["data"]["object"]
+    logger.info(f"Stripe webhook received: {event_type} (id={event['id']})")
+
+    try:
+        if event_type == "payment_intent.succeeded":
+            await _handle_payment_intent_succeeded(db, event_data)
+        elif event_type == "payment_intent.payment_failed":
+            await _handle_payment_intent_failed(db, event_data)
+        elif event_type == "checkout.session.completed":
+            await _handle_checkout_session_completed(db, event_data)
+        else:
+            logger.debug(f"Unhandled Stripe event type: {event_type}")
+    except Exception as exc:
+        logger.exception(f"Stripe webhook handler failed for {event_type}: {exc}")
+        # Still return 200 to Stripe — we logged the error for investigation
+        return {"status": "received", "warning": str(exc)}
+
+    return {"status": "received"}
+
+
+async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
+    """Handle payment_intent.succeeded: create Payment + update invoice status."""
+    stripe_payment_intent_id = intent["id"]
+    metadata = intent.get("metadata", {})
+    invoice_id = metadata.get("invoice_id")
+
+    # Idempotency check: skip if this payment intent was already recorded
+    existing = await db.execute(
+        select(Payment).where(
+            Payment.stripe_payment_intent_id == stripe_payment_intent_id
+        )
+    )
+    if existing.scalar_one_or_none():
+        logger.info(
+            f"Duplicate Stripe event: {stripe_payment_intent_id} already recorded"
+        )
+        return
+
+    amount = Decimal(str(intent["amount"] / 100))  # Convert cents to dollars
+    payment_date = date.today()
+    method = "stripe"
+
+    if not invoice_id:
+        # No invoice metadata — create an unlinked payment for tracking
+        logger.warning(
+            f"payment_intent.succeeded without invoice_id metadata: {stripe_payment_intent_id}"
+        )
+        return
+
+    # Verify invoice exists
+    inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    invoice = inv_result.scalar_one_or_none()
+    if not invoice:
+        logger.warning(
+            f"Stripe webhook: invoice {invoice_id} not found for PI {stripe_payment_intent_id}"
+        )
+        return
+
+    # Create payment
+    payment = Payment(
+        tenant_id=invoice.tenant_id,
+        invoice_id=uuid.UUID(invoice_id),
+        amount=amount,
+        payment_date=payment_date,
+        method=method,
+        reference_number=intent.get("id"),
+        stripe_payment_intent_id=stripe_payment_intent_id,
+        notes=f"Auto-reconciled from Stripe intent {stripe_payment_intent_id}",
+    )
+    db.add(payment)
+
+    # Update invoice status
+    total_paid_result = await db.execute(
+        select(func.sum(Payment.amount)).where(
+            Payment.invoice_id == invoice_id,
+        )
+    )
+    total_paid = (total_paid_result.scalar() or Decimal("0")) + amount
+
+    if total_paid >= invoice.total:
+        invoice.status = "paid"
+    elif total_paid > 0:
+        invoice.status = "partially_paid"
+
+    if invoice.qbo_sync_status == "synced":
+        invoice.qbo_sync_status = "pending"
+
+    await db.commit()
+    logger.info(
+        f"Auto-reconciled payment for invoice {invoice_id}: ${amount} via Stripe"
+    )
+
+
+async def _handle_payment_intent_failed(db: AsyncSession, intent: dict):
+    """Handle payment_intent.payment_failed: log the failure."""
+    metadata = intent.get("metadata", {})
+    invoice_id = metadata.get("invoice_id")
+    error_msg = (
+        intent.get("last_payment_error", {}).get("message", "Unknown failure")
+        if intent.get("last_payment_error")
+        else "Payment failed"
+    )
+    logger.warning(
+        f"Stripe payment failed for invoice {invoice_id}: {error_msg} "
+        f"(PI: {intent['id']})"
+    )
+
+    # Optionally mark invoice for follow-up
+    if invoice_id:
+        inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+        invoice = inv_result.scalar_one_or_none()
+        if invoice and invoice.status not in ("paid", "written_off"):
+            # Add a note to the invoice about the failed payment
+            fail_note = f"[{datetime.now(timezone.utc).date()}] Stripe payment failed: {error_msg[:200]}"
+            if invoice.notes:
+                invoice.notes = f"{invoice.notes}\n{fail_note}"
+            else:
+                invoice.notes = fail_note
+            await db.commit()
+
+
+async def _handle_checkout_session_completed(db: AsyncSession, session: dict):
+    """Handle checkout.session.completed: reconcile Payment Link checkout."""
+    metadata = session.get("metadata", {})
+    invoice_id = metadata.get("invoice_id")
+    payment_intent_id = session.get("payment_intent")
+
+    if not invoice_id:
+        logger.debug("checkout.session.completed without invoice_id metadata")
+        return
+
+    # If we have a payment intent, delegate to the payment_intent handler
+    if payment_intent_id:
+        # Check if already processed
+        existing = await db.execute(
+            select(Payment).where(Payment.stripe_payment_intent_id == payment_intent_id)
+        )
+        if existing.scalar_one_or_none():
+            logger.info(f"Checkout session already reconciled: PI {payment_intent_id}")
+            return
+
+        # Fetch the payment intent from Stripe for full details
+        import stripe
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        try:
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            await _handle_payment_intent_succeeded(db, intent)
+        except stripe.StripeError as exc:
+            logger.error(
+                f"Failed to retrieve payment intent {payment_intent_id}: {exc}"
+            )
+
+    logger.info(f"Checkout session completed for invoice {invoice_id}")
