@@ -386,7 +386,8 @@ export default function PlatformPage() {
                                 {loadingDetail ? (
                                   <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
                                 ) : tenantDetail ? (
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                  <>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                     <div>
                                       <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Tenant Info</h4>
                                       <dl className="space-y-2 text-sm">
@@ -435,6 +436,7 @@ export default function PlatformPage() {
                                     <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">LLM Provider</h4>
                                     <LLMProviderSelect tenant={t} tenantDetail={tenantDetail} platformKey={platformKey} providers={providers} onUpdate={handleUpdate} saving={savingProvider} setSaving={setSavingProvider} />
                                   </div>
+                                  </>
                                 ) : (
                                   <p className="text-sm text-brand-rose font-sans">Failed to load tenant detail</p>
                                 )}
