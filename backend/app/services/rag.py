@@ -26,7 +26,7 @@ async def search_chunks(
     # Format embedding as a Postgres vector literal
     vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
-    sql = text(f"""
+    sql = text("""
         SELECT
             id::text,
             content,
@@ -35,15 +35,15 @@ async def search_chunks(
             court,
             decision_date,
             chunk_index,
-            1 - (embedding <=> '{vec_str}'::vector) AS similarity
+            1 - (embedding <=> :vec::vector) AS similarity
         FROM chunks
         WHERE tenant_id = CAST(:tenant_id AS uuid)
           AND embedding IS NOT NULL
-        ORDER BY embedding <=> '{vec_str}'::vector
+        ORDER BY embedding <=> :vec::vector
         LIMIT :top_k
     """)
 
-    result = await db.execute(sql, {"tenant_id": tenant_id, "top_k": top_k})
+    result = await db.execute(sql, {"tenant_id": tenant_id, "top_k": top_k, "vec": vec_str})
     rows = result.fetchall()
 
     return [
@@ -70,7 +70,7 @@ async def search_public_chunks(
     """Search public CourtListener chunks using BGE-384 embeddings."""
     vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
-    sql = text(f"""
+    sql = text("""
         SELECT
             id::text,
             content,
@@ -79,14 +79,14 @@ async def search_public_chunks(
             court,
             decision_date,
             chunk_index,
-            1 - (embedding <=> '{vec_str}'::vector) AS similarity
+            1 - (embedding <=> :vec::vector) AS similarity
         FROM public_chunks
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> '{vec_str}'::vector
+        ORDER BY embedding <=> :vec::vector
         LIMIT :top_k
     """)
 
-    result = await db.execute(sql, {"top_k": top_k})
+    result = await db.execute(sql, {"top_k": top_k, "vec": vec_str})
     rows = result.fetchall()
 
     return [

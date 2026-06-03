@@ -1,7 +1,7 @@
 """PII detection and scrubbing utilities."""
 
 import re
-from typing import List, Tuple
+from typing import List
 
 # PII Pattern definitions
 PATTERNS = {
@@ -11,8 +11,8 @@ PATTERNS = {
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
     "ip_address": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     "passport": re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),
-    "driver_license": re.compile(r"\b[A-Z]{1,2}\d{5,8}\b"),
-    "bank_account": re.compile(r"\b\d{8,17}\b(?=\D|$)"),  # 8-17 consecutive digits
+    "driver_license": re.compile(r"\b[A-Z]{1,2}\d{9,12}\b"),
+    "bank_account": re.compile(r"(?<!\d)\d{8,17}(?!\d)"),
 }
 
 PLACEHOLDER_MAP = {

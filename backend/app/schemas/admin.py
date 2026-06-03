@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-from uuid import UUID
 
 
 class UserDetailResponse(BaseModel):
     """Full user profile with all fields."""
+
     id: str
     email: str
     full_name: Optional[str] = None
@@ -107,6 +107,7 @@ class UserUsageBreakdown(BaseModel):
 
 class TenantSettingsResponse(BaseModel):
     """Tenant configuration settings."""
+
     id: str
     tenant_id: str
     # Cache settings
@@ -135,6 +136,7 @@ class TenantSettingsResponse(BaseModel):
 
 class TenantSettingsUpdate(BaseModel):
     """Update tenant settings."""
+
     cache_enabled: Optional[bool] = None
     cache_ttl_multiplier: Optional[float] = None
     default_expertise_level: Optional[str] = None
@@ -152,6 +154,7 @@ class TenantSettingsUpdate(BaseModel):
 
 class TenantDetailResponse(BaseModel):
     """Enhanced tenant information with analytics and settings."""
+
     id: str
     name: str
     domain: str
@@ -175,6 +178,7 @@ class TenantDetailResponse(BaseModel):
 
 class CacheAnalytics(BaseModel):
     """Cache performance metrics."""
+
     total_requests: int
     cache_hits: int
     cache_hit_rate: float  # percentage
@@ -183,3 +187,84 @@ class CacheAnalytics(BaseModel):
     matter_hit_rate: float
     avg_hit_latency_ms: Optional[float] = None
     estimated_cost_savings_usd: float
+
+
+# ── Error Log Schemas ─────────────────────────────────────────────────────
+
+
+class ErrorLogResponse(BaseModel):
+    """Single error log entry."""
+
+    id: str
+    tenant_id: str
+    user_id: Optional[str] = None
+    error_type: str
+    severity: str
+    message: str
+    stack_trace: Optional[str] = None
+    endpoint: Optional[str] = None
+    method: Optional[str] = None
+    status_code: Optional[int] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    query_text: Optional[str] = None
+    conversation_id: Optional[str] = None
+    is_resolved: bool
+    resolved_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserErrorLogsResponse(BaseModel):
+    """Per-user error logs response."""
+
+    errors: List[ErrorLogResponse]
+    total: int
+    days: int
+
+
+class SystemErrorLogsResponse(BaseModel):
+    """System-wide error logs response."""
+
+    errors: List[ErrorLogResponse]
+    total: int
+    days: int
+    severity: Optional[str] = None
+
+
+class ErrorTrendBucket(BaseModel):
+    """Daily error count bucket for trend data."""
+
+    date: str  # YYYY-MM-DD
+    total: int
+    critical: int
+    error: int
+    warning: int
+    info: int
+
+
+class ErrorSummaryResponse(BaseModel):
+    """Error summary with counts by severity/type and daily trend."""
+
+    total_errors: int
+    by_severity: Dict[str, int]  # {"critical": N, "error": N, "warning": N, "info": N}
+    by_type: Dict[str, int]  # {"api_error": N, "rag_query_error": N, ...}
+    trend: List[ErrorTrendBucket]
+    days: int
+
+
+class ErrorResolveRequest(BaseModel):
+    """Request to resolve an error log entry."""
+
+    resolution_notes: Optional[str] = None
+
+
+class ErrorResolveResponse(BaseModel):
+    """Response after resolving an error."""
+
+    id: str
+    is_resolved: bool
+    resolved_at: datetime
+    resolution_notes: Optional[str] = None

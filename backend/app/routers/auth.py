@@ -294,6 +294,7 @@ async def microsoft_login(
         f"&scope=openid+email+profile+User.Read+offline_access"
         f"&state={state}"
         f"&response_mode=query"
+        f"&prompt=select_account"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -521,9 +522,10 @@ async def google_login(
         f"?client_id={settings.GOOGLE_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={redirect_uri}"
-        f"&scope=openid+email+profile+offline_access"
+        f"&scope=openid+email+profile"
         f"&state={state}"
         f"&access_type=offline"
+        f"&prompt=consent"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -661,7 +663,9 @@ async def exchange_oauth_callback(
         )
 
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid OAuth callback token")
 
