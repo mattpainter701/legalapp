@@ -177,6 +177,7 @@ export const createMatter = (data) => api.post('/plugins/litigation/matters', da
 export const getMatter = (id) => api.get(`/plugins/litigation/matters/${id}`).then((r) => r.data)
 export const updateMatter = (id, data) => api.patch(`/plugins/litigation/matters/${id}`, data).then((r) => r.data)
 export const addMatterEvent = (id, data) => api.post(`/plugins/litigation/matters/${id}/events`, data).then((r) => r.data)
+export const runMatterConflictCheck = (matterId) => api.post(`/plugins/litigation/matters/${matterId}/conflict-check`).then(r => r.data)
 
 // Renewals
 export const getRenewals = () => api.get('/plugins/commercial/renewals').then((r) => r.data)

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
-import { getMatter, updateMatter, addMatterEvent } from '../api'
+import { getMatter, updateMatter, addMatterEvent, runMatterConflictCheck } from '../api'
 import { Landmark, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Users, FileText } from 'lucide-react'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
@@ -89,6 +89,8 @@ export default function MatterDetailPage() {
   const [newEvent, setNewEvent] = useState({ event_type: 'other', title: '', content: '' })
   const [addingEvent, setAddingEvent] = useState(false)
   const [addEventError, setAddEventError] = useState(null)
+  const [conflictResult, setConflictResult] = useState(null)
+  const [conflictLoading, setConflictLoading] = useState(false)
 
   useEffect(() => {
     getMatter(id)
@@ -112,6 +114,19 @@ export default function MatterDetailPage() {
       setSaveError('Failed to save changes.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleConflictCheck = async () => {
+    setConflictLoading(true)
+    try {
+      const result = await runMatterConflictCheck(matter.id)
+      setConflictResult(result)
+      setMatter(prev => ({ ...prev, conflicts_status: result.conflicts_status }))
+    } catch (e) {
+      console.error('Conflict check failed', e)
+    } finally {
+      setConflictLoading(false)
     }
   }
 
@@ -197,6 +212,35 @@ export default function MatterDetailPage() {
               <div className="w-1.5 h-1.5 rounded-full bg-brand-line-2"></div>
               <RiskBadge level={matter.risk_level} />
             </div>
+            {(() => {
+              const conflictColors = {
+                'not-run': 'bg-gray-100 text-gray-600',
+                'clear': 'bg-green-100 text-green-700',
+                'conflict-found': 'bg-red-100 text-red-700',
+                'override': 'bg-yellow-100 text-yellow-700',
+              }
+              return (
+                <div className="mt-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${conflictColors[matter.conflicts_status] || conflictColors['not-run']}`}>
+                      Conflicts: {matter.conflicts_status || 'not-run'}
+                    </span>
+                    <button
+                      onClick={handleConflictCheck}
+                      disabled={conflictLoading}
+                      className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                    >
+                      {conflictLoading ? 'Checking...' : 'Re-run Check'}
+                    </button>
+                  </div>
+                  {conflictResult && !conflictResult.clear && conflictResult.matches?.length > 0 && (
+                    <div className="mt-1 text-xs text-red-600">
+                      Conflicts: {conflictResult.matches.map(m => m.display_name).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         </div>
 

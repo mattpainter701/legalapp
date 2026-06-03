@@ -384,7 +384,7 @@ async def create_matter(
             names=names,
             emails=[],
         )
-        matter.conflicts_status = "clear" if check["clear"] else "flagged"
+        matter.conflicts_status = "clear" if check["clear"] else "conflict-found"
         await db.commit()
         await db.refresh(matter)
     except Exception:
@@ -424,7 +424,7 @@ async def run_matter_conflict_check(
         names=names,
         emails=[],
     )
-    matter.conflicts_status = "clear" if check["clear"] else "flagged"
+    matter.conflicts_status = "clear" if check["clear"] else "conflict-found"
     matter.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
