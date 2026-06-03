@@ -1,8 +1,5 @@
 import time as _time
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/main
 from fastapi import Depends, Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession

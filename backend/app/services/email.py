@@ -255,10 +255,6 @@ def _markdown_to_html(text: str) -> str:
     Minimal markdown-to-HTML renderer (no external deps).
     Handles: headings (#, ##, ###), bold (**), italic (*), bullet lists, code blocks, blockquotes.
     """
-<<<<<<< HEAD
-=======
-
->>>>>>> origin/main
     lines = text.split("\n")
     html_lines: list[str] = []
     in_ul = False
