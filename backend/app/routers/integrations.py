@@ -2,6 +2,7 @@ import json as _json
 import secrets
 import time as _time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
@@ -69,17 +70,54 @@ GOOGLE_ADMIN_SCOPES = (
 )
 
 
+def _expires_at(expires_in: int) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
+def _require_state_user(meta: dict | None, intent: str) -> tuple[str, str]:
+    if not meta or meta.get("intent") != intent:
+        raise HTTPException(status_code=400, detail="Invalid integration state")
+    user_id = meta.get("user_id")
+    tenant_id = meta.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(
+            status_code=400, detail="Integration state is missing user context"
+        )
+    if intent == "admin" and meta.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id, tenant_id
+
+
 @router.get("/microsoft/connect")
 async def microsoft_connect(
     request: Request,
     intent: str = Query("admin", description="admin=tenant-wide, user=per-user"),
+    db: AsyncSession = Depends(get_db),
 ):
+    user = await get_current_user(request, db)
+    if intent == "admin" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
     state = secrets.token_urlsafe(32)
-    await _save_state(request, state, {"intent": intent, "provider": "microsoft"})
+    await _save_state(
+        request,
+        state,
+        {
+            "intent": intent,
+            "provider": "microsoft",
+            "user_id": str(user.id),
+            "tenant_id": str(user.tenant_id),
+            "role": user.role,
+        },
+    )
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
-    scopes = MICROSOFT_ADMIN_SCOPES if intent == "admin" else "offline_access Mail.Read Files.Read.All Calendars.ReadWrite"
+    scopes = (
+        MICROSOFT_ADMIN_SCOPES
+        if intent == "admin"
+        else "offline_access Mail.Read Files.Read.All Calendars.ReadWrite"
+    )
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
@@ -139,80 +177,70 @@ async def microsoft_callback(
             raise HTTPException(status_code=400, detail="No access token received")
 
         if intent == "admin":
-            user_id = getattr(request.state, "user_id", None)
-            tenant_id = getattr(request.state, "tenant_id", None)
-            if not tenant_id:
-                profile_resp = await client.get(
-                    "https://graph.microsoft.com/v1.0/me",
-                    headers={"Authorization": f"Bearer {access_token}"},
+            _user_id, tenant_id = _require_state_user(meta, "admin")
+            await set_tenant_context(db, tenant_id)
+            result = await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.tenant_id == tenant_id,
+                    TenantCredential.provider == "microsoft",
                 )
-                if profile_resp.status_code == 200:
-                    profile = profile_resp.json()
-                    email = (profile.get("mail") or profile.get("userPrincipalName") or "").lower()
-                    from app.models.user import User
-                    result = await db.execute(select(User).where(User.email == email))
-                    user_row = result.scalar_one_or_none()
-                    if user_row:
-                        user_id = str(user_row.id)
-                        tenant_id = str(user_row.tenant_id)
-
-            if tenant_id:
-                await set_tenant_context(db, tenant_id)
-                result = await db.execute(
-                    select(TenantCredential).where(
-                        TenantCredential.tenant_id == tenant_id,
-                        TenantCredential.provider == "microsoft",
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.encrypted_access_token = encrypt_token(access_token)
+                existing.encrypted_refresh_token = (
+                    encrypt_token(refresh_token) if refresh_token else None
+                )
+                existing.token_expires_at = _expires_at(expires_in)
+                existing.scopes = scope_str
+                existing.is_active = True
+            else:
+                db.add(
+                    TenantCredential(
+                        tenant_id=uuid.UUID(tenant_id),
+                        provider="microsoft",
+                        encrypted_access_token=encrypt_token(access_token),
+                        encrypted_refresh_token=(
+                            encrypt_token(refresh_token) if refresh_token else None
+                        ),
+                        token_expires_at=_expires_at(expires_in),
+                        scopes=scope_str,
                     )
                 )
-                existing = result.scalar_one_or_none()
-                async with db.begin():
-                    if existing:
-                        existing.encrypted_access_token = encrypt_token(access_token)
-                        existing.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
-                        existing.token_expires_at = _time.time() + expires_in
-                        existing.scopes = scope_str
-                        existing.is_active = True
-                    else:
-                        db.add(
-                            TenantCredential(
-                                tenant_id=uuid.UUID(tenant_id),
-                                provider="microsoft",
-                                encrypted_access_token=encrypt_token(access_token),
-                                encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
-                                token_expires_at=_time.time() + expires_in,
-                                scopes=scope_str,
-                            )
-                        )
         else:
-            user_id = getattr(request.state, "user_id", None)
-            tenant_id = getattr(request.state, "tenant_id", None)
-            if user_id and tenant_id:
-                await set_tenant_context(db, tenant_id)
-                existing = await db.execute(
-                    select(UserOAuthToken).where(
-                        UserOAuthToken.user_id == user_id,
-                        UserOAuthToken.provider == "microsoft",
+            user_id, tenant_id = _require_state_user(meta, "user")
+            await set_tenant_context(db, tenant_id)
+            existing = await db.execute(
+                select(UserOAuthToken).where(
+                    UserOAuthToken.user_id == user_id,
+                    UserOAuthToken.tenant_id == tenant_id,
+                    UserOAuthToken.provider == "microsoft",
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                row.encrypted_access_token = encrypt_token(access_token)
+                row.encrypted_refresh_token = (
+                    encrypt_token(refresh_token) if refresh_token else None
+                )
+                row.token_expires_at = _expires_at(expires_in)
+                row.scopes = scope_str
+            else:
+                db.add(
+                    UserOAuthToken(
+                        user_id=uuid.UUID(user_id),
+                        tenant_id=uuid.UUID(tenant_id),
+                        provider="microsoft",
+                        encrypted_access_token=encrypt_token(access_token),
+                        encrypted_refresh_token=(
+                            encrypt_token(refresh_token) if refresh_token else None
+                        ),
+                        token_expires_at=_expires_at(expires_in),
+                        scopes=scope_str,
                     )
                 )
-                row = existing.scalar_one_or_none()
-                async with db.begin():
-                    if row:
-                        row.encrypted_access_token = encrypt_token(access_token)
-                        row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
-                        row.token_expires_at = _time.time() + expires_in
-                        row.scopes = scope_str
-                    else:
-                        db.add(
-                            UserOAuthToken(
-                                user_id=uuid.UUID(user_id),
-                                tenant_id=uuid.UUID(tenant_id),
-                                provider="microsoft",
-                                encrypted_access_token=encrypt_token(access_token),
-                                encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
-                                token_expires_at=_time.time() + expires_in,
-                                scopes=scope_str,
-                            )
-                        )
+
+        await db.commit()
 
     return {"status": "connected", "provider": "microsoft", "scopes": scope_str}
 
@@ -221,12 +249,31 @@ async def microsoft_callback(
 async def google_connect(
     request: Request,
     intent: str = Query("admin", description="admin=tenant-wide, user=per-user"),
+    db: AsyncSession = Depends(get_db),
 ):
+    user = await get_current_user(request, db)
+    if intent == "admin" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
     state = secrets.token_urlsafe(32)
-    await _save_state(request, state, {"intent": intent, "provider": "google"})
+    await _save_state(
+        request,
+        state,
+        {
+            "intent": intent,
+            "provider": "google",
+            "user_id": str(user.id),
+            "tenant_id": str(user.tenant_id),
+            "role": user.role,
+        },
+    )
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/google/callback"
-    scopes = GOOGLE_ADMIN_SCOPES if intent == "admin" else "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar"
+    scopes = (
+        GOOGLE_ADMIN_SCOPES
+        if intent == "admin"
+        else "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar"
+    )
 
     authorize_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
@@ -282,78 +329,70 @@ async def google_callback(
             raise HTTPException(status_code=400, detail="No access token received")
 
         if intent == "admin":
-            tenant_id = getattr(request.state, "tenant_id", None)
-            if not tenant_id:
-                userinfo_resp = await client.get(
-                    "https://www.googleapis.com/oauth2/v3/userinfo",
-                    headers={"Authorization": f"Bearer {access_token}"},
+            _user_id, tenant_id = _require_state_user(meta, "admin")
+            await set_tenant_context(db, tenant_id)
+            existing = await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.tenant_id == tenant_id,
+                    TenantCredential.provider == "google",
                 )
-                if userinfo_resp.status_code == 200:
-                    profile = userinfo_resp.json()
-                    email = (profile.get("email") or "").lower()
-                    from app.models.user import User
-                    result = await db.execute(select(User).where(User.email == email))
-                    user_row = result.scalar_one_or_none()
-                    if user_row:
-                        tenant_id = str(user_row.tenant_id)
-
-            if tenant_id:
-                await set_tenant_context(db, tenant_id)
-                existing = await db.execute(
-                    select(TenantCredential).where(
-                        TenantCredential.tenant_id == tenant_id,
-                        TenantCredential.provider == "google",
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                row.encrypted_access_token = encrypt_token(access_token)
+                row.encrypted_refresh_token = (
+                    encrypt_token(refresh_token) if refresh_token else None
+                )
+                row.token_expires_at = _expires_at(expires_in)
+                row.scopes = scope_str
+                row.is_active = True
+            else:
+                db.add(
+                    TenantCredential(
+                        tenant_id=uuid.UUID(tenant_id),
+                        provider="google",
+                        encrypted_access_token=encrypt_token(access_token),
+                        encrypted_refresh_token=(
+                            encrypt_token(refresh_token) if refresh_token else None
+                        ),
+                        token_expires_at=_expires_at(expires_in),
+                        scopes=scope_str,
                     )
                 )
-                row = existing.scalar_one_or_none()
-                async with db.begin():
-                    if row:
-                        row.encrypted_access_token = encrypt_token(access_token)
-                        row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
-                        row.token_expires_at = _time.time() + expires_in
-                        row.scopes = scope_str
-                        row.is_active = True
-                    else:
-                        db.add(
-                            TenantCredential(
-                                tenant_id=uuid.UUID(tenant_id),
-                                provider="google",
-                                encrypted_access_token=encrypt_token(access_token),
-                                encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
-                                token_expires_at=_time.time() + expires_in,
-                                scopes=scope_str,
-                            )
-                        )
         else:
-            user_id = getattr(request.state, "user_id", None)
-            tenant_id = getattr(request.state, "tenant_id", None)
-            if user_id and tenant_id:
-                await set_tenant_context(db, tenant_id)
-                existing = await db.execute(
-                    select(UserOAuthToken).where(
-                        UserOAuthToken.user_id == user_id,
-                        UserOAuthToken.provider == "google",
+            user_id, tenant_id = _require_state_user(meta, "user")
+            await set_tenant_context(db, tenant_id)
+            existing = await db.execute(
+                select(UserOAuthToken).where(
+                    UserOAuthToken.user_id == user_id,
+                    UserOAuthToken.tenant_id == tenant_id,
+                    UserOAuthToken.provider == "google",
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                row.encrypted_access_token = encrypt_token(access_token)
+                row.encrypted_refresh_token = (
+                    encrypt_token(refresh_token) if refresh_token else None
+                )
+                row.token_expires_at = _expires_at(expires_in)
+                row.scopes = scope_str
+            else:
+                db.add(
+                    UserOAuthToken(
+                        user_id=uuid.UUID(user_id),
+                        tenant_id=uuid.UUID(tenant_id),
+                        provider="google",
+                        encrypted_access_token=encrypt_token(access_token),
+                        encrypted_refresh_token=(
+                            encrypt_token(refresh_token) if refresh_token else None
+                        ),
+                        token_expires_at=_expires_at(expires_in),
+                        scopes=scope_str,
                     )
                 )
-                row = existing.scalar_one_or_none()
-                async with db.begin():
-                    if row:
-                        row.encrypted_access_token = encrypt_token(access_token)
-                        row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
-                        row.token_expires_at = _time.time() + expires_in
-                        row.scopes = scope_str
-                    else:
-                        db.add(
-                            UserOAuthToken(
-                                user_id=uuid.UUID(user_id),
-                                tenant_id=uuid.UUID(tenant_id),
-                                provider="google",
-                                encrypted_access_token=encrypt_token(access_token),
-                                encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
-                                token_expires_at=_time.time() + expires_in,
-                                scopes=scope_str,
-                            )
-                        )
+
+        await db.commit()
 
     return {"status": "connected", "provider": "google", "scopes": scope_str}
 

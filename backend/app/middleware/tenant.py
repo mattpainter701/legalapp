@@ -33,11 +33,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
         if path in SKIP_PATHS or any(path.startswith(p) for p in SKIP_PREFIXES):
             return await call_next(request)
 
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return await call_next(request)
-
-        token = auth_header.split(" ", 1)[1]
+        # Try to get token from cookie first, then fall back to Authorization header
+        token = request.cookies.get("access_token")
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Bearer "):
+                return await call_next(request)
+            token = auth_header.split(" ", 1)[1]
         try:
             payload = jwt.decode(
                 token,
@@ -80,10 +82,13 @@ async def get_current_user(request: Request, db: AsyncSession):
 
     if not user_id:
         # Try to parse token directly for routes that bypass middleware
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        token = auth_header.split(" ", 1)[1]
+        # Try to get token from cookie first, then fall back to Authorization header
+        token = request.cookies.get("access_token")
+        if not token:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            token = auth_header.split(" ", 1)[1]
         try:
             payload = jwt.decode(
                 token,
@@ -100,7 +105,9 @@ async def get_current_user(request: Request, db: AsyncSession):
                     ts = blacklist.get(jti)
                     blacklisted = ts and _time.time() < ts
                 if blacklisted:
-                    raise HTTPException(status_code=401, detail="Token has been revoked")
+                    raise HTTPException(
+                        status_code=401, detail="Token has been revoked"
+                    )
             user_id = payload.get("sub")
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")

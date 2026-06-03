@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +18,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
 
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
-    TOKEN_ENCRYPTION_KEY: str = ""
+    # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    TOKEN_ENCRYPTION_KEY: str
 
     # Azure OpenAI (Copilot backend)
     AZURE_OPENAI_ENDPOINT: str = ""
@@ -37,6 +39,10 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     ANTHROPIC_API_KEY: str = ""
 
+    # OpenRouter — free model access (OpenAI-compatible)
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
@@ -55,12 +61,16 @@ class Settings(BaseSettings):
     # In prod behind nginx both URLs share the same domain so set this to
     # https://yourdomain.com. In dev set to http://localhost:8000.
     BACKEND_URL: str = "http://localhost:8000"
+    # Extra CORS origins (comma-separated); added to defaults (FRONTEND_URL, localhost)
+    EXTRA_CORS_ORIGINS: str = ""
     UPLOAD_DIR: str = "/app/uploads"
     MAX_FILE_SIZE_MB: int = 50
 
     RAG_TOP_K: int = 8
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
+    PUBLIC_RAG_TOP_K: int = 8
+    PUBLIC_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
     # Primary: DeepSeek V4 Flash once released; current OpenAI-compat alias is deepseek-chat
     # Set PRIMARY_LLM=deepseek-v4-flash in .env when V4 Flash ships
@@ -83,6 +93,28 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
 
+def validate_token_encryption_key(settings: Settings) -> None:
+    """Validate TOKEN_ENCRYPTION_KEY is set and valid. Called at startup."""
+    try:
+        from cryptography.fernet import Fernet
+
+        key = settings.TOKEN_ENCRYPTION_KEY
+        if not key:
+            raise ValueError(
+                "TOKEN_ENCRYPTION_KEY is required but not set. "
+                'Generate one with: python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"'
+            )
+        # Validate it's a valid Fernet key
+        Fernet(key.encode() if isinstance(key, str) else key)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}")
+
+
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    validate_token_encryption_key(settings)
+    return settings

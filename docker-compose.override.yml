@@ -17,6 +17,7 @@ services:
     volumes:
       - ./frontend/src:/app/src          # HMR for React
       - ./frontend/public:/app/public
+      - frontend_dist:/app/dist          # share dist with nginx
     environment:
       - VITE_API_URL=/api               # relative — handled by Vite proxy to backend:8000
 
@@ -55,6 +56,7 @@ services:
     # The ./nginx/ssl volume from base compose still mounts (as an empty dir) — harmless.
     volumes:
       - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - frontend_dist:/usr/share/nginx/html/dist:ro   # frontend static assets
     ports:
       - "80:80"
 

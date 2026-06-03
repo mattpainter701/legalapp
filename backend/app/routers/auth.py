@@ -9,7 +9,7 @@ from typing import Optional
 import bcrypt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
+    OAuthCallbackExchangeRequest,
     RegisterRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -30,6 +31,7 @@ from app.schemas.auth import (
 )
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # OAuth state TTL in seconds
@@ -80,9 +82,11 @@ async def _consume_state(request: Request, state: str) -> tuple[bool, dict | Non
 
 
 _FALLBACK_TTL = 600
+_CALLBACK_CODE_TTL = 60
 
 _fallback_states: dict[str, float] = {}
 _fallback_state_data: dict[str, dict] = {}
+_fallback_callback_tokens: dict[str, tuple[str, float]] = {}
 
 
 def _gc_fallback_dicts() -> None:
@@ -94,6 +98,41 @@ def _gc_fallback_dicts() -> None:
     for k, v in list(_fallback_reset_tokens.items()):
         if now - v[1] > _FALLBACK_TTL:
             del _fallback_reset_tokens[k]
+    for k, v in list(_fallback_callback_tokens.items()):
+        if now - v[1] > _CALLBACK_CODE_TTL:
+            del _fallback_callback_tokens[k]
+
+
+def _callback_code_key(code: str) -> str:
+    return f"oauth:callback:{code}"
+
+
+async def _save_callback_token(request: Request, token: str) -> str:
+    code = secrets.token_urlsafe(32)
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        await redis.setex(_callback_code_key(code), _CALLBACK_CODE_TTL, token)
+    else:
+        _gc_fallback_dicts()
+        _fallback_callback_tokens[code] = (token, _time.time())
+    return code
+
+
+async def _consume_callback_token(request: Request, code: str) -> str | None:
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        token = await redis.get(_callback_code_key(code))
+        await redis.delete(_callback_code_key(code))
+        if isinstance(token, bytes):
+            return token.decode("utf-8")
+        return token
+    entry = _fallback_callback_tokens.pop(code, None)
+    if not entry:
+        return None
+    token, ts = entry
+    if _time.time() - ts > _CALLBACK_CODE_TTL:
+        return None
+    return token
 
 
 def _hash_password(password: str) -> str:
@@ -152,6 +191,7 @@ async def _get_or_create_user(
     full_name: Optional[str],
     provider: str,
     sub: str,
+    allow_create: bool = True,
 ) -> User:
     # Try by oauth subject first (most specific)
     result = await db.execute(
@@ -174,6 +214,11 @@ async def _get_or_create_user(
         user = result.scalar_one_or_none()
 
         if user is None:
+            if not allow_create:
+                raise HTTPException(
+                    status_code=403,
+                    detail="An administrator must invite this account before it can join the tenant",
+                )
             count_result = await db.execute(
                 select(User).where(User.tenant_id == tenant_id)
             )
@@ -250,6 +295,7 @@ async def microsoft_login(
         f"&scope=openid+email+profile+User.Read+offline_access"
         f"&state={state}"
         f"&response_mode=query"
+        f"&prompt=select_account"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -336,9 +382,11 @@ async def microsoft_callback(
         staff_size = None
 
     async with db.begin():
+        tenant_exists = False
         if signup_data and signup_data.get("company_name"):
             result = await db.execute(select(Tenant).where(Tenant.domain == domain))
             tenant = result.scalar_one_or_none()
+            tenant_exists = tenant is not None
             if tenant is None:
                 tenant = Tenant(
                     id=uuid.uuid4(),
@@ -354,18 +402,35 @@ async def microsoft_callback(
                 db.add(tenant)
                 await db.flush()
             user = await _get_or_create_user(
-                db, tenant.id, email, full_name, "microsoft", ms_sub
+                db,
+                tenant.id,
+                email,
+                full_name,
+                "microsoft",
+                ms_sub,
+                allow_create=not tenant_exists,
             )
         else:
-            tenant = await _get_or_create_tenant(db, domain, tenant_name)
+            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+            tenant = result.scalar_one_or_none()
+            tenant_exists = tenant is not None
+            if tenant is None:
+                tenant = await _get_or_create_tenant(db, domain, tenant_name)
             user = await _get_or_create_user(
-                db, tenant.id, email, full_name, "microsoft", ms_sub
+                db,
+                tenant.id,
+                email,
+                full_name,
+                "microsoft",
+                ms_sub,
+                allow_create=not tenant_exists,
             )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
+    callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
-        url=f"{settings.FRONTEND_URL}/auth/callback?token={jwt_token}&tenant_id={tenant.id}"
+        url=f"{settings.FRONTEND_URL}/auth/callback?code={callback_code}"
     )
 
 
@@ -458,9 +523,10 @@ async def google_login(
         f"?client_id={settings.GOOGLE_CLIENT_ID}"
         f"&response_type=code"
         f"&redirect_uri={redirect_uri}"
-        f"&scope=openid+email+profile+offline_access"
+        f"&scope=openid+email+profile"
         f"&state={state}"
         f"&access_type=offline"
+        f"&prompt=consent"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -503,6 +569,8 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="No id_token from Google")
 
     claims = await _verify_google_id_token(id_token)
+    if claims.get("email_verified") is not True:
+        raise HTTPException(status_code=400, detail="Google email is not verified")
 
     email = claims.get("email", "").lower().strip()
     full_name = claims.get("name")
@@ -531,9 +599,11 @@ async def google_callback(
         staff_size = None
 
     async with db.begin():
+        tenant_exists = False
         if signup_data and signup_data.get("company_name"):
             result = await db.execute(select(Tenant).where(Tenant.domain == domain))
             tenant = result.scalar_one_or_none()
+            tenant_exists = tenant is not None
             if tenant is None:
                 tenant = Tenant(
                     id=uuid.uuid4(),
@@ -549,18 +619,82 @@ async def google_callback(
                 db.add(tenant)
                 await db.flush()
             user = await _get_or_create_user(
-                db, tenant.id, email, full_name, "google", google_sub
+                db,
+                tenant.id,
+                email,
+                full_name,
+                "google",
+                google_sub,
+                allow_create=not tenant_exists,
             )
         else:
-            tenant = await _get_or_create_tenant(db, domain, tenant_name)
+            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+            tenant = result.scalar_one_or_none()
+            tenant_exists = tenant is not None
+            if tenant is None:
+                tenant = await _get_or_create_tenant(db, domain, tenant_name)
             user = await _get_or_create_user(
-                db, tenant.id, email, full_name, "google", google_sub
+                db,
+                tenant.id,
+                email,
+                full_name,
+                "google",
+                google_sub,
+                allow_create=not tenant_exists,
             )
         await ensure_stripe_customer(tenant, db)
 
     jwt_token = _create_access_token(user, tenant)
+    callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
-        url=f"{settings.FRONTEND_URL}/auth/callback?token={jwt_token}&tenant_id={tenant.id}"
+        url=f"{settings.FRONTEND_URL}/auth/callback?code={callback_code}"
+    )
+
+
+@router.post("/oauth/exchange", response_model=TokenResponse)
+async def exchange_oauth_callback(
+    body: OAuthCallbackExchangeRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    token = await _consume_callback_token(request, body.code)
+    if not token:
+        raise HTTPException(
+            status_code=400, detail="Invalid or expired OAuth callback code"
+        )
+
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid OAuth callback token")
+
+    result = await db.execute(select(User).where(User.id == payload.get("sub")))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    # Set httpOnly cookie with secure flags
+    # Only set Secure in production (https://...) — dev uses http://localhost
+    is_production = settings.BACKEND_URL.startswith("https://")
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=is_production,
+        samesite="Lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+    return TokenResponse(
+        access_token=token,
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
     )
 
 
@@ -601,9 +735,10 @@ async def register(
         await db.flush()
         role = "admin"
     else:
-        count_result = await db.execute(select(User).where(User.tenant_id == tenant.id))
-        is_first = len(count_result.scalars().all()) == 0
-        role = "admin" if is_first else "user"
+        raise HTTPException(
+            status_code=403,
+            detail="An administrator must invite this account before it can join the tenant",
+        )
 
     password_hash = _hash_password(body.password)
 
@@ -636,6 +771,7 @@ async def register(
 @router.post("/login")
 async def login(
     body: LoginRequest,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     body.email = body.email.lower().strip()
@@ -656,6 +792,20 @@ async def login(
 
     tenant = user.tenant
     jwt_token = _create_access_token(user, tenant)
+
+    # Set httpOnly cookie with secure flags
+    # Only set Secure in production (https://...) — dev uses http://localhost
+    is_production = settings.BACKEND_URL.startswith("https://")
+    response.set_cookie(
+        key="access_token",
+        value=jwt_token,
+        httponly=True,
+        secure=is_production,
+        samesite="Lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+    # For backward compatibility, still return token in body (but frontend will prefer cookie)
     return TokenResponse(
         access_token=jwt_token,
         user_id=str(user.id),
@@ -702,7 +852,7 @@ async def forgot_password(
         _fallback_reset_tokens[token] = (user.email, _time.time())
 
     if settings.EMAIL_ENABLED:
-        # TODO: send email with reset link
+        # TODO: send reset email with FRONTEND_URL/reset-password?token=<token>
         return {"message": "If that email exists, a reset link has been sent."}
     else:
         return {
@@ -754,10 +904,15 @@ _fallback_reset_tokens: dict[str, tuple[str, float]] = {}
 
 
 @router.post("/logout")
-async def logout(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ", 1)[1]
+async def logout(request: Request, response: Response):
+    # Extract token from cookie (preferred) or Authorization header (fallback)
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+
+    if token:
         try:
             payload = jwt.decode(
                 token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
@@ -773,6 +928,10 @@ async def logout(request: Request):
                     request.app.state.jti_blacklist[jti] = _time.time() + ttl
         except Exception:
             pass
+
+    # Clear the httpOnly cookie
+    response.delete_cookie("access_token", httponly=True, samesite="Lax")
+
     return {"message": "Logged out successfully"}
 
 

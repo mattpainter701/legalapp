@@ -8,7 +8,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 
 | Capability | Description |
 |-|-|
-| **Legal Research Chat** | Grounded in uploaded documents + public case law via pgvector RAG; confidence-tagged citations |
+| **Legal Research Chat** | Grounded in uploaded documents + CourtListener public case law via pgvector RAG; confidence-tagged citations |
 | **Practice Area Plugins** | 11 workspaces with cold-start profiles, structured skill prompts, dual LLM tiers, and compliance gates |
 | **Matter Management** | Litigation, Trust & Estate, and Mediation portfolios with append-only event timelines |
 | **Contract Renewal Tracker** | Urgency-rated dashboard with automated weekly email alerts |
@@ -16,7 +16,13 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Platform / Operator Console** | Multi-tenant admin with usage dashboards, tenant CRUD, and platform-key auth |
 | **OAuth + Email Auth** | Microsoft 365, Google, or email/password sign-in; unified signup collects firm profile |
 | **Multi-Model AI** | DeepSeek V4 Flash (primary), DeepSeek V4 Pro (premium) via OpenCode.ai; Azure OpenAI + Gemini support |
-| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent |
+| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent; error logs with resolution tracking |
+| **User Expertise Tracking** | Per-user practice areas, expertise level, memory summary, privacy preferences |
+| **Context Usage Transparency** | Explicit source attribution in chat responses; relevance scores for each context source |
+| **PII Protection** | Automatic detection and scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
+| **Skill-Based Chat Routing** | Route messages to specific legal plugins; inject matter context with privacy controls |
+| **Expertise-Aware Caching** | Cache TTLs based on user expertise level (junior paralegal ≠ senior partner); skill-based multipliers |
+| **Auto-Memory Generation** | Per-user conversation summaries; learned preferences and interaction patterns stored as UserMemory |
 | **Billing** | Stripe flat-seat and PAYG metered tiers |
 
 ---
@@ -34,11 +40,12 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Primary LLM | DeepSeek V4 Flash via OpenCode.ai (OpenAI-compatible) |
 | Premium LLM | DeepSeek V4 Pro via OpenCode.ai |
 | Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
-| Embeddings | OpenAI text-embedding-3-small (falls back to OpenCode.ai key) |
+| Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (8 migrations) |
+| Migrations | Alembic (15 migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
+| Services | PII detection (8 types), Memory service (auto-summarization), Matter context (with scrubbing), Expertise-aware cache manager (3-tier TTLs) |
 
 ### Frontend
 | Layer | Technology |
@@ -155,6 +162,14 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 # Then access http://localhost:8080 and set FRONTEND_URL/BACKEND_URL accordingly
 ```
 
+### Auth hardening notes
+
+- Existing tenant domains require an admin invite or pre-provisioned user record; public self-registration only creates a tenant for new domains.
+- OAuth login callbacks return short-lived exchange codes instead of bearer JWTs in redirect URLs.
+- Microsoft/Google integration OAuth state is bound to the initiating user, tenant, intent, and role.
+- `TOKEN_ENCRYPTION_KEY` must be a stable Fernet key before storing OAuth tokens.
+- Backend-side limits protect login, registration, forgot-password, and reset-password endpoints even when nginx is bypassed.
+
 ---
 
 ## Database migrations
@@ -167,6 +182,25 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `004_audit_log` | Audit columns on usage_records |
 | `005`–`007` | Platform admin, MCP keys, model settings |
 | `008_estate_mediation` | Trust & Estate + Mediation tables and routes |
+| `009_oauth_tokens` | Encrypted tenant/user OAuth token persistence |
+| `010_enhance_user_model` | User preferences (practice_areas, expertise_level, default_skill, privacy_mode, memory_summary) |
+| `011_create_user_memory_table` | Per-user memory storage (preferences, expertise, matter context, interaction patterns) |
+| `012_extend_message_context_tracking` | Message enhancements (skill_applied, context_used, context_relevance_scores, pii_flags) |
+| `013_add_cache_tracking` | UsageRecord cache hit flags (RAG, LLM, matter) |
+| `014_create_tenant_settings` | Tenant feature flags, cache config, rate limiting, defaults |
+| `015_create_error_logs` | Global error tracking with per-user rolling 72h support view |
+
+### CourtListener public RAG
+
+CourtListener data is staged in `public_chunks` and embedded on one local NVIDIA Jetson connected to PostgreSQL over the same network.
+
+```bash
+python scripts/ingest_courtlistener.py --file /data/courtlistener/opinions.json.gz --batch-size 1000
+python scripts/jetson_embed_worker.py --worker-id 0 --total-workers 1 --batch-size 64 --db-url "$DATABASE_URL" --loop
+psql "$DATABASE_URL" -f scripts/create_public_chunks_index.sql
+```
+
+Full operator notes are in `scripts/courtlistener_jetson_pipeline.md`.
 
 ---
 
@@ -176,14 +210,18 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 legalapp/
 ├── backend/
 │   ├── app/
-│   │   ├── models/          # SQLAlchemy models
+│   │   ├── models/          # SQLAlchemy models (User, UserMemory, Message, Tenant, TenantSettings, ErrorLog, etc.)
 │   │   ├── routers/         # FastAPI routers (auth, chat, documents, plugins, admin, billing, mcp, platform)
 │   │   ├── services/        # LLM, RAG, embeddings, billing, scheduler
-│   │   │   └── plugins/     # 11 practice area prompts + executor
-│   │   ├── middleware/       # Tenant context + rate limiter
-│   │   ├── schemas/         # Pydantic models
+│   │   │   ├── plugins/     # 11 practice area prompts + executor
+│   │   │   ├── pii_detection.py       # PII pattern matching (8 types) + scrubbing
+│   │   │   ├── memory_service.py      # UserMemory CRUD + auto-summarization
+│   │   │   ├── matter_context.py      # Matter loading with PII scrubbing
+│   │   │   └── cache.py               # ExpertiseCacheManager (3-tier TTLs, skill multipliers)
+│   │   ├── middleware/      # Tenant context + rate limiter
+│   │   ├── schemas/         # Pydantic models (incl. AdminSchemas with UserDetail, TenantSettings, ErrorLog)
 │   │   └── main.py
-│   ├── migrations/          # Alembic (001–008)
+│   ├── migrations/          # Alembic (001–015)
 │   └── tests/
 ├── frontend/
 │   ├── src/

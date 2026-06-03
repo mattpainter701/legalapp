@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../App'
+import { exchangeOAuthCode } from '../api'
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams()
@@ -13,13 +14,14 @@ export default function AuthCallback() {
     if (handled.current) return
     handled.current = true
 
-    const token = searchParams.get('token')
-    if (!token) {
-      setError('No authentication token received. Please try signing in again.')
+    const code = searchParams.get('code')
+    if (!code) {
+      setError('No authentication code received. Please try signing in again.')
       return
     }
 
-    login(token)
+    exchangeOAuthCode(code)
+      .then((result) => login(result.access_token))
       .then(() => {
         navigate('/chat', { replace: true })
       })

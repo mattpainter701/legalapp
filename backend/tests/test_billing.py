@@ -5,7 +5,6 @@ Stripe webhook handling is not tested here (requires live Stripe key).
 
 from decimal import Decimal
 
-import pytest
 
 from app.services.billing import (
     CLAUDE_INPUT_COST_PER_M,
@@ -40,8 +39,12 @@ class TestCalculateCost:
         assert cost == Decimal("0.000000")
 
     def test_deepseek_v4_flash_alias_uses_deepseek_rates(self):
-        cost_v4 = calculate_cost(500_000, 500_000, "deepseek-v4-flash", billing_tier="flat")
-        cost_chat = calculate_cost(500_000, 500_000, "deepseek-chat", billing_tier="flat")
+        cost_v4 = calculate_cost(
+            500_000, 500_000, "deepseek-v4-flash", billing_tier="flat"
+        )
+        cost_chat = calculate_cost(
+            500_000, 500_000, "deepseek-chat", billing_tier="flat"
+        )
         assert cost_v4 == cost_chat
 
     # ------------------------------------------------------------------
@@ -67,9 +70,59 @@ class TestCalculateCost:
         assert cl > ds
 
     def test_anthropic_keyword_routes_to_claude(self):
-        cost_anthropic = calculate_cost(100_000, 100_000, "anthropic-model", billing_tier="flat")
-        cost_claude = calculate_cost(100_000, 100_000, "claude-opus-4-8", billing_tier="flat")
+        cost_anthropic = calculate_cost(
+            100_000, 100_000, "anthropic-model", billing_tier="flat"
+        )
+        cost_claude = calculate_cost(
+            100_000, 100_000, "claude-opus-4-8", billing_tier="flat"
+        )
         assert cost_anthropic == cost_claude
+
+    # ------------------------------------------------------------------
+    # Gemini pricing
+    # ------------------------------------------------------------------
+
+    def test_gemini_flat_tier_input_only(self):
+        cost = calculate_cost(1_000_000, 0, "gemini-2.0-flash", billing_tier="flat")
+        assert cost == GEMINI_INPUT_COST_PER_M.quantize(Decimal("0.000001"))
+
+    def test_gemini_flat_tier_output_only(self):
+        cost = calculate_cost(0, 1_000_000, "gemini-2.0-flash", billing_tier="flat")
+        assert cost == GEMINI_OUTPUT_COST_PER_M.quantize(Decimal("0.000001"))
+
+    def test_gemini_cheaper_than_claude(self):
+        gs = calculate_cost(100_000, 100_000, "gemini-2.0-flash", billing_tier="flat")
+        cl = calculate_cost(100_000, 100_000, "claude-opus-4-8", billing_tier="flat")
+        assert gs < cl
+
+    def test_gemini_payg_markup(self):
+        flat = calculate_cost(100_000, 100_000, "gemini-2.0-flash", billing_tier="flat")
+        payg = calculate_cost(100_000, 100_000, "gemini-2.0-flash", billing_tier="payg")
+        assert payg == (flat * PAYG_MARKUP).quantize(Decimal("0.000001"))
+
+    # ------------------------------------------------------------------
+    # Azure OpenAI pricing
+    # ------------------------------------------------------------------
+
+    def test_azure_gpt4_flat_tier_input_only(self):
+        cost = calculate_cost(1_000_000, 0, "gpt-4o", billing_tier="flat")
+        assert cost == AZURE_INPUT_COST_PER_M.quantize(Decimal("0.000001"))
+
+    def test_azure_gpt4_flat_tier_output_only(self):
+        cost = calculate_cost(0, 1_000_000, "gpt-4o", billing_tier="flat")
+        assert cost == AZURE_OUTPUT_COST_PER_M.quantize(Decimal("0.000001"))
+
+    def test_azure_provider_keyword_routes_to_azure_pricing(self):
+        cost_azure = calculate_cost(
+            100_000, 100_000, "azure-deployment", billing_tier="flat"
+        )
+        cost_gpt4 = calculate_cost(100_000, 100_000, "gpt-4o", billing_tier="flat")
+        assert cost_azure == cost_gpt4
+
+    def test_azure_payg_markup(self):
+        flat = calculate_cost(100_000, 100_000, "gpt-4o", billing_tier="flat")
+        payg = calculate_cost(100_000, 100_000, "gpt-4o", billing_tier="payg")
+        assert payg == (flat * PAYG_MARKUP).quantize(Decimal("0.000001"))
 
     # ------------------------------------------------------------------
     # Precision

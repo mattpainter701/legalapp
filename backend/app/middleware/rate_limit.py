@@ -12,6 +12,7 @@ Only /api/conversations and /api/plugins paths count against tenant daily limit.
 """
 
 from datetime import datetime, timezone
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -25,6 +26,12 @@ from app.config import get_settings
 settings = get_settings()
 
 RATE_LIMITED_PREFIXES = ("/api/conversations", "/api/plugins")
+AUTH_LIMITS = {
+    "/api/auth/login": (10, 600),
+    "/api/auth/register": (5, 600),
+    "/api/auth/forgot-password": (5, 900),
+    "/api/auth/reset-password": (5, 900),
+}
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
@@ -36,6 +43,7 @@ SKIP_PREFIXES = (
 
 TENANT_DAILY_LIMITS = {"flat": 1_000, "payg": 10_000}
 USER_HOURLY_LIMIT = 200
+_fallback_auth_hits: dict[str, tuple[int, float]] = {}
 
 
 def _current_hour_key() -> str:
@@ -61,12 +69,55 @@ def _extract_jwt_claims(request: Request) -> tuple[Optional[str], Optional[str],
         return None, None, "payg"
 
 
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _fallback_auth_increment(key: str, window_seconds: int) -> int:
+    now = time.time()
+    expired = [hit_key for hit_key, (_, expires_at) in _fallback_auth_hits.items() if expires_at <= now]
+    for hit_key in expired:
+        _fallback_auth_hits.pop(hit_key, None)
+
+    count, expires_at = _fallback_auth_hits.get(key, (0, now + window_seconds))
+    if expires_at <= now:
+        count, expires_at = 0, now + window_seconds
+    count += 1
+    _fallback_auth_hits[key] = (count, expires_at)
+    return count
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Reads Redis from request.app.state.redis at request time (set during lifespan)."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
         self._redis: aioredis.Redis | None = getattr(request.app.state, "redis", None)
         path = request.url.path
+
+        if request.method == "POST":
+            for auth_path, (limit, window_seconds) in AUTH_LIMITS.items():
+                if path == auth_path:
+                    key = f"rate:auth:{auth_path}:{_client_ip(request)}"
+                    try:
+                        if self._redis:
+                            count = await self._redis.incr(key)
+                            if count == 1:
+                                await self._redis.expire(key, window_seconds)
+                        else:
+                            count = _fallback_auth_increment(key, window_seconds)
+                    except aioredis.RedisError:
+                        count = _fallback_auth_increment(key, window_seconds)
+
+                    if count > limit:
+                        return JSONResponse(
+                            status_code=429,
+                            content={"detail": "Authentication rate limit exceeded. Please retry later."},
+                            headers={"Retry-After": str(window_seconds)},
+                        )
+                    break
 
         # Skip non-rate-limited paths
         if any(path.startswith(p) for p in SKIP_PREFIXES):
@@ -78,15 +129,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if user_id:
             user_key = f"rate:user:{user_id}:{_current_hour_key()}"
             try:
-                count = await self._redis.incr(user_key)
-                if count == 1:
-                    await self._redis.expire(user_key, 3600)
-                if count > USER_HOURLY_LIMIT:
-                    return JSONResponse(
-                        status_code=429,
-                        content={"detail": "Hourly request limit exceeded. Please retry in a few minutes."},
-                        headers={"Retry-After": "60"},
-                    )
+                if self._redis:
+                    count = await self._redis.incr(user_key)
+                    if count == 1:
+                        await self._redis.expire(user_key, 3600)
+                    if count > USER_HOURLY_LIMIT:
+                        return JSONResponse(
+                            status_code=429,
+                            content={"detail": "Hourly request limit exceeded. Please retry in a few minutes."},
+                            headers={"Retry-After": "60"},
+                        )
             except aioredis.RedisError:
                 pass  # Redis unavailable — fail open
 
@@ -95,17 +147,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             daily_limit = TENANT_DAILY_LIMITS.get(billing_tier, TENANT_DAILY_LIMITS["payg"])
             tenant_key = f"rate:tenant:{tenant_id}:{_current_day_key()}"
             try:
-                count = await self._redis.incr(tenant_key)
-                if count == 1:
-                    await self._redis.expire(tenant_key, 86400)
-                if count > daily_limit:
-                    return JSONResponse(
-                        status_code=429,
-                        content={
-                            "detail": f"Daily query limit of {daily_limit} reached for your plan. Resets at midnight UTC."
-                        },
-                        headers={"Retry-After": "3600"},
-                    )
+                if self._redis:
+                    count = await self._redis.incr(tenant_key)
+                    if count == 1:
+                        await self._redis.expire(tenant_key, 86400)
+                    if count > daily_limit:
+                        return JSONResponse(
+                            status_code=429,
+                            content={
+                                "detail": f"Daily query limit of {daily_limit} reached for your plan. Resets at midnight UTC."
+                            },
+                            headers={"Retry-After": "3600"},
+                        )
             except aioredis.RedisError:
                 pass
 

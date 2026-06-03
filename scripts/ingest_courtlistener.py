@@ -1,8 +1,12 @@
 """
-Ingests CourtListener bulk JSON opinions into PostgreSQL/pgvector.
-Usage: python ingest_courtlistener.py --file /path/to/opinions.json.gz --batch-size 256
+Ingest CourtListener bulk JSON opinions into public_chunks.
+
+Usage: python ingest_courtlistener.py --file /data/courtlistener/opinions.json.gz --batch-size 1000
 
 CourtListener bulk data: https://www.courtlistener.com/api/bulk-info/
+
+This script extracts and chunks opinions only. Embeddings are generated later by
+scripts/jetson_embed_worker.py using BGE-small vectors on the Jetson.
 """
 
 import argparse
@@ -10,14 +14,12 @@ import gzip
 import json
 import os
 import sys
-import time
 import uuid
 from typing import Iterator, List, Optional
 
 import psycopg2
 import psycopg2.extras
 import tiktoken
-from openai import OpenAI
 from tqdm import tqdm
 from dotenv import load_dotenv
 
@@ -26,9 +28,6 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Tenant ID reserved for public case law
-PUBLIC_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Federal and state appellate courts worth ingesting
 ALLOWED_COURT_IDS = {
@@ -55,8 +54,6 @@ ALLOWED_COURT_IDS = {
 
 CHUNK_TOKENS = 500
 CHUNK_OVERLAP_TOKENS = 50
-EMBED_MODEL = "text-embedding-3-small"
-EMBED_DIMENSIONS = 1536
 
 
 # ---------------------------------------------------------------------------
@@ -99,37 +96,7 @@ def get_connection(db_url: str):
     return psycopg2.connect(url)
 
 
-def ensure_schema(conn):
-    """Create tables if they don't exist."""
-    with conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public_chunks (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                tenant_id UUID NOT NULL,
-                opinion_id BIGINT,
-                case_name TEXT,
-                citation TEXT,
-                court_id TEXT,
-                date_filed DATE,
-                chunk_index INTEGER NOT NULL DEFAULT 0,
-                content TEXT NOT NULL,
-                embedding vector(1536),
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_public_chunks_tenant
-            ON public_chunks (tenant_id);
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_public_chunks_opinion
-            ON public_chunks (opinion_id);
-        """)
-        conn.commit()
-
-
-def opinion_already_ingested(conn, opinion_id: int) -> bool:
+def opinion_already_ingested(conn, opinion_id: str) -> bool:
     """Return True if at least one chunk for this opinion already exists."""
     with conn.cursor() as cur:
         cur.execute(
@@ -148,7 +115,7 @@ def bulk_insert_chunks(conn, rows: List[dict]):
             cur,
             """
             INSERT INTO public_chunks
-                (id, tenant_id, opinion_id, case_name, citation, court_id, date_filed,
+                (id, opinion_id, case_name, citation, court, decision_date,
                  chunk_index, content, embedding)
             VALUES %s
             ON CONFLICT DO NOTHING;
@@ -156,50 +123,22 @@ def bulk_insert_chunks(conn, rows: List[dict]):
             [
                 (
                     str(uuid.uuid4()),
-                    row["tenant_id"],
                     row["opinion_id"],
                     row["case_name"],
                     row["citation"],
-                    row["court_id"],
-                    row["date_filed"],
+                    row["court"],
+                    row["decision_date"],
                     row["chunk_index"],
                     row["content"],
-                    row["embedding"],
+                    None,
                 )
                 for row in rows
             ],
             template=(
-                "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector"
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)"
             ),
         )
     conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Embedding
-# ---------------------------------------------------------------------------
-
-def embed_batch(client: OpenAI, texts: List[str], retries: int = 3) -> List[Optional[List[float]]]:
-    """Embed a batch of texts with retry logic."""
-    for attempt in range(retries):
-        try:
-            response = client.embeddings.create(
-                model=EMBED_MODEL,
-                input=texts,
-                dimensions=EMBED_DIMENSIONS,
-            )
-            results = [None] * len(texts)
-            for item in response.data:
-                results[item.index] = item.embedding
-            return results
-        except Exception as e:
-            if attempt < retries - 1:
-                wait = 2 ** attempt
-                print(f"\n  [WARNING] Embed attempt {attempt+1} failed: {e}. Retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                print(f"\n  [ERROR] Embed failed after {retries} attempts: {e}")
-                return [None] * len(texts)
 
 
 # ---------------------------------------------------------------------------
@@ -275,11 +214,11 @@ def extract_opinion_data(opinion: dict) -> Optional[dict]:
         return None
 
     return {
-        "opinion_id": int(opinion_id),
+        "opinion_id": str(opinion_id),
         "case_name": case_name,
         "citation": citation,
-        "court_id": court_id,
-        "date_filed": date_filed,
+        "court": court_id,
+        "decision_date": date_filed,
         "plain_text": plain_text,
     }
 
@@ -300,8 +239,8 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=256,
-        help="Number of chunks per embedding + DB batch (default: 256)"
+        default=1000,
+        help="Number of chunks per DB insert batch (default: 1000)"
     )
     parser.add_argument(
         "--limit",
@@ -314,11 +253,6 @@ def parse_args():
         default=None,
         help="PostgreSQL connection URL (defaults to DATABASE_URL env var)"
     )
-    parser.add_argument(
-        "--openai-key",
-        default=None,
-        help="OpenAI API key (defaults to OPENAI_API_KEY env var)"
-    )
     return parser.parse_args()
 
 
@@ -330,16 +264,8 @@ def main():
         print("ERROR: --db-url or DATABASE_URL env var required.")
         sys.exit(1)
 
-    openai_key = args.openai_key or os.environ.get("OPENAI_API_KEY")
-    if not openai_key:
-        print("ERROR: --openai-key or OPENAI_API_KEY env var required.")
-        sys.exit(1)
-
-    print(f"Connecting to database...")
+    print("Connecting to database...")
     conn = get_connection(db_url)
-    ensure_schema(conn)
-
-    client = OpenAI(api_key=openai_key)
     enc = tiktoken.get_encoding("cl100k_base")
 
     print(f"Reading opinions from: {args.file}")
@@ -351,29 +277,15 @@ def main():
     skipped_opinions = 0
     ingested_opinions = 0
     total_chunks = 0
-    total_embedded = 0
 
     # Pending batch
     pending_chunks: List[dict] = []
 
     def flush_batch():
-        nonlocal total_embedded
         if not pending_chunks:
             return
 
-        texts = [c["content"] for c in pending_chunks]
-        embeddings = embed_batch(client, texts)
-
-        rows = []
-        for chunk, emb in zip(pending_chunks, embeddings):
-            if emb is None:
-                continue
-            # Format for pgvector: list -> '[x,y,z,...]'
-            emb_str = "[" + ",".join(str(v) for v in emb) + "]"
-            rows.append({**chunk, "embedding": emb_str})
-            total_embedded += 1
-
-        bulk_insert_chunks(conn, rows)
+        bulk_insert_chunks(conn, pending_chunks)
         pending_chunks.clear()
 
     with tqdm(desc="Opinions", unit="op") as pbar:
@@ -398,12 +310,11 @@ def main():
 
             for idx, chunk_content in enumerate(chunks):
                 pending_chunks.append({
-                    "tenant_id": PUBLIC_TENANT_ID,
                     "opinion_id": data["opinion_id"],
                     "case_name": data["case_name"],
                     "citation": data["citation"],
-                    "court_id": data["court_id"],
-                    "date_filed": data["date_filed"],
+                    "court": data["court"],
+                    "decision_date": data["decision_date"],
                     "chunk_index": idx,
                     "content": chunk_content,
                 })
@@ -416,7 +327,7 @@ def main():
                 pbar.set_postfix(
                     ingested=ingested_opinions,
                     chunks=total_chunks,
-                    embedded=total_embedded,
+                    pending_embeddings=total_chunks,
                 )
 
     # Final flush
@@ -429,7 +340,7 @@ def main():
     print(f"  Opinions skipped:       {skipped_opinions:,}")
     print(f"  Opinions ingested:      {ingested_opinions:,}")
     print(f"  Total chunks created:   {total_chunks:,}")
-    print(f"  Total chunks embedded:  {total_embedded:,}")
+    print(f"  Chunks pending embed:   {total_chunks:,}")
 
 
 if __name__ == "__main__":

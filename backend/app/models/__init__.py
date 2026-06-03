@@ -1,15 +1,18 @@
-from app.models.tenant import Tenant
-from app.models.user import User
+from app.models.tenant import Tenant, TenantSettings
+from app.models.user import User, UserMemory
 from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.plugin import PracticeProfile, Matter, MatterEvent, Renewal
 from app.models.scheduler import SchedulerLog
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
+from app.models.error_log import ErrorLog
 
 __all__ = [
     "Tenant",
+    "TenantSettings",
     "User",
+    "UserMemory",
     "Document",
     "Chunk",
     "Conversation",
@@ -22,4 +25,5 @@ __all__ = [
     "SchedulerLog",
     "TenantCredential",
     "UserOAuthToken",
+    "ErrorLog",
 ]

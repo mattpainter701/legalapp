@@ -10,6 +10,7 @@ import {
   createConversation,
   getConversation,
   sendMessage,
+  streamMessage,
   getDocuments,
   logout,
 } from '../api'
@@ -121,8 +122,55 @@ export default function ChatPage() {
     setIsSending(true)
 
     try {
-      const response = await sendMessage(convId, content, includePublic, usePremium)
-      setMessages((prev) => [...prev, response])
+      // Create a placeholder assistant message for streaming
+      const assistantMsgId = `stream-${Date.now()}`
+      const assistantMsg = {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: '',
+        sources: [],
+        created_at: new Date().toISOString(),
+      }
+      setMessages((prev) => [...prev, assistantMsg])
+
+      // Stream the response
+      let accumulatedText = ''
+      let streamComplete = false
+      let streamError = null
+
+      for await (const token of streamMessage(convId, content, includePublic, usePremium)) {
+        if (token === '[STREAM_COMPLETE]') {
+          streamComplete = true
+          break
+        } else if (token.startsWith('[ERROR]')) {
+          streamError = token.slice(7) // Extract error message
+          break
+        } else {
+          accumulatedText += token
+          // Update the message as tokens arrive
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId
+                ? { ...msg, content: accumulatedText }
+                : msg
+            )
+          )
+        }
+      }
+
+      if (streamError) {
+        console.error('Stream error:', streamError)
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMsgId
+              ? {
+                  ...msg,
+                  content: `An error occurred: ${streamError}`,
+                }
+              : msg
+          )
+        )
+      }
 
       // Update conversation title if it was auto-generated
       setConversations((prev) =>

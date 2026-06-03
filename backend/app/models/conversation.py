@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from sqlalchemy import String, Integer, Text, DateTime, ForeignKey, JSON, Numeric
+from sqlalchemy import (
+    String,
+    Integer,
+    Text,
+    DateTime,
+    ForeignKey,
+    JSON,
+    Numeric,
+    Boolean,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -61,6 +70,11 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Context tracking
+    skill_applied: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    context_used: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    context_relevance_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pii_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -99,6 +113,16 @@ class UsageRecord(Base):
     rag_source_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Cache tracking
+    cache_hit_rag: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    cache_hit_llm: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    cache_hit_matter: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

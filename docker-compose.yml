@@ -46,6 +46,8 @@ services:
     depends_on:
       backend:
         condition: service_started
+    volumes:
+      - frontend_dist:/app/dist
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
       interval: 15s
@@ -62,8 +64,16 @@ services:
         condition: service_healthy
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl
+      - frontend_dist:/usr/share/nginx/html/dist:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres_data:
   redis_data:
   uploads:
+  frontend_dist:
