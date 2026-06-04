@@ -656,6 +656,12 @@ export const getMatterTimeEntries = (id, params) =>
 export const getMatterInvoices = (id, params) =>
   api.get(`/matters/${id}/invoices`, { params }).then(r => r.data)
 
+// Memory
+export const getMatterMemory = (id) =>
+  api.get(`/matters/${id}/memory`).then(r => r.data)
+export const updateMatterMemory = (id, content) =>
+  api.put(`/matters/${id}/memory`, { content }).then(r => r.data)
+
 // ── Billing Extended ──────────────────────────────────────────────────────────
 export const getTimeEntries = (params) =>
   api.get('/billing/time-entries', { params }).then(r => r.data)

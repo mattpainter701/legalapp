@@ -227,6 +227,7 @@ async def convert_lead_to_matter(
         counterparty=payload.counterparty,
         client_contact_id=lead.contact_id,
         status="active",
+        description=getattr(payload, "description", None),
     )
     db.add(matter)
     await db.flush()

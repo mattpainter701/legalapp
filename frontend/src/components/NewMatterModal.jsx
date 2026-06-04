@@ -1,0 +1,318 @@
+import React, { useState, useEffect } from 'react'
+import { createMatterV2, getContacts, getAdminUsers } from '../api'
+
+const PRACTICE_AREAS = [
+  'Litigation', 'Corporate', 'Real Estate', 'Family Law', 'Criminal Defense',
+  'Intellectual Property', 'Employment', 'Bankruptcy', 'Estate Planning',
+  'Immigration', 'Tax', 'Environmental', 'Healthcare', 'Other',
+]
+
+const STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'closed', label: 'Closed' },
+]
+
+function XIcon({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  )
+}
+
+function ChevronIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  )
+}
+
+export default function NewMatterModal({ open, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    matter_name: '',
+    description: '',
+    practice_area: '',
+    matter_type: '',
+    client_contact_id: '',
+    attorney_of_record_id: '',
+    assigned_user_ids: [],
+    status: 'open',
+    case_number: '',
+    jurisdiction: '',
+    counterparty: '',
+  })
+  const [contacts, setContacts] = useState([])
+  const [users, setUsers] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (!open) return
+    getContacts({ limit: 100 }).then(data => {
+      const list = Array.isArray(data) ? data : data.items || data.contacts || []
+      setContacts(list)
+    }).catch(() => {})
+    getAdminUsers().then(data => {
+      const list = Array.isArray(data) ? data : data.users || []
+      setUsers(list)
+    }).catch(() => {})
+  }, [open])
+
+  const set = (key, val) => setForm(p => ({ ...p, [key]: val }))
+
+  const toggleAssignee = (uid) => {
+    setForm(p => ({
+      ...p,
+      assigned_user_ids: p.assigned_user_ids.includes(uid)
+        ? p.assigned_user_ids.filter(id => id !== uid)
+        : [...p.assigned_user_ids, uid],
+    }))
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.matter_name.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      const payload = {
+        matter_name: form.matter_name.trim(),
+        description: form.description.trim() || undefined,
+        practice_area: form.practice_area || undefined,
+        matter_type: form.matter_type.trim() || undefined,
+        client_contact_id: form.client_contact_id || undefined,
+        attorney_of_record_id: form.attorney_of_record_id || undefined,
+        assigned_user_ids: form.assigned_user_ids,
+        status: form.status,
+        case_number: form.case_number.trim() || undefined,
+        jurisdiction: form.jurisdiction.trim() || undefined,
+        counterparty: form.counterparty.trim() || undefined,
+      }
+      const created = await createMatterV2(payload)
+      onCreated?.(created)
+      setForm({
+        matter_name: '', description: '', practice_area: '', matter_type: '',
+        client_contact_id: '', attorney_of_record_id: '', assigned_user_ids: [],
+        status: 'open', case_number: '', jurisdiction: '', counterparty: '',
+      })
+      onClose()
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to create matter.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) return null
+
+  const inputCls = "w-full border border-brand-line rounded-lg px-3 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
+  const labelCls = "block text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1.5"
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      {/* Backdrop */}
+      <div className="flex-1 bg-black/40" onClick={onClose} />
+
+      {/* Drawer */}
+      <div className="w-full max-w-lg bg-brand-surface border-l border-brand-line flex flex-col shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50">
+          <div>
+            <h2 className="font-serif font-bold text-xl text-brand-ink">New Matter</h2>
+            <p className="text-[13px] text-brand-muted font-sans mt-0.5">Open a new case or matter</p>
+          </div>
+          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink transition-colors p-1 rounded-lg hover:bg-brand-bg-soft">
+            <XIcon size={20} />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+          {/* Title */}
+          <div>
+            <label className={labelCls}>Matter Title <span className="text-brand-rose">*</span></label>
+            <input
+              type="text"
+              value={form.matter_name}
+              onChange={e => set('matter_name', e.target.value)}
+              placeholder="e.g., Smith v. Acme Corp, Estate of John Doe"
+              className={inputCls}
+              required
+              autoFocus
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className={labelCls}>Description</label>
+            <textarea
+              value={form.description}
+              onChange={e => set('description', e.target.value)}
+              placeholder="Brief summary of this matter..."
+              rows={3}
+              className={`${inputCls} resize-none`}
+            />
+          </div>
+
+          {/* Practice Area + Status */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Practice Area</label>
+              <div className="relative">
+                <select
+                  value={form.practice_area}
+                  onChange={e => set('practice_area', e.target.value)}
+                  className={`${inputCls} pr-8 appearance-none`}
+                >
+                  <option value="">Select area...</option>
+                  {PRACTICE_AREAS.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Status</label>
+              <div className="relative">
+                <select
+                  value={form.status}
+                  onChange={e => set('status', e.target.value)}
+                  className={`${inputCls} pr-8 appearance-none`}
+                >
+                  {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+                <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
+          {/* Client */}
+          <div>
+            <label className={labelCls}>Client</label>
+            <div className="relative">
+              <select
+                value={form.client_contact_id}
+                onChange={e => set('client_contact_id', e.target.value)}
+                className={`${inputCls} pr-8 appearance-none`}
+              >
+                <option value="">No client selected</option>
+                {contacts.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.display_name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}
+                  </option>
+                ))}
+              </select>
+              <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Attorney of Record */}
+          <div>
+            <label className={labelCls}>Attorney of Record</label>
+            <div className="relative">
+              <select
+                value={form.attorney_of_record_id}
+                onChange={e => set('attorney_of_record_id', e.target.value)}
+                className={`${inputCls} pr-8 appearance-none`}
+              >
+                <option value="">Not assigned</option>
+                {users.map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name || u.email}
+                  </option>
+                ))}
+              </select>
+              <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+            </div>
+            <p className="text-[11px] text-brand-muted mt-1 font-sans">The named responsible attorney for this matter.</p>
+          </div>
+
+          {/* Additional Assignees */}
+          {users.length > 0 && (
+            <div>
+              <label className={labelCls}>Additional Team Members</label>
+              <div className="border border-brand-line rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+                {users.map(u => {
+                  const checked = form.assigned_user_ids.includes(u.id)
+                  const isAtty = u.id === form.attorney_of_record_id
+                  return (
+                    <label
+                      key={u.id}
+                      className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-brand-bg-soft transition-colors ${isAtty ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked || isAtty}
+                        disabled={isAtty}
+                        onChange={() => !isAtty && toggleAssignee(u.id)}
+                        className="w-4 h-4 rounded border-brand-line accent-brand-accent"
+                      />
+                      <span className="text-[13px] font-sans text-brand-ink">
+                        {u.full_name || u.email}
+                        {isAtty && <span className="ml-1.5 text-brand-muted text-[11px]">(attorney of record)</span>}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Optional litigation fields — collapsible */}
+          <details className="group">
+            <summary className="text-[12px] font-semibold text-brand-muted font-sans cursor-pointer select-none list-none flex items-center gap-2 py-1">
+              <ChevronIcon size={12} className="transition-transform group-open:rotate-180" />
+              Litigation / Court Details (optional)
+            </summary>
+            <div className="mt-4 space-y-4 pl-1">
+              <div>
+                <label className={labelCls}>Counterparty</label>
+                <input type="text" value={form.counterparty} onChange={e => set('counterparty', e.target.value)} placeholder="Opposing party name" className={inputCls} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Jurisdiction</label>
+                  <input type="text" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)} placeholder="e.g., California" className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Case Number</label>
+                  <input type="text" value={form.case_number} onChange={e => set('case_number', e.target.value)} placeholder="e.g., 2026-CV-1234" className={inputCls} />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Matter Type</label>
+                <input type="text" value={form.matter_type} onChange={e => set('matter_type', e.target.value)} placeholder="e.g., Contract Dispute, Personal Injury" className={inputCls} />
+              </div>
+            </div>
+          </details>
+
+          {error && (
+            <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-brand-rose text-sm font-sans">
+              {error}
+            </div>
+          )}
+        </form>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-brand-line bg-brand-bg-soft/30 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !form.matter_name.trim()}
+            className="px-6 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0"
+          >
+            {saving ? 'Opening Matter…' : 'Open Matter'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

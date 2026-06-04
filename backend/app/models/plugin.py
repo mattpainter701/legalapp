@@ -67,7 +67,7 @@ class PracticeProfile(Base):
 
 
 class Matter(Base):
-    """Litigation portfolio ledger — one row per matter."""
+    """Case/matter ledger — one row per matter, any practice area."""
 
     __tablename__ = "matters"
     __table_args__ = (
@@ -91,12 +91,13 @@ class Matter(Base):
     )
     slug: Mapped[str] = mapped_column(String(200), nullable=False)
     matter_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    matter_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    role: Mapped[str] = mapped_column(String(100), nullable=False)
-    counterparty: Mapped[str] = mapped_column(String(500), nullable=False)
-    jurisdiction: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    matter_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    counterparty: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    jurisdiction: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[str] = mapped_column(
-        String(100), default="threatened", server_default="threatened"
+        String(100), default="open", server_default="open"
     )
     stage: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -159,6 +160,16 @@ class Matter(Base):
         nullable=True,
     )
 
+    # Attorney of record — the named responsible attorney for this matter
+    attorney_of_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Per-matter AI memory / context document (the matter's CLAUDE.md equivalent)
+    memory_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -174,6 +185,9 @@ class Matter(Base):
     # Relationships
     client: Mapped["Contact | None"] = relationship(
         "Contact", foreign_keys=[client_contact_id], lazy="joined"
+    )
+    attorney_of_record: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[attorney_of_record_id], lazy="joined"
     )
     assignments: Mapped[list["MatterAssignment"]] = relationship(
         "MatterAssignment", back_populates="matter", cascade="all, delete-orphan"

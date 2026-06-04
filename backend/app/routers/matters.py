@@ -25,6 +25,8 @@ from app.schemas.matter import (
     MatterAssignmentResponse,
     MatterCreate,
     MatterListResponse,
+    MatterMemoryResponse,
+    MatterMemoryUpdate,
     MatterNoteCreate,
     MatterNoteResponse,
     MatterNoteUpdate,
@@ -55,6 +57,7 @@ async def _get_matter_or_404(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     )
@@ -127,6 +130,10 @@ def _matter_to_response(
     if matter.client:
         client_name = getattr(matter.client, "display_name", None)
 
+    attorney_name = None
+    if matter.attorney_of_record:
+        attorney_name = getattr(matter.attorney_of_record, "full_name", None)
+
     assignments = []
     for a in matter.assignments:
         user_name = a.user.full_name if a.user else "Unknown"
@@ -145,6 +152,7 @@ def _matter_to_response(
         id=str(matter.id),
         slug=matter.slug,
         matter_name=matter.matter_name,
+        description=matter.description,
         matter_type=matter.matter_type,
         practice_area=matter.practice_area,
         role=matter.role,
@@ -174,6 +182,10 @@ def _matter_to_response(
         if matter.client_contact_id
         else None,
         client_name=client_name,
+        attorney_of_record_id=str(matter.attorney_of_record_id)
+        if matter.attorney_of_record_id
+        else None,
+        attorney_of_record_name=attorney_name,
         budget_amount=matter.budget_amount,
         budget_currency=matter.budget_currency,
         budget_notification_threshold=matter.budget_notification_threshold,
@@ -184,6 +196,7 @@ def _matter_to_response(
         tax_rate=matter.tax_rate,
         assignments=assignments,
         budget_utilization=budget,
+        memory_content=matter.memory_content,
         created_at=matter.created_at,
         updated_at=matter.updated_at,
     )
@@ -252,6 +265,7 @@ async def list_matters(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(and_(*conditions))
         .order_by(sort_col)
@@ -264,6 +278,7 @@ async def list_matters(
     items = []
     for m in matters:
         client_name = getattr(m.client, "display_name", None) if m.client else None
+        attorney_name = getattr(m.attorney_of_record, "full_name", None) if m.attorney_of_record else None
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
@@ -306,17 +321,19 @@ async def list_matters(
                 id=str(m.id),
                 slug=m.slug,
                 matter_name=m.matter_name,
+                description=m.description,
                 matter_type=m.matter_type,
                 practice_area=m.practice_area,
                 status=m.status,
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
                 client_name=client_name,
+                attorney_of_record_name=attorney_name,
                 assigned_to=assigned_to,
                 budget_amount=m.budget_amount,
                 total_billed=total_billed,
                 budget_utilization_pct=util_pct,
-                is_overdue=m.status in ("threatened", "active") and bool(next_deadline),
+                is_overdue=m.status in ("active",) and bool(next_deadline),
                 next_deadline=next_deadline,
                 created_at=m.created_at,
             )
@@ -337,11 +354,19 @@ async def create_matter(
 
     slug = _generate_slug(body.matter_name)
 
+    attorney_of_record_uuid = None
+    if body.attorney_of_record_id:
+        try:
+            attorney_of_record_uuid = uuid.UUID(body.attorney_of_record_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid attorney_of_record_id")
+
     matter = Matter(
         tenant_id=tenant_id,
         user_id=user.id,
         slug=slug,
         matter_name=body.matter_name,
+        description=body.description,
         matter_type=body.matter_type,
         role=body.role,
         counterparty=body.counterparty,
@@ -364,6 +389,8 @@ async def create_matter(
         client_contact_id=(
             uuid.UUID(body.client_contact_id) if body.client_contact_id else None
         ),
+        attorney_of_record_id=attorney_of_record_uuid,
+        memory_content=body.memory_content,
     )
     db.add(matter)
     await db.flush()
@@ -381,21 +408,29 @@ async def create_matter(
     db.add(event)
 
     # Create initial assignments
-    assigned_ids = {str(user.id)}  # creator is always assigned
+    # If an explicit attorney of record is set, they become lead/primary;
+    # otherwise the creator is lead/primary.
+    assigned_ids = {str(user.id)}
     for uid in body.assigned_user_ids:
         assigned_ids.add(uid)
+    if attorney_of_record_uuid:
+        assigned_ids.add(str(attorney_of_record_uuid))
+
+    primary_uid = str(attorney_of_record_uuid) if attorney_of_record_uuid else str(user.id)
 
     for uid in assigned_ids:
         try:
             uid_uuid = uuid.UUID(uid)
         except (ValueError, TypeError):
             continue
+        is_primary = uid == primary_uid
+        role = "lead_attorney" if is_primary else "associate"
         assignment = MatterAssignment(
             tenant_id=tenant_id,
             matter_id=matter.id,
             user_id=uid_uuid,
-            role="lead_attorney" if uid == str(user.id) else "associate",
-            is_primary=(uid == str(user.id)),
+            role=role,
+            is_primary=is_primary,
         )
         db.add(assignment)
 
@@ -408,6 +443,7 @@ async def create_matter(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(Matter.id == matter.id)
     )
@@ -431,6 +467,7 @@ async def get_my_matters(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(
             Matter.tenant_id == tenant_id,
@@ -450,6 +487,7 @@ async def get_my_matters(
     items = []
     for m in matters:
         client_name = getattr(m.client, "display_name", None) if m.client else None
+        attorney_name = getattr(m.attorney_of_record, "full_name", None) if m.attorney_of_record else None
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
@@ -458,12 +496,14 @@ async def get_my_matters(
                 id=str(m.id),
                 slug=m.slug,
                 matter_name=m.matter_name,
+                description=m.description,
                 matter_type=m.matter_type,
                 practice_area=m.practice_area,
                 status=m.status,
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
                 client_name=client_name,
+                attorney_of_record_name=attorney_name,
                 assigned_to=assigned_to,
                 budget_amount=m.budget_amount,
                 total_billed=Decimal("0"),
@@ -604,10 +644,14 @@ async def update_matter(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Handle client_contact_id conversion
+    # Handle UUID FK conversions
     if "client_contact_id" in update_data:
         cid = update_data.pop("client_contact_id")
         matter.client_contact_id = uuid.UUID(cid) if cid else None
+
+    if "attorney_of_record_id" in update_data:
+        aid = update_data.pop("attorney_of_record_id")
+        matter.attorney_of_record_id = uuid.UUID(aid) if aid else None
 
     for field, value in update_data.items():
         if hasattr(matter, field):
@@ -622,6 +666,7 @@ async def update_matter(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(Matter.id == matter.id)
     )
@@ -1071,6 +1116,7 @@ async def update_budget(
         .options(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
         )
         .where(Matter.id == matter.id)
     )
@@ -1422,6 +1468,42 @@ async def get_matter_invoices(
         }
         for i in invoices
     ]
+
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/memory", response_model=MatterMemoryResponse)
+async def get_matter_memory(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the AI memory document for a matter."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    return MatterMemoryResponse(
+        matter_id=str(matter.id),
+        memory_content=matter.memory_content,
+    )
+
+
+@router.put("/{matter_id}/memory", response_model=MatterMemoryResponse)
+async def update_matter_memory(
+    matter_id: str,
+    body: MatterMemoryUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the AI memory document for a matter."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+    matter.memory_content = body.content
+    await db.commit()
+    return MatterMemoryResponse(
+        matter_id=str(matter.id),
+        memory_content=matter.memory_content,
+    )
 
 
 # ── Slug generation ───────────────────────────────────────────────────────────
