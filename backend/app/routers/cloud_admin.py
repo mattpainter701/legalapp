@@ -95,45 +95,67 @@ async def cloud_search_status(
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    # Query connected credentials
-    cred_result = await db.execute(
-        select(TenantCredential).where(
-            TenantCredential.tenant_id == admin.tenant_id,
-            TenantCredential.is_active.is_(True),
+    try:
+        # Query connected credentials
+        cred_result = await db.execute(
+            select(TenantCredential).where(
+                TenantCredential.tenant_id == admin.tenant_id,
+                TenantCredential.is_active.is_(True),
+            )
         )
-    )
-    creds = cred_result.scalars().all()
+        creds = cred_result.scalars().all()
 
-    # Query metadata counts per provider
-    count_result = await db.execute(
-        select(
-            CloudMetadata.provider,
-            func.count(CloudMetadata.id).label("cnt"),
+        # Query metadata counts per provider
+        count_result = await db.execute(
+            select(
+                CloudMetadata.provider,
+                func.count(CloudMetadata.id).label("cnt"),
+            )
+            .where(
+                CloudMetadata.tenant_id == admin.tenant_id,
+            )
+            .group_by(CloudMetadata.provider)
         )
-        .where(
-            CloudMetadata.tenant_id == admin.tenant_id,
-        )
-        .group_by(CloudMetadata.provider)
-    )
-    count_rows = count_result.all()
-    metadata_counts: dict[str, int] = {r.provider: r.cnt for r in count_rows}
+        count_rows = count_result.all()
+        metadata_counts: dict[str, int] = {r.provider: r.cnt for r in count_rows}
 
-    # Query total metadata count
-    total_result = await db.execute(
-        select(func.count(CloudMetadata.id)).where(
-            CloudMetadata.tenant_id == admin.tenant_id,
+        # Query total metadata count
+        total_result = await db.execute(
+            select(func.count(CloudMetadata.id)).where(
+                CloudMetadata.tenant_id == admin.tenant_id,
+            )
         )
-    )
-    metadata_total = total_result.scalar_one()
+        metadata_total = total_result.scalar_one()
 
-    # Query last sync time across records
-    last_sync_result = await db.execute(
-        select(func.max(CloudMetadata.last_synced)).where(
-            CloudMetadata.tenant_id == admin.tenant_id,
+        # Query last sync time across records
+        last_sync_result = await db.execute(
+            select(func.max(CloudMetadata.last_synced)).where(
+                CloudMetadata.tenant_id == admin.tenant_id,
+            )
         )
-    )
-    last_sync_value = last_sync_result.scalar_one()
-    last_sync = last_sync_value.isoformat() if last_sync_value else None
+        last_sync_value = last_sync_result.scalar_one()
+        last_sync = last_sync_value.isoformat() if last_sync_value else None
+    except Exception:
+        logger.exception("Cloud search status query failed for tenant %s", tenant_id)
+        return {
+            "enabled": True,
+            "providers": {
+                "google": {
+                    "connected": False,
+                    "token_expires": None,
+                    "scopes": [],
+                    "metadata_count": 0,
+                },
+                "microsoft": {
+                    "connected": False,
+                    "token_expires": None,
+                    "scopes": [],
+                    "metadata_count": 0,
+                },
+            },
+            "metadata_total": 0,
+            "last_sync": None,
+        }
 
     # Build provider status dict
     providers: dict = {
@@ -267,8 +289,20 @@ async def cloud_search_sync(
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    result = await _get_cloud_sync().sync_all(db, tenant_id)
-    return result
+    t0 = __import__("time").time()
+    counts = await _get_cloud_sync().sync_all(db, tenant_id)
+    duration_seconds = round(__import__("time").time() - t0, 2)
+
+    total = 0
+    for provider_counts in counts.values():
+        for v in provider_counts.values():
+            total += v or 0
+
+    return {
+        **counts,
+        "total": total,
+        "duration_seconds": duration_seconds,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════

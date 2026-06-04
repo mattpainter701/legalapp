@@ -65,6 +65,7 @@ async def _consume_state(request: Request, state: str) -> tuple[bool, dict | Non
 
 MICROSOFT_ADMIN_SCOPES = "offline_access User.Read.All Mail.Read Files.Read.All Sites.Read.All Calendars.ReadWrite"
 GOOGLE_ADMIN_SCOPES = (
+    "openid email profile "
     "https://www.googleapis.com/auth/admin.directory.user.readonly "
     "https://www.googleapis.com/auth/gmail.readonly "
     "https://www.googleapis.com/auth/calendar "
@@ -173,6 +174,13 @@ async def microsoft_callback(
         refresh_token = token_data.get("refresh_token")
         expires_in = token_data.get("expires_in", 3600)
         scope_str = token_data.get("scope", "")
+
+        # Microsoft sometimes omits "offline_access" from the returned scope
+        # string even when it was requested and granted. The presence of a
+        # refresh_token is the authoritative signal that offline_access was
+        # granted — ensure it appears in the stored scopes.
+        if refresh_token and "offline_access" not in scope_str:
+            scope_str = ("offline_access " + scope_str).strip()
 
         if not access_token:
             return _error_redirect("microsoft", "no_access_token")

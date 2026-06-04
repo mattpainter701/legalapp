@@ -161,6 +161,18 @@ class CloudSearchService:
         by keyword-match count and recency. Full content is still fetched live by
         ``fetch_content`` when needed — only metadata is read here.
         """
+        try:
+            return await self._search_index_impl(db, plan, tenant_id)
+        except Exception:
+            logger.exception("search_index failed for tenant %s", tenant_id)
+            return []
+
+    async def _search_index_impl(
+        self,
+        db: AsyncSession,
+        plan: dict,
+        tenant_id: str,
+    ) -> list[CloudHit]:
         keywords = [k for k in plan.get("keywords", []) if k]
         date_after = plan.get("date_after") or ""
         sources = plan.get("sources", None)

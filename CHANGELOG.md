@@ -61,6 +61,13 @@
 - `TenantSettings` model: +use_customer_llm, customer_llm_provider, customer_llm_config (JSON)
 - AdminPage: +Licensing tab, +Integrations tab (was "Permissions")
 
+### Fixed
+- Cloud search status/metadata endpoints: error handling for missing/broken `cloud_metadata_index` table (returns degraded status instead of 500)
+- Cloud metadata sync endpoint: added `total` and `duration_seconds` fields so the frontend "Sync Metadata Now" result panel renders correctly
+- Microsoft integration: `offline_access` scope not persisted when MS omits it from token response despite granting it (refresh_token presence now forces scope inclusion)
+- Google Workspace integration: added `openid email profile` to admin consent scopes so `id_token` is returned (needed for service account email extraction and proper scope audit)
+- Google Workspace sync: `last_sync_error` now surfaced in permissions audit response and displayed in the Integrations panel
+
 ## [0.9.0] — 2026-06-03
 
 ### Added — Prompt Management System & Missing Skill Prompts

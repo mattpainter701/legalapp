@@ -8,9 +8,15 @@ const SCOPE_LABELS_MS = {
   'Files.Read.All': 'Read all files (OneDrive + SharePoint)',
   'Sites.Read.All': 'Access SharePoint sites',
   'Calendars.ReadWrite': 'Read and write calendars',
+  openid: 'OpenID Connect',
+  email: 'Email address',
+  profile: 'Profile info',
 }
 
 const SCOPE_LABELS_GOOGLE = {
+  'openid': 'OpenID Connect',
+  'email': 'Email address',
+  'profile': 'Profile info',
   'https://www.googleapis.com/auth/admin.directory.user.readonly': 'Read directory users',
   'https://www.googleapis.com/auth/gmail.readonly': 'Read Gmail messages',
   'https://www.googleapis.com/auth/drive.readonly': 'Read Google Drive files',
@@ -151,6 +157,11 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
             <p className="mt-1 text-xs text-brand-ink-2 font-sans">
               {info.user_count ?? 0} users synced
               {info.last_sync_status === 'failed' ? ' · last sync failed' : ` · last run ${relTime(info.last_sync_at)}`}
+            </p>
+          )}
+          {info.connected && info.last_sync_error && (
+            <p className="mt-1 text-xs text-red-600 font-mono bg-red-50 px-2 py-1 rounded">
+              {info.last_sync_error}
             </p>
           )}
         </div>

@@ -1125,6 +1125,9 @@ SCOPES_REQUIRED_MS = [
 ]
 
 SCOPES_REQUIRED_GOOGLE = [
+    "openid",
+    "email",
+    "profile",
     "https://www.googleapis.com/auth/admin.directory.user.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
@@ -1170,6 +1173,7 @@ async def get_permissions_audit(
             else None,
             "last_sync_total": match.last_user_sync_total if match else None,
             "last_sync_status": match.last_user_sync_status if match else None,
+            "last_sync_error": match.last_user_sync_error if match else None,
         }
         if not match or not match.scopes:
             return {
