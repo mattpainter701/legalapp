@@ -288,13 +288,12 @@ async def microsoft_login(
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/microsoft/callback"
-    encoded_redirect = urllib.parse.quote(redirect_uri, safe="")
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
         f"?client_id={settings.MICROSOFT_CLIENT_ID}"
         f"&response_type=code"
-        f"&redirect_uri={encoded_redirect}"
+        f"&redirect_uri={redirect_uri}"
         f"&scope=openid+email+profile+User.Read+offline_access"
         f"&state={state}"
         f"&response_mode=query"
