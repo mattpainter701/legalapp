@@ -15,6 +15,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.task import Task
 from app.models.plugin import Matter, Renewal
+from app.models.estate import EstateDeadline
 from app.schemas.calendar import CalendarEvent, CalendarEventsResponse
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -27,7 +28,7 @@ async def get_calendar_events(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all deadline events (tasks, matter key dates, renewals) in [start, end]."""
+    """Return all deadline events (tasks, matter key dates, renewals, estate deadlines) in [start, end]."""
     tenant_id = current_user["tenant_id"]
     await set_tenant_context(db, tenant_id)
 
@@ -125,6 +126,27 @@ async def get_calendar_events(
                 date=renewal_date,
                 event_type="renewal",
                 url="/plugins/commercial/renewals",
+            )
+        )
+
+    # ── Query 4: Estate deadlines (tax filings, court dates) in range ─────────
+    deadline_stmt = select(EstateDeadline).where(
+        EstateDeadline.tenant_id == tid,
+        EstateDeadline.due_date >= start,
+        EstateDeadline.due_date <= end,
+        EstateDeadline.status.notin_(["complete", "na", "cancelled"]),
+    )
+    deadline_result = await db.execute(deadline_stmt)
+    deadlines = deadline_result.scalars().all()
+
+    for dl in deadlines:
+        events.append(
+            CalendarEvent(
+                id=f"estate-deadline-{dl.id}",
+                title=f"{dl.title} ({dl.deadline_type.replace('_', ' ')})",
+                date=dl.due_date,
+                event_type="estate_deadline",
+                url=f"/plugins/trust-estate/estates/{dl.estate_id}",
             )
         )
 

@@ -38,8 +38,6 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import UsageRecord
 from app.models.plugin import (
-    Estate,
-    EstateEvent,
     Matter,
     MatterEvent,
     MediationCase,
@@ -48,11 +46,6 @@ from app.models.plugin import (
     Renewal,
 )
 from app.schemas.plugin import (
-    EstateCreate,
-    EstateEventCreate,
-    EstateEventResponse,
-    EstateResponse,
-    EstateUpdate,
     MatterCreate,
     MatterEventCreate,
     MatterEventResponse,
@@ -174,39 +167,6 @@ def _renewal_to_response(renewal: Renewal) -> RenewalResponse:
         days_until_renewal=days,
         urgency=_renewal_urgency(days),
         created_at=renewal.created_at,
-    )
-
-
-def _estate_to_response(estate: Estate) -> EstateResponse:
-    return EstateResponse(
-        id=str(estate.id),
-        title=estate.title,
-        grantor=estate.grantor,
-        estate_type=estate.estate_type,
-        status=estate.status,
-        summary=estate.summary,
-        created_at=estate.created_at,
-        updated_at=estate.updated_at,
-        events=[
-            EstateEventResponse(
-                id=str(e.id),
-                event_type=e.event_type,
-                title=e.title,
-                content=e.content,
-                created_at=e.created_at,
-            )
-            for e in (estate.events or [])
-        ],
-    )
-
-
-def _estate_event_to_response(event: EstateEvent) -> EstateEventResponse:
-    return EstateEventResponse(
-        id=str(event.id),
-        event_type=event.event_type,
-        title=event.title,
-        content=event.content,
-        created_at=event.created_at,
     )
 
 
@@ -658,145 +618,6 @@ async def delete_renewal(
 
     await db.delete(renewal)
     await db.commit()
-
-
-# ── Trust & Estate ────────────────────────────────────────────────────────────
-
-
-@router.get("/trust-estate/estates", response_model=List[EstateResponse])
-async def list_estates(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """List all estates for the tenant, sorted by updated_at descending."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(Estate)
-        .where(Estate.tenant_id == user.tenant_id)
-        .order_by(Estate.updated_at.desc())
-    )
-    estates = result.scalars().all()
-    return [_estate_to_response(e) for e in estates]
-
-
-@router.post("/trust-estate/estates", response_model=EstateResponse, status_code=201)
-async def create_estate(
-    body: EstateCreate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Create a new estate matter."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    estate = Estate(
-        id=uuid.uuid4(),
-        tenant_id=user.tenant_id,
-        title=body.title,
-        grantor=body.grantor,
-        estate_type=body.estate_type,
-        status="active",
-        summary=body.summary,
-    )
-    db.add(estate)
-    await db.commit()
-    await db.refresh(estate)
-    return _estate_to_response(estate)
-
-
-@router.get("/trust-estate/estates/{estate_id}", response_model=EstateResponse)
-async def get_estate(
-    estate_id: str,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get a single estate by ID."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(Estate).where(
-            Estate.id == estate_id,
-            Estate.tenant_id == user.tenant_id,
-        )
-    )
-    estate = result.scalar_one_or_none()
-    if estate is None:
-        raise HTTPException(status_code=404, detail="Estate not found")
-    return _estate_to_response(estate)
-
-
-@router.patch("/trust-estate/estates/{estate_id}", response_model=EstateResponse)
-async def update_estate(
-    estate_id: str,
-    body: EstateUpdate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Partially update an estate."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(Estate).where(
-            Estate.id == estate_id,
-            Estate.tenant_id == user.tenant_id,
-        )
-    )
-    estate = result.scalar_one_or_none()
-    if estate is None:
-        raise HTTPException(status_code=404, detail="Estate not found")
-
-    update_data = body.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(estate, field, value)
-    estate.updated_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(estate)
-    return _estate_to_response(estate)
-
-
-@router.post(
-    "/trust-estate/estates/{estate_id}/events",
-    response_model=EstateEventResponse,
-    status_code=201,
-)
-async def append_estate_event(
-    estate_id: str,
-    body: EstateEventCreate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Append an event to an estate's event log."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(Estate).where(
-            Estate.id == estate_id,
-            Estate.tenant_id == user.tenant_id,
-        )
-    )
-    estate = result.scalar_one_or_none()
-    if estate is None:
-        raise HTTPException(status_code=404, detail="Estate not found")
-
-    event = EstateEvent(
-        id=uuid.uuid4(),
-        estate_id=estate.id,
-        event_type=body.event_type,
-        title=body.title,
-        content=body.content,
-    )
-    db.add(event)
-    estate.updated_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(event)
-    return _estate_event_to_response(event)
 
 
 # ── Mediation Cases ───────────────────────────────────────────────────────────
