@@ -77,7 +77,6 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
     },
     {
-    {
         "name": "estate-deadline-watcher",
         "display_name": "Estate Deadline Watcher",
         "description": "Scans estate tax filings and court deadlines due within 14 days and emails reminders.",
@@ -88,7 +87,6 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Directory User Sync",
         "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new users land on the free tier.",
         "schedule": "Daily at 2:00 AM ET",
-    },
     },
 ]
 
