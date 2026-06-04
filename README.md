@@ -41,6 +41,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Matter Budget** | Budget tracking with billable hours vs budget utilization progress bar |
 | **Document Templates** | Reusable templates with `{{variable}}` substitution, render to MatterDocument |
 | **Firm Reports** | Matter status, intake funnel/conversion rate, overdue tasks dashboards |
+| **Trust & Estate Administration** | Full estate workflow — fiduciaries/representatives, beneficiaries (bequests, shares, charities), asset & liability inventory (date-of-death + current valuations), creditor claims, distributions, fiduciary accounting ledger (principal vs income with running balances), tax/court deadline tracking (706/1041/709/1040/inventory/creditor-bar), one-click inventory/accounting/distribution reports, optional Matter linkage, and a daily estate-deadline email watcher |
 
 ---
 
@@ -98,7 +99,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **IP Legal** | trademark-clearance, fto-analysis, cnd-triage |
 | **AI Governance** | use-case-triage, impact-assessment, vendor-ai-review |
 | **Regulatory Legal** | reg-gap-analysis, policy-diff, nprm-comment |
-| **Trust & Estate** | estate-portfolio, estate-detail, will-trust-review, probate-tracking |
+| **Trust & Estate** | will-trust-review, probate-checklist, beneficiary-letter, estate-tax-prep, fiduciary-accounting-review |
 | **Mediation** | case-portfolio, case-detail, intake-brief, settlement-draft |
 
 All skill outputs include confidence tags (`[settled]` / `[verify]` / `[model knowledge]`) and an attorney-review banner.
@@ -231,6 +232,8 @@ ssh -L 8080:localhost:80 user@hypervisor-ip -N
 | `024_add_matter_budget` | Budget tracking (budget_amount, budget_currency on matters) |
 | `025_create_document_templates` | Reusable document templates with variable substitution |
 | `026_matter_revamp` | Matter assignments, notes, retainers; expands matters with practice_area, billing_cycle, billing_method, hourly_rate, contingency_percentage, tax_rate, court, judge, case_number; adds default_billing_rate to users; data migration from internal_owners JSON to matter_assignments rows |
+| `027`–`029` | Sprint 8 onboarding, cloud metadata index, tenant LLM provider |
+| `030_trust_estate_buildout` | Full Trust & Estate module: enriches `estates` (estate_name, matter/client links, jurisdiction, date_of_death, court/case, gross/net value) + 7 RLS sub-tables — fiduciaries, beneficiaries, assets, liabilities/claims, distributions, deadlines, fiduciary accounting ledger |
 
 ### CourtListener public RAG
 

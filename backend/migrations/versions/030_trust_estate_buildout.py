@@ -71,7 +71,7 @@ def _enable_rls(table: str) -> None:
     op.execute(
         f"""
         CREATE POLICY {table}_tenant_isolation ON {table}
-        USING (tenant_id = current_setting('app.tenant_id')::uuid)
+        USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
         """
     )
 

@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
-import { getEstates } from '../api'
-import { Vault, Plus, Search, Filter } from 'lucide-react'
+import { getEstates, createEstate } from '../api'
+import { Vault, Plus, Search, Filter, X } from 'lucide-react'
+
+const ESTATE_TYPES = ['Probate', 'Trust Administration', 'Estate Planning', 'Guardianship', 'Conservatorship', 'Small Estate']
 
 const STATUS_OPTIONS = ['all', 'active', 'in_probate', 'draft', 'closed']
 
@@ -56,6 +58,30 @@ export default function EstatePortfolioPage() {
   const [error, setError] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
+
+  const [showCreate, setShowCreate] = useState(false)
+  const [form, setForm] = useState({ estate_name: '', estate_type: 'Probate', jurisdiction: '', gross_estate_value: '' })
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState(null)
+
+  const handleCreate = async () => {
+    if (!form.estate_name.trim()) return
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const payload = {
+        estate_name: form.estate_name.trim(),
+        estate_type: form.estate_type || null,
+        jurisdiction: form.jurisdiction || null,
+        gross_estate_value: form.gross_estate_value ? Number(form.gross_estate_value) : null,
+      }
+      const created = await createEstate(payload)
+      navigate(`/plugins/trust-estate/estates/${created.id}`)
+    } catch (err) {
+      setCreateError('Failed to create estate.')
+      setCreating(false)
+    }
+  }
 
   useEffect(() => {
     getEstates()
@@ -128,7 +154,7 @@ export default function EstatePortfolioPage() {
             </p>
           </div>
           <button
-            onClick={() => navigate('/plugins/trust-estate-legal')}
+            onClick={() => setShowCreate(true)}
             className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0"
           >
             <Plus size={16} />
@@ -232,6 +258,79 @@ export default function EstatePortfolioPage() {
           </div>
         )}
       </div>
+
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-ink/40 p-4" onClick={() => !creating && setShowCreate(false)}>
+          <div className="bg-brand-surface rounded-2xl shadow-xl border border-brand-line w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-brand-line">
+              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                <Vault size={20} className="text-brand-accent" /> New Estate
+              </h2>
+              <button onClick={() => !creating && setShowCreate(false)} className="text-brand-muted hover:text-brand-ink transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              <div>
+                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Estate / Trust Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={form.estate_name}
+                  onChange={(e) => setForm((p) => ({ ...p, estate_name: e.target.value }))}
+                  placeholder="e.g., Estate of Jane Doe"
+                  className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Type</label>
+                  <select
+                    value={form.estate_type}
+                    onChange={(e) => setForm((p) => ({ ...p, estate_type: e.target.value }))}
+                    className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                  >
+                    {ESTATE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Jurisdiction</label>
+                  <input
+                    type="text"
+                    value={form.jurisdiction}
+                    onChange={(e) => setForm((p) => ({ ...p, jurisdiction: e.target.value }))}
+                    placeholder="e.g., CA — Los Angeles County"
+                    className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Gross Estate Value (USD)</label>
+                <input
+                  type="number"
+                  value={form.gross_estate_value}
+                  onChange={(e) => setForm((p) => ({ ...p, gross_estate_value: e.target.value }))}
+                  placeholder="0.00"
+                  className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                />
+              </div>
+              {createError && (
+                <p className="text-brand-rose text-sm font-sans bg-brand-rose/10 px-3 py-2 rounded border border-brand-rose/20">{createError}</p>
+              )}
+            </div>
+            <div className="flex gap-3 justify-end px-6 py-4 border-t border-brand-line">
+              <button onClick={() => setShowCreate(false)} disabled={creating} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink transition-colors">Cancel</button>
+              <button
+                onClick={handleCreate}
+                disabled={creating || !form.estate_name.trim()}
+                className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted transition-all shadow-sm"
+              >
+                {creating ? 'Creating…' : 'Create Estate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -252,6 +252,7 @@ async def create_estate(
     )
     db.add(estate)
     await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
     estate = await _get_estate_or_404(db, str(estate.id), user.tenant_id)
     return _estate_to_response(estate)
 
@@ -288,6 +289,7 @@ async def update_estate(
     estate.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
     estate = await _get_estate_or_404(db, estate_id, user.tenant_id)
     return _estate_to_response(estate)
 

@@ -236,6 +236,32 @@ export const updateEstate = (id, data) =>
 export const addEstateEvent = (id, data) =>
   api.post(`/plugins/trust-estate/estates/${id}/events`, data).then(r => r.data)
 
+export const deleteEstate = (id) =>
+  api.delete(`/plugins/trust-estate/estates/${id}`).then(r => r.data)
+
+export const getEstateStats = () =>
+  api.get('/plugins/trust-estate/estates/stats').then(r => r.data)
+
+// Generic estate sub-resource helpers — resource is one of:
+// fiduciaries | beneficiaries | assets | liabilities | distributions | deadlines | accounting
+export const listEstateChildren = (id, resource) =>
+  api.get(`/plugins/trust-estate/estates/${id}/${resource}`).then(r => r.data)
+
+export const createEstateChild = (id, resource, data) =>
+  api.post(`/plugins/trust-estate/estates/${id}/${resource}`, data).then(r => r.data)
+
+export const updateEstateChild = (id, resource, childId, data) =>
+  api.patch(`/plugins/trust-estate/estates/${id}/${resource}/${childId}`, data).then(r => r.data)
+
+export const deleteEstateChild = (id, resource, childId) =>
+  api.delete(`/plugins/trust-estate/estates/${id}/${resource}/${childId}`).then(r => r.data)
+
+export const getEstateAccountingSummary = (id) =>
+  api.get(`/plugins/trust-estate/estates/${id}/accounting/summary`).then(r => r.data)
+
+export const getEstateReport = (id, kind) =>
+  api.get(`/plugins/trust-estate/estates/${id}/reports/${kind}`).then(r => r.data)
+
 // ── Mediation ──────────────────────────────────────────────────────────────
 
 export const getMediationCases = () =>
