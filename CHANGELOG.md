@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.11.0] — 2026-06-04
+
+### Sprint 9 — Plugin Platform & Matter Workflow Framework
+
+### Added
+- Canonical plugin catalog manifest with display metadata, skill IDs, workflow routes, matter type mappings, required/optional integrations (`backend/app/services/plugins/manifest.py`)
+- `TenantPluginEntitlement` model: tenant-level plugin purchase/trial/locked state, decoupled from practice profile
+- `TenantPluginSetup` model: structured per-plugin configuration with typed schemas (jurisdictions, escalation rules, approval thresholds, templates, source folders, calendars, house style)
+- Migration 034: `tenant_plugin_entitlements` table + `matters.primary_plugin` + `matters.plugin_workflow_state`
+- Migration 035: `tenant_plugin_setups` table with `setup_data` JSONB + `needs_setup` tracking
+- Plugin setup health endpoint (`GET /plugins/{plugin}/setup`) and upsert (`PUT /plugins/{plugin}/setup`)
+- Plugin entitlement endpoint (`PUT /plugins/{plugin}/entitlement`) for admin-controlled purchase/trial state
+- `GET /api/plugins` now returns canonical catalog with tenant entitlement, profile, and setup status merged per plugin
+- PluginPage: setup health badges, capability checks (integrations, credentials), configuration tab with structured fields
+- PluginsPage: category grouping, entitlement badges (Included/Trial/Purchase/Setup Required), matter workflow detail cards
+
+### Changed
+- Plugin manifest is now the single source of truth — frontend `PLUGIN_META` lookup is secondary
+- `POST /plugins/{plugin}/cold-start` now initializes structured `TenantPluginSetup` row alongside `PracticeProfile`
+- `PluginExecutor` enriched with cloud search context via `RetrievalPlanner` + `CloudSearchService` + `build_cloud_context`
+- Matters V2 router gained `primary_plugin` and `plugin_workflow_state` in create/update/list/detail
+- `MatterContextService` enriched with plugin workflow state for conversation context
+- `NewMatterModal` suggests plugins based on practice area, displays plugin assignment field
+- `MatterDetailPage` shows assigned plugin + workflow state badge
+
+### Fixed
+- Plugin cold-start interview: fixed 422 from mismatched `{message, step}` → `{input_text, context}` request format
+- Plugin cold-start interview: backend now returns `step`, `profile_complete`, `profile` alongside LLM result
+- Plugin cold-start interview: frontend now reads `res.memo` (SkillResponse field) instead of `res.message`
+- Cloud search: search_index and status DB queries wrapped in try/except to return degraded results instead of 500
+- Cloud metadata sync: backend returns `total` + `duration_seconds` for frontend result panel
+- Microsoft integration: `offline_access` scope now persisted when MS omits it from token response but refresh_token is present
+- Google Workspace: added `openid email profile` to admin consent scopes; `last_sync_error` surfaced in audit UI
+- Estate portfolio: migration 030 DDL manually applied on hypervisor (was stamped but never ran — missing columns + 7 sub-tables)
+
 ## [0.10.0] — 2026-06-03
 
 ### Sprint 8 — Tenant Onboarding & Integration Hub

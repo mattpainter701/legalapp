@@ -4,6 +4,8 @@ from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.plugin import (
     PracticeProfile,
+    TenantPluginEntitlement,
+    TenantPluginSetup,
     Matter,
     MatterEvent,
     Renewal,
@@ -53,6 +55,8 @@ __all__ = [
     "Message",
     "UsageRecord",
     "PracticeProfile",
+    "TenantPluginEntitlement",
+    "TenantPluginSetup",
     "Matter",
     "MatterEvent",
     "Renewal",

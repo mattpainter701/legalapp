@@ -26,6 +26,7 @@ POST /litigation/matters and POST /commercial/renewals are not swallowed by the 
 
 import uuid
 import re
+import json
 from datetime import date, datetime, timezone
 from typing import List
 
@@ -42,7 +43,10 @@ from app.models.plugin import (
     MatterEvent,
     PracticeProfile,
     Renewal,
+    TenantPluginEntitlement,
+    TenantPluginSetup,
 )
+from app.models.tenant_credential import TenantCredential
 from app.schemas.plugin import (
     MatterCreate,
     MatterEventCreate,
@@ -50,7 +54,12 @@ from app.schemas.plugin import (
     MatterResponse,
     MatterUpdate,
     PluginInfo,
+    PluginEntitlementResponse,
+    PluginEntitlementUpdate,
     PluginListResponse,
+    PluginSetupHealth,
+    PluginSetupResponse,
+    PluginSetupUpsert,
     PracticeProfileResponse,
     PracticeProfileUpsert,
     RenewalCreate,
@@ -62,10 +71,19 @@ from app.schemas.plugin import (
 from app.services.billing import calculate_cost
 from app.services.cache import ExpertiseCacheManager
 from app.services.conflict_check import run_conflict_check
+from app.services.cloud_search import CloudSearchService
 from app.services.llm import LLMService
+from app.services.matter_context import MatterContextService
 from app.services.plugins.executor import PluginExecutor
+from app.services.plugins.manifest import (
+    get_plugin_manifest,
+    list_plugin_manifests,
+    valid_plugin_names,
+)
 from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
+from app.services.rag import build_cloud_context
+from app.services.retrieval_planner import RetrievalPlanner
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -75,10 +93,13 @@ llm_service = LLMService()
 plugin_cache_manager = ExpertiseCacheManager()
 prompt_resolver = PromptResolver(plugin_cache_manager)
 plugin_executor = PluginExecutor(llm_service, prompt_resolver)
+matter_context_service = MatterContextService()
+cloud_search_service = CloudSearchService()
+retrieval_planner = RetrievalPlanner(llm_service)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-VALID_PLUGINS = set(PLUGIN_DISPLAY_NAMES.keys())
+VALID_PLUGINS = valid_plugin_names()
 
 
 def _slugify(text: str) -> str:
@@ -164,11 +185,233 @@ def _renewal_to_response(renewal: Renewal) -> RenewalResponse:
 
 
 def _validate_plugin(plugin: str) -> None:
-    if plugin not in VALID_PLUGINS:
+    if plugin not in valid_plugin_names():
         raise HTTPException(
             status_code=404,
-            detail=f"Plugin '{plugin}' not found. Valid plugins: {sorted(VALID_PLUGINS)}",
+            detail=f"Plugin '{plugin}' not found. Valid plugins: {sorted(valid_plugin_names())}",
         )
+
+
+def _entitlement_status(entitlement: TenantPluginEntitlement | None) -> str:
+    if entitlement is None:
+        return "available"
+    return entitlement.status or "available"
+
+
+def _is_purchased_status(status: str) -> bool:
+    return status in {"purchased", "included", "trial"}
+
+
+def _validate_entitlement_status(status: str) -> str:
+    value = (status or "").strip().lower()
+    allowed = {"available", "trial", "purchased", "included", "disabled", "locked"}
+    if value not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid entitlement status. Valid statuses: {sorted(allowed)}",
+        )
+    return value
+
+
+def _scope_set(row: TenantCredential | None) -> set[str]:
+    if row is None or not row.scopes or not row.is_active:
+        return set()
+    return {s.strip() for s in row.scopes.split(" ") if s.strip()}
+
+
+def _capabilities_from_credentials(credentials: list[TenantCredential]) -> set[str]:
+    by_provider = {c.provider: c for c in credentials if c.is_active}
+    microsoft = _scope_set(by_provider.get("microsoft"))
+    google = _scope_set(by_provider.get("google"))
+
+    capabilities: set[str] = set()
+    if "Files.Read.All" in microsoft:
+        capabilities.add("onedrive")
+    if "Sites.Read.All" in microsoft:
+        capabilities.add("sharepoint")
+    if "Mail.Read" in microsoft:
+        capabilities.add("outlook")
+    if "Calendars.ReadWrite" in microsoft or "Calendars.Read" in microsoft:
+        capabilities.add("calendar")
+    if "https://www.googleapis.com/auth/drive.readonly" in google:
+        capabilities.add("google_drive")
+    if "https://www.googleapis.com/auth/gmail.readonly" in google:
+        capabilities.add("gmail")
+    if "https://www.googleapis.com/auth/calendar" in google:
+        capabilities.add("calendar")
+    return capabilities
+
+
+def _providers_from_credentials(credentials: list[TenantCredential]) -> list[str]:
+    providers = sorted({c.provider for c in credentials if c.is_active and c.scopes})
+    return [p for p in providers if p in {"google", "microsoft"}]
+
+
+def _setup_to_payload(setup: TenantPluginSetup | None) -> PluginSetupUpsert | None:
+    if setup is None:
+        return None
+    return PluginSetupUpsert(
+        jurisdictions=setup.jurisdictions or [],
+        escalation_rules=setup.escalation_rules or {},
+        approval_thresholds=setup.approval_thresholds or {},
+        template_preferences=setup.template_preferences or {},
+        cloud_bindings=setup.cloud_bindings or {},
+        calendar_bindings=setup.calendar_bindings or {},
+        house_style=setup.house_style or {},
+        custom_config=setup.custom_config or {},
+        generated_profile=setup.generated_profile,
+        is_complete=setup.is_complete,
+    )
+
+
+def _build_setup_health(
+    *,
+    manifest,
+    setup: TenantPluginSetup | None,
+    profile: PracticeProfile | None,
+    available_integrations: set[str],
+) -> PluginSetupHealth:
+    missing_required_fields = []
+    if setup is None:
+        missing_required_fields = [
+            "jurisdictions",
+            "escalation_rules",
+            "approval_thresholds",
+            "house_style",
+        ]
+    else:
+        if not setup.jurisdictions:
+            missing_required_fields.append("jurisdictions")
+        if not setup.escalation_rules:
+            missing_required_fields.append("escalation_rules")
+        if not setup.approval_thresholds:
+            missing_required_fields.append("approval_thresholds")
+        if not setup.house_style:
+            missing_required_fields.append("house_style")
+
+    missing_required_integrations = [
+        item
+        for item in manifest.required_integrations
+        if item not in available_integrations
+    ]
+
+    warnings = []
+    if setup and setup.is_complete and missing_required_fields:
+        warnings.append("Setup is marked complete but required fields are missing.")
+    if setup and setup.generated_profile and not (profile and profile.profile_content):
+        warnings.append("Generated profile has not been synced to the legacy profile.")
+
+    if not manifest.setup_required:
+        setup_status = "not-required"
+    elif setup and setup.is_complete and not missing_required_fields:
+        setup_status = "complete"
+    elif setup:
+        setup_status = "incomplete"
+    elif profile and profile.is_complete:
+        setup_status = "legacy-profile"
+    else:
+        setup_status = "not-started"
+
+    return PluginSetupHealth(
+        setup_status=setup_status,
+        missing_required_fields=missing_required_fields,
+        missing_required_integrations=missing_required_integrations,
+        available_integrations=sorted(available_integrations),
+        optional_integrations=manifest.optional_integrations,
+        warnings=warnings,
+    )
+
+
+def _generate_structured_profile(
+    plugin: str,
+    display_name: str,
+    setup: PluginSetupUpsert,
+) -> str:
+    payload = {
+        "jurisdictions": setup.jurisdictions,
+        "escalation_rules": setup.escalation_rules,
+        "approval_thresholds": setup.approval_thresholds,
+        "template_preferences": setup.template_preferences,
+        "cloud_bindings": setup.cloud_bindings,
+        "calendar_bindings": setup.calendar_bindings,
+        "house_style": setup.house_style,
+        "custom_config": setup.custom_config,
+    }
+    return (
+        f"# {display_name} Structured Practice Profile\n\n"
+        f"Plugin: {plugin}\n\n"
+        "This profile was generated from structured tenant setup and should be "
+        "treated as the controlling plugin playbook unless a more specific matter "
+        "memory overrides it.\n\n"
+        "```json\n"
+        f"{json.dumps(payload, indent=2, sort_keys=True)}\n"
+        "```"
+    )
+
+
+async def _build_plugin_cloud_context(
+    *,
+    db: AsyncSession,
+    tenant_id: str,
+    user_id: str,
+    tenant_name: str,
+    question: str,
+    matter_context: str | None,
+) -> str:
+    """Build additive cloud context for plugin execution.
+
+    Cloud lookup is best-effort and must never block the plugin skill.
+    """
+    if not settings.CLOUD_SEARCH_ENABLED:
+        return ""
+    try:
+        credential_result = await db.execute(
+            select(TenantCredential).where(
+                TenantCredential.tenant_id == tenant_id,
+                TenantCredential.is_active.is_(True),
+            )
+        )
+        credentials = list(credential_result.scalars().all())
+        active_providers = _providers_from_credentials(credentials)
+        if not active_providers:
+            return ""
+
+        plan = await retrieval_planner.plan(
+            user_question=question,
+            tenant_name=tenant_name,
+            matter_context=matter_context,
+            active_providers=active_providers,
+        )
+        if not plan or not plan.get("should_search"):
+            return ""
+
+        hits = await cloud_search_service.search(
+            db=db,
+            plan=plan,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if not hits:
+            return ""
+
+        hits_with_content = await cloud_search_service.fetch_contents(
+            db=db,
+            hits=hits,
+            tenant_id=tenant_id,
+            max_chars=settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+        )
+        serializable_hits = [
+            {
+                "hit": item["hit"].to_dict()
+                if hasattr(item.get("hit"), "to_dict")
+                else item.get("hit", {}),
+                "content": item.get("content"),
+            }
+            for item in hits_with_content
+        ]
+        return await build_cloud_context(serializable_hits)
+    except Exception:
+        return ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -185,25 +428,82 @@ async def list_plugins(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    # Fetch all profiles for this tenant in one query
-    result = await db.execute(
+    # Fetch profiles, structured setup, entitlements, and integration credentials
+    # for this tenant in compact queries.
+    profile_result = await db.execute(
         select(PracticeProfile).where(
             PracticeProfile.tenant_id == user.tenant_id,
         )
     )
-    profiles = result.scalars().all()
+    profiles = profile_result.scalars().all()
     profile_map = {p.plugin_name: p for p in profiles}
 
+    setup_result = await db.execute(
+        select(TenantPluginSetup).where(
+            TenantPluginSetup.tenant_id == user.tenant_id,
+        )
+    )
+    setups = setup_result.scalars().all()
+    setup_map = {s.plugin_name: s for s in setups}
+
+    entitlement_result = await db.execute(
+        select(TenantPluginEntitlement).where(
+            TenantPluginEntitlement.tenant_id == user.tenant_id,
+        )
+    )
+    entitlements = entitlement_result.scalars().all()
+    entitlement_map = {e.plugin_name: e for e in entitlements}
+
+    credential_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    available_integrations = _capabilities_from_credentials(
+        list(credential_result.scalars().all())
+    )
+
     plugins = []
-    for plugin_name, display_name in PLUGIN_DISPLAY_NAMES.items():
-        profile = profile_map.get(plugin_name)
+    for manifest in list_plugin_manifests():
+        profile = profile_map.get(manifest.plugin_name)
+        setup = setup_map.get(manifest.plugin_name)
+        entitlement = entitlement_map.get(manifest.plugin_name)
+        entitlement_status = _entitlement_status(entitlement)
+        has_profile = profile is not None and bool(profile.profile_content)
+        profile_is_complete = profile.is_complete if profile else False
+        health = _build_setup_health(
+            manifest=manifest,
+            setup=setup,
+            profile=profile,
+            available_integrations=available_integrations,
+        )
+
         plugins.append(
             PluginInfo(
-                plugin_name=plugin_name,
-                display_name=display_name,
-                skills=PLUGIN_SKILLS.get(plugin_name, []),
-                has_profile=profile is not None and bool(profile.profile_content),
-                profile_is_complete=profile.is_complete if profile else False,
+                id=manifest.plugin_name,
+                plugin_id=manifest.plugin_name,
+                name=manifest.plugin_name,
+                plugin_name=manifest.plugin_name,
+                display_name=manifest.display_name,
+                category=manifest.category,
+                description=manifest.description,
+                skills=manifest.skills,
+                matter_types=manifest.matter_types,
+                primary_route=manifest.primary_route,
+                required_integrations=manifest.required_integrations,
+                optional_integrations=manifest.optional_integrations,
+                available_integrations=health.available_integrations,
+                missing_required_integrations=health.missing_required_integrations,
+                supports_matter_assignment=manifest.supports_matter_assignment,
+                setup_required=manifest.setup_required,
+                entitlement_status=entitlement_status,
+                is_purchased=_is_purchased_status(entitlement_status),
+                is_trial=entitlement_status == "trial",
+                is_locked=entitlement_status in {"disabled", "locked"},
+                setup_status=health.setup_status,
+                has_profile=has_profile,
+                profile_is_complete=profile_is_complete,
             )
         )
 
@@ -592,6 +892,215 @@ async def delete_renewal(
 # ── Practice Profile CRUD ─────────────────────────────────────────────────────
 
 
+@router.put("/{plugin}/entitlement", response_model=PluginEntitlementResponse)
+async def upsert_plugin_entitlement(
+    plugin: str,
+    body: PluginEntitlementUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only local entitlement control for plugin add-ons.
+
+    This records operational purchase/trial/lock state. Stripe automation can
+    later write the same table without changing the catalog contract.
+    """
+    _validate_plugin(plugin)
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    await set_tenant_context(db, str(user.tenant_id))
+
+    status = _validate_entitlement_status(body.status)
+
+    result = await db.execute(
+        select(TenantPluginEntitlement).where(
+            TenantPluginEntitlement.tenant_id == user.tenant_id,
+            TenantPluginEntitlement.plugin_name == plugin,
+        )
+    )
+    entitlement = result.scalar_one_or_none()
+
+    if entitlement is None:
+        entitlement = TenantPluginEntitlement(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            plugin_name=plugin,
+        )
+        db.add(entitlement)
+
+    entitlement.status = status
+    entitlement.source = body.source or "admin"
+    entitlement.seat_limit = body.seat_limit
+    entitlement.config = body.config or {}
+    entitlement.expires_at = body.expires_at
+    entitlement.starts_at = entitlement.starts_at or datetime.now(timezone.utc)
+    entitlement.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(entitlement)
+
+    return PluginEntitlementResponse(
+        plugin_name=plugin,
+        status=entitlement.status,
+        source=entitlement.source,
+        seat_limit=entitlement.seat_limit,
+        config=entitlement.config or {},
+        expires_at=entitlement.expires_at,
+        updated_at=entitlement.updated_at,
+    )
+
+
+@router.get("/{plugin}/setup", response_model=PluginSetupResponse)
+async def get_plugin_setup(
+    plugin: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get structured tenant setup and health for a plugin."""
+    _validate_plugin(plugin)
+    manifest = get_plugin_manifest(plugin)
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    setup_result = await db.execute(
+        select(TenantPluginSetup).where(
+            TenantPluginSetup.tenant_id == user.tenant_id,
+            TenantPluginSetup.plugin_name == plugin,
+        )
+    )
+    setup = setup_result.scalar_one_or_none()
+
+    profile_result = await db.execute(
+        select(PracticeProfile).where(
+            PracticeProfile.tenant_id == user.tenant_id,
+            PracticeProfile.plugin_name == plugin,
+        )
+    )
+    profile = profile_result.scalar_one_or_none()
+
+    credential_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    available_integrations = _capabilities_from_credentials(
+        list(credential_result.scalars().all())
+    )
+    health = _build_setup_health(
+        manifest=manifest,
+        setup=setup,
+        profile=profile,
+        available_integrations=available_integrations,
+    )
+
+    return PluginSetupResponse(
+        plugin_name=plugin,
+        display_name=manifest.display_name,
+        setup=_setup_to_payload(setup),
+        health=health,
+        updated_at=setup.updated_at if setup else None,
+    )
+
+
+@router.put("/{plugin}/setup", response_model=PluginSetupResponse)
+async def upsert_plugin_setup(
+    plugin: str,
+    body: PluginSetupUpsert,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update structured tenant setup for a plugin.
+
+    Admins own tenant-level setup because it controls firm workflow defaults,
+    escalation thresholds, and source bindings.
+    """
+    _validate_plugin(plugin)
+    manifest = get_plugin_manifest(plugin)
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    await set_tenant_context(db, str(user.tenant_id))
+
+    setup_result = await db.execute(
+        select(TenantPluginSetup).where(
+            TenantPluginSetup.tenant_id == user.tenant_id,
+            TenantPluginSetup.plugin_name == plugin,
+        )
+    )
+    setup = setup_result.scalar_one_or_none()
+    if setup is None:
+        setup = TenantPluginSetup(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            plugin_name=plugin,
+            created_by_user_id=user.id,
+        )
+        db.add(setup)
+
+    generated_profile = body.generated_profile or _generate_structured_profile(
+        plugin, manifest.display_name, body
+    )
+    setup.jurisdictions = body.jurisdictions
+    setup.escalation_rules = body.escalation_rules
+    setup.approval_thresholds = body.approval_thresholds
+    setup.template_preferences = body.template_preferences
+    setup.cloud_bindings = body.cloud_bindings
+    setup.calendar_bindings = body.calendar_bindings
+    setup.house_style = body.house_style
+    setup.custom_config = body.custom_config
+    setup.generated_profile = generated_profile
+    setup.is_complete = body.is_complete
+    setup.updated_at = datetime.now(timezone.utc)
+
+    profile_result = await db.execute(
+        select(PracticeProfile).where(
+            PracticeProfile.tenant_id == user.tenant_id,
+            PracticeProfile.plugin_name == plugin,
+        )
+    )
+    profile = profile_result.scalar_one_or_none()
+    if profile is None:
+        profile = PracticeProfile(
+            id=uuid.uuid4(),
+            tenant_id=user.tenant_id,
+            user_id=user.id,
+            plugin_name=plugin,
+        )
+        db.add(profile)
+    profile.profile_content = generated_profile
+    profile.is_complete = body.is_complete
+    profile.updated_at = datetime.now(timezone.utc)
+
+    credential_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    available_integrations = _capabilities_from_credentials(
+        list(credential_result.scalars().all())
+    )
+    health = _build_setup_health(
+        manifest=manifest,
+        setup=setup,
+        profile=profile,
+        available_integrations=available_integrations,
+    )
+    setup.setup_health = health.model_dump()
+
+    await db.commit()
+    await db.refresh(setup)
+
+    return PluginSetupResponse(
+        plugin_name=plugin,
+        display_name=manifest.display_name,
+        setup=_setup_to_payload(setup),
+        health=health,
+        updated_at=setup.updated_at,
+    )
+
+
 @router.get("/{plugin}/profile", response_model=PracticeProfileResponse)
 async def get_practice_profile(
     plugin: str,
@@ -789,7 +1298,8 @@ async def execute_skill(
     _validate_plugin(plugin)
 
     # Validate skill exists for this plugin
-    valid_skills = PLUGIN_SKILLS.get(plugin, [])
+    manifest = get_plugin_manifest(plugin)
+    valid_skills = manifest.skills if manifest else PLUGIN_SKILLS.get(plugin, [])
     if skill not in valid_skills:
         raise HTTPException(
             status_code=404,
@@ -803,7 +1313,38 @@ async def execute_skill(
     await set_tenant_context(db, str(user.tenant_id))
 
     context = body.context or {}
-    context["tenant_name"] = user.tenant.name if user.tenant else "Legal"
+    tenant_name = user.tenant.name if user.tenant else "Legal"
+    context["tenant_name"] = tenant_name
+    matter_context = ""
+    if body.matter_id:
+        matter_context, _has_pii, pii_findings = (
+            await matter_context_service.get_safe_matter_context(
+                db=db,
+                matter_id=body.matter_id,
+                privacy_mode=getattr(user, "privacy_mode", False),
+            )
+        )
+        if matter_context:
+            context["matter_context"] = matter_context
+            context["matter_id"] = body.matter_id
+        if pii_findings:
+            context["matter_pii_findings"] = pii_findings
+
+    cloud_context = await _build_plugin_cloud_context(
+        db=db,
+        tenant_id=str(user.tenant_id),
+        user_id=str(user.id),
+        tenant_name=tenant_name,
+        question=body.input_text,
+        matter_context=matter_context,
+    )
+    if cloud_context:
+        existing_matter_context = context.get("matter_context", "")
+        context["matter_context"] = (
+            f"{existing_matter_context}\n\n--- Cloud Search Results ---\n\n{cloud_context}"
+            if existing_matter_context
+            else f"--- Cloud Search Results ---\n\n{cloud_context}"
+        )
 
     result_data = await plugin_executor.execute(
         db=db,

@@ -42,6 +42,7 @@ from app.schemas.matter import (
     RetainerTransactionResponse,
     TimelineEntry,
 )
+from app.services.plugins.manifest import get_plugin_manifest
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
@@ -67,6 +68,18 @@ async def _get_matter_or_404(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
     return matter
+
+
+def _validate_primary_plugin(primary_plugin: str | None) -> str | None:
+    """Validate a matter plugin binding. None keeps the matter general-purpose."""
+    if not primary_plugin:
+        return None
+    plugin = primary_plugin.strip()
+    if not plugin:
+        return None
+    if get_plugin_manifest(plugin) is None:
+        raise HTTPException(status_code=400, detail="Unknown primary_plugin")
+    return plugin
 
 
 async def _compute_budget_utilization(
@@ -200,6 +213,8 @@ def _matter_to_response(
         budget_utilization=budget,
         memory_content=matter.memory_content,
         cloud_folder=matter.cloud_folder,
+        primary_plugin=matter.primary_plugin,
+        plugin_workflow_state=matter.plugin_workflow_state,
         created_at=matter.created_at,
         updated_at=matter.updated_at,
     )
@@ -334,6 +349,7 @@ async def list_matters(
                 status=m.status,
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
+                primary_plugin=m.primary_plugin,
                 client_name=client_name,
                 attorney_of_record_name=attorney_name,
                 assigned_to=assigned_to,
@@ -398,6 +414,8 @@ async def create_matter(
         ),
         attorney_of_record_id=attorney_of_record_uuid,
         memory_content=body.memory_content,
+        primary_plugin=_validate_primary_plugin(body.primary_plugin),
+        plugin_workflow_state=body.plugin_workflow_state,
     )
     db.add(matter)
     await db.flush()
@@ -553,6 +571,7 @@ async def get_my_matters(
                 status=m.status,
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
+                primary_plugin=m.primary_plugin,
                 client_name=client_name,
                 attorney_of_record_name=attorney_name,
                 assigned_to=assigned_to,
@@ -703,6 +722,11 @@ async def update_matter(
     if "attorney_of_record_id" in update_data:
         aid = update_data.pop("attorney_of_record_id")
         matter.attorney_of_record_id = uuid.UUID(aid) if aid else None
+
+    if "primary_plugin" in update_data:
+        matter.primary_plugin = _validate_primary_plugin(
+            update_data.pop("primary_plugin")
+        )
 
     for field, value in update_data.items():
         if hasattr(matter, field):

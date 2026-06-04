@@ -26,6 +26,57 @@ class PracticeProfileResponse(BaseModel):
         from_attributes = True
 
 
+# ── Structured Plugin Setup ──────────────────────────────────────────────────
+
+
+class PluginSetupUpsert(BaseModel):
+    jurisdictions: list[str] = []
+    escalation_rules: dict = {}
+    approval_thresholds: dict = {}
+    template_preferences: dict = {}
+    cloud_bindings: dict = {}
+    calendar_bindings: dict = {}
+    house_style: dict = {}
+    custom_config: dict = {}
+    generated_profile: Optional[str] = None
+    is_complete: bool = False
+
+
+class PluginSetupHealth(BaseModel):
+    setup_status: str
+    missing_required_fields: List[str] = []
+    missing_required_integrations: List[str] = []
+    available_integrations: List[str] = []
+    optional_integrations: List[str] = []
+    warnings: List[str] = []
+
+
+class PluginSetupResponse(BaseModel):
+    plugin_name: str
+    display_name: str
+    setup: Optional[PluginSetupUpsert] = None
+    health: PluginSetupHealth
+    updated_at: Optional[datetime] = None
+
+
+class PluginEntitlementUpdate(BaseModel):
+    status: str
+    source: Optional[str] = None
+    seat_limit: Optional[int] = None
+    config: dict = {}
+    expires_at: Optional[datetime] = None
+
+
+class PluginEntitlementResponse(BaseModel):
+    plugin_name: str
+    status: str
+    source: Optional[str] = None
+    seat_limit: Optional[int] = None
+    config: dict = {}
+    expires_at: Optional[datetime] = None
+    updated_at: datetime
+
+
 # ── Plugin Skill Execution ────────────────────────────────────────────────────
 
 
@@ -33,6 +84,7 @@ class SkillRequest(BaseModel):
     skill: str  # e.g. "vendor-agreement-review"
     input_text: str  # Contract text, question, etc.
     context: Optional[dict] = None  # Extra structured context
+    matter_id: Optional[str] = None
     use_premium: bool = False
 
 
@@ -283,9 +335,27 @@ class MediationCaseResponse(BaseModel):
 
 
 class PluginInfo(BaseModel):
+    id: str
+    plugin_id: str
+    name: str
     plugin_name: str
     display_name: str
+    category: str
+    description: str
     skills: List[str]
+    matter_types: List[str] = []
+    primary_route: Optional[str] = None
+    required_integrations: List[str] = []
+    optional_integrations: List[str] = []
+    available_integrations: List[str] = []
+    missing_required_integrations: List[str] = []
+    supports_matter_assignment: bool = True
+    setup_required: bool = True
+    entitlement_status: str = "available"
+    is_purchased: bool = False
+    is_trial: bool = False
+    is_locked: bool = False
+    setup_status: str = "not-started"
     has_profile: bool
     profile_is_complete: bool
 

@@ -205,13 +205,31 @@ export const resetCustomerLLM = () =>
 export const getPlugins = () => api.get('/plugins').then((r) => r.data)
 export const getPluginProfile = (plugin) => api.get(`/plugins/${plugin}/profile`).then((r) => r.data)
 export const savePluginProfile = (plugin, data) => api.put(`/plugins/${plugin}/profile`, data).then((r) => r.data)
+export const updatePluginEntitlement = (plugin, data) => api.put(`/plugins/${plugin}/entitlement`, data).then((r) => r.data)
+export const getPluginSetup = (plugin) => api.get(`/plugins/${plugin}/setup`).then((r) => r.data)
+export const savePluginSetup = (plugin, data) => api.put(`/plugins/${plugin}/setup`, data).then((r) => r.data)
 export const runColdStart = (plugin, message, step) =>
   api.post(`/plugins/${plugin}/cold-start`, {
     input_text: message || '',
     context: { setup_step: step },
   }).then((r) => r.data)
-export const executeSkill = (plugin, skill, data) =>
-  api.post(`/plugins/${plugin}/${skill}`, data).then((r) => r.data)
+export const executeSkill = (plugin, skill, data = {}) => {
+  const {
+    text,
+    input_text,
+    matter_id,
+    use_premium,
+    use_premium_llm,
+    ...context
+  } = data
+  return api.post(`/plugins/${plugin}/${skill}`, {
+    skill,
+    input_text: input_text ?? text ?? '',
+    matter_id: matter_id || undefined,
+    context,
+    use_premium: Boolean(use_premium ?? use_premium_llm),
+  }).then((r) => r.data)
+}
 
 // Matters
 export const getMatters = () => api.get('/plugins/litigation/matters').then((r) => r.data)

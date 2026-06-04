@@ -66,6 +66,96 @@ class PracticeProfile(Base):
     )
 
 
+class TenantPluginEntitlement(Base):
+    """Tenant-level purchase/trial status for a plugin add-on."""
+
+    __tablename__ = "tenant_plugin_entitlements"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "plugin_name", name="uq_tenant_plugin_entitlement"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    plugin_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="purchased", server_default="purchased"
+    )
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    seat_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class TenantPluginSetup(Base):
+    """Structured tenant configuration for a purchased plugin workflow."""
+
+    __tablename__ = "tenant_plugin_setups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "plugin_name", name="uq_tenant_plugin_setup"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    plugin_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    jurisdictions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    escalation_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    approval_thresholds: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    template_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    cloud_bindings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    calendar_bindings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    house_style: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    custom_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    generated_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    setup_health: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_complete: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Matter(Base):
     """Case/matter ledger — one row per matter, any practice area."""
 
@@ -172,6 +262,10 @@ class Matter(Base):
 
     # Provider folder IDs/URLs created for the matter in the tenant's cloud.
     cloud_folder: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Plugin workflow binding. Null means a general matter with no paid add-on workflow.
+    primary_plugin: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    plugin_workflow_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -385,12 +479,10 @@ class Estate(Base):
     deadlines: Mapped[list["EstateDeadline"]] = relationship(  # noqa: F821
         "EstateDeadline", back_populates="estate", cascade="all, delete-orphan"
     )
-    accounting_entries: Mapped[list["EstateAccountingEntry"]] = (
-        relationship(  # noqa: F821
-            "EstateAccountingEntry",
-            back_populates="estate",
-            cascade="all, delete-orphan",
-        )
+    accounting_entries: Mapped[list["EstateAccountingEntry"]] = relationship(  # noqa: F821
+        "EstateAccountingEntry",
+        back_populates="estate",
+        cascade="all, delete-orphan",
     )
 
 

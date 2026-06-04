@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { createMatterV2, getContacts, getAdminUsers } from '../api'
+import { createMatterV2, getContacts, getAdminUsers, getPlugins } from '../api'
 
 const PRACTICE_AREAS = [
   'Litigation', 'Corporate', 'Real Estate', 'Family Law', 'Criminal Defense',
@@ -43,9 +43,11 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
     case_number: '',
     jurisdiction: '',
     counterparty: '',
+    primary_plugin: '',
   })
   const [contacts, setContacts] = useState([])
   const [users, setUsers] = useState([])
+  const [plugins, setPlugins] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -59,9 +61,24 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
       const list = Array.isArray(data) ? data : data.users || []
       setUsers(list)
     }).catch(() => {})
+    getPlugins().then(data => {
+      const list = Array.isArray(data) ? data : data.plugins || []
+      setPlugins(list.filter(p => p.supports_matter_assignment !== false))
+    }).catch(() => {})
   }, [open])
 
   const set = (key, val) => setForm(p => ({ ...p, [key]: val }))
+
+  const setPracticeArea = (value) => {
+    setForm(p => {
+      if (p.primary_plugin || !value) return { ...p, practice_area: value }
+      const normalized = value.toLowerCase()
+      const suggested = plugins.find(plugin =>
+        (plugin.matter_types || []).some(term => normalized.includes(String(term).toLowerCase()))
+      )
+      return { ...p, practice_area: value, primary_plugin: suggested?.plugin_name || '' }
+    })
+  }
 
   const toggleAssignee = (uid) => {
     setForm(p => ({
@@ -90,6 +107,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         case_number: form.case_number.trim() || undefined,
         jurisdiction: form.jurisdiction.trim() || undefined,
         counterparty: form.counterparty.trim() || undefined,
+        primary_plugin: form.primary_plugin || undefined,
       }
       const created = await createMatterV2(payload)
       onCreated?.(created)
@@ -97,6 +115,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         matter_name: '', description: '', practice_area: '', matter_type: '',
         client_contact_id: '', attorney_of_record_id: '', assigned_user_ids: [],
         status: 'open', case_number: '', jurisdiction: '', counterparty: '',
+        primary_plugin: '',
       })
       onClose()
     } catch (err) {
@@ -164,7 +183,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
               <div className="relative">
                 <select
                   value={form.practice_area}
-                  onChange={e => set('practice_area', e.target.value)}
+                  onChange={e => setPracticeArea(e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
                 >
                   <option value="">Select area...</option>
@@ -186,6 +205,31 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
                 <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
               </div>
             </div>
+          </div>
+
+          {/* Plugin Workflow */}
+          <div>
+            <label className={labelCls}>Plugin Workflow</label>
+            <div className="relative">
+              <select
+                value={form.primary_plugin}
+                onChange={e => set('primary_plugin', e.target.value)}
+                className={`${inputCls} pr-8 appearance-none`}
+              >
+                <option value="">General matter</option>
+                {plugins.map(p => (
+                  <option key={p.plugin_name || p.id} value={p.plugin_name || p.id}>
+                    {p.display_name || p.plugin_name}
+                    {p.entitlement_status === 'trial' ? ' (trial)' : ''}
+                    {p.is_purchased ? '' : ' (not purchased)'}
+                  </option>
+                ))}
+              </select>
+              <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+            </div>
+            <p className="text-[11px] text-brand-muted mt-1 font-sans">
+              General matters keep the core context bucket without a paid add-on workflow.
+            </p>
           </div>
 
           {/* Client */}

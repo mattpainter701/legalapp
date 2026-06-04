@@ -6,7 +6,7 @@ import {
   getMatterV2, updateMatterV2, getMatterTimeline, addMatterNote,
   getMatterBudgetV2, getMatterAssignments, addMatterAssignment,
   removeMatterAssignment, getMatterMemory, updateMatterMemory,
-  getAdminUsers,
+  getAdminUsers, getPlugins,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -114,6 +114,7 @@ export default function MatterDetailPage() {
   // Team
   const [assignments, setAssignments] = useState([])
   const [allUsers, setAllUsers] = useState([])
+  const [pluginOptions, setPluginOptions] = useState([])
   const [addingUser, setAddingUser] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
   const [selectedRole, setSelectedRole] = useState('associate')
@@ -139,6 +140,10 @@ export default function MatterDetailPage() {
   useEffect(() => {
     loadMatter()
     getMatterBudgetV2(id).then(setBudget).catch(() => {})
+    getPlugins().then(data => {
+      const list = Array.isArray(data) ? data : data.plugins || []
+      setPluginOptions(list.filter(p => p.supports_matter_assignment !== false))
+    }).catch(() => {})
   }, [id, loadMatter])
 
   useEffect(() => {
@@ -239,11 +244,22 @@ export default function MatterDetailPage() {
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'documents', label: 'Documents', icon: Icons.file },
     { key: 'parties', label: 'Parties', icon: Icons.parties },
+    { key: 'plugin', label: 'Plugin', icon: Icons.briefcase },
     { key: 'memory', label: 'Memory', icon: Icons.brain },
   ]
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
   const unassignedUsers = allUsers.filter(u => !assignedIds.has(u.id))
+  const pluginLabel = (pluginName) => {
+    if (!pluginName) return null
+    const found = pluginOptions.find(p => (p.plugin_name || p.id) === pluginName)
+    return found?.display_name || pluginName
+  }
+  const pluginRoute = (pluginName) => {
+    if (!pluginName) return null
+    const found = pluginOptions.find(p => (p.plugin_name || p.id) === pluginName)
+    return found?.primary_route || `/plugins/${pluginName}`
+  }
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -370,6 +386,17 @@ export default function MatterDetailPage() {
                     <input type="text" value={editData.matter_type || ''} onChange={e => setEditData(p => ({ ...p, matter_type: e.target.value }))} className={inputCls} />
                   </div>
                   <div>
+                    <label className={labelCls}>Plugin Workflow</label>
+                    <select value={editData.primary_plugin || ''} onChange={e => setEditData(p => ({ ...p, primary_plugin: e.target.value || null }))} className={inputCls}>
+                      <option value="">General matter</option>
+                      {pluginOptions.map(p => (
+                        <option key={p.plugin_name || p.id} value={p.plugin_name || p.id}>
+                          {p.display_name || p.plugin_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
                     <label className={labelCls}>Case Number</label>
                     <input type="text" value={editData.case_number || ''} onChange={e => setEditData(p => ({ ...p, case_number: e.target.value }))} className={inputCls} />
                   </div>
@@ -390,6 +417,16 @@ export default function MatterDetailPage() {
                 <dl>
                   <Field label="Practice Area">{dm.practice_area}</Field>
                   <Field label="Matter Type">{dm.matter_type}</Field>
+                  <Field label="Plugin Workflow">
+                    {dm.primary_plugin ? (
+                      <button
+                        onClick={() => navigate(pluginRoute(dm.primary_plugin))}
+                        className="text-brand-accent font-semibold hover:underline"
+                      >
+                        {pluginLabel(dm.primary_plugin)}
+                      </button>
+                    ) : 'General matter'}
+                  </Field>
                   <Field label="Case Number">{dm.case_number}</Field>
                   <Field label="Stage">{dm.stage}</Field>
                   <Field label="Jurisdiction">{dm.jurisdiction}</Field>
@@ -588,6 +625,43 @@ export default function MatterDetailPage() {
 
         {/* ── Parties Tab ──────────────────────────────────────────────────────── */}
         {activeTab === 'parties' && <MatterPartiesTab matterId={id} />}
+
+        {/* ── Plugin Tab ──────────────────────────────────────────────────────── */}
+        {activeTab === 'plugin' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                <Icon d={Icons.briefcase} size={18} className="text-brand-accent" /> Plugin Workflow
+              </h2>
+              <p className="text-[13px] text-brand-muted font-sans mt-0.5">The optional add-on workflow attached to this matter's context bucket.</p>
+            </div>
+            <div className="p-6">
+              {matter.primary_plugin ? (
+                <div className="border border-brand-line rounded-xl p-5 bg-brand-bg-soft/40">
+                  <p className="text-[11px] uppercase tracking-widest font-bold text-brand-muted mb-2">Assigned Workflow</p>
+                  <h3 className="font-serif font-bold text-2xl text-brand-ink mb-2">{pluginLabel(matter.primary_plugin)}</h3>
+                  <p className="text-sm text-brand-muted font-sans mb-5">Plugin skills run with this matter's memory, timeline, notes, parties, budget context, and connected cloud context when available.</p>
+                  <div className="flex flex-wrap gap-3">
+                    <button onClick={() => navigate(pluginRoute(matter.primary_plugin))} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
+                      Open Plugin Workspace
+                    </button>
+                    <button onClick={() => navigate(`/plugins/${matter.primary_plugin}`)} className="px-5 py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-semibold rounded-xl hover:bg-brand-bg">
+                      Configure Workflow
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="border border-brand-line rounded-xl p-6 text-center bg-brand-bg-soft/40">
+                  <h3 className="font-serif font-bold text-xl text-brand-ink mb-2">General Matter</h3>
+                  <p className="text-sm text-brand-muted font-sans mb-5">This matter uses the base matter context without a paid add-on workflow.</p>
+                  <button onClick={() => { setActiveTab('overview'); setEditing(true) }} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
+                    Assign Plugin Workflow
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Memory Tab ───────────────────────────────────────────────────────── */}
         {activeTab === 'memory' && (

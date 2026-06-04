@@ -52,6 +52,10 @@ class MatterCreate(BaseModel):
     # AI memory
     memory_content: str | None = None
 
+    # Plugin workflow binding. None means a general matter.
+    primary_plugin: str | None = Field(None, max_length=100)
+    plugin_workflow_state: dict | None = None
+
 
 class MatterUpdate(BaseModel):
     """Update an existing matter. All fields optional."""
@@ -95,6 +99,8 @@ class MatterUpdate(BaseModel):
     final_cost: str | None = Field(None, max_length=100)
     memory_content: str | None = None
     cloud_folder: dict | None = None
+    primary_plugin: str | None = Field(None, max_length=100)
+    plugin_workflow_state: dict | None = None
 
 
 class MatterAssignmentResponse(BaseModel):
@@ -184,6 +190,10 @@ class MatterResponse(BaseModel):
     memory_content: str | None
     cloud_folder: dict | None
 
+    # Plugin workflow
+    primary_plugin: str | None
+    plugin_workflow_state: dict | None
+
     created_at: datetime
     updated_at: datetime
 
@@ -202,6 +212,7 @@ class MatterSummary(BaseModel):
     status: str
     risk_level: str | None
     counterparty: str | None
+    primary_plugin: str | None
     client_name: str | None
     attorney_of_record_name: str | None
     assigned_to: list[str] = []

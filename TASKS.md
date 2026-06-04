@@ -1,5 +1,45 @@
 # TASKS.md
 
+## Sprint 9 — Plugin Platform & Matter Workflow Framework (v0.11.0)
+
+**Goal:** Turn plugins from generic prompt/profile pages into paid add-on workflow modules that can be purchased by a tenant, configured by admins, and attached to matters as the governing workflow/context layer.
+
+### 901. Plugin Catalog, Entitlements & Canonical API (P0, MEDIUM) — IN PROGRESS
+- [x] Create a canonical backend plugin catalog/manifest with display metadata, skill ids, workflow routes, matter type mappings, required/optional integrations, and setup requirements
+- [x] Add tenant-level plugin entitlement records so "purchased", "trial", "locked", and "setup required" are distinct from practice-profile existence
+- [x] Update `GET /api/plugins` to return the canonical catalog plus tenant entitlement/profile/setup status
+- [ ] Stop relying on duplicated frontend plugin metadata as the source of truth
+
+Files: `backend/app/services/plugins/manifest.py`, `backend/app/models/plugin.py`, `backend/app/routers/plugins.py`, `backend/app/schemas/plugin.py`, `frontend/src/pages/PluginsPage.jsx`
+
+### 902. Matter-to-Plugin Assignment (P0, MEDIUM) — COMPLETED
+- [x] Add first-class `primary_plugin` / plugin workflow assignment on matters
+- [x] Suggest a plugin from matter practice area / matter type during matter creation
+- [x] Expose plugin assignment in matter create/update/list/detail APIs
+- [x] Preserve "general matter" behavior when no paid plugin is attached
+
+Files: `backend/app/models/plugin.py`, `backend/app/schemas/matter.py`, `backend/app/routers/matters.py`, `frontend/src/components/NewMatterModal.jsx`, `frontend/src/pages/MatterDetailPage.jsx`
+
+### 903. Setup 2.0 — Structured Plugin Configuration (P1, LARGE) — COMPLETED
+- [x] Replace pure text cold-start setup with plugin-specific structured setup schemas
+- [x] Persist settings such as jurisdictions, escalation rules, approval thresholds, templates, source folders, calendars, and house style
+- [x] Generate/update the practice profile from structured settings instead of treating it as the activation record
+- [x] Support setup health checks: missing integrations, missing required fields, stale profile, incomplete setup
+
+### 904. Cloud-Aware Plugin Workflows (P1, LARGE) — COMPLETED
+- [x] Let each plugin declare required/optional Microsoft 365 and Google Workspace capabilities
+- [x] Bind plugin workflows to cloud folders, mailboxes, labels, calendars, and SharePoint/Drive locations
+- [x] Surface integration readiness per plugin
+- [x] Use matter context + cloud metadata in plugin skill execution when a matter is attached
+
+### 905. Plugin Workspace UX & Admin Commerce States (P1, LARGE)
+- [ ] Redesign Plugins page around Purchased / Available / Trial / Locked / Setup Required states
+- [ ] Add admin controls to activate trials and configure purchased plugins
+- [ ] Move workflow modules into matter/plugin tabs instead of unrelated hardcoded islands where appropriate
+- [ ] Keep general matters usable without paid plugin purchase
+
+---
+
 ## Sprint 8 — Tenant Onboarding & Integration Hub (v0.10.0)
 
 **Goal:** Guided admin onboarding wizard, license/seat management, service account safety, cloud folder initialization, customer LLM configuration, and permission audit.

@@ -48,6 +48,7 @@ class MatterContextService:
             "matter_name": matter.matter_name,
             "matter_type": matter.matter_type,
             "practice_area": matter.practice_area,
+            "primary_plugin": matter.primary_plugin,
             "role": matter.role,
             "counterparty": matter.counterparty,
             "jurisdiction": matter.jurisdiction,
@@ -65,6 +66,7 @@ class MatterContextService:
             "outcome": matter.outcome,
             "billing_cycle": matter.billing_cycle,
             "billing_method": matter.billing_method,
+            "plugin_workflow_state": matter.plugin_workflow_state,
         }
 
         # Budget
@@ -278,6 +280,7 @@ class MatterContextService:
             "matter_name",
             "matter_type",
             "practice_area",
+            "primary_plugin",
             "role",
             "counterparty",
             "jurisdiction",

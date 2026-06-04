@@ -1,109 +1,86 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getPlugins } from '../api'
+import { getPlugins, updatePluginEntitlement } from '../api'
+import { useAuth } from '../App'
 import {
   Scale, Lock, Landmark, Building2, UserCircle, Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake
 } from 'lucide-react'
 
-const PLUGIN_CONFIG = [
-  {
-    id: 'commercial-legal',
-    icon: Scale,
-    name: 'Commercial Legal',
-    description: 'Contract review, NDA triage, SaaS agreement analysis, renewal tracking',
-  },
-  {
-    id: 'privacy-legal',
-    icon: Lock,
-    name: 'Privacy Legal',
-    description: 'DPA review, DSAR responses, Privacy Impact Assessments',
-  },
-  {
-    id: 'litigation-legal',
-    icon: Landmark,
-    name: 'Litigation Legal',
-    description: 'Matter intake, portfolio management, demand letters, claim charts',
-  },
-  {
-    id: 'corporate-legal',
-    icon: Building2,
-    name: 'Corporate Legal',
-    description: 'M&A diligence, closing checklists, entity compliance',
-  },
-  {
-    id: 'employment-legal',
-    icon: UserCircle,
-    name: 'Employment Legal',
-    description: 'Hire/termination review, worker classification, leave tracking',
-  },
-  {
-    id: 'product-legal',
-    icon: Rocket,
-    name: 'Product Legal',
-    description: 'Launch reviews, marketing claims check, regulatory triage',
-  },
-  {
-    id: 'ip-legal',
-    icon: Lightbulb,
-    name: 'IP Legal',
-    description: 'Trademark clearance, freedom-to-operate, C&D letters',
-  },
-  {
-    id: 'ai-governance-legal',
-    icon: Bot,
-    name: 'AI Governance',
-    description: 'AI use case triage, impact assessments, vendor AI review',
-  },
-  {
-    id: 'regulatory-legal',
-    icon: ClipboardList,
-    name: 'Regulatory Legal',
-    description: 'Regulatory monitoring, policy gap analysis, NPRM comments',
-  },
-  {
-    id: 'trust-estate-legal',
-    icon: Vault,
-    name: 'Trust & Estate',
-    description: 'Will & trust review, estate tax analysis, probate, estate portfolio',
-  },
-  {
-    id: 'mediation-legal',
-    icon: Handshake,
-    name: 'Mediation',
-    description: 'Mediation intake, briefs, settlement drafting, case tracking',
-  },
-]
+const PLUGIN_ICONS = {
+  'commercial-legal': Scale,
+  'privacy-legal': Lock,
+  'litigation-legal': Landmark,
+  'corporate-legal': Building2,
+  'employment-legal': UserCircle,
+  'product-legal': Rocket,
+  'ip-legal': Lightbulb,
+  'ai-governance-legal': Bot,
+  'regulatory-legal': ClipboardList,
+  'trust-estate-legal': Vault,
+  'mediation-legal': Handshake,
+}
 
 export default function PluginsPage() {
   const navigate = useNavigate()
-  const [pluginData, setPluginData] = useState({})
+  const { user } = useAuth()
+  const [plugins, setPlugins] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [savingPlugin, setSavingPlugin] = useState(null)
 
-  useEffect(() => {
-    getPlugins()
+  const loadPlugins = () => {
+    setLoading(true)
+    return getPlugins()
       .then((data) => {
-        const map = {}
-        if (Array.isArray(data)) {
-          data.forEach((p) => {
-            map[p.plugin_id || p.id] = p
-          })
-        } else if (data && typeof data === 'object') {
-          Object.assign(map, data)
-        }
-        setPluginData(map)
+        const list = Array.isArray(data) ? data : data?.plugins || []
+        setPlugins(list)
       })
       .catch((err) => {
         setError('Failed to load plugins.')
         console.error(err)
       })
       .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    loadPlugins()
   }, [])
 
-  const hasProfile = (pluginId) => {
-    const p = pluginData[pluginId]
-    if (!p) return false
-    return !!(p.has_profile || p.profile || p.profile_complete)
+  const iconFor = (pluginId) => {
+    return PLUGIN_ICONS[pluginId] || Scale
+  }
+
+  const handleEntitlement = async (event, pluginId, status) => {
+    event.stopPropagation()
+    setSavingPlugin(`${pluginId}:${status}`)
+    setError(null)
+    try {
+      await updatePluginEntitlement(pluginId, { status, source: 'admin' })
+      await loadPlugins()
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to update plugin entitlement.')
+    } finally {
+      setSavingPlugin(null)
+    }
+  }
+
+  const badgeConfig = (plugin) => {
+    if (plugin.is_locked || plugin.entitlement_status === 'locked') {
+      return ['Locked', 'bg-gray-100 text-gray-600 border-gray-200', 'bg-gray-500']
+    }
+    if (plugin.entitlement_status === 'disabled') {
+      return ['Disabled', 'bg-gray-100 text-gray-600 border-gray-200', 'bg-gray-500']
+    }
+    if (plugin.entitlement_status === 'trial') {
+      return ['Trial', 'bg-purple-100 text-purple-700 border-purple-200', 'bg-purple-500']
+    }
+    if (plugin.setup_status === 'complete' || plugin.profile_is_complete) {
+      return ['Active', 'bg-green-100 text-green-700 border-green-200', 'bg-green-500']
+    }
+    if (plugin.is_purchased || plugin.entitlement_status === 'purchased') {
+      return ['Setup Required', 'bg-blue-100 text-blue-700 border-blue-200', 'bg-blue-500']
+    }
+    return ['Available', 'bg-amber-100 text-amber-700 border-amber-200', 'bg-amber-500']
   }
 
   return (
@@ -148,14 +125,17 @@ export default function PluginsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {PLUGIN_CONFIG.map((plugin) => {
-              const active = hasProfile(plugin.id)
-              const Icon = plugin.icon
+            {plugins.map((plugin) => {
+              const pluginId = plugin.plugin_name || plugin.plugin_id || plugin.id
+              const purchased = plugin.is_purchased || plugin.entitlement_status === 'purchased'
+              const route = plugin.primary_route || `/plugins/${pluginId}`
+              const Icon = iconFor(pluginId)
+              const [badge, badgeCls, dotCls] = badgeConfig(plugin)
               return (
                 <div
-                  key={plugin.id}
+                  key={pluginId}
                   className="bg-brand-surface border border-brand-line rounded-2xl p-6 flex flex-col hover:shadow-md hover:border-brand-accent hover:-translate-y-1 transition-all duration-200 group cursor-pointer"
-                  onClick={() => navigate(`/plugins/${plugin.id}`)}
+                  onClick={() => navigate(route)}
                 >
                   {/* Icon + name */}
                   <div className="flex items-start gap-4 mb-4">
@@ -164,21 +144,14 @@ export default function PluginsPage() {
                     </div>
                     <div className="flex-1 min-w-0 pt-1">
                       <h3 className="font-serif font-bold text-brand-ink text-lg leading-tight mb-2">
-                        {plugin.name}
+                        {plugin.display_name || plugin.name || pluginId}
                       </h3>
                       {/* Profile badge */}
                       <div>
-                        {active ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider bg-green-100 text-green-700 border border-green-200">
-                            <span className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-                            Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200">
-                            <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
-                            Setup Required
-                          </span>
-                        )}
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold font-sans uppercase tracking-wider border ${badgeCls}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${dotCls}`} />
+                          {badge}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -188,12 +161,42 @@ export default function PluginsPage() {
                     {plugin.description}
                   </p>
 
+                  <div className="mb-5 space-y-2 text-[12px] font-sans text-brand-muted">
+                    <div>Category: <span className="text-brand-ink font-medium">{plugin.category}</span></div>
+                    <div>Integrations: <span className="text-brand-ink font-medium">{(plugin.available_integrations || []).join(', ') || 'none connected'}</span></div>
+                  </div>
+
                   {/* Open button */}
-                  <button
-                    className="w-full py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors"
-                  >
-                    Open Workspace
-                  </button>
+                  <div className="space-y-2">
+                    <button
+                      className="w-full py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors"
+                    >
+                      {plugin.is_purchased || purchased ? 'Open Workspace' : 'View Add-on'}
+                    </button>
+                    {user?.role === 'admin' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {!plugin.is_purchased && plugin.entitlement_status !== 'trial' ? (
+                          <>
+                            <button onClick={(e) => handleEntitlement(e, pluginId, 'trial')} disabled={savingPlugin === `${pluginId}:trial`} className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg">
+                              Trial
+                            </button>
+                            <button onClick={(e) => handleEntitlement(e, pluginId, 'purchased')} disabled={savingPlugin === `${pluginId}:purchased`} className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg bg-brand-ink text-white hover:bg-brand-ink-2">
+                              Purchase
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={(e) => { e.stopPropagation(); navigate(`/plugins/${pluginId}`) }} className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg">
+                              Configure
+                            </button>
+                            <button onClick={(e) => handleEntitlement(e, pluginId, 'disabled')} disabled={savingPlugin === `${pluginId}:disabled`} className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-muted hover:text-brand-ink hover:bg-brand-bg">
+                              Disable
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )
             })}
