@@ -13,9 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import require_admin as _require_admin
 from app.models.plugin import PromptOverride
-from app.models.user import User
 from app.routers.plugins import (
     VALID_PLUGINS,
     PLUGIN_DISPLAY_NAMES,
@@ -34,14 +33,6 @@ from app.schemas.plugin import (
 from app.services.plugins.prompts import ALL_DEFAULT_PROMPTS
 
 router = APIRouter(prefix="/admin/prompts", tags=["admin-prompts"])
-
-
-async def _require_admin(request: Request, db: AsyncSession) -> User:
-    """Shared admin gate."""
-    user = await get_current_user(request, db)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
 
 
 @router.get("", response_model=PromptListResponse)

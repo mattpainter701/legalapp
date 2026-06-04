@@ -1,22 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAdminUsers, getAdminUsage, getAdminTenant, getAdminSettings, updateAdminSettings, configureCustomerLLM, resetCustomerLLM } from '../api'
+import { getAdminUsers, deactivateUser, getAdminUsage, getAdminTenant, getAdminSettings, updateAdminSettings, configureCustomerLLM, resetCustomerLLM } from '../api'
 import { useAuth } from '../App'
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
 import LicensingPanel from '../components/LicensingPanel'
-import PermissionsAudit from '../components/PermissionsAudit'
-
-// ── Reusable primitives ──────────────────────────────────────────────────────
-
-function Spinner() {
-  return (
-    <div className="flex justify-center py-16">
-      <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
-}
+import IntegrationsPanel from '../components/IntegrationsPanel'
+import { Spinner, Toggle } from '../components/ui'
 
 function ErrorMsg({ msg }) {
   return (
@@ -38,41 +29,35 @@ function StatCard({ label, value, sub }) {
   )
 }
 
-/** Simple accessible toggle switch */
-function Toggle({ checked, onChange, label }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
-        checked ? 'bg-brand-green' : 'bg-brand-line-2'
-      }`}
-    >
-      <span
-        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform ${
-          checked ? 'translate-x-[18px]' : 'translate-x-1'
-        }`}
-      />
-    </button>
-  )
-}
-
 // ── Tab: Users ───────────────────────────────────────────────────────────────
 
 function UsersTab() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [deactivating, setDeactivating] = useState(null)
 
-  useEffect(() => {
+  const loadUsers = () => {
     getAdminUsers()
       .then(setUsers)
       .catch((e) => setError(e?.response?.data?.detail || 'Failed to load users'))
       .finally(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { loadUsers() }, [])
+
+  const handleDeactivate = async (u) => {
+    if (!window.confirm(`Deactivate ${u.email}?`)) return
+    setDeactivating(u.id)
+    try {
+      await deactivateUser(u.id)
+      loadUsers()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Failed to deactivate user')
+    } finally {
+      setDeactivating(null)
+    }
+  }
 
   if (loading) return <Spinner />
   if (error) return <ErrorMsg msg={error} />
@@ -90,9 +75,6 @@ function UsersTab() {
             </th>
             <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">
               Role
-            </th>
-            <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">
-              Tier
             </th>
             <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">
               Joined
@@ -119,9 +101,6 @@ function UsersTab() {
                   {u.role}
                 </span>
               </td>
-              <td className="px-6 py-4 text-brand-ink-2 font-sans capitalize">
-                {u.billing_tier || 'free'}
-              </td>
               <td className="px-6 py-4 text-brand-muted font-sans text-xs">
                 {u.created_at ? format(new Date(u.created_at), 'MMM d, yyyy') : '—'}
               </td>
@@ -142,20 +121,21 @@ function UsersTab() {
                 </span>
               </td>
               <td className="px-6 py-4 text-right">
-                <button
-                  className="text-xs text-brand-rose hover:text-brand-rose/80 font-sans font-medium transition-colors"
-                  onClick={() =>
-                    alert(`Deactivate ${u.email}? (API call not wired in this demo)`)
-                  }
-                >
-                  Deactivate
-                </button>
+                {u.is_active !== false && (
+                  <button
+                    className="text-xs text-brand-rose hover:text-brand-rose/80 font-sans font-medium transition-colors disabled:opacity-40"
+                    disabled={deactivating === u.id}
+                    onClick={() => handleDeactivate(u)}
+                  >
+                    {deactivating === u.id ? 'Deactivating...' : 'Deactivate'}
+                  </button>
+                )}
               </td>
             </tr>
           ))}
           {users.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
+              <td colSpan={6} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
                 No users found.
               </td>
             </tr>
@@ -190,8 +170,8 @@ function UsageTab() {
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
       <StatCard
         label="Total Requests"
-        value={formatNumber(usage?.total_requests)}
-        sub="All time"
+        value={formatNumber(usage?.request_count)}
+        sub="Last 30 days"
       />
       <StatCard
         label="Tokens In"
@@ -205,7 +185,7 @@ function UsageTab() {
       />
       <StatCard
         label="Total Cost"
-        value={formatCost(usage?.total_cost)}
+        value={formatCost(usage?.total_cost_usd)}
         sub="Estimated USD"
       />
     </div>
@@ -278,30 +258,26 @@ const PROVIDERS = [
 ]
 
 function SettingsTab() {
-  const [includePublic, setIncludePublic] = useState(() => {
-    const stored = localStorage.getItem('clarity_include_public')
-    return stored === null ? true : stored === 'true'
-  })
+  const [includePublic, setIncludePublic] = useState(true)
   const [provider, setProvider] = useState('')
   const [modelOverride, setModelOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [loaded, setLoaded] = useState(false)
+  const [existingConfig, setExistingConfig] = useState({})
 
   useEffect(() => {
     getAdminSettings()
       .then((s) => {
         setProvider(s.default_llm_provider || '')
         setModelOverride(s.default_llm_model || '')
+        const cfg = s.custom_config || {}
+        setExistingConfig(cfg)
+        setIncludePublic(cfg.include_public_case_law !== false)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
   }, [])
-
-  const persist = (key, setter) => (val) => {
-    setter(val)
-    localStorage.setItem(key, String(val))
-  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -309,7 +285,9 @@ function SettingsTab() {
       await updateAdminSettings({
         default_llm_provider: provider || null,
         default_llm_model: modelOverride || null,
+        custom_config: { ...existingConfig, include_public_case_law: includePublic },
       })
+      setExistingConfig((prev) => ({ ...prev, include_public_case_law: includePublic }))
       setMsg({ type: 'success', text: 'Settings saved.' })
     } catch (err) {
       setMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed to save.' })
@@ -341,7 +319,7 @@ function SettingsTab() {
             </div>
             <Toggle
               checked={includePublic}
-              onChange={persist('clarity_include_public', setIncludePublic)}
+              onChange={setIncludePublic}
               label="Public case law search"
             />
           </div>
@@ -426,8 +404,6 @@ function CustomerLLMSection() {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
 
-  useEffect(() => { getAdminTenant().catch(() => {}) }, [])
-
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -510,7 +486,7 @@ export default function AdminPage() {
     { id: 'tenant', label: 'Tenant' },
     { id: 'prompts', label: 'Prompts' },
     { id: 'cloud-search', label: 'Cloud Search' },
-    { id: 'permissions', label: 'Permissions' },
+    { id: 'integrations', label: 'Integrations' },
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -593,7 +569,7 @@ export default function AdminPage() {
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
           {activeTab === 'cloud-search' && <CloudSearchAdmin />}
-          {activeTab === 'permissions' && <PermissionsAudit />}
+          {activeTab === 'integrations' && <IntegrationsPanel />}
         </div>
       </div>
     </div>

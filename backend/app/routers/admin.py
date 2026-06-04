@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import require_admin as _require_admin
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.tenant import Tenant, TenantSettings
@@ -42,12 +42,7 @@ settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-async def _require_admin(request: Request, db: AsyncSession) -> User:
-    """Shared admin gate: get current user and verify admin role."""
-    user = await get_current_user(request, db)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
+logger = logging.getLogger(__name__)
 
 
 @router.get("/users", response_model=UserList)
@@ -420,9 +415,12 @@ async def update_billing(
                     "flat_seat_count": str(tenant.flat_seat_count),
                 },
             )
-        except stripe.StripeError:
-            # Non-fatal: log but don't block the update
-            pass
+        except stripe.StripeError as e:
+            logger.warning(
+                "Failed to sync billing with Stripe for tenant %s: %s",
+                str(admin.tenant_id),
+                e,
+            )
 
     await db.commit()
     await db.refresh(tenant)
@@ -924,6 +922,10 @@ async def set_user_billing_rate(
 ):
     """Set a user's default billing rate (admin only)."""
     admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    if default_billing_rate is not None and default_billing_rate < 0:
+        raise HTTPException(status_code=400, detail="default_billing_rate must be >= 0")
 
     result = await db.execute(
         select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
@@ -1048,6 +1050,15 @@ async def configure_customer_llm(
     admin = await _require_admin(request, db)
     await set_tenant_context(db, str(admin.tenant_id))
 
+    if body.use_customer_llm and body.customer_llm_provider not in (
+        "gemini",
+        "copilot",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="customer_llm_provider must be 'gemini' or 'copilot'",
+        )
+
     result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
     )
@@ -1136,8 +1147,30 @@ async def get_permissions_audit(
     )
     creds = cred_result.scalars().all()
 
-    def audit_provider(provider: str, required: list[str]) -> dict:
+    async def _provider_user_count(provider: str) -> int:
+        return (
+            await db.scalar(
+                select(func.count(User.id)).where(
+                    User.tenant_id == tenant_id,
+                    User.oauth_provider == provider,
+                )
+            )
+            or 0
+        )
+
+    ms_count = await _provider_user_count("microsoft")
+    google_count = await _provider_user_count("google")
+
+    def audit_provider(provider: str, required: list[str], user_count: int) -> dict:
         match = next((c for c in creds if c.provider == provider), None)
+        freshness = {
+            "user_count": user_count,
+            "last_sync_at": match.last_user_sync_at.isoformat()
+            if match and match.last_user_sync_at
+            else None,
+            "last_sync_total": match.last_user_sync_total if match else None,
+            "last_sync_status": match.last_user_sync_status if match else None,
+        }
         if not match or not match.scopes:
             return {
                 "connected": False,
@@ -1146,6 +1179,7 @@ async def get_permissions_audit(
                 "extra_scopes": [],
                 "all_required": False,
                 "health": "disconnected",
+                **freshness,
             }
         granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
         missing = [s for s in required if s not in granted]
@@ -1157,10 +1191,11 @@ async def get_permissions_audit(
             "extra_scopes": extra,
             "all_required": len(missing) == 0,
             "health": "healthy" if len(missing) == 0 else "missing_scopes",
+            **freshness,
         }
 
-    ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS)
-    google_audit = audit_provider("google", SCOPES_REQUIRED_GOOGLE)
+    ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS, ms_count)
+    google_audit = audit_provider("google", SCOPES_REQUIRED_GOOGLE, google_count)
 
     overall = "healthy"
     if (

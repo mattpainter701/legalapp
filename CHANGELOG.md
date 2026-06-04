@@ -34,16 +34,20 @@
 - `POST/DELETE /api/admin/customer-llm/configure` — encrypted API key storage
 - AdminPage Settings: Customer LLM section with toggle, provider, key, endpoint
 
-#### Task 806 — Permission Audit
-- `GET /api/admin/permissions` — granted vs required scope comparison per provider
-- `PermissionsAudit.jsx` — provider cards with scope checkmarks, missing scope warnings
+#### Task 806 — Permission Audit → Integrations Hub
+- `GET /api/admin/permissions` — granted vs required scope comparison per provider, +synced user count, +last-sync freshness (user_count, last_sync_at, last_sync_total, last_sync_status)
+- `IntegrationsPanel.jsx` (renamed from PermissionsAudit): provider cards with scope checkmarks, synced user count display, last-sync timestamp, "Sync now" button
+- Admin "Integrations" tab (renamed from "Permissions")
+- Migration 030: `last_user_sync_*` columns on `tenant_credentials` for sync-run bookkeeping
+- Daily directory user sync: new `user-sync` scheduler job (2:00 AM ET), manually triggerable via `/scheduler/agents/user-sync/run`
+- `UserSyncService` persists last-sync state per credential and creates synced users on the free tier (`license_active=False`)
 
 ### Changed
 - `Tenant` model: +onboarding_completed, onboarding_step, cloud_root_folder (JSON), service_account_email
-- `TenantCredential` model: +granted_by_user_id (FK users.id)
+- `TenantCredential` model: +granted_by_user_id (FK users.id), +last_user_sync_* columns (migration 030)
 - `User` model: +license_active (bool, default true)
 - `TenantSettings` model: +use_customer_llm, customer_llm_provider, customer_llm_config (JSON)
-- AdminPage: +Licensing tab, +Permissions tab
+- AdminPage: +Licensing tab, +Integrations tab (was "Permissions")
 
 ## [0.9.0] — 2026-06-03
 

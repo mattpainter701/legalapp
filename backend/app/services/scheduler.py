@@ -77,10 +77,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
     },
     {
+    {
         "name": "estate-deadline-watcher",
         "display_name": "Estate Deadline Watcher",
         "description": "Scans estate tax filings and court deadlines due within 14 days and emails reminders.",
         "schedule": "Daily at 8:05 AM ET",
+    },
+    {
+        "name": "user-sync",
+        "display_name": "Directory User Sync",
+        "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new users land on the free tier.",
+        "schedule": "Daily at 2:00 AM ET",
+    },
     },
 ]
 
@@ -348,6 +356,15 @@ class LegalScheduler:
             CronTrigger(hour=8, minute=5),
             id="estate-deadline-watcher",
             name="Estate Deadline Watcher",
+            replace_existing=True,
+        )
+
+        # user-sync: daily at 2:00 AM ET
+        self.scheduler.add_job(
+            self.run_user_sync,
+            CronTrigger(hour=2, minute=0),
+            id="user-sync",
+            name="Directory User Sync",
             replace_existing=True,
         )
 
@@ -1078,7 +1095,9 @@ class LegalScheduler:
 
                 if not tenant_ids:
                     await _log_complete(
-                        session, log, "No tenants with active credentials — nothing to sync."
+                        session,
+                        log,
+                        "No tenants with active credentials — nothing to sync.",
                     )
                     logger.info("[cloud-sync] No connected tenants.")
                     return
@@ -1117,6 +1136,89 @@ class LegalScheduler:
                 await _bypass_rls(session)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: user-sync ─────────────────────────────────────────────────────
+
+    async def run_user_sync(self) -> None:
+        """Sync directory users for every tenant with active credentials.
+
+        Per-tenant/per-provider failures are isolated so one bad token cannot
+        abort the whole run. Synced users land on the free tier (license_active
+        is left to the UserSyncService default of False for new users).
+        """
+        logger.info("[user-sync] Starting run")
+        from app.services.user_sync import user_sync as user_sync_svc
+
+        async with async_session_maker() as session:
+            log = await _log_start(session, "user-sync")
+            try:
+                await _bypass_rls(session)
+
+                result = await session.execute(
+                    select(TenantCredential.tenant_id, TenantCredential.provider).where(
+                        TenantCredential.is_active
+                    )
+                )
+                pairs = result.all()
+
+                if not pairs:
+                    await _log_complete(
+                        session, log, "No active credentials -- nothing to sync."
+                    )
+                    logger.info("[user-sync] No connected tenants.")
+                    return
+
+                synced = 0
+                failed = 0
+                total_users = 0
+
+                for tenant_id, provider in pairs:
+                    try:
+                        if provider == "microsoft":
+                            res = await user_sync_svc.sync_microsoft_users(
+                                session, str(tenant_id)
+                            )
+                        elif provider == "google":
+                            res = await user_sync_svc.sync_google_users(
+                                session, str(tenant_id)
+                            )
+                        else:
+                            continue
+                        synced += 1
+                        total_users += res.get("total", 0)
+                    except Exception as tenant_err:
+                        failed += 1
+                        logger.warning(
+                            "[user-sync] %s sync failed for tenant %s: %s",
+                            provider,
+                            tenant_id,
+                            tenant_err,
+                        )
+                        await _bypass_rls(session)
+                        try:
+                            await user_sync_svc.record_sync_failure(
+                                session, str(tenant_id), provider, str(tenant_err)
+                            )
+                        except Exception as record_err:
+                            logger.warning(
+                                "[user-sync] Could not record failure for tenant %s: %s",
+                                tenant_id,
+                                record_err,
+                            )
+
+                await _bypass_rls(session)
+                summary = (
+                    f"Synced {synced} credential(s); {total_users} user(s) seen; "
+                    f"{failed} failed."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[user-sync] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[user-sync] Unhandled error: %s", error_msg)
+                await _bypass_rls(session)
+                await _log_failed(session, log, error_msg)
+
     # ─── Manual trigger ───────────────────────────────────────────────────────
 
     async def run_agent_manually(self, agent_name: str) -> Dict[str, Any]:
@@ -1132,6 +1234,7 @@ class LegalScheduler:
             "task-reminder": self._check_task_reminders,
             "cloud-sync": self.run_cloud_sync,
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
+            "user-sync": self.run_user_sync,
         }
 
         fn = agent_map.get(agent_name)

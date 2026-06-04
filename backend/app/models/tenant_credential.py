@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -28,6 +28,14 @@ class TenantCredential(Base):
         DateTime(timezone=True), nullable=True
     )
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_user_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_user_sync_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_user_sync_created: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_user_sync_updated: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_user_sync_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_user_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     service_account_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )

@@ -156,6 +156,9 @@ export const deleteDocument = (id) =>
 export const getAdminUsers = () =>
   api.get('/admin/users').then((r) => r.data.users ?? r.data)
 
+export const deactivateUser = (userId, force = false) =>
+  api.delete(`/admin/users/${userId}`, { params: { force } })
+
 export const getAdminUsage = () =>
   api.get('/admin/usage').then((r) => r.data)
 
@@ -189,6 +192,8 @@ export const getIntegrationsHealth = () =>
   api.get('/admin/integrations/health').then((r) => r.data)
 export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
+export const triggerUserSync = () =>
+  api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 
 // Customer LLM
 export const configureCustomerLLM = (config) =>
