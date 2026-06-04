@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import require_admin as _require_admin
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.tenant import Tenant, TenantSettings
@@ -42,12 +42,7 @@ settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-async def _require_admin(request: Request, db: AsyncSession) -> User:
-    """Shared admin gate: get current user and verify admin role."""
-    user = await get_current_user(request, db)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
+logger = logging.getLogger(__name__)
 
 
 @router.get("/users", response_model=UserList)
@@ -420,9 +415,12 @@ async def update_billing(
                     "flat_seat_count": str(tenant.flat_seat_count),
                 },
             )
-        except stripe.StripeError:
-            # Non-fatal: log but don't block the update
-            pass
+        except stripe.StripeError as e:
+            logger.warning(
+                "Failed to sync billing with Stripe for tenant %s: %s",
+                str(admin.tenant_id),
+                e,
+            )
 
     await db.commit()
     await db.refresh(tenant)
@@ -924,6 +922,10 @@ async def set_user_billing_rate(
 ):
     """Set a user's default billing rate (admin only)."""
     admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    if default_billing_rate is not None and default_billing_rate < 0:
+        raise HTTPException(status_code=400, detail="default_billing_rate must be >= 0")
 
     result = await db.execute(
         select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
@@ -1047,6 +1049,15 @@ async def configure_customer_llm(
     """Configure the tenant to use their own LLM subscription (Gemini/Copilot)."""
     admin = await _require_admin(request, db)
     await set_tenant_context(db, str(admin.tenant_id))
+
+    if body.use_customer_llm and body.customer_llm_provider not in (
+        "gemini",
+        "copilot",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="customer_llm_provider must be 'gemini' or 'copilot'",
+        )
 
     result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)

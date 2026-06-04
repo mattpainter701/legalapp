@@ -2,16 +2,15 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import require_admin as _require_admin
 from app.models.cloud_metadata import CloudMetadata
 from app.models.tenant_credential import TenantCredential
-from app.models.user import User
 from app.services.cache import ExpertiseCacheManager
 from app.services.cloud_search import CloudSearchService
 from app.services.cloud_sync import CloudSyncService
@@ -22,12 +21,43 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# ── Shared instances ───────────────────────────────────────────────────
+# ── Shared instances (lazy-init at first use) ──────────────────────────
 
-_cloud_search = CloudSearchService()
-_planner = None  # lazy init in test endpoint
-_cloud_sync = CloudSyncService()
-_cache_manager = ExpertiseCacheManager()
+_cloud_search: CloudSearchService | None = None
+_planner: RetrievalPlanner | None = None
+_cloud_sync: CloudSyncService | None = None
+_cache_manager: ExpertiseCacheManager | None = None
+
+
+def _get_cloud_search() -> CloudSearchService:
+    global _cloud_search
+    if _cloud_search is None:
+        _cloud_search = CloudSearchService()
+    return _cloud_search
+
+
+def _get_planner() -> RetrievalPlanner:
+    global _planner
+    if _planner is None:
+        _planner = RetrievalPlanner(LLMService())
+    return _planner
+
+
+def _get_cloud_sync() -> CloudSyncService:
+    global _cloud_sync
+    if _cloud_sync is None:
+        _cloud_sync = CloudSyncService()
+    return _cloud_sync
+
+
+async def _get_cache_manager() -> ExpertiseCacheManager:
+    global _cache_manager
+    if _cache_manager is None:
+        _cache_manager = ExpertiseCacheManager()
+    if not _cache_manager.redis_client:
+        await _cache_manager.init()
+    return _cache_manager
+
 
 # ── Schemas ────────────────────────────────────────────────────────────
 
@@ -44,20 +74,6 @@ class _CloudSearchTestResponse(BaseModel):
     hits: list[dict]
     total_hits: int
     fetch_content_results: list[dict] | None = None
-
-
-# ── Admin gate ─────────────────────────────────────────────────────────
-
-
-async def _require_admin(request: Request, db: AsyncSession) -> User:
-    """Shared admin gate: get current user and verify admin role."""
-    user = await get_current_user(request, db)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
-
-
-# ── Utilities ──────────────────────────────────────────────────────────
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -176,10 +192,7 @@ async def cloud_search_test(
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    # Lazy-init planner so it shares the app lifecycle
-    global _planner
-    if _planner is None:
-        _planner = RetrievalPlanner(LLMService())
+    planner = _get_planner()
 
     # Build plan -- map user sources to provider-level detection
     source_set = set(body.sources)
@@ -189,7 +202,7 @@ async def cloud_search_test(
     if source_set & {"outlook", "onedrive", "sharepoint"}:
         provider_set.add("microsoft")
 
-    plan = await _planner.plan(
+    plan = await planner.plan(
         user_question=body.query,
         active_providers=list(provider_set) if provider_set else None,
     )
@@ -206,14 +219,15 @@ async def cloud_search_test(
         }
 
     # Execute search
-    hits = await _cloud_search.search(db, plan, tenant_id)
+    cloud_search = _get_cloud_search()
+    hits = await cloud_search.search(db, plan, tenant_id)
 
     serialized_hits = [h.to_dict() for h in hits]
 
     # Optionally fetch full content
     fetch_results = None
     if body.fetch_content and hits:
-        raw_results = await _cloud_search.fetch_contents(db, hits, tenant_id)
+        raw_results = await cloud_search.fetch_contents(db, hits, tenant_id)
         fetch_results = []
         for r in raw_results:
             hit_obj = r.get("hit")
@@ -253,7 +267,7 @@ async def cloud_search_sync(
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    result = await _cloud_sync.sync_all(db, tenant_id)
+    result = await _get_cloud_sync().sync_all(db, tenant_id)
     return result
 
 
@@ -357,11 +371,8 @@ async def cloud_search_invalidate_cache(
     tenant_id = str(admin.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    # Ensure the cache manager has a Redis connection
-    if not _cache_manager.redis_client:
-        await _cache_manager.init()
-
-    result = await _cache_manager.invalidate_cloud_search_cache(tenant_id)
+    cache_manager = await _get_cache_manager()
+    result = await cache_manager.invalidate_cloud_search_cache(tenant_id)
 
     return {
         "status": "ok" if result else "cache_disabled",

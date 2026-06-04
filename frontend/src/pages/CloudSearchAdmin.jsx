@@ -7,14 +7,7 @@ import {
   invalidateCloudCache,
 } from '../api'
 import { format } from 'date-fns'
-
-function Spinner() {
-  return (
-    <div className="flex justify-center py-16">
-      <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
-    </div>
-  )
-}
+import { Spinner } from '../components/ui'
 
 function Badge({ label, variant = 'neutral' }) {
   const colors = {
