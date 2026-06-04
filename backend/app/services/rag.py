@@ -220,15 +220,22 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
 
     parts = []
     for i, item in enumerate(cloud_hits_with_content, start=1):
-        hit = item.get("hit", {})
-        content = item.get("content", "")
-        if not content:
-            content = hit.get("snippet", "")
+        hit = item.get("hit")
+        if hit is None:
+            continue
 
-        source_label = f"{hit.get('provider', 'cloud')}/{hit.get('source', 'unknown')}"
-        title = hit.get("title", "Untitled")
-        url = hit.get("url", "")
-        modified = hit.get("modified_time", "")
+        hit_dict = hit.to_dict() if hasattr(hit, "to_dict") else dict(hit)
+        content = item.get("content") or hit_dict.get("snippet", "")
+        if not content:
+            continue
+
+        source_label = (
+            f"{hit_dict.get('provider', 'cloud')}/"
+            f"{hit_dict.get('source', 'unknown')}"
+        )
+        title = hit_dict.get("title") or "Untitled"
+        url = hit_dict.get("url") or ""
+        modified = hit_dict.get("modified_time") or ""
 
         header = f"[C{i}] {source_label}: {title}"
         if url:
@@ -236,9 +243,7 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
         if modified:
             header += f"\n    Modified: {modified}"
 
-        parts.append(
-            f"{header}\nContent:\n{content[:2000]}\n" + "-" * 60,
-        )
+        parts.append(f"{header}\nContent:\n{content[:2000]}\n" + "-" * 60)
 
     return "\n\n".join(parts)
 

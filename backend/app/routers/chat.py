@@ -440,6 +440,7 @@ async def send_message(
         skill=body.skill if hasattr(body, "skill") else user.default_skill,
     )
 
+    cloud_hits = []
     if cached_rag:
         context_str, chunks = cached_rag
         cache_hit_rag = True
@@ -617,6 +618,26 @@ async def send_message(
                 "citation": chunk.get("citation") or "",
                 "court": chunk.get("court"),
                 "excerpt": (chunk.get("content") or "")[:300],
+            }
+        )
+
+    for hit in cloud_hits:
+        hit_dict = hit.to_dict() if hasattr(hit, "to_dict") else dict(hit)
+        cloud_id = (
+            f"cloud:{hit_dict.get('provider')}:{hit_dict.get('source')}:"
+            f"{hit_dict.get('object_id')}"
+        )
+        if cloud_id in seen_citations:
+            continue
+        seen_citations.add(cloud_id)
+        context_used.append(cloud_id)
+        context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
+        source_dicts.append(
+            {
+                "case_name": hit_dict.get("title") or "Cloud result",
+                "citation": hit_dict.get("url") or cloud_id,
+                "court": f"{hit_dict.get('provider', 'cloud')}/{hit_dict.get('source', 'unknown')}",
+                "excerpt": (hit_dict.get("snippet") or "")[:300],
             }
         )
 

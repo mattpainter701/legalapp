@@ -6,8 +6,16 @@ These cover the pure logic and wiring that don't require a live database:
   - the Gmail live-search query no longer emits invalid ``{}`` syntax
 """
 
+import pytest
+
 from app.services import cloud_search
-from app.services.cloud_search import _INDEX_SOURCE_MAP, _parse_index_date
+from app.services.cloud_search import (
+    _INDEX_SOURCE_MAP,
+    _parse_index_date,
+    CloudHit,
+    CloudSearchService,
+)
+from app.services.rag import build_cloud_context
 from app.services.scheduler import AGENT_REGISTRY, LegalScheduler
 
 
@@ -57,3 +65,65 @@ def test_gmail_query_helpers_present():
     src = inspect.getsource(cloud_search.CloudSearchService._search_gmail)
     assert "from:{sanitised}" in src
     assert "from:{{{sanitised}}}" not in src
+
+
+@pytest.mark.asyncio
+async def test_cloud_search_dispatches_subsource_plans(monkeypatch):
+    """Planner emits sub-sources (gmail/outlook), not provider names."""
+    service = CloudSearchService()
+    calls: list[str] = []
+
+    async def fake_gmail(*args, **kwargs):
+        calls.append("gmail")
+        return []
+
+    async def fake_graph(*args, **kwargs):
+        calls.append("graph")
+        return []
+
+    async def fake_index(*args, **kwargs):
+        calls.append("index")
+        return []
+
+    monkeypatch.setattr(service, "_search_gmail", fake_gmail)
+    monkeypatch.setattr(service, "_search_google_drive", fake_gmail)
+    monkeypatch.setattr(service, "_search_graph", fake_graph)
+    monkeypatch.setattr(service, "search_index", fake_index)
+
+    await service.search(
+        db=None,
+        plan={"sources": ["gmail", "outlook"], "keywords": ["acme"]},
+        tenant_id="tenant-1",
+        user_id="user-1",
+    )
+
+    assert calls == ["gmail", "graph", "index"]
+
+
+@pytest.mark.asyncio
+async def test_build_cloud_context_accepts_cloud_hit_objects():
+    hit = CloudHit(
+        provider="google",
+        source="gmail",
+        object_id="msg-1",
+        title="Acme settlement email",
+        snippet="Fallback snippet",
+        url="https://mail.google.com/#all/msg-1",
+        modified_time="2026-06-01T12:00:00Z",
+        mime_type="message/rfc822",
+        relevance_score=0.91,
+    )
+
+    context = await build_cloud_context([{"hit": hit, "content": "Email body text"}])
+
+    assert "google/gmail: Acme settlement email" in context
+    assert "Email body text" in context
+    assert "https://mail.google.com/#all/msg-1" in context
+
+
+def test_source_enabled_accepts_provider_aliases():
+    assert cloud_search._source_enabled(["google"], "gmail")
+    assert cloud_search._source_enabled(["google"], "drive")
+    assert cloud_search._source_enabled(["microsoft"], "outlook")
+    assert cloud_search._source_enabled(["microsoft"], "sharepoint")
+    assert not cloud_search._source_enabled(["google"], "outlook")

@@ -139,6 +139,79 @@ async def initialize_matter_folders(
     return result
 
 
+async def share_matter_folders(
+    db: AsyncSession,
+    tenant_id: str,
+    cloud_folder: dict | None,
+    user_emails: list[str],
+) -> None:
+    """Best-effort sharing of matter root folders with assigned firm users."""
+    if not cloud_folder or not user_emails:
+        return
+
+    unique_emails = sorted({email for email in user_emails if email})
+
+    onedrive = cloud_folder.get("onedrive")
+    if onedrive and onedrive.get("matter_folder_id"):
+        ms_token = await get_fresh_token(db, tenant_id, "microsoft")
+        if ms_token:
+            try:
+                await _share_onedrive_folder(
+                    ms_token, onedrive["matter_folder_id"], unique_emails
+                )
+            except Exception as exc:
+                logger.warning("Failed to share OneDrive matter folder: %s", exc)
+
+    google_drive = cloud_folder.get("google_drive")
+    if google_drive and google_drive.get("matter_folder_id"):
+        g_token = await get_fresh_token(db, tenant_id, "google")
+        if g_token:
+            try:
+                await _share_gdrive_folder(
+                    g_token, google_drive["matter_folder_id"], unique_emails
+                )
+            except Exception as exc:
+                logger.warning("Failed to share Google Drive matter folder: %s", exc)
+
+
+async def _share_onedrive_folder(token: str, folder_id: str, emails: list[str]) -> None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{GRAPH_BASE}/me/drive/items/{folder_id}/invite",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "recipients": [{"email": email} for email in emails],
+                "requireSignIn": True,
+                "sendInvitation": False,
+                "roles": ["write"],
+            },
+        )
+        if resp.status_code not in (200, 201, 202):
+            raise RuntimeError(
+                f"OneDrive invite failed: {resp.status_code} {resp.text[:200]}"
+            )
+
+
+async def _share_gdrive_folder(token: str, folder_id: str, emails: list[str]) -> None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        for email in emails:
+            resp = await client.post(
+                f"{GOOGLE_DRIVE_BASE}/files/{folder_id}/permissions",
+                params={"sendNotificationEmail": "false"},
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "type": "user",
+                    "role": "writer",
+                    "emailAddress": email,
+                },
+            )
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(
+                    f"Google Drive permission failed for {email}: "
+                    f"{resp.status_code} {resp.text[:200]}"
+                )
+
+
 # ── helpers ────────────────────────────────────────────────────────────
 
 
