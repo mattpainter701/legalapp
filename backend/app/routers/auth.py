@@ -299,7 +299,10 @@ async def microsoft_login(
         f"&response_mode=query"
         f"&prompt=select_account"
     )
-    return RedirectResponse(url=authorize_url)
+    response = RedirectResponse(url=authorize_url)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @router.get("/microsoft/callback")
@@ -555,7 +558,10 @@ async def google_login(
         f"&access_type=offline"
         f"&prompt=consent"
     )
-    return RedirectResponse(url=authorize_url)
+    response = RedirectResponse(url=authorize_url)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @router.get("/google/callback")
