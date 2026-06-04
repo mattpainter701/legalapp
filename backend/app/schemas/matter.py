@@ -10,20 +10,26 @@ from pydantic import BaseModel, Field
 
 
 class MatterCreate(BaseModel):
-    """Create a new matter."""
+    """Create a new matter. Only matter_name is required — all other fields optional."""
 
     matter_name: str = Field(..., max_length=500)
-    matter_type: str = Field(..., max_length=100)
-    role: str = Field(..., max_length=100)
-    counterparty: str = Field(..., max_length=500)
-    jurisdiction: str = Field(..., max_length=300)
-    source: str | None = Field(None, max_length=500)
+    description: str | None = None
 
-    # Practice area taxonomy
+    # Practice area / type
+    matter_type: str | None = Field(None, max_length=100)
     practice_area: str | None = Field(None, max_length=200)
 
-    # Client link
+    # Litigation-specific (optional — for non-litigation matters leave blank)
+    role: str | None = Field(None, max_length=100)
+    counterparty: str | None = Field(None, max_length=500)
+    jurisdiction: str | None = Field(None, max_length=300)
+
+    source: str | None = Field(None, max_length=500)
+
+    # People
     client_contact_id: str | None = None
+    attorney_of_record_id: str | None = None
+    assigned_user_ids: list[str] = []
 
     # Court / forum
     court: str | None = Field(None, max_length=300)
@@ -37,21 +43,22 @@ class MatterCreate(BaseModel):
     budget_amount: Decimal | None = None
     budget_currency: str = "USD"
 
-    # Initial assignees
-    assigned_user_ids: list[str] = []
-
-    # Optional fields
-    status: str = "threatened"
+    # Status / risk
+    status: str = "open"
     risk_level: str | None = None
     stage: str | None = Field(None, max_length=200)
     key_dates: dict | None = None
     initial_posture: str | None = None
+
+    # AI memory
+    memory_content: str | None = None
 
 
 class MatterUpdate(BaseModel):
     """Update an existing matter. All fields optional."""
 
     matter_name: str | None = Field(None, max_length=500)
+    description: str | None = None
     matter_type: str | None = Field(None, max_length=100)
     role: str | None = Field(None, max_length=100)
     counterparty: str | None = Field(None, max_length=500)
@@ -64,6 +71,7 @@ class MatterUpdate(BaseModel):
     materiality: str | None = Field(None, max_length=50)
     exposure_range: str | None = Field(None, max_length=200)
     client_contact_id: str | None = None
+    attorney_of_record_id: str | None = None
     court: str | None = Field(None, max_length=300)
     judge: str | None = Field(None, max_length=200)
     case_number: str | None = Field(None, max_length=100)
@@ -86,6 +94,7 @@ class MatterUpdate(BaseModel):
     is_closed: bool | None = None
     outcome: str | None = Field(None, max_length=200)
     final_cost: str | None = Field(None, max_length=100)
+    memory_content: str | None = None
 
 
 class MatterAssignmentResponse(BaseModel):
@@ -120,11 +129,12 @@ class MatterResponse(BaseModel):
     id: str
     slug: str
     matter_name: str
-    matter_type: str
+    description: str | None
+    matter_type: str | None
     practice_area: str | None
-    role: str
-    counterparty: str
-    jurisdiction: str
+    role: str | None
+    counterparty: str | None
+    jurisdiction: str | None
     status: str
     stage: str | None
     source: str | None
@@ -150,6 +160,10 @@ class MatterResponse(BaseModel):
     client_contact_id: str | None
     client_name: str | None
 
+    # Attorney of record
+    attorney_of_record_id: str | None
+    attorney_of_record_name: str | None
+
     # Billing
     budget_amount: Decimal | None
     budget_currency: str | None
@@ -166,6 +180,9 @@ class MatterResponse(BaseModel):
     # Budget utilization (set separately)
     budget_utilization: BudgetUtilization | None = None
 
+    # AI memory
+    memory_content: str | None
+
     created_at: datetime
     updated_at: datetime
 
@@ -178,12 +195,14 @@ class MatterSummary(BaseModel):
     id: str
     slug: str
     matter_name: str
-    matter_type: str
+    description: str | None
+    matter_type: str | None
     practice_area: str | None
     status: str
     risk_level: str | None
-    counterparty: str
+    counterparty: str | None
     client_name: str | None
+    attorney_of_record_name: str | None
     assigned_to: list[str] = []
     budget_amount: Decimal | None
     total_billed: Decimal
@@ -253,6 +272,22 @@ class MatterNoteResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+
+
+class MatterMemoryUpdate(BaseModel):
+    """Update per-matter AI memory document."""
+
+    content: str
+
+
+class MatterMemoryResponse(BaseModel):
+    """Per-matter AI memory document."""
+
+    matter_id: str
+    memory_content: str | None
 
 
 # ── Retainers ─────────────────────────────────────────────────────────────────
