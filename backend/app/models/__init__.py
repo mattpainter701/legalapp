@@ -13,6 +13,15 @@ from app.models.plugin import (
     MediationCaseEvent,
     PromptOverride,
 )
+from app.models.estate import (
+    EstateFiduciary,
+    EstateBeneficiary,
+    EstateAsset,
+    EstateLiability,
+    EstateDistribution,
+    EstateDeadline,
+    EstateAccountingEntry,
+)
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
 from app.models.retainer import Retainer, RetainerTransaction
@@ -42,6 +51,13 @@ __all__ = [
     "Renewal",
     "Estate",
     "EstateEvent",
+    "EstateFiduciary",
+    "EstateBeneficiary",
+    "EstateAsset",
+    "EstateLiability",
+    "EstateDistribution",
+    "EstateDeadline",
+    "EstateAccountingEntry",
     "MediationCase",
     "MediationCaseEvent",
     "MatterAssignment",

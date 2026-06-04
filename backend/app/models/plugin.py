@@ -1,7 +1,7 @@
 """SQLAlchemy models for the legal practice plugin system — matters, events, estates, mediation."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -295,12 +295,40 @@ class Estate(Base):
         index=True,
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    estate_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     grantor: Mapped[str | None] = mapped_column(String(300), nullable=True)
     estate_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    representative_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(
         String(100), default="active", server_default="active"
     )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Estate detail (added in migration 030)
+    jurisdiction: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    domicile_state: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    date_of_death: Mapped[date | None] = mapped_column(Date, nullable=True)
+    court_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    case_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    gross_estate_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    net_estate_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+
+    # Optional link to a Matter (reuses billing, IOLTA, documents) and client Contact
+    matter_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("matters.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -314,6 +342,31 @@ class Estate(Base):
     )
     events: Mapped[list["EstateEvent"]] = relationship(
         "EstateEvent", back_populates="estate", order_by="EstateEvent.created_at"
+    )
+    matter: Mapped["Matter | None"] = relationship("Matter", foreign_keys=[matter_id])
+    client: Mapped["Contact | None"] = relationship(
+        "Contact", foreign_keys=[client_contact_id], lazy="joined"
+    )
+    fiduciaries: Mapped[list["EstateFiduciary"]] = relationship(  # noqa: F821
+        "EstateFiduciary", back_populates="estate", cascade="all, delete-orphan"
+    )
+    beneficiaries: Mapped[list["EstateBeneficiary"]] = relationship(  # noqa: F821
+        "EstateBeneficiary", back_populates="estate", cascade="all, delete-orphan"
+    )
+    assets: Mapped[list["EstateAsset"]] = relationship(  # noqa: F821
+        "EstateAsset", back_populates="estate", cascade="all, delete-orphan"
+    )
+    liabilities: Mapped[list["EstateLiability"]] = relationship(  # noqa: F821
+        "EstateLiability", back_populates="estate", cascade="all, delete-orphan"
+    )
+    distributions: Mapped[list["EstateDistribution"]] = relationship(  # noqa: F821
+        "EstateDistribution", back_populates="estate", cascade="all, delete-orphan"
+    )
+    deadlines: Mapped[list["EstateDeadline"]] = relationship(  # noqa: F821
+        "EstateDeadline", back_populates="estate", cascade="all, delete-orphan"
+    )
+    accounting_entries: Mapped[list["EstateAccountingEntry"]] = relationship(  # noqa: F821
+        "EstateAccountingEntry", back_populates="estate", cascade="all, delete-orphan"
     )
 
 

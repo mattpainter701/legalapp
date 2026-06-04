@@ -26,7 +26,8 @@ from sqlalchemy import or_, select, text
 
 from app.config import get_settings
 from app.database import async_session_maker
-from app.models.plugin import Matter, MatterEvent, Renewal
+from app.models.plugin import Estate, Matter, MatterEvent, Renewal
+from app.models.estate import EstateDeadline
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
 from app.models.tenant_credential import TenantCredential
@@ -76,10 +77,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
     },
     {
+    {
+        "name": "estate-deadline-watcher",
+        "display_name": "Estate Deadline Watcher",
+        "description": "Scans estate tax filings and court deadlines due within 14 days and emails reminders.",
+        "schedule": "Daily at 8:05 AM ET",
+    },
+    {
         "name": "user-sync",
         "display_name": "Directory User Sync",
         "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new users land on the free tier.",
         "schedule": "Daily at 2:00 AM ET",
+    },
     },
 ]
 
@@ -338,6 +347,15 @@ class LegalScheduler:
             hours=1,
             id="task-reminder",
             name="Task Reminder",
+            replace_existing=True,
+        )
+
+        # estate-deadline-watcher: daily 8:05 AM ET
+        self.scheduler.add_job(
+            self.run_estate_deadline_watcher,
+            CronTrigger(hour=8, minute=5),
+            id="estate-deadline-watcher",
+            name="Estate Deadline Watcher",
             replace_existing=True,
         )
 
@@ -940,6 +958,119 @@ class LegalScheduler:
                 logger.exception("[task-reminder] Unhandled error: %s", error_msg)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: estate-deadline-watcher ───────────────────────────────────────
+
+    async def run_estate_deadline_watcher(self) -> None:
+        """Email reminders for estate tax/court deadlines due within 14 days.
+
+        Reminders go to the assigned user when set, otherwise to each tenant's
+        admins. A 6-day dedup guard (reminder_sent_at) prevents repeat emails for
+        the same deadline within a window.
+        """
+        logger.info("[estate-deadline-watcher] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "estate-deadline-watcher")
+            try:
+                await _bypass_rls(session)
+
+                now_utc = datetime.now(timezone.utc)
+                today = now_utc.date()
+                horizon = today + timedelta(days=14)
+                reminder_cutoff = now_utc - timedelta(days=6)
+
+                result = await session.execute(
+                    select(EstateDeadline).where(
+                        EstateDeadline.due_date >= today,
+                        EstateDeadline.due_date <= horizon,
+                        EstateDeadline.status.notin_(["complete", "na", "cancelled"]),
+                        or_(
+                            EstateDeadline.reminder_sent_at.is_(None),
+                            EstateDeadline.reminder_sent_at < reminder_cutoff,
+                        ),
+                    )
+                )
+                deadlines = list(result.scalars().all())
+
+                if not deadlines:
+                    await _log_complete(
+                        session, log, "No estate deadlines due within 14 days."
+                    )
+                    logger.info("[estate-deadline-watcher] Nothing to remind.")
+                    return
+
+                # Cache estate titles and per-tenant admin lists to avoid re-querying.
+                estate_titles: Dict[uuid.UUID, str] = {}
+                admin_cache: Dict[uuid.UUID, List[User]] = {}
+                emails_sent = 0
+
+                for dl in deadlines:
+                    if dl.estate_id not in estate_titles:
+                        est = await session.execute(
+                            select(Estate).where(Estate.id == dl.estate_id)
+                        )
+                        est = est.scalar_one_or_none()
+                        estate_titles[dl.estate_id] = (
+                            (est.estate_name or est.title) if est else "Estate"
+                        )
+                    estate_label = estate_titles[dl.estate_id]
+                    due_str = dl.due_date.isoformat()
+
+                    # Determine recipients: assignee, else tenant admins.
+                    recipients: List[User] = []
+                    if dl.assigned_to:
+                        u = await session.execute(
+                            select(User).where(User.id == dl.assigned_to)
+                        )
+                        u = u.scalar_one_or_none()
+                        if u and u.email:
+                            recipients = [u]
+                    if not recipients:
+                        if dl.tenant_id not in admin_cache:
+                            admin_cache[dl.tenant_id] = await _get_tenant_admins(
+                                session, dl.tenant_id
+                            )
+                        recipients = admin_cache[dl.tenant_id]
+
+                    sent_any = False
+                    for recipient in recipients:
+                        if not getattr(recipient, "email", None):
+                            continue
+                        try:
+                            sent = await email_service.send_task_reminder(
+                                to_email=recipient.email,
+                                task_title=f"{estate_label}: {dl.title} ({dl.deadline_type})",
+                                due_date=due_str,
+                                assignee_name=getattr(recipient, "full_name", None),
+                            )
+                            if sent:
+                                emails_sent += 1
+                                sent_any = True
+                        except Exception as exc:
+                            logger.error(
+                                "[estate-deadline-watcher] Failed to email %s for deadline %s: %s",
+                                recipient.email,
+                                dl.id,
+                                exc,
+                            )
+
+                    if sent_any:
+                        dl.reminder_sent_at = now_utc
+                        await session.commit()
+
+                summary = (
+                    f"Found {len(deadlines)} estate deadline(s) within 14 days. "
+                    f"Sent {emails_sent} reminder email(s)."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[estate-deadline-watcher] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception(
+                    "[estate-deadline-watcher] Unhandled error: %s", error_msg
+                )
+                await _log_failed(session, log, error_msg)
+
     # ─── Agent: cloud-sync ────────────────────────────────────────────────────
 
     async def run_cloud_sync(self) -> None:
@@ -1102,6 +1233,7 @@ class LegalScheduler:
             "oc-status": self.run_oc_status,
             "task-reminder": self._check_task_reminders,
             "cloud-sync": self.run_cloud_sync,
+            "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
         }
 
