@@ -101,9 +101,9 @@ async def create_trust_account(
 
 @router.get("/accounts")
 async def list_trust_accounts(
+    request: Request,
     matter_id: str | None = Query(None),
     is_active: bool | None = Query(None),
-    request: Request | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TrustAccountListResponse:
     """List trust accounts with optional filters."""
@@ -290,10 +290,10 @@ async def create_trust_transaction(
 
 @router.get("/transactions")
 async def list_trust_transactions(
+    request: Request,
     trust_account_id: str | None = Query(None),
     transaction_type: str | None = Query(None),
     is_reconciled: bool | None = Query(None),
-    request: Request | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TrustTransactionListResponse:
     """List trust transactions with optional filters."""
