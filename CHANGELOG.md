@@ -6,6 +6,18 @@
 
 ### Added
 
+#### PR #38 — Mediation Platform Module
+- `MediationCase` model expanded: case_name, party_a/b, dispute_type, mediation_stage, mediator, attorney, claim_value, scheduled_session, confidentiality_signed
+- New models: `MediationParty`, `MediationInvite`, `MediationAsset`, `MediationDocument`, `MediationProposal` with per-table RLS
+- Firm router `/api/plugins/mediation/*`: case CRUD + stats, session log, parties + portal invites, asset schedule with attorney approve → send-to-opposing workflow, document vault upload/download, settlement proposals
+- Portal router `/api/portal/mediation/*`: invite acceptance (magic link + JWT cookie), case view, asset submission/decision, document upload/download, proposal exchange
+- Portal token helpers (`portal_token.py`), shared response builders (`mediation_service.py`), invite email (`email.py`)
+- Migration 031 with 5 new tables + expanded mediation_cases
+- Backend tests: 7/7 pass (CRUD, sessions, invites, approval workflow, visibility scoping, invite acceptance, proposal chains, tenant isolation)
+- Frontend: `MediationPortfolioPage` with create modal, `MediationDetailPage` with 6 tabs (Overview, Parties, Assets, Documents, Proposals, Sessions), `MediationSubTable` generic CRUD component
+- Portal frontend: `PortalAcceptPage` (magic link acceptance), `PortalCasePage` (4 tabs: My Assets, Shared With Me, Documents, Proposals)
+- Sidebar "Mediation" nav entry, `App.jsx` portal routes outside ProtectedRoute
+
 #### Task 801 — Admin Onboarding Wizard
 - 5-step guided wizard after first admin login: Welcome → Connect Integrations → Sync Users → Review → Complete
 - `GET/POST /api/admin/onboarding/status|complete|skip|step/{step}` endpoints

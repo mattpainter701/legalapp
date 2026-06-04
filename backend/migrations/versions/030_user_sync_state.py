@@ -1,18 +1,24 @@
-"""030 — User sync state on tenant_credentials
+"""030_user_sync — User sync state on tenant_credentials
 
-Revision ID: 030
-Revises: 029
+Revision ID: 030_user_sync
+Revises: 030
 Create Date: 2026-06-03
 
 Adds last-sync bookkeeping columns to tenant_credentials so the Integrations
 panel can show how many directory users were pulled and when the last sync ran.
+
+NOTE: this migration originally shared the revision id "030" with
+``030_trust_estate_buildout`` (both branched off 029), which is an illegal
+duplicate for Alembic. It has been given the unique id "030_user_sync" and
+re-chained after the (already deployed) trust-estate "030" so the graph is a
+clean line: 029 -> 030 -> 030_user_sync -> 031.
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "030"
-down_revision = "029"
+revision = "030_user_sync"
+down_revision = "030"
 branch_labels = None
 depends_on = None
 

@@ -137,3 +137,113 @@ async def require_admin(request: Request, db: AsyncSession = Depends(get_db)):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+class PortalContext:
+    """Resolved identity for a mediation-portal request.
+
+    Either a magic-link party (``user`` is None, scoped by the token's claims)
+    or a firm client (role="client") whose ``user`` is linked to a
+    ``MediationParty`` on the requested case.
+    """
+
+    def __init__(
+        self,
+        *,
+        tenant_id: str,
+        party_id: str,
+        party_role: str,
+        case_id: str | None = None,
+        user=None,
+    ):
+        self.tenant_id = tenant_id
+        self.party_id = party_id
+        self.party_role = party_role
+        self.case_id = case_id
+        self.user = user
+
+    @property
+    def is_magic(self) -> bool:
+        return self.user is None
+
+
+def _read_token(request: Request) -> str | None:
+    token = request.cookies.get("access_token")
+    if token:
+        return token
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header.split(" ", 1)[1]
+    return None
+
+
+async def get_portal_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    case_id: str | None = None,
+) -> "PortalContext":
+    """Authenticate a mediation-portal request.
+
+    Accepts a portal-scoped JWT (``portal: true``) OR a firm client login
+    (``role == "client"``). For client logins, resolves the MediationParty
+    linking the user to ``case_id`` (required for client access). Always sets
+    the RLS tenant context before returning.
+    """
+    from app.database import set_tenant_context
+    from app.models.mediation import MediationParty
+    from app.models.user import User
+
+    token = _read_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # 1. Magic-link party token.
+    if payload.get("portal") is True:
+        tenant_id = payload.get("tenant_id")
+        ctx = PortalContext(
+            tenant_id=tenant_id,
+            party_id=payload.get("party_id"),
+            party_role=payload.get("party_role"),
+            case_id=payload.get("case_id"),
+            user=None,
+        )
+        await set_tenant_context(db, str(tenant_id))
+        return ctx
+
+    # 2. Firm client login.
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user.role != "client":
+        raise HTTPException(status_code=403, detail="Portal access only")
+    if not case_id:
+        raise HTTPException(status_code=400, detail="case_id required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    party_result = await db.execute(
+        select(MediationParty).where(
+            MediationParty.case_id == case_id,
+            MediationParty.user_id == user.id,
+            MediationParty.tenant_id == user.tenant_id,
+        )
+    )
+    party = party_result.scalar_one_or_none()
+    if party is None:
+        raise HTTPException(status_code=403, detail="Not a party to this case")
+    return PortalContext(
+        tenant_id=str(user.tenant_id),
+        party_id=str(party.id),
+        party_role=party.role,
+        case_id=str(case_id),
+        user=user,
+    )

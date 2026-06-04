@@ -284,6 +284,117 @@ export const updateMediationCase = (id, data) =>
 export const addMediationEvent = (id, data) =>
   api.post(`/plugins/mediation/cases/${id}/events`, data).then(r => r.data)
 
+export const deleteMediationCase = (id) =>
+  api.delete(`/plugins/mediation/cases/${id}`).then(r => r.data)
+
+export const getMediationStats = () =>
+  api.get('/plugins/mediation/cases/stats').then(r => r.data)
+
+// Parties + invites
+export const listMediationParties = (id) =>
+  api.get(`/plugins/mediation/cases/${id}/parties`).then(r => r.data)
+
+export const createMediationParty = (id, data) =>
+  api.post(`/plugins/mediation/cases/${id}/parties`, data).then(r => r.data)
+
+export const updateMediationParty = (id, partyId, data) =>
+  api.patch(`/plugins/mediation/cases/${id}/parties/${partyId}`, data).then(r => r.data)
+
+export const deleteMediationParty = (id, partyId) =>
+  api.delete(`/plugins/mediation/cases/${id}/parties/${partyId}`).then(r => r.data)
+
+export const inviteMediationParty = (id, partyId) =>
+  api.post(`/plugins/mediation/cases/${id}/parties/${partyId}/invite`).then(r => r.data)
+
+// Asset schedule (firm review + approval)
+export const listMediationAssets = (id) =>
+  api.get(`/plugins/mediation/cases/${id}/assets`).then(r => r.data)
+
+export const createMediationAsset = (id, data) =>
+  api.post(`/plugins/mediation/cases/${id}/assets`, data).then(r => r.data)
+
+export const updateMediationAsset = (id, assetId, data) =>
+  api.patch(`/plugins/mediation/cases/${id}/assets/${assetId}`, data).then(r => r.data)
+
+export const deleteMediationAsset = (id, assetId) =>
+  api.delete(`/plugins/mediation/cases/${id}/assets/${assetId}`).then(r => r.data)
+
+export const approveMediationAsset = (id, assetId) =>
+  api.post(`/plugins/mediation/cases/${id}/assets/${assetId}/approve`).then(r => r.data)
+
+export const sendMediationAsset = (id, assetId) =>
+  api.post(`/plugins/mediation/cases/${id}/assets/${assetId}/send`).then(r => r.data)
+
+// Documents (vault)
+export const listMediationDocuments = (id) =>
+  api.get(`/plugins/mediation/cases/${id}/documents`).then(r => r.data)
+
+export const uploadMediationDocument = (id, file, description) => {
+  const form = new FormData()
+  form.append('file', file)
+  if (description) form.append('description', description)
+  return api.post(`/plugins/mediation/cases/${id}/documents/upload`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+}
+
+export const downloadMediationDocumentUrl = (id, docId) =>
+  `${BASE_URL}/plugins/mediation/cases/${id}/documents/${docId}/download`
+
+// Proposals
+export const listMediationProposals = (id) =>
+  api.get(`/plugins/mediation/cases/${id}/proposals`).then(r => r.data)
+
+export const createMediationProposal = (id, data) =>
+  api.post(`/plugins/mediation/cases/${id}/proposals`, data).then(r => r.data)
+
+// ── Mediation Portal (client / opposing party) ──────────────────────────────
+const portalApi = axios.create({
+  baseURL: BASE_URL,
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
+})
+
+export const acceptPortalInvite = (token) =>
+  portalApi.post('/portal/mediation/accept', { token }).then(r => r.data)
+
+export const getPortalCase = (caseId) =>
+  portalApi.get('/portal/mediation/case', { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const createPortalAsset = (data, caseId) =>
+  portalApi.post('/portal/mediation/assets', data, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const updatePortalAsset = (assetId, data, caseId) =>
+  portalApi.patch(`/portal/mediation/assets/${assetId}`, data, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const submitPortalAsset = (assetId, caseId) =>
+  portalApi.post(`/portal/mediation/assets/${assetId}/submit`, {}, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const decidePortalAsset = (assetId, data, caseId) =>
+  portalApi.post(`/portal/mediation/assets/${assetId}/decision`, data, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const uploadPortalDocument = (file, description, caseId) => {
+  const form = new FormData()
+  form.append('file', file)
+  if (description) form.append('description', description)
+  return portalApi.post('/portal/mediation/documents/upload', form, {
+    params: caseId ? { case_id: caseId } : {},
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+}
+
+export const listPortalDocuments = (caseId) =>
+  portalApi.get('/portal/mediation/documents', { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const listPortalProposals = (caseId) =>
+  portalApi.get('/portal/mediation/proposals', { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const createPortalProposal = (data, caseId) =>
+  portalApi.post('/portal/mediation/proposals', data, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const downloadPortalDocumentUrl = (docId, caseId) =>
+  `${BASE_URL}/portal/mediation/documents/${docId}/download${caseId ? `?case_id=${caseId}` : ''}`
+
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
 export const createCheckoutSession = () => api.post('/billing/checkout-session').then((r) => r.data)

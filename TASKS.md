@@ -385,16 +385,25 @@ Files: `backend/app/services/invoice_pdf.py`
 - [ ] User memory dashboard (view learned preferences + interaction patterns)
 - [ ] Admin console: view/delete UserMemory entries per user
 
-### 808. Skills Expansion — 52 New Legal Prompts (P1, LARGE)
-- [ ] Extract 52 new skill prompt constants from stash (stash@{0}: "local changes before PR fix")
-- [ ] Add new prompt constants to `backend/app/services/plugins/prompts.py`
-- [ ] Add entries to `ALL_DEFAULT_PROMPTS` dict for each new skill
-- [ ] Add 3 new practice areas: Family/Domestic Law, Criminal Defense, Real Estate
-- [ ] Verify `executor.py` SKILL_PROMPT_MAP auto-builds correctly from ALL_DEFAULT_PROMPTS
-- [ ] Verify imports (executor.py already uses ALL_DEFAULT_PROMPTS pattern)
+### 808. Skills Expansion — 52 New Legal Prompts (P1, LARGE) — COMPLETED
+- [x] Recovered 77 prompt constants from stash — 52 net-new skills across all practice areas
+- [x] Added detailed workflow-based prompt templates with output formats for all new skills
+- [x] Built `ALL_DEFAULT_PROMPTS` dict: 99 entries across 13 plugins — auto-generates `SKILL_PROMPT_MAP` in executor.py
+- [x] Added 3 new practice areas: Family/Domestic Law (`family-law`), Criminal Defense (`criminal-defense`), Real Estate (`real-estate`)
+- [x] Added trust-estate-legal plugin entries (ESTATE_WILL_TRUST_REVIEW_PROMPT, ESTATE_PROBATE_CHECKLIST_PROMPT, ESTATE_BENEFICIARY_LETTER_PROMPT, ESTATE_TAX_PREP_PROMPT, ESTATE_ACCOUNTING_REVIEW_PROMPT)
+- [x] Added 5 additional prompt constants from v0.9.0 prompt management: PORTFOLIO_STATUS_PROMPT, LEGAL_HOLD_PROMPT, CLOSING_CHECKLIST_PROMPT, CND_TRIAGE_PROMPT, NPRM_COMMENT_PROMPT
+- [x] `executor.py` SKILL_PROMPT_MAP auto-builds correctly via `for (plugin, skill), prompt in ALL_DEFAULT_PROMPTS.items()`
+- [x] Syntax verified; imports verified; 13 plugins × 99 total skills all wired
 
 Files: `backend/app/services/plugins/prompts.py`, `backend/app/services/plugins/executor.py`
 
+### Mediation Platform Module (PR #38) — Backlog
+
+- [ ] Portal document delete endpoint (backend has no DELETE for portal docs)
+- [ ] Proposal accept/reject UI in PortalCasePage (backend supports status updates)
+- [ ] End-to-end smoke test of full workflow: invite → accept → asset submission → attorney approve → send → opposing decision → proposal exchange
+- [ ] Run full mediation test suite (`backend/tests/test_mediation.py`, 7 tests) as part of CI — currently only runs cleanly in isolation due to unrelated LLM/network test hangs
+- [ ] MediationSubTable: wire delete for portal documents (needs backend DELETE endpoint first)
 ### Future
 - [ ] Production static file serving (nginx directly serves Vite dist)
 - [ ] Backup strategy for postgres

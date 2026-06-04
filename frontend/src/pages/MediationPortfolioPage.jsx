@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getMediationCases, createMediationCase } from '../api'
 import { useAuth } from '../App'
-import { Handshake, Plus, Search, Filter } from 'lucide-react'
+import { Handshake, Plus, Search, Filter, X, Check } from 'lucide-react'
 
 const STATUS_OPTIONS = ['all', 'active', 'scheduled', 'settled', 'closed']
+const DISPUTE_TYPES = ['domestic', 'family', 'divorce', 'custody', 'property', 'contract', 'employment', 'other']
 
 function StatusBadge({ status }) {
   const cfg = {
@@ -14,7 +15,6 @@ function StatusBadge({ status }) {
     settled: 'bg-indigo-100 text-indigo-800 border-indigo-200',
     closed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
   }[status?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
-
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[12px] font-sans font-semibold capitalize border ${cfg}`}>
       {status || '—'}
@@ -51,7 +51,6 @@ function DateCell({ dateStr }) {
 
 export default function MediationPortfolioPage() {
   const navigate = useNavigate()
-  // useAuth available for future auth-gated actions
   const { user } = useAuth()
   const [cases, setCases] = useState([])
   const [loading, setLoading] = useState(true)
@@ -59,20 +58,27 @@ export default function MediationPortfolioPage() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
 
-  useEffect(() => {
+  // Create modal state
+  const [showCreate, setShowCreate] = useState(false)
+  const [newCase, setNewCase] = useState({
+    case_name: '', party_a: '', party_b: '', dispute_type: 'domestic',
+    mediator: '', attorney: '', claim_value: '', summary: '',
+  })
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState(null)
+
+  const loadCases = () => {
+    setLoading(true)
     getMediationCases()
       .then((data) => setCases(Array.isArray(data) ? data : data.cases || data.mediations || []))
       .catch((err) => {
-        const status = err?.response?.status
-        if (status === 404) {
-          setError('404')
-        } else {
-          setError('Failed to load mediation cases.')
-        }
+        setError(err?.response?.status === 404 ? '404' : 'Failed to load mediation cases.')
         console.error(err)
       })
       .finally(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { loadCases() }, [])
 
   const stats = useMemo(() => ({
     active: cases.filter((c) => c.status?.toLowerCase() === 'active').length,
@@ -80,10 +86,8 @@ export default function MediationPortfolioPage() {
     pendingNda: cases.filter((c) => !c.confidentiality_signed).length,
     upcoming: cases.filter((c) => {
       if (!c.scheduled_session) return false
-      try {
-        const d = differenceInDays(parseISO(c.scheduled_session), new Date())
-        return d >= 0 && d <= 7
-      } catch { return false }
+      try { const d = differenceInDays(parseISO(c.scheduled_session), new Date()); return d >= 0 && d <= 7 }
+      catch { return false }
     }).length,
   }), [cases])
 
@@ -95,33 +99,38 @@ export default function MediationPortfolioPage() {
     })
   }, [cases, statusFilter, search])
 
+  const handleCreate = async () => {
+    if (!newCase.case_name.trim()) return
+    setCreating(true); setCreateError(null)
+    try {
+      const result = await createMediationCase(newCase)
+      const created = result.mediation || result
+      setShowCreate(false)
+      setNewCase({ case_name: '', party_a: '', party_b: '', dispute_type: 'domestic', mediator: '', attorney: '', claim_value: '', summary: '' })
+      navigate(`/plugins/mediation/cases/${created.id}`)
+    } catch (err) {
+      setCreateError(err?.response?.data?.detail || 'Failed to create case.')
+    } finally { setCreating(false) }
+  }
+
+  const inputCls = 'w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all'
+  const labelCls = 'block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5'
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-brand-bg">
-        <div className="text-brand-rose font-sans">
-          {error.includes('404') ? 'Mediation module is not yet available.' : error}
-        </div>
+        <div className="text-brand-rose font-sans">{error.includes('404') ? 'Mediation module is not yet available.' : error}</div>
       </div>
     )
   }
 
   return (
     <div className="min-h-screen bg-brand-bg relative overflow-hidden">
-      {/* Background noise */}
-      <div
-        className="absolute inset-0 opacity-[0.02] pointer-events-none z-0"
-        style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=%220 0 200 200%22 xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter id=%22noiseFilter%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.65%22 numOctaves=%223%22 stitchTiles=%22stitch%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23noiseFilter)%22/%3E%3C/svg%3E")' }}
-      ></div>
+      <div className="absolute inset-0 opacity-[0.02] pointer-events-none z-0" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=%220 0 200 200%22 xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter id=%22noiseFilter%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.65%22 numOctaves=%223%22 stitchTiles=%22stitch%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23noiseFilter)%22/%3E%3C/svg%3E")' }}></div>
 
       <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/plugins/mediation-legal')}
-            className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink transition-colors text-sm font-sans font-medium"
-          >
-            <Handshake size={16} />
-            Mediation
-          </button>
+          <div className="flex items-center gap-2 text-brand-ink text-sm font-sans font-medium"><Handshake size={16} /> Mediation</div>
           <div className="h-4 w-px bg-brand-line"></div>
           <span className="font-serif font-bold text-lg text-brand-ink tracking-tight">Mediation Cases</span>
         </div>
@@ -131,19 +140,14 @@ export default function MediationPortfolioPage() {
         <div className="flex items-end justify-between mb-10">
           <div>
             <h1 className="font-serif text-4xl font-bold text-brand-ink tracking-tight mb-2">Mediation Cases</h1>
-            <p className="text-brand-ink-2 text-[15px] font-sans">
-              {cases.length} total case{cases.length !== 1 ? 's' : ''}
-            </p>
+            <p className="text-brand-ink-2 text-[15px] font-sans">{cases.length} total case{cases.length !== 1 ? 's' : ''}</p>
           </div>
-          <button
-            onClick={() => navigate('/plugins/mediation-legal')}
-            className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0"
-          >
-            <Plus size={16} />
-            New Case
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0">
+            <Plus size={16} /> New Case
           </button>
         </div>
 
+        {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-10">
           {[
             { label: 'Active Cases', value: stats.active, dot: 'bg-brand-green' },
@@ -152,47 +156,74 @@ export default function MediationPortfolioPage() {
             { label: 'Pending NDAs', value: stats.pendingNda, dot: 'bg-brand-rose' },
           ].map((s, i) => (
             <div key={i} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:border-brand-line-2 transition-colors shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <div className={`w-2.5 h-2.5 rounded-full ${s.dot}`}></div>
-              </div>
+              <div className="flex items-center justify-between mb-3"><div className={`w-2.5 h-2.5 rounded-full ${s.dot}`}></div></div>
               <p className="text-4xl font-bold font-serif text-brand-ink tracking-tight mb-1">{s.value}</p>
               <p className="text-sm text-brand-ink-2 font-sans font-medium">{s.label}</p>
             </div>
           ))}
         </div>
 
+        {/* Filters */}
         <div className="bg-brand-surface border border-brand-line rounded-2xl p-4 mb-6 flex flex-wrap gap-4 items-center shadow-sm">
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1.5">
-              <Filter size={14} className="text-brand-muted" />
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-6 cursor-pointer appearance-none"
-                style={{ backgroundImage: 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\' viewBox=\'0 0 10 6\'><path fill=\'none\' stroke=\'%2314253B\' stroke-width=\'1.4\' d=\'M1 1l4 4 4-4\'/></svg>")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}
-              >
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                ))}
-              </select>
-            </div>
+          <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1.5">
+            <Filter size={14} className="text-brand-muted" />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-6 cursor-pointer appearance-none" style={{ backgroundImage: 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\' viewBox=\'0 0 10 6\'><path fill=\'none\' stroke=\'%2314253B\' stroke-width=\'1.4\' d=\'M1 1l4 4 4-4\'/></svg>")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
+              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+            </select>
           </div>
           <div className="flex-1 min-w-64 relative">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-muted" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by case name..."
-              className="w-full bg-brand-surface border border-brand-line rounded-lg pl-11 pr-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent placeholder-brand-muted transition-all"
-            />
+            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by case name..." className="w-full bg-brand-surface border border-brand-line rounded-lg pl-11 pr-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent placeholder-brand-muted transition-all" />
           </div>
         </div>
 
-        {loading ? (
-          <div className="flex justify-center py-24">
-            <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+        {/* Create Modal */}
+        {showCreate && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] bg-brand-ink/30 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
+            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between sticky top-0 bg-brand-surface rounded-t-2xl">
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2"><Handshake size={20} className="text-brand-accent" /> New Mediation Case</h2>
+                <button onClick={() => setShowCreate(false)} className="p-1.5 text-brand-muted hover:text-brand-ink transition-colors rounded-lg"><X size={18} /></button>
+              </div>
+              <div className="p-6 space-y-5">
+                {[
+                  { key: 'case_name', label: 'Case Name *', placeholder: 'e.g., Smith v. Jones — Divorce Mediation' },
+                  { key: 'party_a', label: 'Party A', placeholder: 'Petitioner / Initiating party' },
+                  { key: 'party_b', label: 'Party B', placeholder: 'Respondent / Opposing party' },
+                  { key: 'mediator', label: 'Mediator', placeholder: 'Assigned mediator name' },
+                  { key: 'attorney', label: 'Attorney / Counsel' },
+                  { key: 'claim_value', label: 'Claim Value', placeholder: 'e.g., $250,000' },
+                ].map(({ key, label, placeholder }) => (
+                  <div key={key}>
+                    <label className={labelCls}>{label}</label>
+                    <input type="text" value={newCase[key]} onChange={(e) => setNewCase((p) => ({ ...p, [key]: e.target.value }))} className={inputCls} placeholder={placeholder} />
+                  </div>
+                ))}
+                <div>
+                  <label className={labelCls}>Dispute Type</label>
+                  <select value={newCase.dispute_type} onChange={(e) => setNewCase((p) => ({ ...p, dispute_type: e.target.value }))} className={inputCls}>
+                    {DISPUTE_TYPES.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Summary / Notes</label>
+                  <textarea value={newCase.summary} onChange={(e) => setNewCase((p) => ({ ...p, summary: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Brief description of the dispute and mediation goals..." />
+                </div>
+                {createError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-brand-rose text-sm font-sans">{createError}</div>}
+              </div>
+              <div className="px-6 py-4 border-t border-brand-line bg-brand-bg-soft/50 rounded-b-2xl flex gap-3 justify-end">
+                <button onClick={() => setShowCreate(false)} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink transition-colors">Cancel</button>
+                <button onClick={handleCreate} disabled={creating || !newCase.case_name.trim()} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 disabled:bg-brand-line disabled:text-brand-muted transition-all shadow-sm flex items-center gap-2">
+                  {creating ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Creating…</> : <><Check size={16} /> Create Case</>}
+                </button>
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* Table */}
+        {loading ? (
+          <div className="flex justify-center py-24"><div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
         ) : filtered.length === 0 ? (
           <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm">
             <Handshake size={48} className="mx-auto text-brand-line-2 mb-4" strokeWidth={1} />
@@ -206,45 +237,23 @@ export default function MediationPortfolioPage() {
                 <thead>
                   <tr className="bg-brand-bg-soft/50 border-b border-brand-line">
                     {['Case', 'Parties', 'Dispute Type', 'Stage', 'Mediator', 'Claim Value', 'Status', 'NDA', 'Next Session', ''].map((h, i) => (
-                      <th key={h} className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 9 ? 'pr-6' : ''}`}>
-                        {h}
-                      </th>
+                      <th key={h} className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 9 ? 'pr-6' : ''}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-brand-line">
                   {filtered.map((c) => (
-                    <tr
-                      key={c.id}
-                      className="hover:bg-brand-bg-soft cursor-pointer transition-colors group"
-                      onClick={() => navigate(`/plugins/mediation/cases/${c.id}`)}
-                    >
+                    <tr key={c.id} className="hover:bg-brand-bg-soft cursor-pointer transition-colors group" onClick={() => navigate(`/plugins/mediation/cases/${c.id}`)}>
                       <td className="px-5 py-4 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">{c.case_name || '—'}</td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.party_a} <span className="text-brand-muted mx-1">v.</span> {c.party_b}</td>
+                      <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.party_a || '—'} <span className="text-brand-muted mx-1">v.</span> {c.party_b || '—'}</td>
                       <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">{c.dispute_type || '—'}</td>
                       <td className="px-5 py-4"><StageBadge stage={c.mediation_stage} /></td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.mediator || '—'}</td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.claim_value || '—'}</td>
                       <td className="px-5 py-4"><StatusBadge status={c.status} /></td>
-                      <td className="px-5 py-4">
-                        {c.confidentiality_signed ? (
-                          <span className="inline-flex items-center gap-1.5 text-brand-green font-sans text-xs font-semibold">
-                            <div className="w-1.5 h-1.5 rounded-full bg-brand-green"></div>
-                            Signed
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 text-brand-amber font-sans text-xs font-semibold">
-                            <div className="w-1.5 h-1.5 rounded-full bg-brand-amber"></div>
-                            Pending
-                          </span>
-                        )}
-                      </td>
+                      <td className="px-5 py-4">{c.confidentiality_signed ? <span className="inline-flex items-center gap-1.5 text-brand-green font-sans text-xs font-semibold"><div className="w-1.5 h-1.5 rounded-full bg-brand-green"></div> Signed</span> : <span className="inline-flex items-center gap-1.5 text-brand-amber font-sans text-xs font-semibold"><div className="w-1.5 h-1.5 rounded-full bg-brand-amber"></div> Pending</span>}</td>
                       <td className="px-5 py-4"><DateCell dateStr={c.scheduled_session} /></td>
-                      <td className="px-5 py-4 pr-6 text-right">
-                        <span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
-                          View →
-                        </span>
-                      </td>
+                      <td className="px-5 py-4 pr-6 text-right"><span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span></td>
                     </tr>
                   ))}
                 </tbody>
