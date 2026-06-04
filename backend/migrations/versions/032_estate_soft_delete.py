@@ -9,6 +9,7 @@ Adds:
   - Check constraint on ``estate_beneficiaries.share_percentage`` (0–100).
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "032"
@@ -20,23 +21,43 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "estates",
-        op.Column(
+        sa.Column(
             "is_deleted",
-            op.Boolean(),
+            sa.Boolean(),
             nullable=False,
-            server_default=op.text("false"),
+            server_default=sa.text("false"),
         ),
     )
     op.create_index("idx_estates_is_deleted", "estates", ["is_deleted"])
 
-    op.create_check_constraint(
-        "estate_beneficiaries",
-        "ck_beneficiary_share_pct",
-        "share_percentage >= 0 AND share_percentage <= 100",
+    # Guard: only add constraint if the table exists (migration 030 may have
+    # been partially applied in some environments).
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables "
+            "WHERE table_name = 'estate_beneficiaries')"
+        )
     )
+    if result.scalar():
+        op.create_check_constraint(
+            "ck_beneficiary_share_pct",
+            "estate_beneficiaries",
+            "share_percentage >= 0 AND share_percentage <= 100",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_beneficiary_share_pct", "estate_beneficiaries", type_="check")
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables "
+            "WHERE table_name = 'estate_beneficiaries')"
+        )
+    )
+    if result.scalar():
+        op.drop_constraint(
+            "ck_beneficiary_share_pct", "estate_beneficiaries", type_="check"
+        )
     op.drop_index("idx_estates_is_deleted", "estates")
     op.drop_column("estates", "is_deleted")
