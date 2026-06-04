@@ -349,8 +349,6 @@ export const createMediationProposal = (id, data) =>
   api.post(`/plugins/mediation/cases/${id}/proposals`, data).then(r => r.data)
 
 // ── Mediation Portal (client / opposing party) ──────────────────────────────
-// Separate axios instance: a 401 here must NOT bounce the user to the firm
-// /login page (portal users authenticate via invite link, not firm login).
 const portalApi = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
@@ -385,8 +383,17 @@ export const uploadPortalDocument = (file, description, caseId) => {
   }).then(r => r.data)
 }
 
+export const listPortalDocuments = (caseId) =>
+  portalApi.get('/portal/mediation/documents', { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const listPortalProposals = (caseId) =>
+  portalApi.get('/portal/mediation/proposals', { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
 export const createPortalProposal = (data, caseId) =>
   portalApi.post('/portal/mediation/proposals', data, { params: caseId ? { case_id: caseId } : {} }).then(r => r.data)
+
+export const downloadPortalDocumentUrl = (docId, caseId) =>
+  `${BASE_URL}/portal/mediation/documents/${docId}/download${caseId ? `?case_id=${caseId}` : ''}`
 
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)

@@ -33,6 +33,8 @@ import InvoicesPage from './pages/InvoicesPage'
 import InvoiceDetailPage from './pages/InvoiceDetailPage'
 import ProfilePage from './pages/ProfilePage'
 import OnboardingWizard from './pages/OnboardingWizard'
+import PortalAcceptPage from './pages/PortalAcceptPage'
+import PortalCasePage from './pages/PortalCasePage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -151,6 +153,9 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        {/* Portal routes — auth via httpOnly cookie from invite acceptance */}
+        <Route path="/portal/accept" element={<PortalAcceptPage />} />
+        <Route path="/portal/case" element={<PortalCasePage />} />
         <Route
           path="/onboarding"
           element={
