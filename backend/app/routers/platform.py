@@ -13,6 +13,7 @@ Endpoints:
   GET  /api/platform/health          — row counts and index info
 """
 
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models.conversation import UsageRecord
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 
 settings = get_settings()
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 def _require_platform_key(request: Request) -> None:
     key = request.headers.get("X-Platform-Key", "")
-    if not settings.PLATFORM_SECRET_KEY or key != settings.PLATFORM_SECRET_KEY:
+    if not settings.PLATFORM_SECRET_KEY or not hmac.compare_digest(key, settings.PLATFORM_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Invalid or missing platform key")
 
 

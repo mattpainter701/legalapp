@@ -72,7 +72,7 @@ async def get_licensing_info(
     active = (
         await db.scalar(
             select(func.count(User.id)).where(
-                User.tenant_id == tenant_id, User.is_active == True
+                User.tenant_id == tenant_id, User.is_active.is_(True)
             )
         )
         or 0
@@ -80,7 +80,7 @@ async def get_licensing_info(
     licensed = (
         await db.scalar(
             select(func.count(User.id)).where(
-                User.tenant_id == tenant_id, User.license_active == True
+                User.tenant_id == tenant_id, User.license_active.is_(True)
             )
         )
         or 0
@@ -174,7 +174,7 @@ async def toggle_user_license(
         cred_result = await db.execute(
             select(TenantCredential).where(
                 TenantCredential.granted_by_user_id == user.id,
-                TenantCredential.is_active == True,
+                TenantCredential.is_active.is_(True),
             )
         )
         if cred_result.scalar_one_or_none():
@@ -220,7 +220,7 @@ async def update_seat_count(
     licensed = (
         await db.scalar(
             select(func.count(User.id)).where(
-                User.tenant_id == tenant_id, User.license_active == True
+                User.tenant_id == tenant_id, User.license_active.is_(True)
             )
         )
         or 0

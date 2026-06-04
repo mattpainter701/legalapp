@@ -44,7 +44,6 @@ async def _safe_cache_op(db, user, request, conv_id, query_text, op_name, coro):
     try:
         return await coro()
     except Exception as cache_exc:
-        logger = __import__("logging").getLogger(__name__)
         logger.warning(f"Cache operation failed ({op_name}): {cache_exc}")
         await capture_chat_error(
             db=db,

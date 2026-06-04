@@ -188,7 +188,7 @@ class CloudSearchService:
         if keywords:
             kw_clauses = []
             for kw in keywords:
-                like = f"%{kw}%"
+                like = f"%{_escape_ilike(kw)}%"
                 kw_clauses.append(CloudMetadata.title.ilike(like))
                 kw_clauses.append(CloudMetadata.snippet.ilike(like))
             stmt = stmt.where(or_(*kw_clauses))
@@ -842,6 +842,11 @@ class CloudSearchService:
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────
+
+
+def _escape_ilike(value: str) -> str:
+    """Escape ``%`` and ``_`` wildcards before ILIKE to prevent unintended matches."""
+    return value.replace("%", "\\%").replace("_", "\\_")
 
 
 def _source_enabled(sources: list[str] | None, name: str) -> bool:

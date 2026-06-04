@@ -1,8 +1,11 @@
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel as _PydanticBase
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,7 +114,7 @@ async def deactivate_user(
         cred_result = await db.execute(
             select(TenantCredential).where(
                 TenantCredential.granted_by_user_id == user_id,
-                TenantCredential.is_active == True,
+                TenantCredential.is_active.is_(True),
             )
         )
         service_creds = cred_result.scalars().all()
@@ -458,7 +461,7 @@ async def get_tenant_settings(
     if settings_record is None:
         # Create default settings if not exists
         settings_record = TenantSettings(
-            id=__import__("uuid").uuid4(),
+            id=uuid.uuid4(),
             tenant_id=admin.tenant_id,
         )
         db.add(settings_record)
@@ -485,7 +488,7 @@ async def update_tenant_settings(
 
     if settings_record is None:
         settings_record = TenantSettings(
-            id=__import__("uuid").uuid4(),
+            id=uuid.uuid4(),
             tenant_id=admin.tenant_id,
         )
         db.add(settings_record)
@@ -1027,9 +1030,6 @@ async def update_billing_defaults(
 
 
 # ── Customer LLM Configuration ──────────────────────────────────────────
-
-
-from pydantic import BaseModel as _PydanticBase
 
 
 class CustomerLLMConfigRequest(_PydanticBase):

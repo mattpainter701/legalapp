@@ -36,7 +36,7 @@ async def _get_integration_status(
     result = await db.execute(
         select(TenantCredential).where(
             TenantCredential.tenant_id == tenant_id,
-            TenantCredential.is_active == True,
+            TenantCredential.is_active.is_(True),
         )
     )
     creds = result.scalars().all()
