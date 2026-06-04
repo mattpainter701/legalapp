@@ -766,7 +766,12 @@ async def cold_start_interview(
 
     await db.commit()
 
-    return SkillResponse(**result_data)
+    return {
+        **result_data,
+        "step": new_step,
+        "profile_complete": profile.is_complete,
+        "profile": profile.profile_content if profile.is_complete else None,
+    }
 
 
 # ── Skill Execution (catch-all — must be LAST) ────────────────────────────────

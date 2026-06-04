@@ -206,7 +206,10 @@ export const getPlugins = () => api.get('/plugins').then((r) => r.data)
 export const getPluginProfile = (plugin) => api.get(`/plugins/${plugin}/profile`).then((r) => r.data)
 export const savePluginProfile = (plugin, data) => api.put(`/plugins/${plugin}/profile`, data).then((r) => r.data)
 export const runColdStart = (plugin, message, step) =>
-  api.post(`/plugins/${plugin}/cold-start`, { message, step }).then((r) => r.data)
+  api.post(`/plugins/${plugin}/cold-start`, {
+    input_text: message || '',
+    context: { setup_step: step },
+  }).then((r) => r.data)
 export const executeSkill = (plugin, skill, data) =>
   api.post(`/plugins/${plugin}/${skill}`, data).then((r) => r.data)
 

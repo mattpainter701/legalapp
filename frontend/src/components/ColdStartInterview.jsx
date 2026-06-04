@@ -43,7 +43,7 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
     setError(null)
     try {
       const res = await runColdStart(plugin, '', 1)
-      setMessages([{ role: 'assistant', content: res.message || res.assistant_message || '' }])
+      setMessages([{ role: 'assistant', content: res.memo || res.message || '' }])
       if (res.step) setStep(res.step)
     } catch (err) {
       setError('Failed to start interview. Please try again.')
@@ -66,11 +66,11 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
       const nextStep = res.step || step + 1
       setStep(nextStep)
 
-      const assistantMsg = res.message || res.assistant_message || ''
+      const assistantMsg = res.memo || res.message || ''
       setMessages((prev) => [...prev, { role: 'assistant', content: assistantMsg }])
 
       if (res.profile_complete || nextStep > TOTAL_STEPS) {
-        setGeneratedProfile(res.profile || res.generated_profile || null)
+        setGeneratedProfile(res.profile || null)
       }
     } catch (err) {
       setError('Failed to process response. Please try again.')
