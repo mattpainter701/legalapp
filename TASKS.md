@@ -43,12 +43,16 @@ Files: `backend/app/services/cloud_init.py`, `backend/app/routers/plugins.py`
 
 Files: `backend/app/routers/admin.py`, `frontend/src/pages/AdminPage.jsx`
 
-### 806. Permission Audit (P1, SMALL) — COMPLETED
-- [x] `admin.py`: GET /permissions — granted vs required scope comparison
-- [x] `frontend/src/components/PermissionsAudit.jsx`: provider cards with scope checkmarks, missing scope warnings, re-authorize buttons
-- [x] AdminPage: "Permissions" tab added
+### 806. Permission Audit / Integrations Hub (P1, MEDIUM) — COMPLETED
+- [x] `admin.py`: GET /permissions — granted vs required scopes, +user_count, +last_sync freshness per provider
+- [x] `frontend/src/components/IntegrationsPanel.jsx`: provider cards with scope checkmarks, synced user count, last-sync freshness, "Sync now" button
+- [x] AdminPage: "Integrations" tab (renamed from "Permissions")
+- [x] Migration 030: user_sync_state columns on tenant_credentials
+- [x] `UserSyncService`: persist sync state, license_active=False on new synced users
+- [x] `LegalScheduler`: nightly user-sync job (2:00 AM ET) + manual trigger
+- [x] `routers/scheduler.py`: agent registry entry for manual trigger
 
-Files: `backend/app/routers/admin.py`, `frontend/src/components/PermissionsAudit.jsx`
+Files: `backend/app/routers/admin.py`, `backend/app/services/user_sync.py`, `backend/app/services/scheduler.py`, `backend/app/routers/scheduler.py`, `backend/migrations/versions/030_user_sync_state.py`, `frontend/src/components/IntegrationsPanel.jsx`, `frontend/src/pages/AdminPage.jsx`
 
 ### 807. Integration Tests & Polish (P1, SMALL) — COMPLETED
 - [x] `backend/tests/test_onboarding.py`: onboarding flow, license toggle, service account deactivation guard, permission audit

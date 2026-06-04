@@ -1136,8 +1136,30 @@ async def get_permissions_audit(
     )
     creds = cred_result.scalars().all()
 
-    def audit_provider(provider: str, required: list[str]) -> dict:
+    async def _provider_user_count(provider: str) -> int:
+        return (
+            await db.scalar(
+                select(func.count(User.id)).where(
+                    User.tenant_id == tenant_id,
+                    User.oauth_provider == provider,
+                )
+            )
+            or 0
+        )
+
+    ms_count = await _provider_user_count("microsoft")
+    google_count = await _provider_user_count("google")
+
+    def audit_provider(provider: str, required: list[str], user_count: int) -> dict:
         match = next((c for c in creds if c.provider == provider), None)
+        freshness = {
+            "user_count": user_count,
+            "last_sync_at": match.last_user_sync_at.isoformat()
+            if match and match.last_user_sync_at
+            else None,
+            "last_sync_total": match.last_user_sync_total if match else None,
+            "last_sync_status": match.last_user_sync_status if match else None,
+        }
         if not match or not match.scopes:
             return {
                 "connected": False,
@@ -1146,6 +1168,7 @@ async def get_permissions_audit(
                 "extra_scopes": [],
                 "all_required": False,
                 "health": "disconnected",
+                **freshness,
             }
         granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
         missing = [s for s in required if s not in granted]
@@ -1157,10 +1180,11 @@ async def get_permissions_audit(
             "extra_scopes": extra,
             "all_required": len(missing) == 0,
             "health": "healthy" if len(missing) == 0 else "missing_scopes",
+            **freshness,
         }
 
-    ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS)
-    google_audit = audit_provider("google", SCOPES_REQUIRED_GOOGLE)
+    ms_audit = audit_provider("microsoft", SCOPES_REQUIRED_MS, ms_count)
+    google_audit = audit_provider("google", SCOPES_REQUIRED_GOOGLE, google_count)
 
     overall = "healthy"
     if (
