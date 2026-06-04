@@ -40,6 +40,8 @@ from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
 from app.routers.matters import router as matters_router
 from app.routers.estates import router as estates_router
+from app.routers.mediation import router as mediation_router
+from app.routers.mediation_portal import router as mediation_portal_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.licensing import router as licensing_router
 from app.services.scheduler import LegalScheduler
@@ -165,6 +167,12 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
+# Dedicated plugin-subpath routers MUST be registered before the generic
+# plugins_router, whose greedy ``POST /{plugin}/{skill}`` skill-execution route
+# would otherwise shadow specific paths like ``/api/plugins/mediation/cases``.
+app.include_router(estates_router)
+app.include_router(mediation_router)
+app.include_router(mediation_portal_router)
 app.include_router(plugins_router, prefix="/api")
 app.include_router(prompt_admin_router, prefix="/api")
 app.include_router(cloud_admin_router, prefix="/api")
@@ -186,7 +194,6 @@ app.include_router(matter_documents_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
 app.include_router(matters_router)
-app.include_router(estates_router)
 app.include_router(document_templates_router)
 app.include_router(onboarding_router)
 app.include_router(licensing_router)

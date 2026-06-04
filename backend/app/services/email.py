@@ -571,3 +571,44 @@ class EmailService:
 
 # Module-level singleton
 email_service = EmailService()
+
+
+async def send_portal_invite(
+    to_email: str, case_name: str, invite_url: str
+) -> bool:
+    """Email a mediation-portal invite link to a party (client or opposing)."""
+    now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+    content = f"""
+    <div class="header">
+      <h1>Clarity Legal — Mediation Portal</h1>
+      <p>You've been invited to a secure mediation workspace</p>
+    </div>
+    <div class="body">
+      <p>You have been invited to participate in the mediation matter
+         <strong>{case_name}</strong>.</p>
+      <p>Use the secure link below to access the portal, where you can review
+         and submit financial disclosures, upload supporting documents, and
+         exchange settlement proposals.</p>
+      <p style="margin:24px 0;">
+        <a href="{invite_url}"
+           style="background:#0f2d5e;color:#ffffff;text-decoration:none;
+                  padding:12px 24px;border-radius:6px;font-weight:bold;
+                  display:inline-block;">Open Mediation Portal</a>
+      </p>
+      <p style="font-size:12px;color:#888;">If the button doesn't work, copy
+         and paste this link into your browser:<br/>{invite_url}</p>
+      <p style="font-size:12px;color:#888;">This invitation link is confidential
+         and will expire. Do not forward it.</p>
+    </div>
+    """
+    html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+    text_body = (
+        f"You've been invited to the Clarity Legal mediation portal for "
+        f"'{case_name}'.\n\nAccess it here: {invite_url}\n"
+    )
+    return await email_service.send_email(
+        to=[to_email],
+        subject=f"Clarity Legal — Mediation Portal Invitation: {case_name}",
+        html_body=html_body,
+        text_body=text_body,
+    )

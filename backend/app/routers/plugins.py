@@ -40,8 +40,6 @@ from app.models.conversation import UsageRecord
 from app.models.plugin import (
     Matter,
     MatterEvent,
-    MediationCase,
-    MediationCaseEvent,
     PracticeProfile,
     Renewal,
 )
@@ -51,11 +49,6 @@ from app.schemas.plugin import (
     MatterEventResponse,
     MatterResponse,
     MatterUpdate,
-    MediationCaseCreate,
-    MediationCaseEventCreate,
-    MediationCaseEventResponse,
-    MediationCaseResponse,
-    MediationCaseUpdate,
     PluginInfo,
     PluginListResponse,
     PracticeProfileResponse,
@@ -167,40 +160,6 @@ def _renewal_to_response(renewal: Renewal) -> RenewalResponse:
         days_until_renewal=days,
         urgency=_renewal_urgency(days),
         created_at=renewal.created_at,
-    )
-
-
-def _mediation_case_to_response(case: MediationCase) -> MediationCaseResponse:
-    return MediationCaseResponse(
-        id=str(case.id),
-        title=case.title,
-        parties=case.parties,
-        status=case.status,
-        summary=case.summary,
-        created_at=case.created_at,
-        updated_at=case.updated_at,
-        events=[
-            MediationCaseEventResponse(
-                id=str(e.id),
-                event_type=e.event_type,
-                title=e.title,
-                content=e.content,
-                created_at=e.created_at,
-            )
-            for e in (case.events or [])
-        ],
-    )
-
-
-def _mediation_event_to_response(
-    event: MediationCaseEvent,
-) -> MediationCaseEventResponse:
-    return MediationCaseEventResponse(
-        id=str(event.id),
-        event_type=event.event_type,
-        title=event.title,
-        content=event.content,
-        created_at=event.created_at,
     )
 
 
@@ -620,146 +579,10 @@ async def delete_renewal(
     await db.commit()
 
 
-# ── Mediation Cases ───────────────────────────────────────────────────────────
-
-
-@router.get("/mediation/cases", response_model=List[MediationCaseResponse])
-async def list_mediation_cases(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """List all mediation cases for the tenant, sorted by updated_at descending."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(MediationCase)
-        .where(MediationCase.tenant_id == user.tenant_id)
-        .order_by(MediationCase.updated_at.desc())
-    )
-    cases = result.scalars().all()
-    return [_mediation_case_to_response(c) for c in cases]
-
-
-@router.post("/mediation/cases", response_model=MediationCaseResponse, status_code=201)
-async def create_mediation_case(
-    body: MediationCaseCreate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Create a new mediation case."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    case = MediationCase(
-        id=uuid.uuid4(),
-        tenant_id=user.tenant_id,
-        title=body.title,
-        parties=body.parties,
-        status="active",
-        summary=body.summary,
-    )
-    db.add(case)
-    await db.commit()
-    await db.refresh(case)
-    return _mediation_case_to_response(case)
-
-
-@router.get(
-    "/mediation/cases/{mediation_case_id}", response_model=MediationCaseResponse
-)
-async def get_mediation_case(
-    mediation_case_id: str,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get a single mediation case by ID."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(MediationCase).where(
-            MediationCase.id == mediation_case_id,
-            MediationCase.tenant_id == user.tenant_id,
-        )
-    )
-    case = result.scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Mediation case not found")
-    return _mediation_case_to_response(case)
-
-
-@router.patch(
-    "/mediation/cases/{mediation_case_id}", response_model=MediationCaseResponse
-)
-async def update_mediation_case(
-    mediation_case_id: str,
-    body: MediationCaseUpdate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Partially update a mediation case."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(MediationCase).where(
-            MediationCase.id == mediation_case_id,
-            MediationCase.tenant_id == user.tenant_id,
-        )
-    )
-    case = result.scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Mediation case not found")
-
-    update_data = body.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(case, field, value)
-    case.updated_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(case)
-    return _mediation_case_to_response(case)
-
-
-@router.post(
-    "/mediation/cases/{mediation_case_id}/events",
-    response_model=MediationCaseEventResponse,
-    status_code=201,
-)
-async def append_mediation_case_event(
-    mediation_case_id: str,
-    body: MediationCaseEventCreate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Append an event to a mediation case's event log."""
-    user = await get_current_user(request, db)
-    await set_tenant_context(db, str(user.tenant_id))
-
-    result = await db.execute(
-        select(MediationCase).where(
-            MediationCase.id == mediation_case_id,
-            MediationCase.tenant_id == user.tenant_id,
-        )
-    )
-    case = result.scalar_one_or_none()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Mediation case not found")
-
-    event = MediationCaseEvent(
-        id=uuid.uuid4(),
-        case_id=case.id,
-        event_type=body.event_type,
-        title=body.title,
-        content=body.content,
-    )
-    db.add(event)
-    case.updated_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(event)
-    return _mediation_event_to_response(event)
+# NOTE: Mediation case endpoints used to live here as a minimal skeleton. They
+# have been superseded by the dedicated Mediation Platform module
+# (``app/routers/mediation.py`` + ``app/routers/mediation_portal.py``), which
+# owns the ``/api/plugins/mediation`` paths.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -421,6 +421,31 @@ class MediationCase(Base):
         String(100), default="active", server_default="active"
     )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── Domestic / family mediation fields (mirrors the frontend detail view) ──
+    case_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    party_a: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    party_b: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    dispute_type: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    mediation_stage: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mediator: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    attorney: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    claim_value: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    scheduled_session: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confidentiality_signed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    matter_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("matters.id", ondelete="SET NULL"), nullable=True
+    )
+    client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -436,6 +461,38 @@ class MediationCase(Base):
         "MediationCaseEvent",
         back_populates="case",
         order_by="MediationCaseEvent.created_at",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    case_parties: Mapped[list["MediationParty"]] = relationship(
+        "MediationParty",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    assets: Mapped[list["MediationAsset"]] = relationship(
+        "MediationAsset",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    documents: Mapped[list["MediationDocument"]] = relationship(
+        "MediationDocument",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    proposals: Mapped[list["MediationProposal"]] = relationship(
+        "MediationProposal",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    invites: Mapped[list["MediationInvite"]] = relationship(
+        "MediationInvite",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
@@ -458,8 +515,10 @@ class MediationCaseEvent(Base):
     event_type: Mapped[str] = mapped_column(
         String(100), nullable=False, default="other", server_default="other"
     )
+    session_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    added_by: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
