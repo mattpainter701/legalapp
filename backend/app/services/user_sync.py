@@ -1,8 +1,9 @@
+from datetime import datetime, timezone
 import logging
 import uuid
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -30,11 +31,9 @@ class UserSyncService:
         updated: int = 0,
         error: str | None = None,
     ) -> None:
-        from sqlalchemy import update
-
         from app.models.tenant_credential import TenantCredential
 
-        await db.execute(
+        result = await db.execute(
             update(TenantCredential)
             .where(
                 TenantCredential.tenant_id == uuid.UUID(tenant_id),
@@ -49,6 +48,12 @@ class UserSyncService:
                 last_user_sync_error=error,
             )
         )
+        if result.rowcount == 0:
+            logger.warning(
+                "_save_sync_state: no TenantCredential row for tenant=%s provider=%s",
+                tenant_id,
+                provider,
+            )
         await db.commit()
 
     async def record_sync_failure(
@@ -268,12 +273,14 @@ class UserSyncService:
         except Exception as exc:
             logger.warning("Microsoft user sync failed: %s", exc)
             result["microsoft"] = {"error": str(exc)}
+            await self.record_sync_failure(db, tenant_id, "microsoft", str(exc))
 
         try:
             result["google"] = await self.sync_google_users(db, tenant_id)
         except Exception as exc:
             logger.warning("Google user sync failed: %s", exc)
             result["google"] = {"error": str(exc)}
+            await self.record_sync_failure(db, tenant_id, "google", str(exc))
 
         return result
 
