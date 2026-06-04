@@ -385,6 +385,16 @@ Files: `backend/app/services/invoice_pdf.py`
 - [ ] User memory dashboard (view learned preferences + interaction patterns)
 - [ ] Admin console: view/delete UserMemory entries per user
 
+### 808. Skills Expansion — 52 New Legal Prompts (P1, LARGE)
+- [ ] Extract 52 new skill prompt constants from stash (stash@{0}: "local changes before PR fix")
+- [ ] Add new prompt constants to `backend/app/services/plugins/prompts.py`
+- [ ] Add entries to `ALL_DEFAULT_PROMPTS` dict for each new skill
+- [ ] Add 3 new practice areas: Family/Domestic Law, Criminal Defense, Real Estate
+- [ ] Verify `executor.py` SKILL_PROMPT_MAP auto-builds correctly from ALL_DEFAULT_PROMPTS
+- [ ] Verify imports (executor.py already uses ALL_DEFAULT_PROMPTS pattern)
+
+Files: `backend/app/services/plugins/prompts.py`, `backend/app/services/plugins/executor.py`
+
 ### Future
 - [ ] Production static file serving (nginx directly serves Vite dist)
 - [ ] Backup strategy for postgres
