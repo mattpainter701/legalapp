@@ -6,7 +6,7 @@ import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
 import LicensingPanel from '../components/LicensingPanel'
-import PermissionsAudit from '../components/PermissionsAudit'
+import IntegrationsPanel from '../components/IntegrationsPanel'
 
 // ── Reusable primitives ──────────────────────────────────────────────────────
 
@@ -431,7 +431,7 @@ export default function AdminPage() {
     { id: 'tenant', label: 'Tenant' },
     { id: 'prompts', label: 'Prompts' },
     { id: 'cloud-search', label: 'Cloud Search' },
-    { id: 'permissions', label: 'Permissions' },
+    { id: 'integrations', label: 'Integrations' },
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -514,7 +514,7 @@ export default function AdminPage() {
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}
           {activeTab === 'cloud-search' && <CloudSearchAdmin />}
-          {activeTab === 'permissions' && <PermissionsAudit />}
+          {activeTab === 'integrations' && <IntegrationsPanel />}
         </div>
       </div>
     </div>

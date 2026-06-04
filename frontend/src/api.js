@@ -185,6 +185,8 @@ export const getIntegrationsHealth = () =>
   api.get('/admin/integrations/health').then((r) => r.data)
 export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
+export const triggerUserSync = () =>
+  api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
 
 // Customer LLM
 export const configureCustomerLLM = (config) =>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getAdminPermissions } from '../api'
+import { getAdminPermissions, triggerUserSync } from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
@@ -17,10 +17,36 @@ const SCOPE_LABELS_GOOGLE = {
   'https://www.googleapis.com/auth/calendar': 'Read Google Calendar',
 }
 
-export default function PermissionsAudit() {
+export default function IntegrationsPanel() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+
+  const relTime = (iso) => {
+    if (!iso) return 'never'
+    const diffMs = Date.now() - new Date(iso).getTime()
+    const mins = Math.floor(diffMs / 60000)
+    if (mins < 1) return 'just now'
+    if (mins < 60) return `${mins}m ago`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `${hrs}h ago`
+    return `${Math.floor(hrs / 24)}d ago`
+  }
+
+  const handleSyncNow = async () => {
+    setSyncing(true)
+    try {
+      await triggerUserSync()
+      setTimeout(() => {
+        getAdminPermissions().then(setData).catch(() => {})
+        setSyncing(false)
+      }, 4000)
+    } catch {
+      setError('Failed to trigger sync.')
+      setSyncing(false)
+    }
+  }
 
   useEffect(() => {
     getAdminPermissions()
@@ -72,7 +98,7 @@ export default function PermissionsAudit() {
           data.overall_health === 'healthy' ? 'bg-green-500' :
           data.overall_health === 'attention_needed' ? 'bg-amber-500' : 'bg-red-500'
         }`} />
-        Overall: {data.overall_health === 'healthy' ? 'Healthy' :
+        Integrations: {data.overall_health === 'healthy' ? 'Healthy' :
           data.overall_health === 'attention_needed' ? 'Needs Attention' : 'No integrations connected'}
       </div>
 
@@ -83,6 +109,9 @@ export default function PermissionsAudit() {
         info={data.microsoft}
         scopeLabels={SCOPE_LABELS_MS}
         onReauthorize={handleReauthorize}
+        relTime={relTime}
+        onSyncNow={handleSyncNow}
+        syncing={syncing}
       />
 
       {/* Google card */}
@@ -92,12 +121,15 @@ export default function PermissionsAudit() {
         info={data.google}
         scopeLabels={SCOPE_LABELS_GOOGLE}
         onReauthorize={handleReauthorize}
+        relTime={relTime}
+        onSyncNow={handleSyncNow}
+        syncing={syncing}
       />
     </div>
   )
 }
 
-function ProviderCard({ name, provider, info, scopeLabels, onReauthorize }) {
+function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTime, onSyncNow, syncing }) {
   const allScopes = [...(info.granted_scopes || []), ...(info.missing_required || [])]
   // Deduplicate while preserving order
   const uniqueScopes = [...new Set(allScopes)]
@@ -115,13 +147,30 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize }) {
             {info.health === 'healthy' ? 'Healthy' :
              info.health === 'missing_scopes' ? 'Missing Scopes' : 'Disconnected'}
           </span>
+          {info.connected && (
+            <p className="mt-1 text-xs text-brand-ink-2 font-sans">
+              {info.user_count ?? 0} users synced
+              {info.last_sync_status === 'failed' ? ' · last sync failed' : ` · last run ${relTime(info.last_sync_at)}`}
+            </p>
+          )}
         </div>
-        <button
-          onClick={() => onReauthorize(provider)}
-          className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors"
-        >
-          {info.connected ? 'Re-authorize' : 'Connect'}
-        </button>
+        <div className="flex items-center gap-2">
+          {info.connected && (
+            <button
+              onClick={onSyncNow}
+              disabled={syncing}
+              className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          )}
+          <button
+            onClick={() => onReauthorize(provider)}
+            className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors"
+          >
+            {info.connected ? 'Re-authorize' : 'Connect'}
+          </button>
+        </div>
       </div>
 
       <div className="space-y-1.5">
