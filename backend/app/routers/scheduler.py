@@ -42,6 +42,12 @@ AGENT_REGISTRY = [
         "description": "Weekly matter portfolio summary email for each tenant's admin users.",
         "schedule": "Every Monday at 9:00 AM ET",
     },
+    {
+        "name": "user-sync",
+        "display_name": "Directory User Sync",
+        "description": "Pulls directory users from connected Google/Microsoft tenants; new users land on the free tier.",
+        "schedule": "Daily at 2:00 AM ET",
+    },
 ]
 
 
