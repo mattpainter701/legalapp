@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-
 # ── Matter CRUD ───────────────────────────────────────────────────────────────
 
 
@@ -95,6 +94,7 @@ class MatterUpdate(BaseModel):
     outcome: str | None = Field(None, max_length=200)
     final_cost: str | None = Field(None, max_length=100)
     memory_content: str | None = None
+    cloud_folder: dict | None = None
 
 
 class MatterAssignmentResponse(BaseModel):
@@ -182,6 +182,7 @@ class MatterResponse(BaseModel):
 
     # AI memory
     memory_content: str | None
+    cloud_folder: dict | None
 
     created_at: datetime
     updated_at: datetime

@@ -170,6 +170,9 @@ class Matter(Base):
     # Per-matter AI memory / context document (the matter's CLAUDE.md equivalent)
     memory_content: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Provider folder IDs/URLs created for the matter in the tenant's cloud.
+    cloud_folder: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -382,8 +385,12 @@ class Estate(Base):
     deadlines: Mapped[list["EstateDeadline"]] = relationship(  # noqa: F821
         "EstateDeadline", back_populates="estate", cascade="all, delete-orphan"
     )
-    accounting_entries: Mapped[list["EstateAccountingEntry"]] = relationship(  # noqa: F821
-        "EstateAccountingEntry", back_populates="estate", cascade="all, delete-orphan"
+    accounting_entries: Mapped[list["EstateAccountingEntry"]] = (
+        relationship(  # noqa: F821
+            "EstateAccountingEntry",
+            back_populates="estate",
+            cascade="all, delete-orphan",
+        )
     )
 
 

@@ -19,6 +19,8 @@ from app.models.matter_note import MatterNote
 from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer, RetainerTransaction
 from app.models.user import User
+from app.models.tenant import Tenant
+from app.services.cloud_init import initialize_matter_folders, share_matter_folders
 from app.schemas.matter import (
     BudgetUtilization,
     MatterAssignmentCreate,
@@ -178,13 +180,13 @@ def _matter_to_response(
         court=matter.court,
         judge=matter.judge,
         case_number=matter.case_number,
-        client_contact_id=str(matter.client_contact_id)
-        if matter.client_contact_id
-        else None,
+        client_contact_id=(
+            str(matter.client_contact_id) if matter.client_contact_id else None
+        ),
         client_name=client_name,
-        attorney_of_record_id=str(matter.attorney_of_record_id)
-        if matter.attorney_of_record_id
-        else None,
+        attorney_of_record_id=(
+            str(matter.attorney_of_record_id) if matter.attorney_of_record_id else None
+        ),
         attorney_of_record_name=attorney_name,
         budget_amount=matter.budget_amount,
         budget_currency=matter.budget_currency,
@@ -197,6 +199,7 @@ def _matter_to_response(
         assignments=assignments,
         budget_utilization=budget,
         memory_content=matter.memory_content,
+        cloud_folder=matter.cloud_folder,
         created_at=matter.created_at,
         updated_at=matter.updated_at,
     )
@@ -278,7 +281,11 @@ async def list_matters(
     items = []
     for m in matters:
         client_name = getattr(m.client, "display_name", None) if m.client else None
-        attorney_name = getattr(m.attorney_of_record, "full_name", None) if m.attorney_of_record else None
+        attorney_name = (
+            getattr(m.attorney_of_record, "full_name", None)
+            if m.attorney_of_record
+            else None
+        )
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
@@ -395,6 +402,23 @@ async def create_matter(
     db.add(matter)
     await db.flush()
 
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant and tenant.cloud_root_folder:
+        try:
+            matter.cloud_folder = await initialize_matter_folders(
+                db=db,
+                tenant_id=str(tenant_id),
+                matter_slug=slug,
+                cloud_root=tenant.cloud_root_folder,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to initialize cloud folders for matter %s",
+                matter.id,
+                exc_info=True,
+            )
+
     # Create initial event
     event = MatterEvent(
         tenant_id=tenant_id,
@@ -416,7 +440,9 @@ async def create_matter(
     if attorney_of_record_uuid:
         assigned_ids.add(str(attorney_of_record_uuid))
 
-    primary_uid = str(attorney_of_record_uuid) if attorney_of_record_uuid else str(user.id)
+    primary_uid = (
+        str(attorney_of_record_uuid) if attorney_of_record_uuid else str(user.id)
+    )
 
     for uid in assigned_ids:
         try:
@@ -433,6 +459,27 @@ async def create_matter(
             is_primary=is_primary,
         )
         db.add(assignment)
+
+    if matter.cloud_folder:
+        valid_assigned_user_ids = []
+        for uid in assigned_ids:
+            try:
+                valid_assigned_user_ids.append(uuid.UUID(uid))
+            except (ValueError, TypeError):
+                continue
+        user_rows = await db.execute(
+            select(User.email).where(
+                User.tenant_id == tenant_id,
+                User.id.in_(valid_assigned_user_ids),
+            )
+        )
+        assigned_emails = [email for (email,) in user_rows.all() if email]
+        await share_matter_folders(
+            db=db,
+            tenant_id=str(tenant_id),
+            cloud_folder=matter.cloud_folder,
+            user_emails=assigned_emails,
+        )
 
     await db.commit()
     await db.refresh(matter)
@@ -487,7 +534,11 @@ async def get_my_matters(
     items = []
     for m in matters:
         client_name = getattr(m.client, "display_name", None) if m.client else None
-        attorney_name = getattr(m.attorney_of_record, "full_name", None) if m.attorney_of_record else None
+        attorney_name = (
+            getattr(m.attorney_of_record, "full_name", None)
+            if m.attorney_of_record
+            else None
+        )
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
@@ -1439,12 +1490,12 @@ async def get_matter_invoices(
             "tax_amount": float(i.tax_amount),
             "total": float(i.total),
             "retainer_id": str(i.retainer_id) if i.retainer_id else None,
-            "billing_period_start": str(i.billing_period_start)
-            if i.billing_period_start
-            else None,
-            "billing_period_end": str(i.billing_period_end)
-            if i.billing_period_end
-            else None,
+            "billing_period_start": (
+                str(i.billing_period_start) if i.billing_period_start else None
+            ),
+            "billing_period_end": (
+                str(i.billing_period_end) if i.billing_period_end else None
+            ),
             "line_items": [
                 {
                     "id": str(li.id),

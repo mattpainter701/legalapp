@@ -93,7 +93,14 @@ class CloudSearchService:
         results: list[CloudHit] = []
         tasks = []
 
-        if sources is None or "google" in sources:
+        google_sources = {"drive", "gmail"}
+        microsoft_sources = {"onedrive", "sharepoint", "outlook"}
+
+        if (
+            sources is None
+            or "google" in sources
+            or google_sources.intersection(sources)
+        ):
             if _source_enabled(sources, "drive"):
                 tasks.append(
                     self._search_google_drive(
@@ -107,22 +114,16 @@ class CloudSearchService:
                     )
                 )
 
-        if sources is None or "microsoft" in sources:
-            if _source_enabled(sources, "onedrive") or _source_enabled(
-                sources, "sharepoint"
-            ):
-                tasks.append(
-                    self._search_graph(
-                        db, keywords, date_after, max_hits, tenant_id, user_id
-                    )
+        if (
+            sources is None
+            or "microsoft" in sources
+            or microsoft_sources.intersection(sources)
+        ):
+            tasks.append(
+                self._search_graph(
+                    db, keywords, date_after, max_hits, tenant_id, user_id, sources
                 )
-            elif sources is None:
-                # No microsoft sub-source filter — run full Graph search
-                tasks.append(
-                    self._search_graph(
-                        db, keywords, date_after, max_hits, tenant_id, user_id
-                    )
-                )
+            )
 
         # Always include the locally-synced metadata index. It is a reliable
         # fallback when live tokens are limited and gives the sync subsystem a
@@ -181,7 +182,7 @@ class CloudSearchService:
         # Restrict to the (provider, object_type) pairs the plan asked for.
         allowed: set[tuple[str, str]] = set()
         for (provider, object_type), source in _INDEX_SOURCE_MAP.items():
-            if sources is None or source in sources:
+            if sources is None or provider in sources or source in sources:
                 allowed.add((provider, object_type))
         if not allowed:
             return []
@@ -240,9 +241,9 @@ class CloudSearchService:
                     title=row.title or "",
                     snippet=row.snippet or "",
                     url=row.web_url or "",
-                    modified_time=row.modified_time.isoformat()
-                    if row.modified_time
-                    else "",
+                    modified_time=(
+                        row.modified_time.isoformat() if row.modified_time else ""
+                    ),
                     mime_type=row.mime_type or "",
                     participants=[p for p in participants if p],
                     relevance_score=min(score, 0.99),
@@ -530,6 +531,7 @@ class CloudSearchService:
         max_hits: int,
         tenant_id: str,
         user_id: str | None,
+        sources: list[str] | None = None,
     ) -> list[CloudHit]:
         token = await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
@@ -589,7 +591,7 @@ class CloudSearchService:
             for raw_hit in container.get("hits", []):
                 try:
                     hit = self._parse_graph_hit(raw_hit, total_results)
-                    if hit:
+                    if hit and _source_enabled(sources, hit.source):
                         hits.append(hit)
                 except Exception:
                     logger.debug("Failed to parse Graph hit", exc_info=True)
@@ -628,9 +630,9 @@ class CloudSearchService:
                 modified_time=modified,
                 mime_type=mime or "application/octet-stream",
                 participants=[],
-                relevance_score=1.0 - (rank / max(total_results, 1))
-                if total_results
-                else 1.0,
+                relevance_score=(
+                    1.0 - (rank / max(total_results, 1)) if total_results else 1.0
+                ),
             )
 
         if "message" in entity_type:
@@ -663,9 +665,9 @@ class CloudSearchService:
                 modified_time=received,
                 mime_type="message/rfc822",
                 participants=participants,
-                relevance_score=1.0 - (rank / max(total_results, 1))
-                if total_results
-                else 1.0,
+                relevance_score=(
+                    1.0 - (rank / max(total_results, 1)) if total_results else 1.0
+                ),
             )
 
         return None
@@ -865,7 +867,13 @@ def _source_enabled(sources: list[str] | None, name: str) -> bool:
     """Check whether a specific sub-source is in the list of requested sources."""
     if sources is None:
         return True
-    return name in sources
+    if name in sources:
+        return True
+    if name in {"drive", "gmail"} and "google" in sources:
+        return True
+    if name in {"onedrive", "sharepoint", "outlook"} and "microsoft" in sources:
+        return True
+    return False
 
 
 def _parse_index_date(value: str) -> datetime | None:

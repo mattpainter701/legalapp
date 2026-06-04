@@ -1,8 +1,8 @@
 """Matter file store — routes document storage to customer's cloud (OneDrive/Google Drive).
 
 Files are stored in the customer's own cloud storage, not ours:
-  - MS365 customers → OneDrive: /LegalApp/Matters/{matter_slug}/{category}/{filename}
-  - Google Workspace → Google Drive: LegalApp/Matters/{matter_slug}/ folder
+  - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
+  - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
   - Fallback → local disk (UPLOAD_DIR)
 """
 
@@ -80,9 +80,9 @@ class MatterFileStore:
             if not token:
                 return None
 
-            # Build folder path: /LegalApp/Matters/{slug}/{category}
+            # Build folder path: /claritylegal-records/{slug}/{category}
             parent_id = await _ensure_onedrive_path(
-                token, ["LegalApp", "Matters", matter_slug, category]
+                token, ["claritylegal-records", matter_slug, category]
             )
 
             upload_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
@@ -131,7 +131,7 @@ class MatterFileStore:
                 return None
 
             parent_id = await _ensure_gdrive_path(
-                token, ["LegalApp", "Matters", matter_slug, category]
+                token, ["claritylegal-records", matter_slug, category]
             )
 
             # Upload file

@@ -3,9 +3,8 @@
 import os
 import uuid
 
-import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +18,11 @@ from app.schemas.matter_document import (
     MatterDocumentResponse,
     MatterDocumentUpdate,
 )
+from app.services.matter_file_store import MatterFileStore
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["matter-documents"])
+matter_file_store = MatterFileStore()
 
 
 async def _get_matter_or_404(
@@ -101,7 +102,7 @@ async def upload_matter_document(
     """Upload a file attachment to a matter."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    await _get_matter_or_404(matter_id, user.tenant_id, db)
+    matter = await _get_matter_or_404(matter_id, user.tenant_id, db)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -115,19 +116,16 @@ async def upload_matter_document(
         )
 
     doc_id = uuid.uuid4()
-    storage_dir = os.path.join(
-        settings.UPLOAD_DIR,
-        str(user.tenant_id),
-        "matters",
-        matter_id,
-        str(doc_id),
-    )
-    os.makedirs(storage_dir, exist_ok=True)
     safe_filename = os.path.basename(file.filename)
-    storage_path = os.path.join(storage_dir, safe_filename)
-
-    async with aiofiles.open(storage_path, "wb") as out_file:
-        await out_file.write(file_bytes)
+    storage_path = await matter_file_store.store_matter_file(
+        db=db,
+        tenant_id=str(user.tenant_id),
+        matter_slug=matter.slug,
+        category=document_category or "general",
+        filename=safe_filename,
+        content=file_bytes,
+        content_type=file.content_type or "application/octet-stream",
+    )
 
     doc = MatterDocument(
         id=doc_id,
@@ -209,6 +207,9 @@ async def download_matter_document(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
+
+    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
+        return RedirectResponse(doc.storage_path)
 
     if not doc.storage_path or not os.path.exists(doc.storage_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
