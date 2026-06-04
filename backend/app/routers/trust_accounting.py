@@ -103,7 +103,7 @@ async def create_trust_account(
 async def list_trust_accounts(
     matter_id: str | None = Query(None),
     is_active: bool | None = Query(None),
-    request: Request = None,
+    request: Request | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TrustAccountListResponse:
     """List trust accounts with optional filters."""
@@ -113,7 +113,7 @@ async def list_trust_accounts(
     if matter_id:
         stmt = stmt.where(TrustAccount.matter_id == matter_id)
     if is_active is not None:
-        stmt = stmt.where(TrustAccount.is_active == is_active)
+        stmt = stmt.where(TrustAccount.is_active.is_(is_active))
 
     stmt = stmt.order_by(TrustAccount.account_name)
 
@@ -232,10 +232,12 @@ async def create_trust_transaction(
 
     # Verify trust account belongs to tenant
     account_result = await db.execute(
-        select(TrustAccount).where(
+        select(TrustAccount)
+        .where(
             TrustAccount.id == body.trust_account_id,
             TrustAccount.tenant_id == user.tenant_id,
         )
+        .with_for_update()
     )
     account = account_result.scalar_one_or_none()
     if not account:
@@ -274,7 +276,11 @@ async def create_trust_transaction(
         account.current_balance += body.amount
     elif body.transaction_type in DEBIT_TYPES:
         account.current_balance -= body.amount
-    # "adjustment" can go either way — handled as a signed amount by caller
+    elif body.transaction_type == "adjustment":
+        if body.amount > 0:
+            account.current_balance += body.amount
+        elif body.amount < 0:
+            account.current_balance -= abs(body.amount)
 
     await db.commit()
     await db.refresh(transaction)
@@ -287,7 +293,7 @@ async def list_trust_transactions(
     trust_account_id: str | None = Query(None),
     transaction_type: str | None = Query(None),
     is_reconciled: bool | None = Query(None),
-    request: Request = None,
+    request: Request | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> TrustTransactionListResponse:
     """List trust transactions with optional filters."""
@@ -299,7 +305,7 @@ async def list_trust_transactions(
     if transaction_type:
         stmt = stmt.where(TrustTransaction.transaction_type == transaction_type)
     if is_reconciled is not None:
-        stmt = stmt.where(TrustTransaction.is_reconciled == is_reconciled)
+        stmt = stmt.where(TrustTransaction.is_reconciled.is_(is_reconciled))
 
     stmt = stmt.order_by(
         TrustTransaction.transaction_date.desc(),

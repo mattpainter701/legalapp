@@ -302,6 +302,9 @@ class Estate(Base):
     status: Mapped[str] = mapped_column(
         String(100), default="active", server_default="active"
     )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Estate detail (added in migration 030)

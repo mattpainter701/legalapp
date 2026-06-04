@@ -7,6 +7,7 @@ import {
   listEstateChildren, getEstateAccountingSummary, getEstateReport,
 } from '../api'
 import EstateSubTable, { fmtMoney, fmtDate } from '../components/EstateSubTable'
+import StatusBadge from '../components/StatusBadge'
 import { Vault, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock, Download } from 'lucide-react'
 
 const EVENT_TYPES = ['drafting', 'review', 'filing', 'funding', 'distribution', 'tax', 'correspondence', 'other']
@@ -17,20 +18,6 @@ const TABS = [
   'Overview', 'Fiduciaries', 'Beneficiaries', 'Assets', 'Claims',
   'Distributions', 'Accounting', 'Deadlines', 'Activity',
 ]
-
-function StatusBadge({ status }) {
-  const cfg = {
-    active: 'bg-brand-green/10 text-brand-green border-brand-green/20',
-    in_probate: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
-    draft: 'bg-blue-50 text-blue-700 border-blue-200',
-    closed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
-  }[status?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
-  return (
-    <span className={`inline-flex items-center px-3 py-1 rounded-full text-[13px] font-semibold capitalize font-sans border ${cfg}`}>
-      {(status || '—').replace(/_/g, ' ')}
-    </span>
-  )
-}
 
 function Pill({ children }) {
   return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider font-sans border bg-brand-ink/5 text-brand-ink-2 border-brand-ink/10">{children}</span>

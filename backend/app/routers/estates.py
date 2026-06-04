@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -167,7 +167,12 @@ def _as_uuid(value: str | None) -> uuid.UUID | None:
 
 
 @router.get("/estates", response_model=List[EstateResponse])
-async def list_estates(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_estates(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
@@ -179,8 +184,13 @@ async def list_estates(request: Request, db: AsyncSession = Depends(get_db)):
             selectinload(Estate.deadlines),
             selectinload(Estate.client),
         )
-        .where(Estate.tenant_id == user.tenant_id)
+        .where(
+            Estate.tenant_id == user.tenant_id,
+            Estate.is_deleted == False,  # noqa: E712
+        )
         .order_by(Estate.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
     return [_estate_to_response(e) for e in result.scalars().all()]
 
@@ -193,7 +203,10 @@ async def estate_stats(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Estate)
         .options(selectinload(Estate.beneficiaries))
-        .where(Estate.tenant_id == user.tenant_id)
+        .where(
+            Estate.tenant_id == user.tenant_id,
+            Estate.is_deleted == False,  # noqa: E712
+        )
     )
     estates = result.scalars().all()
 
@@ -301,7 +314,17 @@ async def delete_estate(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     estate = await _get_estate_or_404(db, estate_id, user.tenant_id)
-    await db.delete(estate)
+    estate.is_deleted = True
+    estate.updated_at = datetime.now(timezone.utc)
+
+    event = EstateEvent(
+        id=uuid.uuid4(),
+        estate_id=estate.id,
+        event_type="deletion",
+        title="Estate record deleted",
+        content=f"Estate '{estate.estate_name or estate.title}' was soft-deleted by {user.email or user.id}.",
+    )
+    db.add(event)
     await db.commit()
 
 
@@ -394,7 +417,11 @@ def _fiduciary_resp(f: EstateFiduciary) -> FiduciaryResponse:
 
 @router.get("/estates/{estate_id}/fiduciaries", response_model=List[FiduciaryResponse])
 async def list_fiduciaries(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -406,6 +433,8 @@ async def list_fiduciaries(
             EstateFiduciary.tenant_id == user.tenant_id,
         )
         .order_by(EstateFiduciary.is_primary.desc(), EstateFiduciary.created_at)
+        .offset(offset)
+        .limit(limit)
     )
     return [_fiduciary_resp(f) for f in result.scalars().all()]
 
@@ -516,7 +545,11 @@ def _beneficiary_resp(b: EstateBeneficiary) -> BeneficiaryResponse:
     "/estates/{estate_id}/beneficiaries", response_model=List[BeneficiaryResponse]
 )
 async def list_beneficiaries(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -528,6 +561,8 @@ async def list_beneficiaries(
             EstateBeneficiary.tenant_id == user.tenant_id,
         )
         .order_by(EstateBeneficiary.created_at)
+        .offset(offset)
+        .limit(limit)
     )
     return [_beneficiary_resp(b) for b in result.scalars().all()]
 
@@ -620,7 +655,11 @@ async def delete_beneficiary(
 
 @router.get("/estates/{estate_id}/assets", response_model=List[AssetResponse])
 async def list_assets(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -632,6 +671,8 @@ async def list_assets(
             EstateAsset.tenant_id == user.tenant_id,
         )
         .order_by(EstateAsset.created_at)
+        .offset(offset)
+        .limit(limit)
     )
     return list(result.scalars().all())
 
@@ -701,7 +742,11 @@ async def delete_asset(
     "/estates/{estate_id}/liabilities", response_model=List[LiabilityResponse]
 )
 async def list_liabilities(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -713,6 +758,8 @@ async def list_liabilities(
             EstateLiability.tenant_id == user.tenant_id,
         )
         .order_by(EstateLiability.created_at)
+        .offset(offset)
+        .limit(limit)
     )
     return list(result.scalars().all())
 
@@ -809,7 +856,11 @@ def _distribution_resp(
     response_model=List[DistributionResponse],
 )
 async def list_distributions(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -821,6 +872,8 @@ async def list_distributions(
             EstateDistribution.tenant_id == user.tenant_id,
         )
         .order_by(EstateDistribution.created_at)
+        .offset(offset)
+        .limit(limit)
     )
     distributions = result.scalars().all()
     ben_result = await db.execute(
@@ -917,7 +970,11 @@ async def delete_distribution(
 
 @router.get("/estates/{estate_id}/deadlines", response_model=List[DeadlineResponse])
 async def list_deadlines(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -929,6 +986,8 @@ async def list_deadlines(
             EstateDeadline.tenant_id == user.tenant_id,
         )
         .order_by(EstateDeadline.due_date)
+        .offset(offset)
+        .limit(limit)
     )
     return [_deadline_resp(d) for d in result.scalars().all()]
 
@@ -1030,7 +1089,11 @@ async def delete_deadline(
     response_model=List[AccountingEntryResponse],
 )
 async def list_accounting(
-    estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
+    estate_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -1045,6 +1108,8 @@ async def list_accounting(
             EstateAccountingEntry.entry_date.desc(),
             EstateAccountingEntry.created_at.desc(),
         )
+        .offset(offset)
+        .limit(limit)
     )
     return list(result.scalars().all())
 

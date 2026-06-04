@@ -2,26 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getEstates, createEstate } from '../api'
+import StatusBadge from '../components/StatusBadge'
 import { Vault, Plus, Search, Filter, X } from 'lucide-react'
 
 const ESTATE_TYPES = ['Probate', 'Trust Administration', 'Estate Planning', 'Guardianship', 'Conservatorship', 'Small Estate']
 
 const STATUS_OPTIONS = ['all', 'active', 'in_probate', 'draft', 'closed']
-
-function StatusBadge({ status }) {
-  const cfg = {
-    active: 'bg-brand-green/10 text-brand-green border-brand-green/20',
-    in_probate: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
-    draft: 'bg-blue-50 text-blue-700 border-blue-200',
-    closed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
-  }[status?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
-
-  return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[12px] font-sans font-semibold capitalize border ${cfg}`}>
-      {(status || '—').replace(/_/g, ' ')}
-    </span>
-  )
-}
 
 function TypeBadge({ type }) {
   return (

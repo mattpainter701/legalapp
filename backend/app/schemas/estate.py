@@ -2,9 +2,9 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Events (activity log) ─────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ class EstateEventResponse(BaseModel):
 
 class EstateCreate(BaseModel):
     estate_name: str
-    estate_type: Optional[str] = None
+    estate_type: Optional[Literal["probate", "trust_administration", "estate_planning", "guardianship", "conservatorship", "small_estate"]] = None
     representative_type: Optional[str] = None
     grantor: Optional[str] = None
     summary: Optional[str] = None
@@ -49,10 +49,10 @@ class EstateCreate(BaseModel):
 
 class EstateUpdate(BaseModel):
     estate_name: Optional[str] = None
-    estate_type: Optional[str] = None
+    estate_type: Optional[Literal["probate", "trust_administration", "estate_planning", "guardianship", "conservatorship", "small_estate"]] = None
     representative_type: Optional[str] = None
     grantor: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["active", "in_probate", "draft", "closed"]] = None
     summary: Optional[str] = None
     jurisdiction: Optional[str] = None
     domicile_state: Optional[str] = None
@@ -164,14 +164,14 @@ class BeneficiaryCreate(BaseModel):
     name: str
     relationship: Optional[str] = None
     contact_id: Optional[str] = None
-    beneficiary_type: str = "residuary"
-    share_percentage: Optional[Decimal] = None
+    beneficiary_type: Literal["specific", "residuary", "percentage", "contingent"] = "residuary"
+    share_percentage: Optional[Decimal] = Field(default=None, ge=0, le=100)
     bequest_description: Optional[str] = None
     is_charity: bool = False
     charity_ein: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
-    distribution_status: str = "pending"
+    distribution_status: Literal["pending", "partial", "complete"] = "pending"
     notes: Optional[str] = None
 
 
@@ -179,14 +179,14 @@ class BeneficiaryUpdate(BaseModel):
     name: Optional[str] = None
     relationship: Optional[str] = None
     contact_id: Optional[str] = None
-    beneficiary_type: Optional[str] = None
-    share_percentage: Optional[Decimal] = None
+    beneficiary_type: Optional[Literal["specific", "residuary", "percentage", "contingent"]] = None
+    share_percentage: Optional[Decimal] = Field(default=None, ge=0, le=100)
     bequest_description: Optional[str] = None
     is_charity: Optional[bool] = None
     charity_ein: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
-    distribution_status: Optional[str] = None
+    distribution_status: Optional[Literal["pending", "partial", "complete"]] = None
     notes: Optional[str] = None
 
 
@@ -264,21 +264,21 @@ class AssetResponse(BaseModel):
 
 class LiabilityCreate(BaseModel):
     creditor_name: str
-    claim_type: str = "debt"
+    claim_type: Literal["debt", "funeral", "administration_expense", "tax", "secured", "unsecured"] = "debt"
     amount: Decimal = Decimal("0")
     date_filed: Optional[date] = None
     bar_date: Optional[date] = None
-    status: str = "pending"
+    status: Literal["pending", "allowed", "disputed", "paid", "rejected"] = "pending"
     notes: Optional[str] = None
 
 
 class LiabilityUpdate(BaseModel):
     creditor_name: Optional[str] = None
-    claim_type: Optional[str] = None
+    claim_type: Optional[Literal["debt", "funeral", "administration_expense", "tax", "secured", "unsecured"]] = None
     amount: Optional[Decimal] = None
     date_filed: Optional[date] = None
     bar_date: Optional[date] = None
-    status: Optional[str] = None
+    status: Optional[Literal["pending", "allowed", "disputed", "paid", "rejected"]] = None
     notes: Optional[str] = None
 
 
@@ -343,18 +343,18 @@ class DistributionResponse(BaseModel):
 
 class DeadlineCreate(BaseModel):
     title: str
-    deadline_type: str = "other"
+    deadline_type: Literal["court_filing", "tax_706", "tax_1041", "tax_709", "tax_1040", "inventory", "accounting", "creditor_bar", "distribution", "task", "other"] = "other"
     due_date: date
-    status: str = "pending"
+    status: Literal["pending", "in_progress", "complete", "overdue", "na"] = "pending"
     assigned_to: Optional[str] = None
     notes: Optional[str] = None
 
 
 class DeadlineUpdate(BaseModel):
     title: Optional[str] = None
-    deadline_type: Optional[str] = None
+    deadline_type: Optional[Literal["court_filing", "tax_706", "tax_1041", "tax_709", "tax_1040", "inventory", "accounting", "creditor_bar", "distribution", "task", "other"]] = None
     due_date: Optional[date] = None
-    status: Optional[str] = None
+    status: Optional[Literal["pending", "in_progress", "complete", "overdue", "na"]] = None
     assigned_to: Optional[str] = None
     notes: Optional[str] = None
 
@@ -380,8 +380,8 @@ class DeadlineResponse(BaseModel):
 
 class AccountingEntryCreate(BaseModel):
     entry_date: date
-    entry_type: str = "receipt"
-    account_class: str = "principal"
+    entry_type: Literal["receipt", "disbursement", "gain", "loss", "distribution"] = "receipt"
+    account_class: Literal["principal", "income"] = "principal"
     amount: Decimal = Decimal("0")
     description: str
     payee_payor: Optional[str] = None
@@ -392,8 +392,8 @@ class AccountingEntryCreate(BaseModel):
 
 class AccountingEntryUpdate(BaseModel):
     entry_date: Optional[date] = None
-    entry_type: Optional[str] = None
-    account_class: Optional[str] = None
+    entry_type: Optional[Literal["receipt", "disbursement", "gain", "loss", "distribution"]] = None
+    account_class: Optional[Literal["principal", "income"]] = None
     amount: Optional[Decimal] = None
     description: Optional[str] = None
     payee_payor: Optional[str] = None

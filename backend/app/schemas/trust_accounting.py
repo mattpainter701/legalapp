@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -64,10 +64,7 @@ class TrustAccountListResponse(BaseModel):
 
 class TrustTransactionCreate(BaseModel):
     trust_account_id: str
-    transaction_type: str = Field(
-        ...,
-        description="deposit, disbursement, transfer_in, transfer_out, replenishment, fee, adjustment",
-    )
+    transaction_type: Literal["deposit", "disbursement", "transfer_in", "transfer_out", "replenishment", "fee", "adjustment"]
     amount: Decimal = Field(..., gt=0)
     description: str = Field(..., min_length=1)
     transaction_date: Optional[date] = None
