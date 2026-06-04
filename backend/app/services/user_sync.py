@@ -18,6 +18,46 @@ GOOGLE_DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1"
 
 
 class UserSyncService:
+    async def _save_sync_state(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        provider: str,
+        *,
+        status: str,
+        total: int = 0,
+        created: int = 0,
+        updated: int = 0,
+        error: str | None = None,
+    ) -> None:
+        from sqlalchemy import update
+
+        from app.models.tenant_credential import TenantCredential
+
+        await db.execute(
+            update(TenantCredential)
+            .where(
+                TenantCredential.tenant_id == uuid.UUID(tenant_id),
+                TenantCredential.provider == provider,
+            )
+            .values(
+                last_user_sync_at=datetime.now(timezone.utc),
+                last_user_sync_total=total,
+                last_user_sync_created=created,
+                last_user_sync_updated=updated,
+                last_user_sync_status=status,
+                last_user_sync_error=error,
+            )
+        )
+        await db.commit()
+
+    async def record_sync_failure(
+        self, db: AsyncSession, tenant_id: str, provider: str, error: str
+    ) -> None:
+        await self._save_sync_state(
+            db, tenant_id, provider, status="failed", error=error
+        )
+
     async def sync_microsoft_users(
         self,
         db: AsyncSession,
@@ -90,11 +130,22 @@ class UserSyncService:
                         oauth_provider="microsoft",
                         oauth_subject=ms_user.get("id"),
                         is_active=True,
+                        license_active=False,
                     )
                     db.add(new_user)
                     created += 1
 
             await db.commit()
+
+            await self._save_sync_state(
+                db,
+                tenant_id,
+                "microsoft",
+                status="ok",
+                total=len(all_users),
+                created=created,
+                updated=updated,
+            )
 
         return {
             "created": created,
@@ -181,11 +232,22 @@ class UserSyncService:
                         oauth_provider="google",
                         oauth_subject=g_user.get("id"),
                         is_active=True,
+                        license_active=False,
                     )
                     db.add(new_user)
                     created += 1
 
             await db.commit()
+
+            await self._save_sync_state(
+                db,
+                tenant_id,
+                "google",
+                status="ok",
+                total=len(all_users),
+                created=created,
+                updated=updated,
+            )
 
         return {
             "created": created,
