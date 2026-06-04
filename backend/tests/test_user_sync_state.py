@@ -163,3 +163,29 @@ async def test_sync_does_not_relicense_existing_user(db_session, test_tenant):
     ).scalar_one()
     # Regression B: existing license untouched by sync
     assert owner.license_active is True
+
+
+@pytest.mark.asyncio
+async def test_permissions_returns_user_count_and_freshness(
+    client, db_session, test_tenant, test_user
+):
+    # test_user has oauth_provider="google"; add a connected google credential
+    db_session.add(
+        TenantCredential(
+            tenant_id=test_tenant.id,
+            provider="google",
+            encrypted_access_token="enc",
+            scopes="https://www.googleapis.com/auth/admin.directory.user.readonly",
+            is_active=True,
+            last_user_sync_total=5,
+            last_user_sync_status="ok",
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/admin/permissions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["google"]["user_count"] >= 1
+    assert data["google"]["last_sync_total"] == 5
+    assert data["google"]["last_sync_status"] == "ok"
