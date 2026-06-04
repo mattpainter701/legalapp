@@ -1264,18 +1264,22 @@ async def estate_report(
     if kind == "inventory":
         assets = (
             await db.execute(
-                select(EstateAsset).where(
+                select(EstateAsset)
+                .where(
                     EstateAsset.estate_id == estate_id,
                     EstateAsset.tenant_id == user.tenant_id,
                 )
+                .limit(1000)
             )
         ).scalars().all()
         liabilities = (
             await db.execute(
-                select(EstateLiability).where(
+                select(EstateLiability)
+                .where(
                     EstateLiability.estate_id == estate_id,
                     EstateLiability.tenant_id == user.tenant_id,
                 )
+                .limit(1000)
             )
         ).scalars().all()
         total_assets = sum(
@@ -1315,10 +1319,13 @@ async def estate_report(
     if kind == "accounting":
         entries = (
             await db.execute(
-                select(EstateAccountingEntry).where(
+                select(EstateAccountingEntry)
+                .where(
                     EstateAccountingEntry.estate_id == estate_id,
                     EstateAccountingEntry.tenant_id == user.tenant_id,
-                ).order_by(EstateAccountingEntry.entry_date)
+                )
+                .order_by(EstateAccountingEntry.entry_date)
+                .limit(1000)
             )
         ).scalars().all()
         summary = _compute_accounting_summary(entries)
@@ -1343,18 +1350,22 @@ async def estate_report(
     if kind == "distribution":
         bens = (
             await db.execute(
-                select(EstateBeneficiary).where(
+                select(EstateBeneficiary)
+                .where(
                     EstateBeneficiary.estate_id == estate_id,
                     EstateBeneficiary.tenant_id == user.tenant_id,
                 )
+                .limit(1000)
             )
         ).scalars().all()
         dists = (
             await db.execute(
-                select(EstateDistribution).where(
+                select(EstateDistribution)
+                .where(
                     EstateDistribution.estate_id == estate_id,
                     EstateDistribution.tenant_id == user.tenant_id,
                 )
+                .limit(1000)
             )
         ).scalars().all()
         paid_by_ben: dict[str, Decimal] = {}
@@ -1381,10 +1392,13 @@ async def estate_report(
     if kind == "deadlines":
         deadlines = (
             await db.execute(
-                select(EstateDeadline).where(
+                select(EstateDeadline)
+                .where(
                     EstateDeadline.estate_id == estate_id,
                     EstateDeadline.tenant_id == user.tenant_id,
-                ).order_by(EstateDeadline.due_date)
+                )
+                .order_by(EstateDeadline.due_date)
+                .limit(1000)
             )
         ).scalars().all()
         return {
