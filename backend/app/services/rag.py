@@ -72,11 +72,11 @@ async def search_chunks(
             court,
             decision_date,
             chunk_index,
-            1 - (embedding <=> :vec::vector) AS similarity
+            1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM chunks
         WHERE tenant_id = CAST(:tenant_id AS uuid)
           AND embedding IS NOT NULL
-        ORDER BY embedding <=> :vec::vector
+        ORDER BY embedding <=> CAST(:vec AS vector)
         LIMIT :top_k
     """)
 
@@ -118,10 +118,10 @@ async def search_public_chunks(
             court,
             decision_date,
             chunk_index,
-            1 - (embedding <=> :vec::vector) AS similarity
+            1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM public_chunks
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> :vec::vector
+        ORDER BY embedding <=> CAST(:vec AS vector)
         LIMIT :top_k
     """)
 

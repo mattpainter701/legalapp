@@ -12,9 +12,13 @@ from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.services.scheduler import LegalScheduler
 
-# Use the database owner account so DDL and DML operate on the same user.
+# Use DATABASE_URL from environment (set in CI) or the test-user default.
 DB_URL = os.environ.get(
-    "TEST_DB_URL", "postgresql+asyncpg://legalapp:legalapp@localhost:5432/legalapp_test"
+    "TEST_DB_URL",
+    os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://test:test@localhost:5432/legalapp_test",
+    ),
 )
 
 

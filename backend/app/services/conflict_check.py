@@ -21,6 +21,7 @@ async def run_conflict_check(
     names: list[str],
     emails: list[str],
     organization_names: list[str] | None = None,
+    exclude_matter_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     """
     Run a fuzzy conflict check across contacts and matter counterparties.
@@ -33,6 +34,8 @@ async def run_conflict_check(
     """
     if organization_names is None:
         organization_names = []
+    if exclude_matter_ids is None:
+        exclude_matter_ids = []
     matches: list[dict] = []
 
     def _escape_ilike(text: str) -> str:
@@ -102,11 +105,14 @@ async def run_conflict_check(
         if not term:
             continue
         pattern = f"%{_escape_ilike(term)}%"
-        cp_stmt = select(Matter).where(
+        cp_filters = [
             Matter.tenant_id == tenant_id,
             Matter.counterparty.ilike(pattern),
             Matter.client_contact_id.is_(None),  # not already linked to a contact
-        )
+        ]
+        if exclude_matter_ids:
+            cp_filters.append(Matter.id.notin_(exclude_matter_ids))
+        cp_stmt = select(Matter).where(*cp_filters)
         cp_result = await db.execute(cp_stmt)
         cp_matters = cp_result.scalars().all()
 

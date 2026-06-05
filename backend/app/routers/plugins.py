@@ -607,6 +607,7 @@ async def create_matter(
             tenant_id=user.tenant_id,
             names=names,
             emails=[],
+            exclude_matter_ids=[matter.id],
         )
         matter.conflicts_status = "clear" if check["clear"] else "conflict-found"
         await db.commit()

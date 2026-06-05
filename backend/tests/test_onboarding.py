@@ -126,6 +126,7 @@ async def test_service_account_deactivation_guard(db_session, tenant_id, admin_u
         is_active=True,
     )
     db_session.add(admin)
+    await db_session.flush()  # ensure User is visible for FK on granted_by_user_id
 
     cred = TenantCredential(
         tenant_id=tenant_id,

@@ -186,7 +186,7 @@ class PluginExecutor:
             use_premium=use_premium,
         )
 
-        cleaned_response, needs_retry = apply_guardrails(response_text)
+        cleaned_response, needs_retry, _ = apply_guardrails(response_text)
 
         model_used = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
 

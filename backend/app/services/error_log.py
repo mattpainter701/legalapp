@@ -51,7 +51,7 @@ async def log_error(
     """
     try:
         # Extract message and stack trace from exception
-        message = str(exc)
+        message = f"{type(exc).__name__}: {exc}"
         stack_trace = traceback.format_exc()
 
         # If tenant_id is None but error is from an API, skip logging
