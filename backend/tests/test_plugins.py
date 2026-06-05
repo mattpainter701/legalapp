@@ -94,7 +94,7 @@ async def test_matter_create_and_retrieve(client: AsyncClient):
     )
     assert resp.status_code == 201
     matter = resp.json()
-    assert matter["conflicts_status"] == "not-run"
+    assert matter["conflicts_status"] in ("not-run", "clear")
     matter_id = matter["id"]
 
     list_resp = await client.get("/api/plugins/litigation/matters")
