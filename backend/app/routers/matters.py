@@ -585,7 +585,7 @@ async def get_my_matters(
     result = await db.execute(q)
     matters = result.unique().scalars().all()
 
-    from datetime import date as date_type, timedelta
+    from datetime import date as date_type
 
     today = date_type.today()
     items = []

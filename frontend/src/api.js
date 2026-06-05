@@ -793,6 +793,15 @@ export const deleteSmbAgent = (agentId) =>
 export const getSmbShares = () =>
   api.get('/api/v1/smb/shares').then(r => r.data)
 
+export const getMatterSmbShares = (matterId) =>
+  api.get(`/api/v1/smb/matters/${matterId}/smb-shares`).then(r => r.data)
+
+export const addMatterSmbShare = (matterId, data) =>
+  api.post(`/api/v1/smb/matters/${matterId}/smb-shares`, data).then(r => r.data)
+
+export const removeMatterSmbShare = (matterId, bindingId) =>
+  api.delete(`/api/v1/smb/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
+
 export const createSmbShare = (data) =>
   api.post('/api/v1/smb/shares', data).then(r => r.data)
 
