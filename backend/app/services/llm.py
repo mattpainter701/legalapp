@@ -1,11 +1,29 @@
+import logging
 from typing import AsyncGenerator, List, Tuple
 
 import anthropic
-from openai import AsyncOpenAI
+from openai import APIError, APIConnectionError, AsyncOpenAI
 
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def _clean_llm_error(exc: Exception) -> str:
+    """Extract a clean error message from an LLM provider exception, stripping raw HTML."""
+    msg = str(exc)
+    if "<!DOCTYPE" in msg or "<html" in msg.lower():
+        msg = msg.split("<!DOCTYPE")[0].split("<html")[0].strip()
+        if not msg:
+            msg = "LLM service returned an unexpected response (possible proxy/gateway error)"
+    return msg[:300]
+
+
+def _llm_error_msg(provider: str, exc: Exception) -> str:
+    """Build a clean error message for the chat pipeline."""
+    clean = _clean_llm_error(exc)
+    return f"{provider} API error: {clean}"
 
 SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working for {tenant_name}. You support attorneys with research, drafting, and analysis. You are precise, discreet, and bound by professional ethics.
 
@@ -264,18 +282,22 @@ class LLMService:
         """Call DeepSeek via OpenAI-compatible endpoint."""
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        response = await self.deepseek_client.chat.completions.create(
-            model=model or settings.PRIMARY_LLM,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+        try:
+            response = await self.deepseek_client.chat.completions.create(
+                model=model or settings.PRIMARY_LLM,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
 
-        response_text = response.choices[0].message.content or ""
-        tokens_in = response.usage.prompt_tokens if response.usage else 0
-        tokens_out = response.usage.completion_tokens if response.usage else 0
+            response_text = response.choices[0].message.content or ""
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
 
-        return response_text, tokens_in, tokens_out
+            return response_text, tokens_in, tokens_out
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"DeepSeek API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("DeepSeek", e)) from e
 
     async def _complete_opencode(
         self,
@@ -288,18 +310,22 @@ class LLMService:
             raise ValueError("OpenCode Zen not configured — set OPENCODE_KEY")
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        response = await self.opencode_client.chat.completions.create(
-            model=model or settings.PRIMARY_LLM,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+        try:
+            response = await self.opencode_client.chat.completions.create(
+                model=model or settings.PRIMARY_LLM,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
 
-        response_text = response.choices[0].message.content or ""
-        tokens_in = response.usage.prompt_tokens if response.usage else 0
-        tokens_out = response.usage.completion_tokens if response.usage else 0
+            response_text = response.choices[0].message.content or ""
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
 
-        return response_text, tokens_in, tokens_out
+            return response_text, tokens_in, tokens_out
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"OpenCode Zen API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("OpenCode Zen", e)) from e
 
     async def _complete_gemini(
         self,
@@ -371,18 +397,22 @@ class LLMService:
 
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        response = await self.azure_client.chat.completions.create(
-            model=settings.AZURE_OPENAI_DEPLOYMENT,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+        try:
+            response = await self.azure_client.chat.completions.create(
+                model=settings.AZURE_OPENAI_DEPLOYMENT,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
 
-        response_text = response.choices[0].message.content or ""
-        tokens_in = response.usage.prompt_tokens if response.usage else 0
-        tokens_out = response.usage.completion_tokens if response.usage else 0
+            response_text = response.choices[0].message.content or ""
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
 
-        return response_text, tokens_in, tokens_out
+            return response_text, tokens_in, tokens_out
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"Azure OpenAI API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("Azure OpenAI", e)) from e
 
     async def _complete_openrouter(
         self,
@@ -395,18 +425,22 @@ class LLMService:
             raise ValueError("OpenRouter not configured — set OPENROUTER_API_KEY")
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        response = await self.openrouter_client.chat.completions.create(
-            model=model,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+        try:
+            response = await self.openrouter_client.chat.completions.create(
+                model=model,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
 
-        response_text = response.choices[0].message.content or ""
-        tokens_in = response.usage.prompt_tokens if response.usage else 0
-        tokens_out = response.usage.completion_tokens if response.usage else 0
+            response_text = response.choices[0].message.content or ""
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
 
-        return response_text, tokens_in, tokens_out
+            return response_text, tokens_in, tokens_out
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"OpenRouter API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("OpenRouter", e)) from e
 
     async def _complete_anthropic(
         self,
@@ -420,19 +454,23 @@ class LLMService:
         for msg in messages:
             anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        response = await self.anthropic_client.messages.create(
-            model=model or settings.PREMIUM_LLM,
-            system=system_prompt,
-            messages=anthropic_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+        try:
+            response = await self.anthropic_client.messages.create(
+                model=model or settings.PREMIUM_LLM,
+                system=system_prompt,
+                messages=anthropic_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
 
-        response_text = response.content[0].text if response.content else ""
-        tokens_in = response.usage.input_tokens if response.usage else 0
-        tokens_out = response.usage.output_tokens if response.usage else 0
+            response_text = response.content[0].text if response.content else ""
+            tokens_in = response.usage.input_tokens if response.usage else 0
+            tokens_out = response.usage.output_tokens if response.usage else 0
 
-        return response_text, tokens_in, tokens_out
+            return response_text, tokens_in, tokens_out
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("Anthropic", e)) from e
 
     async def _stream_deepseek(
         self,
@@ -443,17 +481,21 @@ class LLMService:
         """Stream DeepSeek via OpenAI-compatible endpoint."""
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        stream = await self.deepseek_client.chat.completions.create(
-            model=model or settings.PRIMARY_LLM,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            stream=True,
-        )
+        try:
+            stream = await self.deepseek_client.chat.completions.create(
+                model=model or settings.PRIMARY_LLM,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"DeepSeek streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("DeepSeek", e)) from e
 
     async def _stream_opencode(
         self,
@@ -467,17 +509,21 @@ class LLMService:
 
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        stream = await self.opencode_client.chat.completions.create(
-            model=model or settings.PRIMARY_LLM,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            stream=True,
-        )
+        try:
+            stream = await self.opencode_client.chat.completions.create(
+                model=model or settings.PRIMARY_LLM,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"OpenCode Zen streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("OpenCode Zen", e)) from e
 
     async def _stream_azure(
         self,
@@ -490,17 +536,21 @@ class LLMService:
 
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        stream = await self.azure_client.chat.completions.create(
-            model=settings.AZURE_OPENAI_DEPLOYMENT,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            stream=True,
-        )
+        try:
+            stream = await self.azure_client.chat.completions.create(
+                model=settings.AZURE_OPENAI_DEPLOYMENT,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"Azure OpenAI streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("Azure OpenAI", e)) from e
 
     async def _stream_openrouter(
         self,
@@ -514,17 +564,21 @@ class LLMService:
 
         all_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        stream = await self.openrouter_client.chat.completions.create(
-            model=model,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            stream=True,
-        )
+        try:
+            stream = await self.openrouter_client.chat.completions.create(
+                model=model,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                stream=True,
+            )
 
-        async for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"OpenRouter streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("OpenRouter", e)) from e
 
     async def _stream_anthropic(
         self,
@@ -537,12 +591,16 @@ class LLMService:
         for msg in messages:
             anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
 
-        async with self.anthropic_client.messages.stream(
-            model=model or settings.PREMIUM_LLM,
-            system=system_prompt,
-            messages=anthropic_messages,
-            temperature=0.1,
-            max_tokens=4096,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+        try:
+            async with self.anthropic_client.messages.stream(
+                model=model or settings.PREMIUM_LLM,
+                system=system_prompt,
+                messages=anthropic_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+        except anthropic.APIStatusError as e:
+            logger.error(f"Anthropic streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("Anthropic", e)) from e

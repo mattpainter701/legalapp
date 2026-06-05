@@ -10,7 +10,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db
+from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.billing import TimeEntry, Invoice, Payment
 from app.models.contact import Contact
@@ -241,7 +241,7 @@ async def list_matters(
     request: Request,
     db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
+    page_size: int = Query(25, ge=1, le=200),
     status: str | None = Query(None),
     matter_type: str | None = Query(None),
     practice_area: str | None = Query(None),
@@ -255,6 +255,7 @@ async def list_matters(
     """List matters with filters, search, and pagination."""
     user = await get_current_user(request, db)
     tenant_id = user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
 
     conditions = [Matter.tenant_id == tenant_id]
 

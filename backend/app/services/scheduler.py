@@ -27,6 +27,7 @@ from sqlalchemy import or_, select, text
 from app.config import get_settings
 from app.database import async_session_maker
 from app.models.plugin import Estate, Matter, MatterEvent, Renewal
+from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
@@ -87,6 +88,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Directory User Sync",
         "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new users land on the free tier.",
         "schedule": "Daily at 2:00 AM ET",
+    },
+    {
+        "name": "smb-heartbeat",
+        "display_name": "SMB Agent Heartbeat",
+        "description": "Checks for stale SMB relay agents (no heartbeat in 15 minutes) and marks them paused.",
+        "schedule": "Every 15 minutes",
     },
 ]
 
@@ -379,6 +386,15 @@ class LegalScheduler:
                 replace_existing=True,
             )
             agent_count += 1
+
+        # smb-heartbeat: every 15 minutes
+        self.scheduler.add_job(
+            self._check_smb_agent_heartbeats,
+            CronTrigger(minute="*/15"),
+            id="smb-heartbeat",
+            name="SMB Agent Heartbeat",
+            replace_existing=True,
+        )
 
         self.scheduler.start()
         logger.info("LegalScheduler started with %d agents", agent_count)
@@ -1217,6 +1233,52 @@ class LegalScheduler:
                 await _bypass_rls(session)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: smb-heartbeat ──────────────────────────────────────────────────
+
+    async def _check_smb_agent_heartbeats(self) -> None:
+        """Mark active SMB agents as paused when their last heartbeat is older than 15 minutes (or null)."""
+        logger.info("[smb-heartbeat] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "smb-heartbeat")
+            try:
+                await _bypass_rls(session)
+
+                cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+
+                result = await session.execute(
+                    select(SmbAgent).where(
+                        SmbAgent.status == "active",
+                        or_(
+                            SmbAgent.last_heartbeat.is_(None),
+                            SmbAgent.last_heartbeat < cutoff,
+                        ),
+                    )
+                )
+                stale_agents = list(result.scalars().all())
+
+                if not stale_agents:
+                    await _log_complete(
+                        session, log, "No stale SMB agents found."
+                    )
+                    logger.info("[smb-heartbeat] No stale agents.")
+                    return
+
+                paused_count = 0
+                for agent in stale_agents:
+                    agent.status = "paused"
+                    paused_count += 1
+
+                await session.commit()
+
+                summary = f"Paused {paused_count} stale SMB agent(s) (no heartbeat in 15 min)."
+                await _log_complete(session, log, summary)
+                logger.info("[smb-heartbeat] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[smb-heartbeat] Unhandled error: %s", error_msg)
+                await _log_failed(session, log, error_msg)
+
     # ─── Manual trigger ───────────────────────────────────────────────────────
 
     async def run_agent_manually(self, agent_name: str) -> Dict[str, Any]:
@@ -1233,6 +1295,7 @@ class LegalScheduler:
             "cloud-sync": self.run_cloud_sync,
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
+            "smb-heartbeat": self._check_smb_agent_heartbeats,
         }
 
         fn = agent_map.get(agent_name)

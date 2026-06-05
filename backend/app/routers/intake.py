@@ -97,7 +97,7 @@ async def list_leads(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(Lead).where(Lead.tenant_id == uuid.UUID(tenant_id))
@@ -121,10 +121,10 @@ async def create_lead(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     uid = uuid.UUID(tenant_id)
-    user_id = uuid.UUID(current_user["user_id"])
+    user_id = current_user.id
 
     contact_id = payload.contact_id
     if not contact_id:
@@ -164,7 +164,7 @@ async def get_lead(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     lead = await _load_lead(db, lead_id, tenant_id)
     return await _lead_to_response(db, lead, tenant_id)
@@ -177,7 +177,7 @@ async def update_lead(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     lead = await _load_lead(db, lead_id, tenant_id)
 
@@ -203,10 +203,10 @@ async def convert_lead_to_matter(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     uid = uuid.UUID(tenant_id)
-    user_id = uuid.UUID(current_user["user_id"])
+    user_id = current_user.id
 
     lead = await _load_lead(db, lead_id, tenant_id)
 

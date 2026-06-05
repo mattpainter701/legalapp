@@ -17,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.database import Base
 
@@ -276,6 +276,9 @@ class Matter(Base):
     # Provider folder IDs/URLs created for the matter in the tenant's cloud.
     cloud_folder: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # SMB share folder bindings for the matter (parallel to cloud_folder).
+    smb_folders: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Plugin workflow binding. Null means a general matter with no paid add-on workflow.
     primary_plugin: Mapped[str | None] = mapped_column(String(100), nullable=True)
     plugin_workflow_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -294,10 +297,10 @@ class Matter(Base):
 
     # Relationships
     client: Mapped["Contact | None"] = relationship(
-        "Contact", foreign_keys=[client_contact_id], lazy="joined"
+        "Contact", foreign_keys=[client_contact_id], lazy="select"
     )
     attorney_of_record: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[attorney_of_record_id], lazy="joined"
+        "User", foreign_keys=[attorney_of_record_id], lazy="select"
     )
     partner_attorney: Mapped["User | None"] = relationship(
         "User", foreign_keys=[partner_attorney_id], lazy="joined"

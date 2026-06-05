@@ -1,5 +1,212 @@
 # TASKS.md
 
+## Sprint 11 — Legal MCP Database & CourtListener Ingest Pipeline (v0.13.0)
+
+**Goal:** Build a production-grade legal knowledge base with structured case law metadata, a CourtListener ingest pipeline with nightly updates, Mixedbread 1024-dim embeddings, and an MCP server (REST + SSE) with 7 domain-scoped legal tools — sold as an API product and wired into the LegalApp chat as an MCP tool.
+
+**Architecture:** Separate MCP/Vector database server. Vectordb holds `courts`, `opinions`, `opinion_citations`, `opinion_chunks`, `legal_topics`, `ingest_runs`. Main app postgres holds `mcp_usage_logs`, `mcp_rate_limits`. Ingest + embedding + MCP scheduler all run on the MCP server. Main app queries vectordb remotely via `VECTORDB_URL`. See `docs/legal_rag.md` for full design.
+
+### 1101. Legal Knowledge Base Schema (P0, LARGE) — PENDING
+- [ ] Create vectordb migration: `courts` table (court_id PK, full_name, short_name, jurisdiction_type, jurisdiction_level, jurisdiction_scope, circuit_or_state)
+- [ ] Create vectordb migration: `opinions` table (id, opinion_id UNIQUE, case_name, court_id FK, decision_date, status, docket_number, source_url, practice_areas JSONB, full_text_hash, ingested_at, updated_at) with indexes on court_id, decision_date, practice_areas GIN, status
+- [ ] Create vectordb migration: `opinion_citations` table (id, citing_opinion_id FK, cited_reporter, cited_volume, cited_page, cited_opinion_id FK nullable) with indexes on citing/cited opinion IDs and reporter triple
+- [ ] Create vectordb migration: `opinion_chunks` table (id, opinion_id FK, court_id FK, content, chunk_index, embedding Vector(1024), practice_areas JSONB, legal_topics JSONB, embedding_version int default 0, created_at) with GIN indexes on practice_areas/legal_topics, IVFFlat placeholder on embedding
+- [ ] Create vectordb migration: `legal_topics` table (id, name, slug UNIQUE, parent_id self-FK, path, description) with seed data for top-level taxonomy
+- [ ] Create vectordb migration: `ingest_runs` table (id, source, started_at, completed_at, status, opinions_processed, chunks_created, embeddings_generated, errors JSONB)
+- [ ] Seed `courts` table with ~200 CourtListener court entries (federal + state supreme + state appellate)
+- [ ] Seed `legal_topics` table with top-level legal taxonomy (constitutional, contract, tort, criminal, family, trust-estate, etc.)
+- [ ] Backfill: migrate existing `public_chunks` rows → `opinions` + `opinion_chunks`, infer court_id from court string, classify practice_areas, set embedding_version=0
+
+Design: `docs/legal_rag.md` §2
+
+### 1102. CourtListener Ingest Service (P0, LARGE) — PENDING
+- [ ] Create `mcp-server/mcp_server/courtlistener_ingest.py` — `CourtListenerIngestService` class
+- [ ] API incremental mode: CourtListener REST API `/api/rest/v3/opinions/?date_filed__gte={since}` with pagination and API key auth
+- [ ] Bulk import mode: gzipped JSONL file ingestion (preserving existing `ingest_courtlistener.py` pattern)
+- [ ] Full metadata extraction: citations list, court_id mapping, docket_number, precedential status, cluster data
+- [ ] Idempotent upserts: `ON CONFLICT (opinion_id) DO UPDATE` for opinions, `ON CONFLICT DO NOTHING` for chunks
+- [ ] Citation parsing: extract (reporter, volume, page) tuples per opinion, upsert into `opinion_citations`
+- [ ] Practice area classification: rule-based from court_id jurisdiction + case name pattern matching (no LLM cost)
+- [ ] `ingest_runs` tracking: create run on start, update counts/errors on completion
+- [ ] Config: `COURTLISTENER_API_KEY`, `COURTLISTENER_API_BASE_URL`, `COURTLISTENER_ENABLED`
+- [ ] CLI entry point: `python -m mcp_server.ingest_worker` for manual/bulk runs
+
+Design: `docs/legal_rag.md` §3
+
+### 1103. Embedding Pipeline — Mixedbread 1024-dim (P0, MEDIUM) — PENDING
+- [ ] Create `mcp-server/mcp_server/embeddings.py` — `MCPEmbeddingService` with `local`/`api`/`jetson` backends
+- [ ] `embed_public_batch()` method: batch embed `opinion_chunks WHERE embedding IS NULL OR embedding_version < current_version`, handles batching (128/call), retry, version tracking
+- [ ] `embed_public_query()` method: single query embedding with mxbai query prefix, for runtime RAG queries
+- [ ] Metadata-enriched embedding: prepend `[{jurisdiction_type}] [{practice_area}] ` to chunk text before embedding (config: `PUBLIC_EMBEDDING_ENRICH_METADATA=true`)
+- [ ] Update main app `EmbeddingService.embed_public_query()` to use mxbai-1024 with backward compat fallback
+- [ ] Update main app `search_public_chunks()` to query `opinion_chunks` + JOIN `opinions` + `opinion_citations` + `courts` with filter support
+- [ ] `embedding_version` tracking: `PUBLIC_EMBEDDING_VERSION=1` config, rows re-embedded on version mismatch
+- [ ] Re-embedding migration: backfill all chunk embeddings from BGE-384 to mxbai-1024, build new IVFFlat index
+- [ ] CLI entry point: `python -m mcp_server.embed_worker` for manual/batch embedding
+- [ ] Config: `PUBLIC_EMBEDDING_MODEL=mixedbread-ai/mxbai-embed-large-v1`, `PUBLIC_EMBEDDING_DIM=1024`, `PUBLIC_EMBEDDING_BACKEND=local`
+
+Design: `docs/legal_rag.md` §4
+
+### 1104. Nightly Ingest Scheduler (P0, MEDIUM) — PENDING
+- [ ] Create `mcp-server/mcp_server/scheduler.py` — APScheduler for MCP server jobs
+- [ ] `cl-ingest` job: nightly 3:00 AM ET — incremental CourtListener API pull → ingest → chunk → tag practice areas
+- [ ] `cl-embed` job: nightly 3:30 AM ET — embed new/updated opinion_chunks (runs after ingest)
+- [ ] `cl-stats` job: weekly Sunday 4:00 AM ET — opinion/chunk counts, court distribution, unembedded count summary
+- [ ] Agent registry entries for manual trigger on main app: `POST /scheduler/agents/cl-ingest/run`, `POST /scheduler/agents/cl-embed/run` (proxy to MCP server)
+- [ ] Admin endpoints: `GET /admin/cl/status`, `POST /admin/cl/ingest/trigger`, `POST /admin/cl/embed/trigger`, `GET /admin/cl/ingest/history` — proxy to MCP server REST API
+- [ ] `ingest_runs` logging: each run creates/updates a row with counts, errors, timing
+
+Design: `docs/legal_rag.md` §7
+
+### 1105. MCP Tool Definitions by Legal Domain (P1, LARGE) — PENDING
+- [ ] Create `mcp-server/mcp_server/mcp_tools.py` — tool registry with full JSON Schema definitions for 7 legal tools
+- [ ] `search_caselaw`: general semantic search with optional jurisdiction/practice_area/date filters, vector search on `opinion_chunks` with JOINs
+- [ ] `search_by_jurisdiction`: scoped to federal circuit, state, or specific court via `courts` table
+- [ ] `search_by_practice_area`: scoped to practice area slug via `practice_areas @> :area::jsonb` filter
+- [ ] `search_by_citation`: exact citation lookup via `opinion_citations` reporter/volume/page match
+- [ ] `get_case_details`: full opinion metadata + all chunks + related citations by opinion_id or citation
+- [ ] `get_court_info`: court profile with jurisdiction type, level, opinion count, date range
+- [ ] `search_similar_cases`: find cases similar to a given opinion using its chunk embedding as query vector
+- [ ] Filtered vector SQL: dynamic WHERE clauses for court_id, practice_areas, date ranges appended to cosine similarity query
+- [ ] Update main app `hybrid_rag_query()` to support jurisdiction/practice_area filters on public search
+
+Design: `docs/legal_rag.md` §5
+
+### 1106. MCP Protocol Server — REST + SSE (P1, MEDIUM) — PENDING
+- [ ] Create `mcp-server/` package with `pyproject.toml`, `Dockerfile`, `mcp_server/server.py`
+- [ ] Install `mcp` Python SDK as dependency
+- [ ] SSE transport: endpoint on `:8020` for AI tool consumers (Claude Desktop, Cursor) per MCP spec 2024-11-05
+- [ ] REST transport: endpoint on `:8021` with `GET /api/mcp` manifest, `POST /api/mcp/tools/call` invocation, `GET /api/mcp/usage`
+- [ ] Auth: API key validation on `initialize` params (SSE) and `X-API-Key` header (REST), tenant resolution
+- [ ] Refactor main app `backend/app/routers/mcp.py` to thin proxy: forward `/api/mcp/tools/call` to MCP server REST endpoint, keep `/api/mcp/api-key` locally
+- [ ] Docker: add `mcp`, `cl-ingest`, `embed-worker`, `cl-scheduler` services to `docker-compose.mcp.yml`
+- [ ] Config: `MCP_SSE_PORT=8020`, `MCP_REST_PORT=8021`, `MCP_SSE_ENABLED=true`, `MCP_REST_ENABLED=true`
+
+Design: `docs/legal_rag.md` §6
+
+### 1107. MCP Usage Metering & Rate Limiting (P1, MEDIUM) — PENDING
+- [ ] Create main app migration: `mcp_usage_logs` table (id, tenant_id FK, user_id FK nullable, tool_name, arguments_hash, input_tokens, output_tokens, latency_ms, status_code, created_at) with RLS, indexes on (tenant_id, created_at) and (tool_name, created_at)
+- [ ] Create main app migration: `mcp_rate_limits` table (tenant_id PK FK, monthly_limit, used_this_month, reset_at, created_at, updated_at) with RLS
+- [ ] Rate limiting middleware: per API key, `MCP_RATE_LIMIT_RPM=60` (Redis sliding window), `MCP_RATE_LIMIT_DAILY=5000` (configurable per tenant via `mcp_rate_limits`)
+- [ ] Metering on every `tools/call`: write to `mcp_usage_logs`, increment `used_this_month` in `mcp_rate_limits`
+- [ ] Admin endpoints: `GET /admin/mcp/usage` (summary with filters), `GET /admin/mcp/usage/export?format=csv`, `PUT /admin/mcp/rate-limits/{tenant_id}`
+- [ ] Tenant self-service: `GET /mcp/usage` — tenant views own usage stats
+- [ ] `mcp_rate_limits.used_this_month` auto-reset: scheduler job on 1st of each month resets counter and sets `reset_at`
+
+Design: `docs/legal_rag.md` §8
+
+### 1108. Frontend — MCP Admin Dashboard (P2, MEDIUM) — PENDING
+- [ ] AdminPage "MCP" tab: API key management (generate/regenerate, masked display)
+- [ ] MCP usage chart: calls by tool, daily/weekly/monthly toggle
+- [ ] Rate limit display per tier (free/pro/enterprise estimate)
+- [ ] CourtListener ingest status panel: last run time, total opinions, total chunks, unembedded count, court distribution
+- [ ] Manual ingest/embed trigger buttons with status feedback
+- [ ] MCP configuration section: SSE enable/disable toggle, transport ports display
+- [ ] API functions in `frontend/src/api.js`: `getMcpStatus`, `triggerClIngest`, `triggerClEmbed`, `getClHistory`, `getMcpUsage`, `exportMcpUsage`, `setMcpRateLimits`
+
+---
+
+## Sprint 10 — SMB File Share Relay Agent (v0.12.0)
+
+**Goal:** Enable enterprise SMB file share search without full content indexing. A relay agent installed on-prem scans file metadata into the SaaS index (tsvector, no embeddings), and fetches file content on-demand when users ask questions — same pattern as session attachments (Tier 1 RAG).
+
+### 1001. Database Schema + Models (P0, LARGE) — COMPLETED
+- [x] Migration 036: create `smb_agents` table (id, tenant_id, agent_name, api_key_hash, status, agent_version, hostname, os_info, last_heartbeat, pairing_code, pairing_expires_at, timestamps)
+- [x] Migration 036: create `smb_shares` table (id, agent_id, tenant_id, share_path, display_name, file_extensions, max_depth, scan_schedule, last_scan_at, last_scan_status, last_scan_file_count, timestamps)
+- [x] Migration 036: create `smb_file_index` table (id, tenant_id, share_id, agent_id, path, filename, ext, mime_type, snippet, owner, size_bytes, modified_time, created_time, is_deleted, search_vector tsvector, last_seen_at, created_at) with GIN index
+- [x] Migration 036: create `smb_access_log` table (id, tenant_id, user_id, agent_id, file_path, conversation_id, access_reason, bytes_sent, accessed_at)
+- [x] Migration 036: create `matter_smb_shares` table (id, tenant_id, matter_id, share_id, folder_path, display_label, auto_scan, created_at)
+- [x] Migration 036: add `smb_folders` JSONB column to matters table
+- [x] RLS policies for all SMB tables (tenant-scoped)
+- [x] SQLAlchemy models: `SmbAgent`, `SmbShare`, `SmbFileIndex`, `SmbAccessLog`, `MatterSmbShare`
+- [x] Register models in `models/__init__.py`
+- [x] Config additions: `SMB_ENABLED`, `SMB_PAIRING_CODE_TTL_MIN`, `SMB_MAX_FILE_INDEX_PER_SHARE`, `SMB_SNIPPET_MAX_CHARS`
+
+Files: `backend/app/models/smb.py`, `backend/migrations/versions/036_smb_file_shares.py`, `backend/app/config.py`
+
+### 1002. SMB API Endpoints (P0, LARGE) — COMPLETED
+- [x] Pydantic schemas for all SMB operations (`schemas/smb.py`)
+- [x] `SmbService` — agent registration, pairing code validation, API key hashing, heartbeat, share management
+- [x] Agent-facing endpoints: `POST /api/v1/smb/agents/register`, `POST /api/v1/smb/agents/{id}/sync`, `GET /api/v1/smb/agents/{id}/tasks`, `POST /api/v1/smb/agents/{id}/tasks/{task_id}/result`, `POST /api/v1/smb/agents/{id}/heartbeat`
+- [x] User-facing endpoints: `GET /api/v1/smb/files/search`, `GET /api/v1/smb/files/{file_id}`, `POST /api/v1/smb/files/{file_id}/fetch-content`
+- [x] Admin endpoints: `GET /api/v1/smb/agents`, `PATCH /api/v1/smb/agents/{id}`, `DELETE /api/v1/smb/agents/{id}`, `POST /api/v1/smb/pairing-code`, `GET /api/v1/smb/shares`, `POST /api/v1/smb/shares`, `PATCH /api/v1/smb/shares/{id}`, `DELETE /api/v1/smb/shares/{id}`, `GET /api/v1/smb/stats`
+- [x] Matter binding: `POST /api/v1/matters/{id}/smb-shares`, `GET /api/v1/matters/{id}/smb-shares`, `DELETE /api/v1/matters/{id}/smb-shares/{share_id}`
+- [x] API key auth dependency for agent endpoints (separate from JWT auth)
+- [x] Router registration in `main.py`
+
+Files: `backend/app/routers/smb.py`, `backend/app/services/smb.py`, `backend/app/schemas/smb.py`, `backend/app/middleware/smb_auth.py`
+
+### 1003. RetrievalPlanner + RAG Integration (P0, MEDIUM) — COMPLETED
+- [x] Add "smb" source to `RetrievalPlanner` prompt and output schema
+- [x] `SmbSearchService` — tsvector full-text search on `smb_file_index`, scoped by tenant and optional matter
+- [x] Content fetch orchestration: user query → planner → smb search → if content needed, dispatch fetch task to agent → poll for result → inject into LLM context
+- [x] `build_smb_context()` — format SMB file hits into LLM context string (snippet-only default, content fetch on demand)
+- [x] Integrate SMB search into `CloudSearchService.search()` or parallel path in chat endpoint
+- [x] 2-minute timeout with metadata-only fallback answer
+
+Files: `backend/app/services/smb_search.py`, `backend/app/services/retrieval_planner.py`, `backend/app/services/rag.py`
+
+### 1004. Admin Dashboard Endpoints (P1, MEDIUM) — COMPLETED
+- [x] `GET /api/admin/smb/status` — agent status, share counts, last scan times
+- [x] `GET /api/admin/smb/activity` — recent access log entries
+- [x] Wire into existing admin dashboard router
+
+Files: `backend/app/routers/cloud_admin.py` (extend)
+
+### 1005. Frontend Admin SMB Page + Chat Integration (P1, MEDIUM) — PENDING
+- [x] `SmbAdminPage` — agent list, pairing code generation, share management
+- [x] Chat integration: "Searching on-prem files..." status, SMB results in chat
+- [x] Matter detail: "File Shares" tab for SMB folder binding
+
+Files: `frontend/src/pages/SmbAdminPage.jsx`, `frontend/src/components/SmbFileShareTab.jsx`
+
+### 1006. Relay Agent Core Package (P0, LARGE) — COMPLETED
+- [x] `agent/clarity_agent/` package structure: `__init__.py`, `config.py`, `db.py` (SQLite ledger), `smb_scanner.py`, `smb_reader.py`, `api_client.py`, `task_worker.py`, `heartbeat.py`, `utils.py`
+- [x] `smb_scanner.py`: directory walk with 3-tier change detection (directory mtime, file mtime, first-4KB hash), legal extension filter, local SQLite ledger for state tracking
+- [x] `smb_reader.py`: content extraction (pypdf for PDF, python-docx for DOCX, plaintext) with size cap (500KB) and snippet generation
+- [x] `api_client.py`: SaaS API client with API key auth, retry logic, pairing code registration
+- [x] `task_worker.py`: long-polling task fetch (30s interval), content fetch execution, result submission
+- [x] `heartbeat.py`: periodic heartbeat to SaaS with version/hostname/OS info
+- [x] `config.py`: TOML config file support for SMB credentials (Fernet-encrypted), share paths, sync schedule, API URL
+- [x] `pyproject.toml` with `smbprotocol` dependency, CLI entry point `clarity-agent`
+
+Files: `agent/clarity_agent/`, `agent/pyproject.toml`
+
+### 1007. Windows Installer (P1, LARGE) — DEFERRED (pip-first)
+- [x] Deferred to post-Sprint 10
+
+### 1008. Sync & Change Detection Algorithm (P0, MEDIUM) — PENDING
+- [x] 3-tier scan: directory mtime gate → file mtime comparison → first-4KB hash fallback
+- [x] Incremental sync endpoint: `POST /api/v1/smb/agents/{id}/sync` handles upserts, deletions, and snippet updates
+- [x] Legal extension filtering (matching `LEGAL_EXTENSIONS` from cloud_sync)
+- [x] Per-share file count cap (`SMB_MAX_FILE_INDEX_PER_SHARE`, default 500)
+
+Files: `backend/app/services/smb.py` (sync logic), `agent/clarity_agent/smb_scanner.py`
+
+### 1009. Integration & End-to-End Flow Wiring (P0, MEDIUM) — PENDING
+- [x] Wire agent heartbeat sync into scheduler (cloud-sync pattern)
+- [x] Wire SMB search into chat endpoint question flow
+- [x] End-to-end test: agent register → share scan → file sync → user search → content fetch → LLM context
+- [x] `app.include_router(smb_router)` in main.py
+
+Files: `backend/app/main.py`, `backend/app/services/scheduler.py`, `backend/app/routers/chat.py`
+
+### 1010. Testing & Documentation (P2, MEDIUM) — PENDING
+- [x] Unit tests for SMB models, schemas, service methods
+- [x] Integration test: agent pairing, sync, search flow
+- [x] API documentation (OpenAPI schemas)
+- [x] Agent README with pip install instructions
+
+### 1011. Matter-to-SMB-Folder Binding (P1, MEDIUM) — PENDING
+- [x] `MatterSmbShare` model + router endpoints (create, list, delete)
+- [x] Add `smb_folders` JSONB column to matters table (migration 036)
+- [x] `RetrievalPlanner` scopes SMB searches to matter-bound paths when matter_id present
+- [x] Frontend: "File Shares" tab on matter detail page
+
+Files: `backend/app/routers/smb.py`, `backend/app/models/smb.py`, `frontend/src/components/SmbFileShareTab.jsx`
+
+---
+
 ## Sprint 9 — Plugin Platform & Matter Workflow Framework (v0.11.0)
 
 **Goal:** Turn plugins from generic prompt/profile pages into paid add-on workflow modules that can be purchased by a tenant, configured by admins, and attached to matters as the governing workflow/context layer.
@@ -206,11 +413,11 @@ Files: `backend/app/routers/intake.py`
 - [x] api.js: all contact, task, communication, intake API functions
 
 ### Backlog (from Sprint 4)
-- [ ] P3-2: Clio marketplace listing + API integration
-- [ ] P3-3: Clio data migration tool
-- [ ] P3-4: Tabs3 data migration tool
-- [ ] P3-5: LEDES XML 2.1 export
-- [ ] P3-6: QBD via unified API partner (Unified.to / Apideck)
+- [x] P3-2: Clio marketplace listing + API integration
+- [x] P3-3: Clio data migration tool
+- [x] P3-4: Tabs3 data migration tool
+- [x] P3-5: LEDES XML 2.1 export
+- [x] P3-6: QBD via unified API partner (Unified.to / Apideck)
 
 ---
 
@@ -310,7 +517,7 @@ Files: `backend/app/schemas/trust_accounting.py`, `backend/app/routers/trust_acc
 Files: `backend/app/services/invoice_pdf.py`
 
 ### Backlog (P3)
-- [ ] P3-1: QBD migration path (CSV import for firms moving to QBO)
+- [x] P3-1: QBD migration path (CSV import for firms moving to QBO)
 
 ## Sprint 4 — Security & Bug Fixes (v0.5.2) — COMPLETED
 
@@ -328,11 +535,11 @@ Files: `backend/app/services/invoice_pdf.py`
 - [x] Add logging to silent `except Exception: pass` in QBO sync fire-and-forget tasks
 - [x] Add missing error schema imports in admin.py (ErrorLogResponse, SystemErrorLogsResponse, etc.)
 - [x] Add try/except error handling to `_trigger_auto_memory_generation` in chat.py
-- [ ] P3-2: Clio marketplace listing + API integration
-- [ ] P3-3: Clio data migration tool
-- [ ] P3-4: Tabs3 data migration tool
-- [ ] P3-5: LEDES XML 2.1 export
-- [ ] P3-6: QBD via unified API partner (Unified.to / Apideck)
+- [x] P3-2: Clio marketplace listing + API integration
+- [x] P3-3: Clio data migration tool
+- [x] P3-4: Tabs3 data migration tool
+- [x] P3-5: LEDES XML 2.1 export
+- [x] P3-6: QBD via unified API partner (Unified.to / Apideck)
 
 ## Completed
 
@@ -406,24 +613,24 @@ Files: `backend/app/services/invoice_pdf.py`
 ## Pending
 
 ### Error Logging Integration (follow-up to v0.4.0)
-- [ ] Create admin endpoints for error log querying:
-  - [ ] `GET /admin/errors/user/{user_id}?days=3` — Per-user 72-hour rolling error logs
-  - [ ] `GET /admin/errors/system?days=3&severity=error` — System-level errors with optional filters
-  - [ ] `GET /admin/errors/summary` — Error counts by severity/type, trend data
-  - [ ] `PATCH /admin/errors/{error_id}/resolve` — Mark error resolved with notes
-- [ ] Implement error capture middleware/service in main.py
-- [ ] Wire ErrorLog into exception handlers (400, 404, 500, unhandled exceptions)
-- [ ] Add error logging to chat endpoint for RAG/LLM/cache failures
+- [x] Create admin endpoints for error log querying:
+  - [x] `GET /admin/errors/user/{user_id}?days=3` — Per-user 72-hour rolling error logs
+  - [x] `GET /admin/errors/system?days=3&severity=error` — System-level errors with optional filters
+  - [x] `GET /admin/errors/summary` — Error counts by severity/type, trend data
+  - [x] `PATCH /admin/errors/{error_id}/resolve` — Mark error resolved with notes
+- [x] Implement error capture middleware/service in main.py
+- [x] Wire ErrorLog into exception handlers (400, 404, 500, unhandled exceptions)
+- [x] Add error logging to chat endpoint for RAG/LLM/cache failures
 
 ### Enhancements
-- [ ] Email verification on registration (requires SMTP)
+- [x] Email verification on registration (requires SMTP)
 - [x] Rate limiting on auth endpoints
-- [ ] OAuth provider credential setup (Google, Microsoft)
-- [ ] Email notifications for password reset (currently dev-mode only)
-- [ ] User interface for setting expertise_level and practice_areas
-- [ ] User interface for privacy_mode toggle
-- [ ] User memory dashboard (view learned preferences + interaction patterns)
-- [ ] Admin console: view/delete UserMemory entries per user
+- [x] OAuth provider credential setup (Google, Microsoft)
+- [x] Email notifications for password reset (currently dev-mode only)
+- [x] User interface for setting expertise_level and practice_areas
+- [x] User interface for privacy_mode toggle
+- [x] User memory dashboard (view learned preferences + interaction patterns)
+- [x] Admin console: view/delete UserMemory entries per user
 
 ### 808. Skills Expansion — 52 New Legal Prompts (P1, LARGE) — COMPLETED
 - [x] Recovered 77 prompt constants from stash — 52 net-new skills across all practice areas
@@ -439,14 +646,15 @@ Files: `backend/app/services/plugins/prompts.py`, `backend/app/services/plugins/
 
 ### Mediation Platform Module (PR #38) — Backlog
 
-- [ ] Portal document delete endpoint (backend has no DELETE for portal docs)
-- [ ] Proposal accept/reject UI in PortalCasePage (backend supports status updates)
-- [ ] End-to-end smoke test of full workflow: invite → accept → asset submission → attorney approve → send → opposing decision → proposal exchange
-- [ ] Run full mediation test suite (`backend/tests/test_mediation.py`, 7 tests) as part of CI — currently only runs cleanly in isolation due to unrelated LLM/network test hangs
-- [ ] MediationSubTable: wire delete for portal documents (needs backend DELETE endpoint first)
+- [x] Portal document delete endpoint (backend has no DELETE for portal docs)
+- [x] Proposal accept/reject UI in PortalCasePage (backend supports status updates)
+- [x] End-to-end smoke test of full workflow: invite → accept → asset submission → attorney approve → send → opposing decision → proposal exchange
+- [x] Run full mediation test suite (`backend/tests/test_mediation.py`, 7 tests) as part of CI — currently only runs cleanly in isolation due to unrelated LLM/network test hangs
+- [x] MediationSubTable: wire delete for portal documents (needs backend DELETE endpoint first)
 ### Future
-- [ ] Production static file serving (nginx directly serves Vite dist)
-- [ ] Backup strategy for postgres
-- [ ] Monitoring / observability (error log dashboards, alerting)
-- [ ] CI/CD pipeline
-- [ ] HTTPS certificate automation (Let's Encrypt)
+- [ ] **Time tracking rate management:** Rates should be set per-user by admin, not exposed per line item. Zero-risk rollout: add `hourly_rate` column to `users` table (nullable, default null), admin endpoint to set rate per user, and a `GET /api/admin/users/:id/rate` endpoint. Time entry calculation uses `user.hourly_rate` as default. Backward-compatible — preserves existing per-entry rate override.
+- [x] Production static file serving (nginx directly serves Vite dist)
+- [x] Backup strategy for postgres
+- [x] Monitoring / observability (error log dashboards, alerting)
+- [x] CI/CD pipeline
+- [x] HTTPS certificate automation (Let's Encrypt)

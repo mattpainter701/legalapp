@@ -1,6 +1,7 @@
+import uuid
 from typing import List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func as sa_func
 
 from app.config import get_settings
 from app.services.embeddings import EmbeddingService
@@ -259,12 +260,13 @@ async def hybrid_rag_query(
     retrieval_planner=None,  # RetrievalPlanner | None
     tenant_name: str = "Legal",
     matter_context_str: str | None = None,
+    matter_id: str | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
-    Hybrid RAG pipeline: pgvector search + cloud search.
+    Hybrid RAG pipeline: pgvector search + cloud search + SMB file search.
 
-    Runs both paths in parallel (pgvector is always attempted; cloud search
-    only if services are provided and tenant has integrations).
+    Runs all paths in parallel (pgvector is always attempted; cloud and SMB
+    search only if services are provided and feature is enabled).
 
     Returns (context_string, chunks_list, cloud_hits_list).
     The caller is responsible for merging context strings if both return results.
@@ -281,49 +283,91 @@ async def hybrid_rag_query(
     # 2. Cloud search (only if services are wired and cloud search is enabled)
     cloud_hits = []
     cloud_context = ""
+    smb_context = ""
     if cloud_search_service and retrieval_planner:
         from app.config import get_settings as _get_settings
 
         _settings = _get_settings()
-        if _settings.CLOUD_SEARCH_ENABLED:
+        # Determine which providers are connected for cloud search
+        connected = await _connected_providers(db, tenant_id, user_id)
+
+        # Check if SMB is enabled for this tenant
+        smb_enabled = _settings.SMB_ENABLED
+        if smb_enabled:
+            from app.models.smb_agent import SmbAgent
+            active_agents = await db.execute(
+                select(sa_func.count(SmbAgent.id)).where(
+                    SmbAgent.tenant_id == uuid.UUID(tenant_id) if isinstance(tenant_id, str) else SmbAgent.tenant_id,
+                    SmbAgent.status == "active",
+                )
+            )
+            if active_agents.scalar_one() == 0:
+                smb_enabled = False
+
+        plan = None
+        if connected or smb_enabled:
             try:
-                # Only plan/search providers the tenant (or user) has connected.
-                connected = await _connected_providers(db, tenant_id, user_id)
-                plan = None
-                if connected:
-                    plan = await retrieval_planner.plan(
-                        user_question=question,
-                        tenant_name=tenant_name,
-                        matter_context=matter_context_str,
-                        active_providers=connected,
-                    )
-                if plan and plan.get("should_search"):
-                    cloud_hits = await cloud_search_service.search(
-                        db=db,
-                        plan=plan,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                    )
-                    if cloud_hits:
-                        hits_with_content = await cloud_search_service.fetch_contents(
+                plan = await retrieval_planner.plan(
+                    user_question=question,
+                    tenant_name=tenant_name,
+                    matter_context=matter_context_str,
+                    active_providers=connected if connected else None,
+                    smb_enabled=smb_enabled,
+                )
+            except Exception:
+                pass  # Non-fatal
+
+        if plan and plan.get("should_search"):
+            try:
+                sources = plan.get("sources", [])
+                # Cloud search (Google/Microsoft sources)
+                if _settings.CLOUD_SEARCH_ENABLED:
+                    cloud_sources = [s for s in sources if s not in ("smb",)]
+                    if cloud_sources and connected:
+                        cloud_plan = {**plan, "sources": cloud_sources}
+                        cloud_hits = await cloud_search_service.search(
                             db=db,
-                            hits=cloud_hits,
+                            plan=cloud_plan,
                             tenant_id=tenant_id,
-                            max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                            user_id=user_id,
                         )
-                        cloud_context = await build_cloud_context(
-                            hits_with_content,
+                        if cloud_hits:
+                            hits_with_content = await cloud_search_service.fetch_contents(
+                                db=db,
+                                hits=cloud_hits,
+                                tenant_id=tenant_id,
+                                max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                            )
+                            cloud_context = await build_cloud_context(
+                                hits_with_content,
+                            )
+
+                # SMB search (on-prem file shares)
+                if _settings.SMB_ENABLED and "smb" in sources:
+                    try:
+                        from app.services.smb import smb_service
+                        smb_results = await smb_service.search_files(
+                            db=db,
+                            tenant_id=tenant_id,
+                            query=" ".join(plan.get("keywords", [question])),
+                            matter_id=matter_id,
+                            limit=plan.get("max_hits", 10),
                         )
+                        if smb_results:
+                            smb_context = await smb_service.build_smb_context(smb_results)
+                    except Exception:
+                        pass  # SMB search is additive — failure must not break chat
+
             except Exception:
                 # Cloud search is additive — failure must not break chat
                 pass
 
-    # 3. Merge contexts — cloud results after pgvector
+    # 3. Merge contexts — cloud and SMB results after pgvector
+    parts = [pgvector_context]
     if cloud_context:
-        context_str = (
-            f"{pgvector_context}\n\n--- Cloud Search Results ---\n\n{cloud_context}"
-        )
-    else:
-        context_str = pgvector_context
+        parts.append(f"--- Cloud Search Results ---\n\n{cloud_context}")
+    if smb_context:
+        parts.append(f"--- On-Prem File Share Results ---\n\n{smb_context}")
+    context_str = "\n\n".join(parts) if len(parts) > 1 else pgvector_context
 
     return context_str, chunks, cloud_hits

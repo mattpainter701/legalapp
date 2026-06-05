@@ -40,7 +40,7 @@ async def list_communications(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(CommunicationLog).where(
@@ -78,7 +78,7 @@ async def create_communication_log(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     data = payload.model_dump(exclude_none=True)
@@ -87,7 +87,7 @@ async def create_communication_log(
 
     log = CommunicationLog(
         tenant_id=uuid.UUID(tenant_id),
-        created_by_user_id=uuid.UUID(current_user["user_id"]),
+        created_by_user_id=current_user.id,
         **data,
     )
     db.add(log)
@@ -102,7 +102,7 @@ async def get_communication_log(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -124,7 +124,7 @@ async def update_communication_log(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -151,7 +151,7 @@ async def delete_communication_log(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(

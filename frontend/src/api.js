@@ -744,4 +744,36 @@ export const getCloudMetadata = (params) =>
 export const invalidateCloudCache = () =>
   api.delete('/admin/cloud-search/cache').then(r => r.data)
 
+// ── SMB File Shares Admin ──────────────────────────────────────────────────────
+
+export const getSmbStatus = () =>
+  api.get('/admin/smb/status').then(r => r.data)
+
+export const getSmbActivity = (params) =>
+  api.get('/admin/smb/activity', { params }).then(r => r.data)
+
+export const getSmbAgents = () =>
+  api.get('/api/v1/smb/agents').then(r => r.data)
+
+export const generateSmbPairingCode = () =>
+  api.post('/api/v1/smb/pairing-code').then(r => r.data)
+
+export const updateSmbAgent = (agentId, data) =>
+  api.patch(`/api/v1/smb/agents/${agentId}`, data).then(r => r.data)
+
+export const deleteSmbAgent = (agentId) =>
+  api.delete(`/api/v1/smb/agents/${agentId}`).then(r => r.data)
+
+export const getSmbShares = () =>
+  api.get('/api/v1/smb/shares').then(r => r.data)
+
+export const createSmbShare = (data) =>
+  api.post('/api/v1/smb/shares', data).then(r => r.data)
+
+export const deleteSmbShare = (shareId) =>
+  api.delete(`/api/v1/smb/shares/${shareId}`).then(r => r.data)
+
+export const searchSmbFiles = (params) =>
+  api.get('/api/v1/smb/files/search', { params }).then(r => r.data)
+
 export default api

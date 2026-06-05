@@ -55,7 +55,7 @@ async def list_contacts(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(Contact).where(Contact.tenant_id == uuid.UUID(tenant_id))
@@ -99,12 +99,12 @@ async def create_contact(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     contact = Contact(
         tenant_id=uuid.UUID(tenant_id),
-        created_by_user_id=uuid.UUID(current_user["user_id"]),
+        created_by_user_id=current_user.id,
         **payload.model_dump(exclude_none=True),
     )
     db.add(contact)
@@ -119,7 +119,7 @@ async def conflict_check(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
     tid = uuid.UUID(tenant_id)
 
@@ -146,7 +146,7 @@ async def get_contact(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -168,7 +168,7 @@ async def update_contact(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -195,7 +195,7 @@ async def delete_contact(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -218,7 +218,7 @@ async def contact_matters(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -251,7 +251,7 @@ async def contact_communications(
 ):
     from app.schemas.communication_log import CommunicationLogResponse
 
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = (

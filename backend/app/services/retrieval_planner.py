@@ -1,4 +1,7 @@
-"""LLM-driven retrieval planner that converts user questions into structured cloud search plans."""
+"""LLM-driven retrieval planner that converts user questions into structured search plans.
+
+Plans can include cloud providers (Google, Microsoft) and on-prem SMB file shares.
+"""
 
 import json
 import logging
@@ -12,33 +15,37 @@ logger = logging.getLogger(__name__)
 PROVIDER_SOURCES = {
     "google": frozenset({"gmail", "drive"}),
     "microsoft": frozenset({"outlook", "onedrive", "sharepoint"}),
+    "smb": frozenset({"smb"}),
 }
 
-PLANNER_SYSTEM_PROMPT = """You are a legal search planner. Your job is to convert a user's question into a structured cloud search plan.
+PLANNER_SYSTEM_PROMPT = """You are a legal search planner. Your job is to convert a user's question into a structured search plan.
 
 TENANT: {tenant_name}
 ACTIVE PROVIDERS: {providers}
+SMB ENABLED: {smb_enabled}
 MATTER CONTEXT (if any): {matter_context}
 
 USER QUESTION: {user_question}
 
 Decide:
-1. Does this question require searching the firm's cloud documents/emails? If it's a general legal question, return NO_SEARCH.
-2. Which sources to search (gmail, drive, outlook, onedrive, sharepoint)
+1. Does this question require searching the firm's documents/emails? If it's a general legal question, return NO_SEARCH.
+2. Which sources to search: gmail, drive, outlook, onedrive, sharepoint (cloud), and/or smb (on-prem file shares).
 3. Keywords and entities to search for
 4. Date range (if the question mentions time periods like "last quarter", "this year")
+
+If the user mentions files on a file server, network drive, shared drive, or on-prem documents, include "smb" in sources.
 
 Output ONLY this JSON (no markdown, no surrounding text):
 {{
   "should_search": true,
-  "sources": ["gmail", "drive"],
+  "sources": ["drive", "smb"],
   "keywords": ["renewal", "SOW", "Acme"],
   "date_after": "2026-01-01",
   "max_hits": 10,
   "people": ["acme.com", "john@firm.com"]
 }}
 
-Or if cloud search is not needed:
+Or if search is not needed:
 {{
   "should_search": false
 }}"""
@@ -71,6 +78,7 @@ class RetrievalPlanner:
         tenant_name: str = "Legal",
         matter_context: str | None = None,
         active_providers: list[str] | None = None,
+        smb_enabled: bool = False,
     ) -> RetrievalPlanDict | None:
         """Generate a search plan from a user question.
 
@@ -81,10 +89,11 @@ class RetrievalPlanner:
             active_providers: Enabled cloud providers — ``["google"]``,
                 ``["microsoft"]``, ``["google", "microsoft"]``, or ``None``
                 for all.
+            smb_enabled: Whether SMB file share search is available.
 
         Returns:
             A ``RetrievalPlanDict`` with search parameters, or ``None`` if
-            no cloud search is needed or parsing fails.
+            no search is needed or parsing fails.
         """
         if active_providers is None:
             active_providers = ["google", "microsoft"]
@@ -93,11 +102,17 @@ class RetrievalPlanner:
         for provider in active_providers:
             allowed_sources |= PROVIDER_SOURCES.get(provider, set())
 
+        if smb_enabled:
+            allowed_sources.add("smb")
+
         providers_str = ", ".join(active_providers)
+        if smb_enabled:
+            providers_str += ", smb"
 
         system_prompt = PLANNER_SYSTEM_PROMPT.format(
             tenant_name=tenant_name,
             providers=providers_str,
+            smb_enabled=str(smb_enabled).lower(),
             matter_context=matter_context or "None",
             user_question=user_question,
         )

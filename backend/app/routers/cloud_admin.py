@@ -415,3 +415,72 @@ async def cloud_search_invalidate_cache(
         if result
         else "Cache is not enabled (no Redis configured)",
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  6. SMB FILE SHARE STATUS
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/smb/status")
+async def smb_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return SMB file share relay status for the tenant.
+
+    Shows agent count, active agents, share count, file count, and last activity.
+    """
+    from app.services.smb import smb_service
+    from app.config import get_settings as _gs
+
+    if not _gs().SMB_ENABLED:
+        return {"enabled": False, "message": "SMB file share feature is not enabled"}
+
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    stats = await smb_service.get_admin_stats(db, tenant_id)
+    stats["enabled"] = True
+    return stats
+
+
+@router.get("/smb/activity")
+async def smb_activity(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return recent SMB file access log entries for the tenant."""
+    from app.models.smb_access_log import SmbAccessLog
+
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    from sqlalchemy import select, desc
+
+    result = await db.execute(
+        select(SmbAccessLog)
+        .where(SmbAccessLog.tenant_id == admin.tenant_id)
+        .order_by(desc(SmbAccessLog.accessed_at))
+        .limit(limit)
+    )
+    entries = result.scalars().all()
+
+    return {
+        "items": [
+            {
+                "id": str(e.id),
+                "user_id": str(e.user_id) if e.user_id else None,
+                "agent_id": str(e.agent_id) if e.agent_id else None,
+                "file_path": e.file_path,
+                "access_reason": e.access_reason,
+                "bytes_sent": e.bytes_sent,
+                "accessed_at": e.accessed_at.isoformat() if e.accessed_at else None,
+            }
+            for e in entries
+        ],
+        "total": len(entries),
+    }

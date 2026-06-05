@@ -51,7 +51,7 @@ async def list_matter_parties(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = (
@@ -80,7 +80,7 @@ async def add_matter_party(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     matter_result = await db.execute(
@@ -114,7 +114,7 @@ async def update_matter_party(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(MatterParty).where(
@@ -142,7 +142,7 @@ async def remove_matter_party(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(MatterParty).where(

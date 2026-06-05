@@ -14,6 +14,7 @@ from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
 from app.routers.intake import router as intake_router
+from app.routers.smb import router as smb_router
 
 __all__ = [
     "auth_router",
@@ -32,4 +33,5 @@ __all__ = [
     "tasks_router",
     "communications_router",
     "intake_router",
+    "smb_router",
 ]

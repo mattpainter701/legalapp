@@ -159,7 +159,7 @@ async def get_matter_status_report(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = uuid.UUID(current_user["tenant_id"])
+    tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
     return await _matter_status_report(db, tenant_id)
 
@@ -169,7 +169,7 @@ async def get_intake_funnel_report(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = uuid.UUID(current_user["tenant_id"])
+    tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
     return await _intake_funnel_report(db, tenant_id)
 
@@ -179,7 +179,7 @@ async def get_overdue_tasks_report(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = uuid.UUID(current_user["tenant_id"])
+    tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
     return await _overdue_tasks_report(db, tenant_id)
 
@@ -189,7 +189,7 @@ async def get_reports_bundle(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = uuid.UUID(current_user["tenant_id"])
+    tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
 
     matter_status = await _matter_status_report(db, tenant_id)
@@ -211,7 +211,7 @@ async def get_matter_budget_report(
     db: AsyncSession = Depends(get_db),
 ):
     """Return budget utilization for a single matter."""
-    tenant_id = uuid.UUID(current_user["tenant_id"])
+    tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
 
     # Verify matter belongs to tenant

@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     CLOUD_SEARCH_CACHE_TTL: int = 300  # 5 min for search results
     CLOUD_METADATA_SYNC_INTERVAL_MIN: int = 15  # Cron interval
 
+    # ── SMB File Share Relay Agent ──────────────────────────────────────────
+    SMB_ENABLED: bool = False  # Master feature flag
+    SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes
+    SMB_MAX_FILE_INDEX_PER_SHARE: int = 500  # Cap files per share
+    SMB_SNIPPET_MAX_CHARS: int = 500  # Max chars in snippet column
+    SMB_TASK_POLL_INTERVAL: int = 30  # Seconds between agent task polls
+    SMB_CONTENT_FETCH_TIMEOUT: int = 120  # Seconds to wait for content fetch
+
     model_config = SettingsConfigDict(env_file=".env")
 
 

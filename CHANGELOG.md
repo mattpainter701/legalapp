@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.13.1] — 2026-06-04
+
+### Sprint 10 Post-Review Bug Fixes
+
+### Fixed
+- **Agent sync broken (CRITICAL):** `share_id` sent in JSON body, but router expects query param — sync operations silently failed. Moved `share_id` to `params` in agent's `api_client.py`.
+- **`_scan_share` wrong type annotation + duplicate args (CRITICAL):** Removed unused `scanner: SaaSClient` param, fixed call sites to pass correct args.
+- **Content fetch tasks never succeed (CRITICAL):** `task_worker.py` called `read_content(session=None)` without SMB session. Moved `register_session` call to always execute before reading.
+- **`tomli_w` inline import in `config.py` (CRITICAL):** Moved to top-level import with `ImportError` fallback; `save_config` falls back to JSON if TOML unavailable.
+- **Pairing code registration — no tenant isolation:** `register_agent` query selects by pairing code across all tenants. Added optional `tenant_id` filter param.
+- **Share CRUD — no tenant RLS validation:** `update_share`, `delete_share`, `list_shares` queried without tenant filter. Added `tenant_id` conditions to all DML.
+- **Content fetch task — no tenant ownership check:** `get_content_status` endpoint polled any `task_id` without tenant validation. Added file ownership check.
+- **Frontend field name mismatches:** `SmbAdminPage` used `agent.name`/`agent.version` (should be `agent_name`/`agent_version`) and `MatterSmbSharesTab` used non-existent `s.name`/`s.share_name`/`s.server_host` (should be `display_name`/`share_path`).
+- **Sync file count cap race condition:** Added `db.flush()` before count query to see pending inserts.
+
+### Changed
+- **SmbShare model:** Added `ForeignKey("tenants.id", ondelete="CASCADE")` on `tenant_id` and `Index("ix_smb_shares_tenant_id", "tenant_id")`.
+- **SMB auth rate limiting:** Added Redis-based rate limiter (30 req/60s) on `X-Agent-API-Key` endpoint.
+- **RAG integration:** `rag.py` now uses `SmbService` directly instead of duplicating through `smb_search.py` module.
+- **Content fetch polling:** Added `poll_content_result()` with exponential backoff (1s → 8s) to `SmbService`, replacing fixed 2s polling in `smb_search.py`.
+
+### Added
+- **Per-share file extension filtering:** `SmbScanner.scan_share()` accepts `file_extensions` parameter, propagated from share config through `_scan_share()`.
+- **`build_smb_context()`** on `SmbService` (static method) — consolidates context formatting from `smb_search.py`.
+- **JSON config fallback** in agent `config.py` — `load()` supports both TOML and JSON formats.
+
+### Sprint 11 — Legal MCP Database & CourtListener Ingest Pipeline
+
+### Added
+- **Legal Knowledge Base Schema**: `courts`, `opinions`, `opinion_citations`, `opinion_chunks` (Vector(1024)), `legal_topics`, `ingest_runs` tables in vectordb — structured case law metadata replacing flat `public_chunks`
+- **MCP Usage Metering**: `mcp_usage_logs` and `mcp_rate_limits` tables in main app DB with RLS, per-tenant rate limiting
+- **CourtListener Ingest Service**: `CourtListenerIngestService` with API incremental mode (nightly REST API pull) and bulk import mode (gzipped JSONL), idempotent upserts, citation parsing, rule-based practice area classification
+- **Mixedbread mxbai-embed-large-v1 Embedding Pipeline**: 1024-dim embeddings replacing BGE-small-384, with `MCPEmbeddingService` supporting local/api/jetson backends, batch embedding, metadata enrichment, and version tracking
+- **Nightly Ingest Scheduler**: `cl-ingest` (3 AM ET), `cl-embed` (3:30 AM ET), `cl-stats` (weekly Sunday) APScheduler jobs on MCP server
+- **MCP Tool Definitions (7 domain-scoped tools)**: `search_caselaw`, `search_by_jurisdiction`, `search_by_practice_area`, `search_by_citation`, `get_case_details`, `get_court_info`, `search_similar_cases` — all with jurisdiction/practice-area/date filtering
+- **MCP Protocol Server**: standalone service with SSE transport (port 8020) for AI tool consumers and REST transport (port 8021) for API customers, API key auth, usage metering
+- **Docker Compose MCP**: `docker-compose.mcp.yml` for dev with vectordb, mcp, cl-ingest, embed-worker, cl-scheduler containers
+- **Admin Endpoints**: `/admin/cl/status`, `/admin/cl/ingest/trigger`, `/admin/cl/embed/trigger`, `/admin/cl/ingest/history`, `/admin/mcp/usage`, `/admin/mcp/usage/export`, `/admin/mcp/rate-limits/{tenant_id}`
+- **Architecture Design Doc**: `docs/legal_rag.md` — full schema, ingest pipeline, embedding migration, MCP tools, metering, deployment architecture
+
+### Changed
+- `search_public_chunks()` now queries `opinion_chunks` with JOINs to `opinions` and `courts`, supports jurisdiction/practice_area/date filters
+- `EmbeddingService.embed_public_query()` upgraded to mxbai-1024 with backward compat fallback to BGE-384
+- `routers/mcp.py` refactored to thin proxy forwarding to MCP server REST endpoint
+- CourtListener ingest moved from shell script (`daily_update.sh`) to APScheduler-managed service on MCP server
+- `public_chunks` table superseded by `opinion_chunks` (kept for rollback during migration)
+
+---
+
+## [0.12.0] — 2026-06-04
+
+### Sprint 10 — SMB File Share Relay Agent
+
+### Added
+- **SMB Agent Models**: `SmbAgent`, `SmbShare`, `SmbFileIndex`, `SmbAccessLog`, `MatterSmbShare` SQLAlchemy models with pgvector-style tsvector/GIN full-text search, RLS policies, and migration 036
+- `smb_folders` JSONB column on `matters` table (parallel to `cloud_folder`)
+- **Migration 036**: Five new tables (`smb_agents`, `smb_shares`, `smb_file_index`, `smb_access_log`, `matter_smb_shares`) with RLS, GIN index on search_vector, tsvector auto-update trigger, and `smb_folders` column on matters
+- **SMB API Router** (`/api/v1/smb`): 19 endpoints — agent registration, pairing, heartbeat, file sync, content fetch task queue, user search, admin stats, matter binding
+- **SMB Auth Middleware**: API key authentication for agent endpoints (SHA-256 hashed keys, separate from JWT)
+- **SmbService**: Pairing code generation, agent registration, heartbeat, file sync (upsert with ON CONFLICT), content fetch task dispatch via Redis, full-text search, share CRUD, matter binding CRUD
+- **SmbSearchService**: tsvector full-text search with `plainto_tsquery`, matter-scoped search via `matter_smb_shares` join, content fetch orchestration, `build_smb_context()` for LLM context injection
+- **RetrievalPlanner**: Added `smb_enabled` parameter to planner, `smb` source in PROVIDER_SOURCES, updated prompt to include on-prem file share as search source
+- **RAG Integration**: `hybrid_rag_query()` now checks for active SMB agents and runs tsvector search alongside pgvector and cloud search, merges results into unified context
+- **Admin Endpoints**: `GET /admin/smb/status` (agent/share/file counts, last activity) and `GET /admin/smb/activity` (access log)
+- **Config**: `SMB_ENABLED`, `SMB_PAIRING_CODE_TTL_MIN`, `SMB_MAX_FILE_INDEX_PER_SHARE`, `SMB_SNIPPET_MAX_CHARS`, `SMB_TASK_POLL_INTERVAL`, `SMB_CONTENT_FETCH_TIMEOUT`
+- **Relay Agent Package** (`agent/clarity_agent/`): pip-installable agent with SMB scanner (3-tier change detection), file reader (PDF/DOCX/text extraction), SaaS API client, task worker, heartbeat, local SQLite ledger, and CLI (`clarity-agent register/start/scan/status`)
+- **Scheduler Integration**: `smb-heartbeat` agent added to AGENT_REGISTRY — cron job every 15 min pauses agents with no heartbeat for 15+ minutes
+- **Frontend: SmbAdminPage** — 4-panel admin page (Status, Agents, Shares, Activity) with pairing code generation, agent pause/resume/revoke, share management, and access log viewer
+- **Frontend: MatterSmbSharesTab** — "File Shares" tab on matter detail page for binding SMB shares/folders to matters with add/remove/auto-scan
+- **Frontend: API functions** — 9 SMB admin functions + 4 matter binding functions added to api.js
+
+### Changed
+- Bug fixes in `services/smb.py` — proper UUID conversion via `_uuid()` helper, correct RLS context in pairing code generation and agent registration, cap-aware sync count, null-safe Redis access
+- Bug fixes in `routers/smb.py` — correct FastAPI Body defaults, null-safe Redis via `request.app.state.redis`
+- `RetrievalPlanner` — added `smb_enabled` parameter, `smb` source in PROVIDER_SOURCES, updated prompt
+- `hybrid_rag_query()` — now checks for active SMB agents, runs tsvector search in parallel with pgvector/cloud, accepts `matter_id` for matter-scoped SMB search
+- `AdminPage.jsx` — added "File Shares" tab with SmbAdminPage component
+- `MatterDetailPage.jsx` — added "File Shares" tab with MatterSmbSharesTab component
+
 ## [0.11.0] — 2026-06-04
 
 ### Sprint 9 — Plugin Platform & Matter Workflow Framework

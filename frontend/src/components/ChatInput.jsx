@@ -6,6 +6,7 @@ export default function ChatInput({
   onInputChange,
   onSend,
   onUploadClick,
+  onDropFiles,
   isSending,
   disabled,
   placeholder = "Ask a legal question or drop a document here...",
@@ -13,6 +14,34 @@ export default function ChatInput({
   const textareaRef = useRef(null)
   const [showExamples, setShowExamples] = useState(false)
   const [charCount, setCharCount] = useState(0)
+  const [isDragOver, setIsDragOver] = useState(false)
+
+  const handleDragEnter = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }
+
+  const handleDragOver = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    const files = e.dataTransfer?.files
+    if (files?.length && onDropFiles) {
+      onDropFiles(Array.from(files))
+    }
+  }
 
   const handleTextareaChange = (e) => {
     const value = e.target.value
@@ -39,7 +68,18 @@ export default function ChatInput({
   ]
 
   return (
-    <div className="bg-brand-surface border-t border-brand-line px-8 py-4 flex-shrink-0 z-20">
+    <div
+      className={`bg-brand-surface border-t border-brand-line px-8 py-4 flex-shrink-0 z-20 relative transition-colors ${isDragOver ? 'bg-brand-accent/10' : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDragOver && (
+        <div className="absolute inset-0 border-2 border-dashed border-brand-accent bg-brand-accent/5 flex items-center justify-center z-30 pointer-events-none">
+          <p className="text-sm font-medium text-brand-accent">Drop files to upload</p>
+        </div>
+      )}
       <div className="max-w-4xl mx-auto flex flex-col gap-3">
         {/* Quick examples dropdown */}
         <div className="flex justify-center relative">

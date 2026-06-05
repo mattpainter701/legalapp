@@ -33,7 +33,7 @@ async def get_overdue_tasks(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     today = date.today()
@@ -78,7 +78,7 @@ async def get_upcoming_tasks(
 ):
     from datetime import timedelta
 
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     today = date.today()
@@ -121,7 +121,7 @@ async def list_tasks(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = select(Task).where(Task.tenant_id == uuid.UUID(tenant_id))
@@ -163,12 +163,12 @@ async def create_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     task = Task(
         tenant_id=uuid.UUID(tenant_id),
-        created_by_user_id=uuid.UUID(current_user["user_id"]),
+        created_by_user_id=current_user.id,
         **payload.model_dump(exclude_none=True),
     )
     db.add(task)
@@ -183,7 +183,7 @@ async def get_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -205,7 +205,7 @@ async def update_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -240,7 +240,7 @@ async def delete_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -264,7 +264,7 @@ async def send_task_reminder(
     db: AsyncSession = Depends(get_db),
 ):
     """Manually send a reminder email for a specific task."""
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(

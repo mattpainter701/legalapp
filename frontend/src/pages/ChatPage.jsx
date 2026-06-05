@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from '../components/Sidebar'
@@ -12,6 +12,7 @@ import {
   sendMessage,
   streamMessage,
   getDocuments,
+  uploadDocument,
   logout,
 } from '../api'
 
@@ -30,6 +31,37 @@ export default function ChatPage() {
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
+  const fileInputRef = useRef(null)
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFilesSelected = async (e) => {
+    const files = e.target.files
+    if (!files?.length) return
+    await uploadFiles(Array.from(files))
+    e.target.value = ''
+  }
+
+  const handleDropFiles = async (files) => {
+    if (!files?.length) return
+    await uploadFiles(files)
+  }
+
+  const uploadFiles = async (files) => {
+    for (const file of files) {
+      try {
+        const doc = await uploadDocument(file)
+        setDocuments((prev) => {
+          const exists = prev.find((d) => d.id === doc.id)
+          return exists ? prev : [doc, ...prev]
+        })
+      } catch (err) {
+        console.error('Upload failed:', err)
+      }
+    }
+  }
 
   // Load conversations and documents on mount
   useEffect(() => {
@@ -292,8 +324,18 @@ export default function ChatPage() {
             inputValue={inputValue}
             onInputChange={setInputValue}
             onSend={handleSend}
+            onUploadClick={handleUploadClick}
+            onDropFiles={handleDropFiles}
             isSending={isSending}
             disabled={false}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.txt"
+            multiple
+            className="hidden"
+            onChange={handleFilesSelected}
           />
         </div>
       </div>

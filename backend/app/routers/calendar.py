@@ -29,7 +29,7 @@ async def get_calendar_events(
     db: AsyncSession = Depends(get_db),
 ):
     """Return all deadline events (tasks, matter key dates, renewals, estate deadlines) in [start, end]."""
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     tid = uuid.UUID(tenant_id)

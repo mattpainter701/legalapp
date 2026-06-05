@@ -486,6 +486,7 @@ async def send_message(
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
+                matter_id=body.matter_id if hasattr(body, "matter_id") else None,
             )
             # Cache RAG results
             await cache_manager.set_cached_rag_results(
@@ -914,6 +915,7 @@ async def stream_message(
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
+                matter_id=body.matter_id if hasattr(body, "matter_id") else None,
             )
         except Exception:
             logger.exception(

@@ -11,6 +11,7 @@ import {
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
+import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -35,6 +36,7 @@ const Icons = {
   mail: 'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6',
   dollar: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
   messageSquare: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
+  folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
 }
 
 // ── Small UI pieces ───────────────────────────────────────────────────────────
@@ -314,6 +316,7 @@ export default function MatterDetailPage() {
     { key: 'communications', label: 'Communications', icon: Icons.mail },
     { key: 'billing', label: 'Billing', icon: Icons.dollar },
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
+    { key: 'file-shares', label: 'File Shares', icon: Icons.folder },
     { key: 'plugin', label: 'Plugin', icon: Icons.briefcase },
     { key: 'memory', label: 'Memory', icon: Icons.brain },
   ]
@@ -944,6 +947,8 @@ export default function MatterDetailPage() {
             </div>
           </div>
         )}
+        {/* ── File Shares Tab ─────────────────────────────────────────────────── */}
+        {activeTab === 'file-shares' && <MatterSmbSharesTab matterId={id} />}
 
         {/* ── Plugin Tab ──────────────────────────────────────────────────────── */}
         {activeTab === 'plugin' && (

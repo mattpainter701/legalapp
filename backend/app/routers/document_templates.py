@@ -52,7 +52,7 @@ async def list_templates(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     stmt = (
@@ -82,7 +82,7 @@ async def create_template(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     if payload.category not in CATEGORIES:
@@ -109,7 +109,7 @@ async def get_template(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -131,7 +131,7 @@ async def update_template(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -165,7 +165,7 @@ async def delete_template(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -189,7 +189,7 @@ async def render_template_endpoint(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = current_user["tenant_id"]
+    tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -236,7 +236,7 @@ async def render_template_endpoint(
             id=doc_id,
             matter_id=uuid.UUID(payload.matter_id),
             tenant_id=uuid.UUID(tenant_id),
-            uploaded_by_user_id=uuid.UUID(current_user["user_id"]),
+            uploaded_by_user_id=current_user.id,
             filename=safe_filename,
             content_type="text/markdown",
             file_size=len(rendered_bytes),
