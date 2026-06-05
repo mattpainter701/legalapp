@@ -5,11 +5,13 @@ from pydantic import BaseModel
 
 class ConversationCreate(BaseModel):
     title: Optional[str] = None
+    matter_id: Optional[str] = None
 
 
 class ConversationResponse(BaseModel):
     id: str
     title: str
+    matter_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     message_count: Optional[int] = None

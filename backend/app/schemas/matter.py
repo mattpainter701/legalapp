@@ -1,6 +1,6 @@
 """Pydantic schemas for the matter/case management system."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ class MatterCreate(BaseModel):
     # People
     client_contact_id: str | None = None
     attorney_of_record_id: str | None = None
+    partner_attorney_id: str | None = None
     assigned_user_ids: list[str] = []
 
     # Court / forum
@@ -75,6 +76,7 @@ class MatterUpdate(BaseModel):
     exposure_range: str | None = Field(None, max_length=200)
     client_contact_id: str | None = None
     attorney_of_record_id: str | None = None
+    partner_attorney_id: str | None = None
     court: str | None = Field(None, max_length=300)
     judge: str | None = Field(None, max_length=200)
     case_number: str | None = Field(None, max_length=100)
@@ -97,6 +99,8 @@ class MatterUpdate(BaseModel):
     is_closed: bool | None = None
     outcome: str | None = Field(None, max_length=200)
     final_cost: str | None = Field(None, max_length=100)
+    retention_until: date | None = None
+    is_archived: bool | None = None
     memory_content: str | None = None
     cloud_folder: dict | None = None
     primary_plugin: str | None = Field(None, max_length=100)
@@ -111,6 +115,7 @@ class MatterAssignmentResponse(BaseModel):
     user_name: str
     role: str
     is_primary: bool
+    is_active_working: bool
     assigned_at: datetime
 
     model_config = {"from_attributes": True}
@@ -169,6 +174,14 @@ class MatterResponse(BaseModel):
     # Attorney of record
     attorney_of_record_id: str | None
     attorney_of_record_name: str | None
+
+    # Partner attorney (commission tracking)
+    partner_attorney_id: str | None
+    partner_attorney_name: str | None
+
+    # Retention
+    retention_until: date | None
+    archived_at: datetime | None
 
     # Billing
     budget_amount: Decimal | None
@@ -233,6 +246,16 @@ class MatterListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class MatterSummaryMyMatters(MatterSummary):
+    """Matter summary enriched with the current user's context."""
+
+    my_role: str
+    my_assignment_id: str
+    is_active_working: bool
+    active_workers: list[str] = []
+    overdue_deadline_label: str | None = None
 
 
 # ── Assignments ───────────────────────────────────────────────────────────────

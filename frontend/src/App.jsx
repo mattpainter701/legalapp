@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import HomePage from './pages/HomePage'
 import SignupPage from './pages/SignupPage'
@@ -136,7 +136,12 @@ function RootRedirect() {
     )
   }
 
-  return user ? <Navigate to="/chat" replace /> : <HomePage />
+  return user ? <Navigate to="/matters" replace /> : <HomePage />
+}
+
+function RedirectMatterId() {
+  const { id } = useParams()
+  return <Navigate to={`/matters/${id}`} replace />
 }
 
 // ---------------------------------------------------------------------------
@@ -188,8 +193,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        {/* Primary matter routes */}
         <Route
-          path="/plugins/litigation/matters"
+          path="/matters"
           element={
             <ProtectedRoute>
               <MatterPortfolioPage />
@@ -197,10 +203,20 @@ export default function App() {
           }
         />
         <Route
-          path="/plugins/litigation/matters/:id"
+          path="/matters/:id"
           element={
             <ProtectedRoute>
               <MatterDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Legacy redirects */}
+        <Route path="/plugins/litigation/matters" element={<Navigate to="/matters" replace />} />
+        <Route
+          path="/plugins/litigation/matters/:id"
+          element={
+            <ProtectedRoute>
+              <RedirectMatterId />
             </ProtectedRoute>
           }
         />

@@ -181,30 +181,23 @@ export default function Sidebar({
 
       {/* Actions */}
       <div className="p-4 flex flex-col gap-2 border-b border-brand-line shrink-0">
+        {/* Matters — primary entry point */}
+        <button
+          onClick={() => navigate('/matters')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-brand-ink text-white text-sm font-semibold hover:bg-brand-ink-2 transition-colors border border-brand-ink"
+        >
+          <span className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4" /> My Matters
+          </span>
+        </button>
         <button
           onClick={onNewConversation}
-          className="flex items-center justify-between w-full px-3 py-2 bg-brand-ink text-white text-sm font-medium hover:bg-brand-ink-2 transition-colors border border-brand-ink"
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
             <Plus className="w-4 h-4" /> New Conversation
           </span>
-          <span className="text-white/50 text-xs font-mono">⌘N</span>
-        </button>
-        <button
-          onClick={() => navigate('/plugins')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Blocks className="w-4 h-4" /> Add-on Modules
-          </span>
-        </button>
-        <button
-          onClick={() => navigate('/reports')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <BarChart2 className="w-4 h-4" /> Reports
-          </span>
+          <span className="text-brand-muted text-xs font-mono">⌘N</span>
         </button>
         <button
           onClick={() => navigate('/calendar')}
@@ -220,14 +213,6 @@ export default function Sidebar({
         >
           <span className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4" /> Communications
-          </span>
-        </button>
-        <button
-          onClick={() => navigate('/plugins/litigation/matters')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Briefcase className="w-4 h-4" /> Matters
           </span>
         </button>
         <button
@@ -247,11 +232,27 @@ export default function Sidebar({
           </span>
         </button>
         <button
+          onClick={() => navigate('/reports')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <BarChart2 className="w-4 h-4" /> Reports
+          </span>
+        </button>
+        <button
           onClick={() => navigate('/templates')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
             <FileSignature className="w-4 h-4" /> Templates
+          </span>
+        </button>
+        <button
+          onClick={() => navigate('/plugins')}
+          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+        >
+          <span className="flex items-center gap-2">
+            <Blocks className="w-4 h-4" /> Add-on Modules
           </span>
         </button>
       </div>

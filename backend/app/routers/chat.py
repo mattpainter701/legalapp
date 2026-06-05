@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +96,7 @@ def _conversation_to_response(
     return ConversationResponse(
         id=str(conv.id),
         title=conv.title,
+        matter_id=str(conv.matter_id) if conv.matter_id else None,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         message_count=message_count,
@@ -165,17 +166,25 @@ async def _trigger_auto_memory_generation(
 async def list_conversations(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    matter_id: str | None = Query(None),
 ):
-    """List all conversations for the current user."""
+    """List all conversations for the current user, optionally filtered by matter."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
+    conditions = [
+        Conversation.user_id == user.id,
+        Conversation.tenant_id == user.tenant_id,
+    ]
+    if matter_id:
+        try:
+            conditions.append(Conversation.matter_id == uuid.UUID(matter_id))
+        except (ValueError, TypeError):
+            pass
+
     result = await db.execute(
         select(Conversation)
-        .where(
-            Conversation.user_id == user.id,
-            Conversation.tenant_id == user.tenant_id,
-        )
+        .where(*conditions)
         .order_by(Conversation.updated_at.desc())
     )
     conversations = result.scalars().all()
@@ -203,12 +212,32 @@ async def create_conversation(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    title = body.title or "New Conversation"
+    matter_uuid = None
+    matter_name = None
+    if body.matter_id:
+        try:
+            matter_uuid = uuid.UUID(body.matter_id)
+            # Load matter name for auto-title
+            from app.models.plugin import Matter as MatterModel
+            m_result = await db.execute(
+                select(MatterModel.matter_name).where(
+                    MatterModel.id == matter_uuid,
+                    MatterModel.tenant_id == user.tenant_id,
+                )
+            )
+            row = m_result.one_or_none()
+            if row:
+                matter_name = row[0]
+        except (ValueError, TypeError):
+            matter_uuid = None
+
+    title = body.title or (f"Chat: {matter_name}" if matter_name else "New Conversation")
     conv = Conversation(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
         user_id=user.id,
         title=title,
+        matter_id=matter_uuid,
     )
     db.add(conv)
     await db.commit()
