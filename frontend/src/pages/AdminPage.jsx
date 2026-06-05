@@ -500,9 +500,9 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-brand-bg">
       {/* Top nav */}
-      <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-4">
-          <div className="w-8 h-8 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center">
+      <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-2 md:gap-4 min-w-0">
+          <div className="w-8 h-8 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center flex-shrink-0">
             <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
               <path
                 d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z"
@@ -510,18 +510,19 @@ export default function AdminPage() {
               />
             </svg>
           </div>
-          <span className="font-serif font-bold text-lg text-brand-ink">Clarity Legal</span>
-          <span className="text-brand-line-2 mx-1">|</span>
-          <span className="text-brand-ink-2 font-sans font-medium tracking-wide text-sm">
+          <span className="font-serif font-bold text-base md:text-lg text-brand-ink truncate">Clarity Legal</span>
+          <span className="text-brand-line-2 mx-1 hidden sm:inline">|</span>
+          <span className="text-brand-ink-2 font-sans font-medium tracking-wide text-sm hidden sm:inline">
             Admin Panel
           </span>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-3 md:gap-6 flex-shrink-0">
           <button
             onClick={() => navigate('/chat')}
             className="text-sm font-medium text-brand-ink-2 hover:text-brand-accent transition-colors font-sans"
           >
-            Back to Chat
+            <span className="hidden sm:inline">Back to Chat</span>
+            <span className="sm:hidden">Chat</span>
           </button>
           <button
             onClick={handleLogout}
@@ -533,9 +534,9 @@ export default function AdminPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-6xl mx-auto px-8 py-12">
-        <div className="mb-10">
-          <h1 className="text-4xl font-bold font-serif text-brand-ink tracking-tight mb-3">
+      <div className="max-w-6xl mx-auto px-4 md:px-8 py-8 md:py-12">
+        <div className="mb-8 md:mb-10">
+          <h1 className="text-3xl md:text-4xl font-bold font-serif text-brand-ink tracking-tight mb-3">
             Administration
           </h1>
           <p className="text-brand-ink-2 text-base font-sans">
@@ -544,13 +545,13 @@ export default function AdminPage() {
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-brand-line mb-8">
-          <nav className="-mb-px flex gap-8">
+        <div className="border-b border-brand-line mb-8 overflow-x-auto">
+          <nav className="-mb-px flex gap-4 md:gap-8">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`pb-4 text-[15px] font-sans font-medium border-b-2 transition-all ${
+                className={`pb-4 text-[14px] md:text-[15px] font-sans font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0 ${
                   activeTab === tab.id
                     ? 'border-brand-accent text-brand-ink'
                     : 'border-transparent text-brand-muted hover:text-brand-ink hover:border-brand-line-2'

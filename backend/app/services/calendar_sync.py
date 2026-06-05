@@ -30,7 +30,14 @@ class CalendarSyncService:
             token = await get_fresh_token(db, tenant_id, "microsoft")
 
         if not token:
-            raise RuntimeError("No Microsoft OAuth token available")
+            logger.warning(
+                "ms_get_events: no Microsoft token for user_id=%s tenant_id=%s",
+                user_id,
+                tenant_id,
+            )
+            raise ValueError(
+                "No Microsoft calendar token. Please reconnect your calendar in Settings."
+            )
 
         cal_url = f"{GRAPH_BASE}/me/calendarview"
         start = datetime.now(timezone.utc)
@@ -51,7 +58,9 @@ class CalendarSyncService:
                 params=params,
             )
             if resp.status_code != 200:
-                raise RuntimeError(f"MS Graph calendar read failed: {resp.status_code}")
+                raise ValueError(
+                    f"Microsoft calendar read failed (HTTP {resp.status_code}). Please try again or reconnect your calendar in Settings."
+                )
 
             events = []
             for evt in resp.json().get("value", []):
@@ -147,7 +156,14 @@ class CalendarSyncService:
     ) -> list[dict]:
         token = await get_fresh_user_token(db, tenant_id, user_id, "google")
         if not token:
-            raise RuntimeError("No Google OAuth token available")
+            logger.warning(
+                "google_get_events: no Google token for user_id=%s tenant_id=%s",
+                user_id,
+                tenant_id,
+            )
+            raise ValueError(
+                "No Google calendar token. Please reconnect your calendar in Settings."
+            )
 
         now = datetime.now(timezone.utc)
         time_min = now.isoformat()
@@ -168,7 +184,9 @@ class CalendarSyncService:
                 params=params,
             )
             if resp.status_code != 200:
-                raise RuntimeError(f"Google Calendar read failed: {resp.status_code}")
+                raise ValueError(
+                    f"Google Calendar read failed (HTTP {resp.status_code}). Please try again or reconnect your calendar in Settings."
+                )
 
             events = []
             for evt in resp.json().get("items", []):

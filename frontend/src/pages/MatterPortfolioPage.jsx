@@ -205,7 +205,7 @@ export default function MatterPortfolioPage() {
   return (
     <div className="min-h-screen bg-brand-bg">
       {/* Top nav */}
-      <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
+      <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
           <Icon d={Icons.briefcase} size={18} className="text-brand-accent" />
           <span className="font-serif font-bold text-lg text-brand-ink tracking-tight">Matters</span>
@@ -219,7 +219,7 @@ export default function MatterPortfolioPage() {
         </button>
       </div>
 
-      <div className="max-w-[1400px] mx-auto px-8 py-10">
+      <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-10">
 
         {/* ── My Matters ─────────────────────────────────────────────────────── */}
         <div className="mb-12">

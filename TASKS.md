@@ -104,6 +104,28 @@ Design: `docs/legal_rag.md` §8
 - [ ] MCP configuration section: SSE enable/disable toggle, transport ports display
 - [ ] API functions in `frontend/src/api.js`: `getMcpStatus`, `triggerClIngest`, `triggerClEmbed`, `getClHistory`, `getMcpUsage`, `exportMcpUsage`, `setMcpRateLimits`
 
+### 1109. Calendar Sync — Fix Multi-User Sync Failure (P0, MEDIUM) — COMPLETED
+
+- [x] Diagnose: `get_fresh_user_token()` silently returned `None` on any failure; calendar service raised bare `RuntimeError` that crashed as 500 with no user feedback
+- [x] Verify `set_tenant_context` is called before calendar DB queries — confirmed present in both `email_agent.py` and `calendar_sync.py`
+- [x] Confirm OAuth tokens are stored per-user (`UserOAuthToken` keyed on `user_id + provider`) — no admin-sharing issue
+- [x] Add per-user sync error logging in `token_vault.py` (logs user_id, provider, reason on every None return); change `RuntimeError` → `ValueError` in `calendar_sync.py`; return 401 with readable message in `email_agent.py`
+- [x] Surface errors in UI: `CalendarPage` now shows sync button, spinner, and success/error banner after each attempt
+
+### 1110. Mobile Responsive UI Overhaul (P1, LARGE) — COMPLETED
+
+- [x] Audit all pages for mobile breakpoints — identified worst offenders (sidebar, tables, chat, matter detail)
+- [x] Sidebar: hamburger button (md:hidden) in ChatHeader, overlay with backdrop, slide-in/out via sidebar-hidden/sidebar-visible CSS classes wired to sidebarOpen state in ChatPage
+- [x] Matter detail tabs: tab bar made horizontally scrollable (overflow-x-auto, flex-shrink-0 on each tab), edit form grids changed to grid-cols-1 sm:grid-cols-2, billing stats grid to grid-cols-1 sm:grid-cols-3, team add form to flex-col sm:flex-row
+- [x] Chat page: ChatInput px reduced to px-4 md:px-8, iOS safe-area bottom padding via env(safe-area-inset-bottom), model selector and public case law toggle hidden on small screens (sm:hidden/md:hidden)
+- [x] ChatHeader: hamburger button visible md:hidden, gap reduced on mobile, controls hidden at small breakpoints
+- [x] Admin page: topbar px-4 md:px-8, content px-4 md:px-8 py-8 md:py-12, tab nav overflow-x-auto with whitespace-nowrap tabs
+- [x] MatterPortfolioPage: topbar and content padding made responsive (px-4 md:px-8)
+- [x] MatterDetailPage: topbar px-4 md:px-8, content px-4 md:px-8, title truncation, action buttons gap responsive
+- Viewport meta tag was already present in index.html — no change needed
+
+Files changed: `frontend/src/index.css`, `frontend/src/components/Sidebar.jsx`, `frontend/src/components/ChatHeader.jsx`, `frontend/src/components/ChatInput.jsx`, `frontend/src/pages/ChatPage.jsx`, `frontend/src/pages/MatterDetailPage.jsx`, `frontend/src/pages/AdminPage.jsx`, `frontend/src/pages/MatterPortfolioPage.jsx`
+
 ---
 
 ## Sprint 10 — SMB File Share Relay Agent (v0.12.0)

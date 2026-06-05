@@ -156,15 +156,13 @@
     @apply bg-brand-accent text-white;
   }
 
-  /* Responsive utilities */
-  @media (max-width: 768px) {
-    .sidebar-hidden {
-      @apply -translate-x-full;
-    }
+  /* Sidebar mobile slide transition */
+  .sidebar-hidden {
+    transform: translateX(-100%);
+  }
 
-    .sidebar-visible {
-      @apply translate-x-0;
-    }
+  .sidebar-visible {
+    transform: translateX(0);
   }
 }
 

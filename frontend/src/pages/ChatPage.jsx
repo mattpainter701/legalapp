@@ -31,6 +31,7 @@ export default function ChatPage() {
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const fileInputRef = useRef(null)
 
   const handleUploadClick = () => {
@@ -290,7 +291,7 @@ export default function ChatPage() {
         <Sidebar
           conversations={conversations}
           activeConvId={activeConvId}
-          onSelectConversation={loadConversation}
+          onSelectConversation={(id) => { loadConversation(id); setSidebarOpen(false) }}
           onNewConversation={handleNewConversation}
           onConversationDeleted={handleConversationDeleted}
           documents={documents}
@@ -298,10 +299,12 @@ export default function ChatPage() {
           onDocumentDeleted={handleDocumentDeleted}
           user={user}
           onLogout={handleLogout}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
-        {/* Main area */}
-        <div className="flex-1 flex flex-col min-w-0 bg-brand-bg">
+        {/* Main area — on desktop, sidebar is in-flow so we don't need left offset */}
+        <div className="flex-1 flex flex-col min-w-0 bg-brand-bg md:ml-0">
           <ChatHeader
             activeRef={activeRef}
             activeConvTitle={activeConvTitle}
@@ -312,6 +315,7 @@ export default function ChatPage() {
             user={user}
             onExportConversation={handleExportConversation}
             onSearchMessages={handleSearchMessages}
+            onOpenSidebar={() => setSidebarOpen(true)}
           />
 
           <Messages

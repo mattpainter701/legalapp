@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCalendarEvents } from '../api'
+import { getCalendarEvents, syncCalendarDeadlines } from '../api'
 import { ChevronLeft, ChevronRight, CalendarDays, ClipboardList, Building2, RefreshCw } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -93,6 +93,8 @@ export default function CalendarPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState(null) // { type: 'success'|'error', text: string }
 
   const fetchEvents = useCallback(async (pivot) => {
     setLoading(true)
@@ -133,6 +135,28 @@ export default function CalendarPage() {
     if (event.url) navigate(event.url)
   }
 
+  const handleSync = async (provider) => {
+    setSyncing(true)
+    setSyncMessage(null)
+    try {
+      const result = await syncCalendarDeadlines(provider)
+      setSyncMessage({
+        type: 'success',
+        text: `Synced ${result.deadlines_created ?? 0} deadline(s) to ${provider === 'google' ? 'Google Calendar' : 'Microsoft Calendar'}.`,
+      })
+      // Refresh local events list after sync
+      fetchEvents(pivotDate)
+    } catch (err) {
+      const detail =
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Calendar sync failed. Please try again.'
+      setSyncMessage({ type: 'error', text: `Calendar sync failed: ${detail}` })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <div className="flex flex-col h-screen bg-brand-bg">
       {/* Header */}
@@ -143,8 +167,37 @@ export default function CalendarPage() {
           <span className="text-xs text-brand-muted font-mono">
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
+          <button
+            onClick={() => handleSync('microsoft')}
+            disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
+            title="Sync matter deadlines to Microsoft Calendar"
+          >
+            <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync to Calendar'}
+          </button>
         </div>
       </div>
+
+      {/* Sync message banner */}
+      {syncMessage && (
+        <div
+          className={`px-6 py-2 text-xs font-medium flex items-center justify-between ${
+            syncMessage.type === 'error'
+              ? 'bg-red-50 text-red-700 border-b border-red-200'
+              : 'bg-green-50 text-green-700 border-b border-green-200'
+          }`}
+        >
+          <span>{syncMessage.text}</span>
+          <button
+            onClick={() => setSyncMessage(null)}
+            className="ml-4 opacity-60 hover:opacity-100 text-xs"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Month navigation */}
       <div className="flex items-center gap-4 px-6 py-4 border-b border-brand-line bg-brand-surface-2 shrink-0">

@@ -337,15 +337,15 @@ export default function MatterDetailPage() {
   return (
     <div className="min-h-screen bg-brand-bg">
       {/* Topbar */}
-      <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
-        <div className="flex items-center gap-4">
-          <button onClick={() => navigate('/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors">
-            <Icon d={Icons.back} size={16} /> Matter Portfolio
+      <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
+        <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
+          <button onClick={() => navigate('/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors flex-shrink-0">
+            <Icon d={Icons.back} size={16} /> <span className="hidden sm:inline">Matter Portfolio</span>
           </button>
-          <div className="h-4 w-px bg-brand-line" />
-          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight truncate max-w-xs">{matter.matter_name}</span>
+          <div className="h-4 w-px bg-brand-line flex-shrink-0" />
+          <span className="font-serif font-bold text-base md:text-lg text-brand-ink tracking-tight truncate">{matter.matter_name}</span>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-2 md:gap-3 flex-shrink-0">
           {editing ? (
             <>
               <button onClick={() => { setEditing(false); setEditData(matter) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
@@ -363,7 +363,7 @@ export default function MatterDetailPage() {
         </div>
       </div>
 
-      <div className="max-w-[1200px] mx-auto px-8 py-10">
+      <div className="max-w-[1200px] mx-auto px-4 md:px-8 py-6 md:py-10">
         {/* Hero */}
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
           <div className="flex-1 min-w-0">
@@ -407,12 +407,12 @@ export default function MatterDetailPage() {
         {saveError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-6 text-brand-rose text-sm font-sans">{saveError}</div>}
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-8 border-b border-brand-line overflow-x-auto">
+        <div className="flex gap-1 mb-8 border-b border-brand-line overflow-x-auto scrollbar-none pb-px">
           {tabs.map(({ key, label, icon }) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-1.5 px-5 py-3 text-[13px] font-sans font-semibold transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === key ? 'border-brand-ink text-brand-ink' : 'border-transparent text-brand-muted hover:text-brand-ink-2'}`}
+              className={`flex items-center gap-1.5 px-3 md:px-5 py-3 text-[13px] font-sans font-semibold transition-colors border-b-2 -mb-px whitespace-nowrap flex-shrink-0 ${activeTab === key ? 'border-brand-ink text-brand-ink' : 'border-transparent text-brand-muted hover:text-brand-ink-2'}`}
             >
               <Icon d={icon} size={14} />
               {label}
@@ -435,7 +435,7 @@ export default function MatterDetailPage() {
                     <label className={labelCls}>Description</label>
                     <textarea value={editData.description || ''} onChange={e => setEditData(p => ({ ...p, description: e.target.value }))} rows={3} className={`${inputCls} resize-none`} />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Status</label>
                       <select value={editData.status || 'open'} onChange={e => setEditData(p => ({ ...p, status: e.target.value }))} className={inputCls}>
@@ -473,7 +473,7 @@ export default function MatterDetailPage() {
                     <label className={labelCls}>Case Number</label>
                     <input type="text" value={editData.case_number || ''} onChange={e => setEditData(p => ({ ...p, case_number: e.target.value }))} className={inputCls} />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Budget Amount</label>
                       <input type="number" step="0.01" min="0" value={editData.budget_amount || ''} onChange={e => setEditData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
@@ -687,7 +687,7 @@ export default function MatterDetailPage() {
               {unassignedUsers.length > 0 && (
                 <div className="border-t border-brand-line pt-5">
                   <h3 className="text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-3">Add Team Member</h3>
-                  <div className="flex gap-3 items-end">
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                     <div className="flex-1">
                       <label className={labelCls}>User</label>
                       <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)} className={inputCls}>
@@ -695,7 +695,7 @@ export default function MatterDetailPage() {
                         {unassignedUsers.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                       </select>
                     </div>
-                    <div className="w-40">
+                    <div className="sm:w-40">
                       <label className={labelCls}>Role</label>
                       <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
                         {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
@@ -839,7 +839,7 @@ export default function MatterDetailPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
                       <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Hours</div>
                       <div className="text-2xl font-serif font-bold text-brand-ink">

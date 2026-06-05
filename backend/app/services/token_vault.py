@@ -215,6 +215,12 @@ async def get_fresh_user_token(
     token_row = result.scalar_one_or_none()
 
     if not token_row:
+        logger.warning(
+            "get_fresh_user_token: no token row found for user_id=%s provider=%s tenant_id=%s",
+            user_id,
+            provider,
+            tenant_id,
+        )
         return None
 
     if _is_fresh(token_row.token_expires_at):
@@ -225,6 +231,12 @@ async def get_fresh_user_token(
         refresh_token = decrypt_token(token_row.encrypted_refresh_token)
 
     if not refresh_token:
+        logger.warning(
+            "get_fresh_user_token: token expired and no refresh token for user_id=%s provider=%s tenant_id=%s",
+            user_id,
+            provider,
+            tenant_id,
+        )
         return None
 
     if provider == "microsoft":
@@ -241,12 +253,21 @@ async def get_fresh_user_token(
                 },
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "get_fresh_user_token: microsoft refresh failed status=%d user_id=%s",
+                    resp.status_code,
+                    user_id,
+                )
                 return None
             data = resp.json()
             new_access_token = data.get("access_token")
             new_refresh_token = data.get("refresh_token")
             expires_in = data.get("expires_in", 3600)
             if not new_access_token:
+                logger.warning(
+                    "get_fresh_user_token: microsoft refresh returned no access_token user_id=%s",
+                    user_id,
+                )
                 return None
             token_row.encrypted_access_token = encrypt_token(new_access_token)
             if new_refresh_token:
@@ -268,11 +289,20 @@ async def get_fresh_user_token(
                 },
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "get_fresh_user_token: google refresh failed status=%d user_id=%s",
+                    resp.status_code,
+                    user_id,
+                )
                 return None
             data = resp.json()
             new_access_token = data.get("access_token")
             expires_in = data.get("expires_in", 3600)
             if not new_access_token:
+                logger.warning(
+                    "get_fresh_user_token: google refresh returned no access_token user_id=%s",
+                    user_id,
+                )
                 return None
             token_row.encrypted_access_token = encrypt_token(new_access_token)
             token_row.token_expires_at = _expires_at(expires_in)

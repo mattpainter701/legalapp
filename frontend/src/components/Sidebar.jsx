@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import IntegrationPanel from './IntegrationPanel'
 import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User, Menu } from 'lucide-react'
 
 function ConversationItem({
   conv,
@@ -122,6 +122,8 @@ export default function Sidebar({
   onDocumentDeleted,
   user,
   onLogout,
+  isOpen = true,
+  onClose,
 }) {
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState('')
@@ -171,19 +173,46 @@ export default function Sidebar({
     return [...pinned, ...unpinned]
   }, [conversations, searchQuery, pinnedConvIds])
 
+  const handleNavAndClose = (path) => {
+    navigate(path)
+    onClose?.()
+  }
+
   return (
-    <div className="w-[300px] flex-shrink-0 border-r border-brand-line flex flex-col h-full bg-brand-surface-2 relative z-20">
+    <>
+      {/* Mobile backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/40 z-30 md:hidden transition-opacity duration-300 ${isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      {/* Sidebar panel */}
+      <div className={`
+        fixed md:relative inset-y-0 left-0 z-40
+        w-[300px] flex-shrink-0 border-r border-brand-line flex flex-col h-full bg-brand-surface-2
+        transition-transform duration-300 ease-in-out
+        ${isOpen ? 'sidebar-visible' : 'sidebar-hidden md:translate-x-0'}
+      `}>
       {/* Header */}
       <div className="h-16 flex items-center px-4 border-b border-brand-line shrink-0">
         <Scale className="w-5 h-5 mr-2 text-brand-accent" strokeWidth={1.5} />
-        <span className="font-serif font-semibold text-lg tracking-tight text-brand-ink">Clarity Legal</span>
+        <span className="font-serif font-semibold text-lg tracking-tight text-brand-ink flex-1">Clarity Legal</span>
+        {/* Close button — mobile only */}
+        <button
+          className="md:hidden p-1.5 text-brand-muted hover:text-brand-ink transition-colors"
+          onClick={onClose}
+          aria-label="Close sidebar"
+        >
+          <X size={18} />
+        </button>
       </div>
 
       {/* Actions */}
       <div className="p-4 flex flex-col gap-2 border-b border-brand-line shrink-0">
         {/* Matters — primary entry point */}
         <button
-          onClick={() => navigate('/matters')}
+          onClick={() => handleNavAndClose('/matters')}
           className="flex items-center justify-between w-full px-3 py-2 bg-brand-ink text-white text-sm font-semibold hover:bg-brand-ink-2 transition-colors border border-brand-ink"
         >
           <span className="flex items-center gap-2">
@@ -191,7 +220,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={onNewConversation}
+          onClick={() => { onNewConversation?.(); onClose?.() }}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -200,7 +229,7 @@ export default function Sidebar({
           <span className="text-brand-muted text-xs font-mono">⌘N</span>
         </button>
         <button
-          onClick={() => navigate('/calendar')}
+          onClick={() => handleNavAndClose('/calendar')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -208,7 +237,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/communications')}
+          onClick={() => handleNavAndClose('/communications')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -216,7 +245,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/time-tracking')}
+          onClick={() => handleNavAndClose('/time-tracking')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -224,7 +253,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/invoices')}
+          onClick={() => handleNavAndClose('/invoices')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -232,7 +261,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/reports')}
+          onClick={() => handleNavAndClose('/reports')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -240,7 +269,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/templates')}
+          onClick={() => handleNavAndClose('/templates')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -248,7 +277,7 @@ export default function Sidebar({
           </span>
         </button>
         <button
-          onClick={() => navigate('/plugins')}
+          onClick={() => handleNavAndClose('/plugins')}
           className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
         >
           <span className="flex items-center gap-2">
@@ -368,7 +397,7 @@ export default function Sidebar({
           </p>
         </div>
         <button
-          onClick={() => navigate('/profile')}
+          onClick={() => handleNavAndClose('/profile')}
           className="text-brand-muted hover:text-brand-ink transition-colors shrink-0"
           title="Profile"
         >
@@ -382,6 +411,7 @@ export default function Sidebar({
           <Settings className="w-4 h-4" />
         </button>
       </div>
-    </div>
+      </div>{/* end sidebar panel */}
+    </>
   )
 }

@@ -69,7 +69,8 @@ export default function ChatInput({
 
   return (
     <div
-      className={`bg-brand-surface border-t border-brand-line px-8 py-4 flex-shrink-0 z-20 relative transition-colors ${isDragOver ? 'bg-brand-accent/10' : ''}`}
+      className={`bg-brand-surface border-t border-brand-line px-4 md:px-8 py-4 flex-shrink-0 z-20 relative transition-colors ${isDragOver ? 'bg-brand-accent/10' : ''}`}
+      style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}

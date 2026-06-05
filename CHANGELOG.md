@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.13.2] — 2026-06-05
+
+### Task 1109 — Calendar Sync Multi-User Fix
+
+### Fixed
+- **`token_vault.py`:** `get_fresh_user_token()` now logs a warning (user_id, provider, reason) on every silent `None` return instead of failing invisibly.
+- **`calendar_sync.py`:** Replaced bare `RuntimeError` with `ValueError` carrying a user-readable message ("No Microsoft calendar token. Please reconnect your calendar in Settings.") for both missing-token and HTTP-failure cases.
+- **`email_agent.py`:** Sync endpoint catches `ValueError` from calendar service and returns `HTTP 401` with the readable detail instead of crashing as a 500.
+- **`CalendarPage.jsx` + `api.js`:** Added "Sync to Calendar" button with spinner; success/error banner displayed after each attempt so users know exactly what failed.
+
+---
+
+### Task 1110 — Mobile Responsive UI Overhaul
+
+### Added
+- **Sidebar mobile overlay:** Hamburger button in `ChatHeader` (hidden on md+) opens sidebar as a slide-in overlay with backdrop on mobile. Sidebar uses `position: fixed md:relative` so it doesn't push content on desktop. State managed via `sidebarOpen` in `ChatPage`.
+- **iOS safe-area bottom padding:** `ChatInput` uses `env(safe-area-inset-bottom)` so the input bar clears the home indicator on iPhone.
+
+### Changed
+- **`Sidebar.jsx`:** Accepts `isOpen`/`onClose` props. All nav clicks close the sidebar on mobile. Desktop layout unchanged (always visible, in-flow).
+- **`ChatHeader.jsx`:** Hamburger button (md:hidden), model selector hidden on mobile (sm:hidden), public case law toggle hidden on small screens (md:hidden), gap reduced on small viewports.
+- **`ChatInput.jsx`:** Horizontal padding responsive `px-4 md:px-8`.
+- **`MatterDetailPage.jsx`:** Topbar and content padding responsive. Tab bar `overflow-x-auto` with `flex-shrink-0` on each tab. Edit form grids `grid-cols-1 sm:grid-cols-2`. Billing stats `grid-cols-1 sm:grid-cols-3`. Team add form `flex-col sm:flex-row`.
+- **`AdminPage.jsx`:** Topbar `px-4 md:px-8`, content `px-4 md:px-8 py-8 md:py-12`, tab nav `overflow-x-auto` with `whitespace-nowrap` and smaller gap on mobile.
+- **`MatterPortfolioPage.jsx`:** Topbar and content padding responsive `px-4 md:px-8`.
+- **`index.css`:** Sidebar slide transition classes made unconditional (not wrapped in media query) so Tailwind `md:translate-x-0` override works correctly.
+
+---
+
 ## [0.13.1] — 2026-06-04
 
 ### Sprint 10 Post-Review Bug Fixes

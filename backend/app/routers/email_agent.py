@@ -106,21 +106,27 @@ async def sync_calendar(
 
     await set_tenant_context(db, tenant_id)
 
-    if body.provider == "microsoft":
-        events = await calendar_sync.ms_get_events(db, tenant_id, user_id)
-    elif body.provider == "google":
-        events = await calendar_sync.google_get_events(db, tenant_id, user_id)
-    else:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported provider: {body.provider}"
-        )
+    try:
+        if body.provider == "microsoft":
+            events = await calendar_sync.ms_get_events(db, tenant_id, user_id)
+        elif body.provider == "google":
+            events = await calendar_sync.google_get_events(db, tenant_id, user_id)
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported provider: {body.provider}"
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
 
     deadlines_created = 0
     if body.sync_deadlines:
-        sync_result = await calendar_sync.sync_deadlines_to_calendar(
-            db, tenant_id, user_id, body.provider
-        )
-        deadlines_created = sync_result.get("created", 0)
+        try:
+            sync_result = await calendar_sync.sync_deadlines_to_calendar(
+                db, tenant_id, user_id, body.provider
+            )
+            deadlines_created = sync_result.get("created", 0)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
 
     return CalendarSyncResponse(
         provider=body.provider,

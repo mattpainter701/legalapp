@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, Download, Search, MoreVertical } from 'lucide-react'
+import { ShieldCheck, Download, Search, MoreVertical, Menu } from 'lucide-react'
 
 export default function ChatHeader({
   activeRef,
@@ -12,6 +12,7 @@ export default function ChatHeader({
   user,
   onExportConversation,
   onSearchMessages,
+  onOpenSidebar,
 }) {
   const navigate = useNavigate()
   const [showMenu, setShowMenu] = useState(false)
@@ -27,8 +28,16 @@ export default function ChatHeader({
   }
 
   return (
-    <div className="h-16 bg-brand-surface border-b border-brand-line px-6 flex items-center justify-between flex-shrink-0 z-20">
-      {/* Left: Conversation info */}
+    <div className="h-16 bg-brand-surface border-b border-brand-line px-4 md:px-6 flex items-center justify-between flex-shrink-0 z-20">
+      {/* Left: Hamburger (mobile) + Conversation info */}
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <button
+          className="md:hidden p-2 text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
+          onClick={onOpenSidebar}
+          aria-label="Open sidebar"
+        >
+          <Menu size={20} />
+        </button>
       <div className="flex flex-col min-w-0 flex-1">
         <div className="text-xs font-mono text-brand-muted uppercase tracking-widest mb-0.5 flex items-center gap-2">
           <span>Case Ledger</span>
@@ -61,9 +70,10 @@ export default function ChatHeader({
           </h1>
         )}
       </div>
+      </div>{/* end left flex wrapper */}
 
       {/* Right: Controls */}
-      <div className="flex items-center gap-6 flex-shrink-0">
+      <div className="flex items-center gap-2 md:gap-6 flex-shrink-0">
         {/* Legal-safe badge */}
         <div
           className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-brand-accent/10 text-brand-accent border border-brand-accent/20 text-xs font-semibold"
@@ -74,7 +84,7 @@ export default function ChatHeader({
         </div>
 
         {/* Model selector */}
-        <div className="flex items-center bg-brand-surface-2 border border-brand-line p-0.5 rounded">
+        <div className="hidden sm:flex items-center bg-brand-surface-2 border border-brand-line p-0.5 rounded">
           <button
             onClick={() => setUsePremium(false)}
             className={`px-3 py-1.5 text-xs font-medium transition-all rounded-sm ${
@@ -103,7 +113,7 @@ export default function ChatHeader({
           role="switch"
           aria-checked={includePublic}
           onClick={() => setIncludePublic((v) => !v)}
-          className="flex items-center gap-2 cursor-pointer group focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-ink"
+          className="hidden md:flex items-center gap-2 cursor-pointer group focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-ink"
         >
           <span
             className={`relative inline-block w-8 h-4 rounded-full transition-colors ${
