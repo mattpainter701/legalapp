@@ -159,6 +159,24 @@ export const getAdminUsers = () =>
 export const deactivateUser = (userId, force = false) =>
   api.delete(`/admin/users/${userId}`, { params: { force } })
 
+export const reactivateUser = (userId) =>
+  api.post(`/admin/users/${userId}/reactivate`).then((r) => r.data)
+
+export const updateUser = (userId, data) =>
+  api.patch(`/admin/users/${userId}`, data).then((r) => r.data)
+
+export const inviteUser = (data) =>
+  api.post('/admin/users/invite', data).then((r) => r.data)
+
+export const getUsageByUser = (days = 30) =>
+  api.get('/admin/usage/by-user', { params: { days } }).then((r) => r.data)
+
+export const getAlertConfig = () =>
+  api.get('/admin/alerts/config').then((r) => r.data)
+
+export const updateAlertConfig = (data) =>
+  api.put('/admin/alerts/config', data).then((r) => r.data)
+
 export const getAdminUsage = () =>
   api.get('/admin/usage').then((r) => r.data)
 
@@ -810,5 +828,14 @@ export const deleteSmbShare = (shareId) =>
 
 export const searchSmbFiles = (params) =>
   api.get('/api/v1/smb/files/search', { params }).then(r => r.data)
+
+export const getMatterSmbShares = (matterId) =>
+  api.get(`/plugins/litigation/matters/${matterId}/smb-shares`).then(r => r.data)
+
+export const addMatterSmbShare = (matterId, data) =>
+  api.post(`/plugins/litigation/matters/${matterId}/smb-shares`, data).then(r => r.data)
+
+export const removeMatterSmbShare = (matterId, bindingId) =>
+  api.delete(`/plugins/litigation/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
 
 export default api

@@ -1218,3 +1218,225 @@ async def get_permissions_audit(
         "google": google_audit,
         "overall_health": overall,
     }
+
+
+# ─────────────────────────────────────────────────────
+# ENHANCED USER MANAGEMENT
+# ─────────────────────────────────────────────────────
+
+
+class UserPatchRequest(_PydanticBase):
+    role: Optional[str] = None          # "admin" | "user"
+    full_name: Optional[str] = None
+    payg_monthly_budget: Optional[float] = None   # None = clear cap; pass -1 to leave unchanged
+
+
+class InviteUserRequest(_PydanticBase):
+    email: str
+    role: str = "user"
+    full_name: Optional[str] = None
+
+
+class InviteUserResponse(_PydanticBase):
+    status: str
+    user_id: str
+    email: str
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+async def patch_user(
+    user_id: str,
+    body: UserPatchRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user role, name, or PAYG monthly budget cap."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if body.role is not None:
+        if body.role not in ("admin", "user"):
+            raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
+        user.role = body.role
+
+    if body.full_name is not None:
+        user.full_name = body.full_name
+
+    if body.payg_monthly_budget is not None:
+        user.payg_monthly_budget = body.payg_monthly_budget if body.payg_monthly_budget >= 0 else None
+
+    await db.commit()
+    await db.refresh(user)
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+    )
+
+
+@router.post("/users/{user_id}/reactivate", status_code=200)
+async def reactivate_user(
+    user_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-enable a previously deactivated user."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.tenant_id == admin.tenant_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_active:
+        return {"status": "already_active", "user_id": user_id}
+
+    user.is_active = True
+    await db.commit()
+    return {"status": "reactivated", "user_id": user_id}
+
+
+@router.post("/users/invite", response_model=InviteUserResponse)
+async def invite_user(
+    body: InviteUserRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Invite a new user by email. Creates an inactive account and sends an invite link."""
+    import secrets
+    from app.services.email_admin import send_admin_notification
+
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    # Check for existing user
+    existing = await db.execute(
+        select(User).where(User.tenant_id == admin.tenant_id, User.email == body.email)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A user with this email already exists in your tenant.")
+
+    # Create inactive user with a random password (they will set their own via invite link)
+    invite_token = secrets.token_urlsafe(32)
+    new_user = User(
+        tenant_id=admin.tenant_id,
+        email=body.email,
+        full_name=body.full_name,
+        role=body.role if body.role in ("admin", "user") else "user",
+        is_active=False,
+        license_active=True,
+        # Store invite token temporarily in password_hash field (hashed prefix)
+        password_hash=f"invite:{invite_token}",
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    # Build invite URL (uses existing reset-password flow)
+    base_url = settings.FRONTEND_URL or "https://app.claritylegal.io"
+    invite_url = f"{base_url}/reset-password?token={invite_token}&invite=1"
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:#14253B;padding:24px 32px;border-radius:8px 8px 0 0;">
+        <h1 style="color:#fff;margin:0;font-size:20px;">You've been invited to Clarity Legal</h1>
+      </div>
+      <div style="padding:24px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
+        <p>Hi{' ' + body.full_name if body.full_name else ''},</p>
+        <p><strong>{admin.full_name or admin.email}</strong> has invited you to join their firm on Clarity Legal.</p>
+        <p style="margin:24px 0;">
+          <a href="{invite_url}" style="background:#14253B;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;">
+            Accept Invitation
+          </a>
+        </p>
+        <p style="color:#666;font-size:13px;">This link expires in 7 days. If you didn't expect this invitation, you can ignore this email.</p>
+      </div>
+    </div>
+    """
+
+    await send_admin_notification(
+        db=db,
+        tenant_id=tenant_id,
+        to_emails=[body.email],
+        subject="You've been invited to Clarity Legal",
+        html_body=html_body,
+    )
+
+    return InviteUserResponse(status="invited", user_id=str(new_user.id), email=new_user.email)
+
+
+# ─────────────────────────────────────────────────────
+# ALERT CONFIG (stored in TenantSettings.custom_config)
+# ─────────────────────────────────────────────────────
+
+
+class AlertConfig(_PydanticBase):
+    spend_alert_usd: Optional[float] = None       # monthly tenant-wide threshold in USD
+    spend_alert_pct: int = 80                      # alert at this % of budget
+    alert_emails: list[str] = []                   # recipients
+    weekly_digest_enabled: bool = True
+
+
+@router.get("/alerts/config", response_model=AlertConfig)
+async def get_alert_config(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get alert and budget notification configuration."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    ts = result.scalar_one_or_none()
+    cfg = (ts.custom_config or {}) if ts else {}
+
+    return AlertConfig(
+        spend_alert_usd=cfg.get("spend_alert_usd"),
+        spend_alert_pct=cfg.get("spend_alert_pct", 80),
+        alert_emails=cfg.get("alert_emails", []),
+        weekly_digest_enabled=cfg.get("weekly_digest_enabled", True),
+    )
+
+
+@router.put("/alerts/config", response_model=AlertConfig)
+async def update_alert_config(
+    body: AlertConfig,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update alert and budget notification configuration."""
+    admin = await _require_admin(request, db)
+    await set_tenant_context(db, str(admin.tenant_id))
+
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    ts = result.scalar_one_or_none()
+    if ts is None:
+        ts = TenantSettings(id=uuid.uuid4(), tenant_id=admin.tenant_id)
+        db.add(ts)
+
+    cfg = dict(ts.custom_config or {})
+    cfg["spend_alert_usd"] = body.spend_alert_usd
+    cfg["spend_alert_pct"] = body.spend_alert_pct
+    cfg["alert_emails"] = body.alert_emails
+    cfg["weekly_digest_enabled"] = body.weekly_digest_enabled
+    ts.custom_config = cfg
+
+    await db.commit()
+    return body

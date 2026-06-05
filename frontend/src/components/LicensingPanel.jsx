@@ -169,46 +169,80 @@ export default function LicensingPanel() {
                 <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">User</th>
                 <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Role</th>
                 <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Usage (30d)</th>
+                {billing_tier === 'payg' && (
+                  <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Budget cap</th>
+                )}
                 <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">License</th>
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
-                <tr key={u.user_id} className="border-b border-brand-line hover:bg-brand-bg transition-colors">
-                  <td className="px-5 py-3">
-                    <p className="text-brand-ink font-sans text-sm font-medium">{u.full_name || u.email}</p>
-                    <p className="text-brand-ink-2 font-sans text-xs">{u.email}</p>
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
-                      u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {u.role}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    <p className="text-brand-ink font-sans text-xs">{u.tokens_used?.toLocaleString()} tokens</p>
-                    <p className="text-brand-ink-2 font-sans text-xs">${(u.cost_usd || 0).toFixed(2)}</p>
-                  </td>
-                  <td className="px-5 py-3">
-                    <button
-                      onClick={() => handleToggleLicense(u.user_id, u.license_active)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                        u.license_active ? 'bg-green-500' : 'bg-gray-300'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          u.license_active ? 'translate-x-6' : 'translate-x-1'
+              {users.map((u) => {
+                const budget = u.payg_monthly_budget
+                const cost = u.cost_usd || 0
+                const pct = budget ? Math.min(100, Math.round((cost / budget) * 100)) : null
+                return (
+                  <tr key={u.user_id} className="border-b border-brand-line hover:bg-brand-bg transition-colors">
+                    <td className="px-5 py-3">
+                      <p className="text-brand-ink font-sans text-sm font-medium">{u.full_name || u.email}</p>
+                      <p className="text-brand-ink-2 font-sans text-xs">{u.email}</p>
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
+                        u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {u.role}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3">
+                      <p className="text-brand-ink font-sans text-xs">{u.tokens_used?.toLocaleString()} tokens</p>
+                      <p className="text-brand-ink-2 font-sans text-xs">${(u.cost_usd || 0).toFixed(2)}</p>
+                    </td>
+                    {billing_tier === 'payg' && (
+                      <td className="px-5 py-3">
+                        {budget != null ? (
+                          <div>
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className={`text-xs font-sans font-medium ${pct >= 100 ? 'text-red-600' : pct >= 80 ? 'text-amber-600' : 'text-brand-ink'}`}>
+                                ${cost.toFixed(2)} / ${budget.toFixed(0)}
+                              </span>
+                              {pct != null && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${pct >= 100 ? 'bg-red-100 text-red-700' : pct >= 80 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                                  {pct}%
+                                </span>
+                              )}
+                            </div>
+                            <div className="w-24 h-1.5 bg-brand-line rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-400' : 'bg-green-500'}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-brand-muted font-sans">No cap</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-5 py-3">
+                      <button
+                        onClick={() => handleToggleLicense(u.user_id, u.license_active)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                          u.license_active ? 'bg-green-500' : 'bg-gray-300'
                         }`}
-                      />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            u.license_active ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-5 py-6 text-center text-brand-ink-2 font-sans text-sm">
+                  <td colSpan={billing_tier === 'payg' ? 5 : 4} className="px-5 py-6 text-center text-brand-ink-2 font-sans text-sm">
                     No users found.
                   </td>
                 </tr>
