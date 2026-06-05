@@ -470,6 +470,12 @@ export const getPlatformHealth = (key) =>
 export const getPlatformLLMProviders = (key) =>
   platformApi(key).get('/platform/llm-providers').then((r) => r.data)
 
+export const getPlatformLLMConfig = (key) =>
+  platformApi(key).get('/platform/llm-config').then((r) => r.data)
+
+export const updatePlatformLLMConfig = (key, data) =>
+  platformApi(key).put('/platform/llm-config', data).then((r) => r.data)
+
 export const getPlatformLogs = (key, params = {}) =>
   platformApi(key).get('/platform/logs', { params }).then((r) => r.data)
 

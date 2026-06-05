@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from app.models.plugin import PracticeProfile
 from app.services.llm import LLMService
+from app.services.llm_routing import fallback_route, resolve_llm_route
 from app.services.plugins.prompts import (
     WORK_PRODUCT_HEADER,
     UNIVERSAL_GUARDRAILS,
@@ -148,10 +149,6 @@ class PluginExecutor:
         use_premium: bool = False,
     ) -> dict:
         """Execute a plugin skill and return structured response."""
-        from app.config import get_settings
-
-        settings = get_settings()
-
         profile = await self.get_practice_profile(db, tenant_id, user_id, plugin)
         gates = self.check_hard_gates(plugin, skill, profile, context)
 
@@ -165,7 +162,7 @@ class PluginExecutor:
                 "flags": [],
                 "requires_attorney_review": True,
                 "tokens_used": 0,
-                "model_used": settings.PRIMARY_LLM,
+                "model_used": fallback_route(False).model,
             }
 
         # Resolve prompt: tenant override -> code default -> generic fallback
@@ -179,16 +176,22 @@ class PluginExecutor:
             plugin, skill, profile, context, prompt_template=resolved_prompt
         )
 
+        route = await resolve_llm_route(
+            db,
+            tenant_id,
+            use_premium=use_premium,
+        )
+
         response_text, tokens_in, tokens_out = await self.llm.complete(
             messages=[{"role": "user", "content": input_text}],
             tenant_name=context.get("tenant_name", "Legal"),
             context=system_prompt,
             use_premium=use_premium,
+            provider=route.provider,
+            model=route.model,
         )
 
         cleaned_response, needs_retry, _ = apply_guardrails(response_text)
-
-        model_used = settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
 
         return {
             "skill": skill,
@@ -201,5 +204,5 @@ class PluginExecutor:
             "tokens_used": tokens_in + tokens_out,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
-            "model_used": model_used,
+            "model_used": route.model,
         }

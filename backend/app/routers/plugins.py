@@ -1248,7 +1248,9 @@ async def cold_start_interview(
         profile.is_complete = "[PLACEHOLDER]" not in profile_content
 
     # Record usage
-    model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+    model_used = result_data.get("model_used") or (
+        settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+    )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
     tokens_out_val = result_data.get(
         "tokens_out", result_data.get("tokens_used", 0) // 2
@@ -1362,7 +1364,9 @@ async def execute_skill(
     )
 
     # Record usage
-    model_used = settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+    model_used = result_data.get("model_used") or (
+        settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+    )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
     tokens_out_val = result_data.get(
         "tokens_out", result_data.get("tokens_used", 0) // 2

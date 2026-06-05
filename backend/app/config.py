@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # OpenCode Zen — free-tier LLM access (OpenAI-compatible)
     OPENCODE_ZEN_BASE_URL: str = "https://zen.opencode.ai/v1"
 
+    # LiteLLM Gateway — primary OpenAI-compatible model router
+    LITELLM_ENABLED: bool = False
+    LITELLM_BASE_URL: str = "http://litellm:4000"
+    LITELLM_API_KEY: str = ""
+    LITELLM_STANDARD_MODEL: str = "clarity-standard"
+    LITELLM_PREMIUM_MODEL: str = "clarity-premium"
+
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription

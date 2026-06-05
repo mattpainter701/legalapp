@@ -14,6 +14,7 @@ Endpoints:
 """
 
 import hmac
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -30,6 +31,12 @@ from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
+from app.services.llm_routing import (
+    VALID_LLM_PROVIDERS,
+    default_platform_llm_config,
+    get_platform_llm_config,
+    upsert_platform_llm_config,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -70,9 +77,20 @@ class TenantUpdate(BaseModel):
     is_active: Optional[bool] = None
     seat_count: Optional[int] = None
     llm_provider: Optional[str] = (
-        None  # "deepseek"|"opencode"|"openrouter"|"anthropic"|"azure"|"gemini"
+        None  # "deepseek"|"opencode"|"openrouter"|"litellm"|"anthropic"|"azure"|"gemini"
     )
     llm_model: Optional[str] = None  # optional model override
+    standard_llm_provider: Optional[str] = None
+    standard_llm_model: Optional[str] = None
+    premium_llm_provider: Optional[str] = None
+    premium_llm_model: Optional[str] = None
+
+
+class PlatformLLMConfigUpdate(BaseModel):
+    standard_provider: Optional[str] = None
+    standard_model: Optional[str] = None
+    premium_provider: Optional[str] = None
+    premium_model: Optional[str] = None
 
 
 class PlatformUsage(BaseModel):
@@ -92,6 +110,18 @@ def _mask(val: str | None) -> str | None:
     if not val:
         return None
     return val[:8] + "..." + val[-4:]
+
+
+def _validate_provider(provider: str | None, field: str = "provider") -> None:
+    if provider is not None and provider not in VALID_LLM_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} must be one of: {', '.join(sorted(VALID_LLM_PROVIDERS))}",
+        )
+
+
+def _field_was_sent(model: BaseModel, field: str) -> bool:
+    return field in getattr(model, "model_fields_set", set())
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -244,6 +274,10 @@ async def get_tenant_detail(
         "llm_config": {
             "provider": ts.default_llm_provider if ts else None,
             "model": ts.default_llm_model if ts else None,
+            "standard_provider": ts.default_llm_provider if ts else None,
+            "standard_model": ts.default_llm_model if ts else None,
+            "premium_provider": ts.premium_llm_provider if ts else None,
+            "premium_model": ts.premium_llm_model if ts else None,
         },
     }
 
@@ -277,21 +311,34 @@ async def update_tenant(
             raise HTTPException(status_code=400, detail="seat_count must be >= 0")
         tenant.flat_seat_count = body.seat_count
 
-    # LLM provider / model — stored on TenantSettings
-    if body.llm_provider is not None or body.llm_model is not None:
-        VALID_PROVIDERS = {
-            "deepseek",
-            "opencode",
-            "openrouter",
-            "anthropic",
-            "azure",
-            "gemini",
-        }
-        if body.llm_provider is not None and body.llm_provider not in VALID_PROVIDERS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"llm_provider must be one of: {', '.join(sorted(VALID_PROVIDERS))}",
-            )
+    standard_provider_sent = _field_was_sent(
+        body, "standard_llm_provider"
+    ) or _field_was_sent(body, "llm_provider")
+    standard_model_sent = _field_was_sent(
+        body, "standard_llm_model"
+    ) or _field_was_sent(body, "llm_model")
+    premium_provider_sent = _field_was_sent(body, "premium_llm_provider")
+    premium_model_sent = _field_was_sent(body, "premium_llm_model")
+
+    # LLM routing — stored on TenantSettings
+    if (
+        standard_provider_sent
+        or standard_model_sent
+        or premium_provider_sent
+        or premium_model_sent
+    ):
+        standard_provider = (
+            body.standard_llm_provider
+            if _field_was_sent(body, "standard_llm_provider")
+            else body.llm_provider
+        )
+        standard_model = (
+            body.standard_llm_model
+            if _field_was_sent(body, "standard_llm_model")
+            else body.llm_model
+        )
+        _validate_provider(standard_provider, "standard_llm_provider")
+        _validate_provider(body.premium_llm_provider, "premium_llm_provider")
 
         ts_result = await db.execute(
             select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
@@ -300,10 +347,14 @@ async def update_tenant(
         if not ts:
             ts = TenantSettings(tenant_id=tenant.id)
             db.add(ts)
-        if body.llm_provider is not None:
-            ts.default_llm_provider = body.llm_provider
-        if body.llm_model is not None:
-            ts.default_llm_model = body.llm_model
+        if standard_provider_sent:
+            ts.default_llm_provider = standard_provider
+        if standard_model_sent:
+            ts.default_llm_model = standard_model
+        if premium_provider_sent:
+            ts.premium_llm_provider = body.premium_llm_provider
+        if premium_model_sent:
+            ts.premium_llm_model = body.premium_llm_model
 
     await db.commit()
     return {"status": "updated", "tenant_id": tenant_id}
@@ -348,6 +399,113 @@ async def platform_usage(
     )
 
 
+@router.get("/llm-config")
+async def get_llm_config(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get live platform-wide standard/premium LLM routing."""
+    _require_platform_key(request)
+    return {"config": await get_platform_llm_config(db)}
+
+
+@router.put("/llm-config")
+async def update_llm_config(
+    body: PlatformLLMConfigUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update live platform-wide standard/premium LLM routing."""
+    _require_platform_key(request)
+
+    _validate_provider(body.standard_provider, "standard_provider")
+    _validate_provider(body.premium_provider, "premium_provider")
+
+    updates = {
+        key: getattr(body, key)
+        for key in default_platform_llm_config()
+        if _field_was_sent(body, key)
+    }
+    config = await upsert_platform_llm_config(db, updates)
+    await db.commit()
+    return {"status": "updated", "config": config}
+
+
+async def _fetch_openai_compatible_models(
+    *,
+    base_url: str,
+    api_key: str,
+) -> list[str]:
+    if not base_url or not api_key:
+        return []
+    import httpx
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.get(
+            f"{base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    return [
+        item.get("id")
+        for item in data.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+
+
+async def _fetch_anthropic_models() -> list[str]:
+    if not settings.ANTHROPIC_API_KEY:
+        return []
+    import httpx
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.get(
+            "https://api.anthropic.com/v1/models",
+            headers={
+                "x-api-key": settings.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    return [
+        item.get("id")
+        for item in data.get("data", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+
+
+async def _fetch_gemini_models() -> list[str]:
+    if not settings.GEMINI_API_KEY:
+        return []
+    import httpx
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": settings.GEMINI_API_KEY},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    models = []
+    for item in data.get("models", []):
+        methods = item.get("supportedGenerationMethods", [])
+        name = item.get("name", "").removeprefix("models/")
+        if name and "generateContent" in methods:
+            models.append(name)
+    return models
+
+
+async def _safe_models(coro, fallback: list[str]) -> list[str]:
+    try:
+        models = await coro
+        deduped = list(dict.fromkeys(m for m in models if m))
+        return deduped or fallback
+    except Exception:
+        return fallback
+
+
 @router.get("/llm-providers")
 async def list_llm_providers(request: Request):
     """List available LLM providers and their status (checks env vars)."""
@@ -361,6 +519,10 @@ async def list_llm_providers(request: Request):
                 and (settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY)
             )
             or (key == "openrouter" and settings.OPENROUTER_API_KEY)
+            or (
+                key == "litellm"
+                and (settings.LITELLM_ENABLED or bool(settings.LITELLM_API_KEY))
+            )
             or (key == "anthropic" and settings.ANTHROPIC_API_KEY)
             or (
                 key == "azure"
@@ -381,25 +543,71 @@ async def list_llm_providers(request: Request):
         m.strip() for m in settings.OPENROUTER_FREE_MODELS.split(",") if m.strip()
     ]
 
+    deepseek_key = settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY
+    opencode_key = settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY
+    (
+        deepseek_models,
+        opencode_models,
+        fetched_openrouter_models,
+        litellm_models,
+        anthropic_models,
+        gemini_models,
+    ) = await asyncio.gather(
+        _safe_models(
+            _fetch_openai_compatible_models(
+                base_url=settings.DEEPSEEK_BASE_URL,
+                api_key=deepseek_key,
+            ),
+            [settings.PRIMARY_LLM],
+        ),
+        _safe_models(
+            _fetch_openai_compatible_models(
+                base_url=settings.OPENCODE_ZEN_BASE_URL,
+                api_key=opencode_key,
+            ),
+            [settings.PRIMARY_LLM],
+        ),
+        _safe_models(
+            _fetch_openai_compatible_models(
+                base_url=settings.OPENROUTER_BASE_URL,
+                api_key=settings.OPENROUTER_API_KEY,
+            ),
+            openrouter_models if openrouter_models else ["google/gemma-4-31b-it:free"],
+        ),
+        _safe_models(
+            _fetch_openai_compatible_models(
+                base_url=settings.LITELLM_BASE_URL,
+                api_key=(
+                    settings.LITELLM_API_KEY
+                    or ("not-needed" if settings.LITELLM_ENABLED else "")
+                ),
+            ),
+            [settings.LITELLM_STANDARD_MODEL, settings.LITELLM_PREMIUM_MODEL],
+        ),
+        _safe_models(_fetch_anthropic_models(), [settings.PREMIUM_LLM]),
+        _safe_models(_fetch_gemini_models(), ["gemini-2.0-flash"]),
+    )
+
     providers = [
-        _provider("deepseek", "DeepSeek", False, [settings.PRIMARY_LLM]),
-        _provider("opencode", "OpenCode Zen", True, [settings.PRIMARY_LLM]),
+        _provider("deepseek", "DeepSeek", False, deepseek_models),
+        _provider("opencode", "OpenCode Zen", True, opencode_models),
         _provider(
             "openrouter",
             "OpenRouter",
             True,
-            openrouter_models if openrouter_models else ["google/gemma-4-31b-it:free"],
+            fetched_openrouter_models,
         ),
-        _provider("anthropic", "Anthropic Claude", False, [settings.PREMIUM_LLM]),
+        _provider("litellm", "LiteLLM Gateway", False, litellm_models),
+        _provider("anthropic", "Anthropic Claude", False, anthropic_models),
         _provider(
             "azure",
             "Azure OpenAI",
             False,
             [settings.AZURE_OPENAI_DEPLOYMENT]
             if settings.AZURE_OPENAI_DEPLOYMENT
-            else [],
+                else [],
         ),
-        _provider("gemini", "Google Gemini", True, ["gemini-2.0-flash"]),
+        _provider("gemini", "Google Gemini", True, gemini_models),
     ]
 
     return {"providers": providers}

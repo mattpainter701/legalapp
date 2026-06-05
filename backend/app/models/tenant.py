@@ -138,9 +138,11 @@ class TenantSettings(Base):
     customer_llm_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Operator-assigned default LLM provider + model (platform-level providers only)
-    # "deepseek" | "opencode" | "openrouter" | "anthropic" | "azure" | "gemini"
+    # "deepseek" | "opencode" | "openrouter" | "litellm" | "anthropic" | "azure" | "gemini"
     default_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    default_llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    default_llm_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    premium_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    premium_llm_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # Notes/audit info
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

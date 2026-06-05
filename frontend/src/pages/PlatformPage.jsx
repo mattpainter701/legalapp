@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLLMConfig, updatePlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -70,89 +70,209 @@ function LoginScreen({ onLogin }) {
   )
 }
 
+function ModelRouteFields({ label, provider, model, providers, modelListId, onProviderChange, onModelChange, defaultLabel = 'Platform default' }) {
+  const selectedProviderObj = providers.find((p) => p.key === provider)
+  const models = selectedProviderObj?.models || []
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_1fr] gap-3 items-end">
+      <div>
+        <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans mb-1">{label}</p>
+        <p className="text-[11px] text-brand-muted font-sans">{provider || defaultLabel}</p>
+      </div>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+        <select
+          value={provider}
+          onChange={(e) => onProviderChange(e.target.value)}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        >
+          <option value="">{defaultLabel}</option>
+          {providers.map((p) => (
+            <option key={p.key} value={p.key} disabled={!p.configured}>
+              {p.label} {p.free_tier ? '(free)' : ''} {!p.configured ? '- not configured' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
+        <input
+          list={modelListId}
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          placeholder="Default, fetched model, or pasted id"
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        />
+        <datalist id={modelListId}>
+          {models.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      </div>
+      {provider && !selectedProviderObj?.configured && (
+        <p className="md:col-start-2 md:col-span-2 text-xs text-brand-rose font-sans">This provider is not configured at the platform level.</p>
+      )}
+    </div>
+  )
+}
+
 function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpdate, saving, setSaving }) {
-  const currentProvider = tenantDetail?.llm_config?.provider || ''
-  const currentModel = tenantDetail?.llm_config?.model || ''
-  const [selectedProvider, setSelectedProvider] = useState(currentProvider)
-  const [selectedModel, setSelectedModel] = useState(currentModel)
+  const config = tenantDetail?.llm_config || {}
+  const current = {
+    standardProvider: config.standard_provider || config.provider || '',
+    standardModel: config.standard_model || config.model || '',
+    premiumProvider: config.premium_provider || '',
+    premiumModel: config.premium_model || '',
+  }
+  const [values, setValues] = useState(current)
   const [saved, setSaved] = useState(false)
 
-  // Sync when tenantDetail changes (e.g. switching expanded tenant)
   useEffect(() => {
-    setSelectedProvider(currentProvider)
-    setSelectedModel(currentModel)
+    setValues(current)
     setSaved(false)
-  }, [tenantDetail?.llm_config?.provider, tenantDetail?.llm_config?.model])
+  }, [config.standard_provider, config.standard_model, config.premium_provider, config.premium_model, config.provider, config.model])
 
-  const selectedProviderObj = providers.find((p) => p.key === selectedProvider)
-  const models = selectedProviderObj?.models || []
+  const changed = JSON.stringify(values) !== JSON.stringify(current)
+
+  const setValue = (key, value) => {
+    setValues((prev) => ({ ...prev, [key]: value }))
+    setSaved(false)
+  }
 
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
     try {
-      const payload = {}
-      if (selectedProvider) {
-        payload.llm_provider = selectedProvider
-        payload.llm_model = selectedModel || null
+      const payload = {
+        standard_llm_provider: values.standardProvider || null,
+        standard_llm_model: values.standardModel || null,
+        premium_llm_provider: values.premiumProvider || null,
+        premium_llm_model: values.premiumModel || null,
       }
       await updatePlatformTenant(platformKey, tenant.id, payload)
-      onUpdate(tenant.id, payload)
+      onUpdate(tenant.id, { llm_config: payload })
       setSaved(true)
     } catch { /* save error silently */ }
     finally { setSaving(false) }
   }
 
   return (
-    <div className="flex flex-wrap items-end gap-4">
-      <div className="flex-1 min-w-[200px]">
-        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
-        <select
-          value={selectedProvider}
-          onChange={(e) => {
-            setSelectedProvider(e.target.value)
-            setSelectedModel('')
-            setSaved(false)
-          }}
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+    <div className="space-y-4">
+      <ModelRouteFields
+        label="Standard"
+        provider={values.standardProvider}
+        model={values.standardModel}
+        providers={providers}
+        modelListId={`tenant-standard-models-${tenant.id}`}
+        onProviderChange={(value) => { setValue('standardProvider', value); setValue('standardModel', '') }}
+        onModelChange={(value) => setValue('standardModel', value)}
+      />
+      <ModelRouteFields
+        label="Premium"
+        provider={values.premiumProvider}
+        model={values.premiumModel}
+        providers={providers}
+        modelListId={`tenant-premium-models-${tenant.id}`}
+        onProviderChange={(value) => { setValue('premiumProvider', value); setValue('premiumModel', '') }}
+        onModelChange={(value) => setValue('premiumModel', value)}
+      />
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !changed}
+          className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
+            saved
+              ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
+              : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
+          }`}
         >
-          <option value="">Platform default (DeepSeek)</option>
-          {providers.map((p) => (
-            <option key={p.key} value={p.key} disabled={!p.configured}>
-              {p.label} {p.free_tier ? '(free)' : ''} {!p.configured ? '— not configured' : ''}
-            </option>
-          ))}
-        </select>
+          {saved ? 'Saved' : saving ? 'Saving...' : 'Apply Routes'}
+        </button>
+        <p className="text-xs text-brand-muted font-sans">Blank fields inherit platform defaults.</p>
       </div>
-      {models.length > 0 && selectedProvider && (
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
-          <select
-            value={selectedModel}
-            onChange={(e) => { setSelectedModel(e.target.value); setSaved(false) }}
-            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-          >
-            <option value="">Default</option>
-            {models.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
+    </div>
+  )
+}
+
+function PlatformLLMConfigPanel({ platformKey, providers, config, onSaved }) {
+  const current = {
+    standardProvider: config?.standard_provider || '',
+    standardModel: config?.standard_model || '',
+    premiumProvider: config?.premium_provider || '',
+    premiumModel: config?.premium_model || '',
+  }
+  const [values, setValues] = useState(current)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setValues(current)
+    setSaved(false)
+  }, [config?.standard_provider, config?.standard_model, config?.premium_provider, config?.premium_model])
+
+  const changed = JSON.stringify(values) !== JSON.stringify(current)
+  const setValue = (key, value) => {
+    setValues((prev) => ({ ...prev, [key]: value }))
+    setSaved(false)
+  }
+
+  const save = async () => {
+    setSaving(true)
+    setSaved(false)
+    try {
+      const resp = await updatePlatformLLMConfig(platformKey, {
+        standard_provider: values.standardProvider || null,
+        standard_model: values.standardModel || null,
+        premium_provider: values.premiumProvider || null,
+        premium_model: values.premiumModel || null,
+      })
+      onSaved(resp.config)
+      setSaved(true)
+    } catch { /* silent */ }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-8">
+      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
+        <div>
+          <h2 className="font-serif font-bold text-brand-ink">Global AI Routing</h2>
+          <p className="text-xs text-brand-muted font-sans mt-1">Used for every tenant unless a tenant override is set.</p>
         </div>
-      )}
-      <button
-        onClick={handleSave}
-        disabled={saving || (selectedProvider === currentProvider && selectedModel === currentModel)}
-        className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
-          saved
-            ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
-            : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
-        }`}
-      >
-        {saved ? '✓ Saved' : saving ? 'Saving…' : 'Apply'}
-      </button>
-      {selectedProvider && !selectedProviderObj?.configured && (
-        <p className="text-xs text-brand-rose font-sans w-full">This provider is not configured at the platform level. Set the required API key in the environment.</p>
-      )}
+        <button
+          onClick={save}
+          disabled={saving || !changed}
+          className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
+            saved
+              ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
+              : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
+          }`}
+        >
+          {saved ? 'Saved' : saving ? 'Saving...' : 'Save Routes'}
+        </button>
+      </div>
+      <div className="p-5 space-y-4">
+        <ModelRouteFields
+          label="Standard"
+          provider={values.standardProvider}
+          model={values.standardModel}
+          providers={providers}
+          modelListId="global-standard-models"
+          defaultLabel="Env fallback"
+          onProviderChange={(value) => { setValue('standardProvider', value); setValue('standardModel', '') }}
+          onModelChange={(value) => setValue('standardModel', value)}
+        />
+        <ModelRouteFields
+          label="Premium"
+          provider={values.premiumProvider}
+          model={values.premiumModel}
+          providers={providers}
+          modelListId="global-premium-models"
+          defaultLabel="Env fallback"
+          onProviderChange={(value) => { setValue('premiumProvider', value); setValue('premiumModel', '') }}
+          onModelChange={(value) => setValue('premiumModel', value)}
+        />
+      </div>
     </div>
   )
 }
@@ -523,6 +643,7 @@ export default function PlatformPage() {
   const [usage, setUsage] = useState(null)
   const [health, setHealth] = useState(null)
   const [providers, setProviders] = useState([])
+  const [llmConfig, setLlmConfig] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
@@ -544,7 +665,7 @@ export default function PlatformPage() {
     setLoading(true)
     setError(null)
     try {
-      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey), getPlatformLLMProviders(platformKey)]
+      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey), getPlatformLLMProviders(platformKey), getPlatformLLMConfig(platformKey)]
       if (tab === 'health') promises.push(getPlatformHealth(platformKey))
       const results = await Promise.all(promises)
       setTenants(results[0].tenants)
@@ -552,7 +673,8 @@ export default function PlatformPage() {
       setLimit(results[0].limit || 50)
       setUsage(results[1])
       setProviders(results[2].providers)
-      if (results[3]) setHealth(results[3])
+      setLlmConfig(results[3].config)
+      if (results[4]) setHealth(results[4])
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load')
       if (e?.response?.status === 403) { sessionStorage.removeItem('platform_key'); setPlatformKey(null) }
@@ -563,6 +685,21 @@ export default function PlatformPage() {
 
   const handleUpdate = (id, changes) => {
     setTenants((prev) => prev.map((t) => (t.id === id ? { ...t, ...changes } : t)))
+    if (expandedTenant === id && changes.llm_config) {
+      const cfg = changes.llm_config
+      setTenantDetail((prev) => prev ? ({
+        ...prev,
+        llm_config: {
+          ...(prev.llm_config || {}),
+          standard_provider: cfg.standard_llm_provider ?? cfg.standard_provider ?? null,
+          standard_model: cfg.standard_llm_model ?? cfg.standard_model ?? null,
+          premium_provider: cfg.premium_llm_provider ?? cfg.premium_provider ?? null,
+          premium_model: cfg.premium_llm_model ?? cfg.premium_model ?? null,
+          provider: cfg.standard_llm_provider ?? cfg.standard_provider ?? null,
+          model: cfg.standard_llm_model ?? cfg.standard_model ?? null,
+        },
+      }) : prev)
+    }
   }
 
   const toggleTenant = async (id) => {
@@ -601,7 +738,7 @@ export default function PlatformPage() {
         </div>
         <div className="flex items-center gap-4">
           <span className="text-xs text-brand-muted font-mono">{platformKey.slice(0, 8)}…</span>
-          <button onClick={() => { sessionStorage.removeItem('platform_key'); setPlatformKey(null); setTenants([]); setUsage(null); setHealth(null) }} className="text-xs text-brand-muted hover:text-brand-rose font-sans transition-colors">Sign out</button>
+          <button onClick={() => { sessionStorage.removeItem('platform_key'); setPlatformKey(null); setTenants([]); setUsage(null); setHealth(null); setLlmConfig(null) }} className="text-xs text-brand-muted hover:text-brand-rose font-sans transition-colors">Sign out</button>
         </div>
       </div>
 
@@ -631,6 +768,8 @@ export default function PlatformPage() {
               <StatCard label="Requests (30d)" value={usage.requests_30d?.toLocaleString()} icon={Activity} />
               <StatCard label="Revenue (30d)" value={`$${(usage.cost_usd_30d ?? 0).toFixed(2)}`} sub="billed model cost" icon={Zap} />
             </div>
+
+            <PlatformLLMConfigPanel platformKey={platformKey} providers={providers} config={llmConfig} onSaved={setLlmConfig} />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Top tenants by usage */}

@@ -96,6 +96,12 @@ class LLMService:
             if opencode_key
             else None
         )
+        self.litellm_client = None
+        if settings.LITELLM_ENABLED or settings.LITELLM_API_KEY:
+            self.litellm_client = AsyncOpenAI(
+                api_key=settings.LITELLM_API_KEY or "not-needed",
+                base_url=settings.LITELLM_BASE_URL,
+            )
 
     def _build_messages(
         self,
@@ -129,6 +135,7 @@ class LLMService:
           - "deepseek"  → DeepSeek
           - "opencode"  → OpenCode Zen (free tier)
           - "openrouter" → OpenRouter (free models)
+          - "litellm"   → LiteLLM gateway
           - "gemini"    → Google Gemini
           - "azure"     → Azure OpenAI (GPT-4o)
           - "anthropic" / premium → Anthropic Claude
@@ -151,6 +158,15 @@ class LLMService:
                 model or settings.OPENROUTER_FREE_MODELS.split(",")[0].strip()
             )
             return await self._complete_openrouter(
+                messages, system_prompt, resolved_model
+            )
+        if provider == "litellm":
+            resolved_model = model or (
+                settings.LITELLM_PREMIUM_MODEL
+                if use_premium
+                else settings.LITELLM_STANDARD_MODEL
+            )
+            return await self._complete_litellm(
                 messages, system_prompt, resolved_model
             )
         if provider == "opencode":
@@ -203,6 +219,7 @@ class LLMService:
           - "deepseek"  → DeepSeek
           - "opencode"  → OpenCode Zen (free tier)
           - "openrouter" → OpenRouter (free models)
+          - "litellm"   → LiteLLM gateway
           - "gemini"    → Google Gemini (fallback to non-streaming)
           - "azure"     → Azure OpenAI (GPT-4o)
           - "anthropic" / premium → Anthropic Claude
@@ -229,6 +246,17 @@ class LLMService:
                 model or settings.OPENROUTER_FREE_MODELS.split(",")[0].strip()
             )
             async for chunk in self._stream_openrouter(
+                messages, system_prompt, resolved_model
+            ):
+                yield chunk
+            return
+        if provider == "litellm":
+            resolved_model = model or (
+                settings.LITELLM_PREMIUM_MODEL
+                if use_premium
+                else settings.LITELLM_STANDARD_MODEL
+            )
+            async for chunk in self._stream_litellm(
                 messages, system_prompt, resolved_model
             ):
                 yield chunk
@@ -443,6 +471,34 @@ class LLMService:
             logger.error(f"OpenRouter API error: {_clean_llm_error(e)}")
             raise RuntimeError(_llm_error_msg("OpenRouter", e)) from e
 
+    async def _complete_litellm(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> Tuple[str, int, int]:
+        """Call LiteLLM Gateway via its OpenAI-compatible API."""
+        if not self.litellm_client:
+            raise ValueError("LiteLLM Gateway not configured — set LITELLM_ENABLED=true")
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        try:
+            response = await self.litellm_client.chat.completions.create(
+                model=model,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+            )
+
+            response_text = response.choices[0].message.content or ""
+            tokens_in = response.usage.prompt_tokens if response.usage else 0
+            tokens_out = response.usage.completion_tokens if response.usage else 0
+
+            return response_text, tokens_in, tokens_out
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"LiteLLM Gateway API error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("LiteLLM Gateway", e)) from e
+
     async def _complete_anthropic(
         self,
         messages: List[dict],
@@ -580,6 +636,34 @@ class LLMService:
         except (APIError, APIConnectionError) as e:
             logger.error(f"OpenRouter streaming error: {_clean_llm_error(e)}")
             raise RuntimeError(_llm_error_msg("OpenRouter", e)) from e
+
+    async def _stream_litellm(
+        self,
+        messages: List[dict],
+        system_prompt: str,
+        model: str,
+    ) -> AsyncGenerator[str, None]:
+        """Stream from LiteLLM Gateway."""
+        if not self.litellm_client:
+            raise ValueError("LiteLLM Gateway not configured — set LITELLM_ENABLED=true")
+
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        try:
+            stream = await self.litellm_client.chat.completions.create(
+                model=model,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                stream=True,
+            )
+
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except (APIError, APIConnectionError) as e:
+            logger.error(f"LiteLLM Gateway streaming error: {_clean_llm_error(e)}")
+            raise RuntimeError(_llm_error_msg("LiteLLM Gateway", e)) from e
 
     async def _stream_anthropic(
         self,

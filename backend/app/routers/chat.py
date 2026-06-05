@@ -14,7 +14,6 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
-from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
@@ -27,6 +26,7 @@ from app.schemas.chat import (
 from app.services.embeddings import EmbeddingService
 from app.services.rag import hybrid_rag_query
 from app.services.llm import LLMService
+from app.services.llm_routing import resolve_llm_route
 from app.services.billing import calculate_cost
 from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
@@ -530,22 +530,18 @@ async def send_message(
     # 5. Call LLM (with caching)
     import hashlib
 
-    context_hash = hashlib.md5(context_str.encode()).hexdigest()
-
     tenant_name = user.tenant.name if user.tenant else "Legal"
     user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
 
-    # Resolve provider: if "default", use tenant's configured LLM provider/model
-    resolved_provider = body.provider
-    resolved_model = None
-    if body.provider == "default":
-        ts_result = await db.execute(
-            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
-        )
-        ts = ts_result.scalar_one_or_none()
-        if ts and ts.default_llm_provider:
-            resolved_provider = ts.default_llm_provider
-            resolved_model = ts.default_llm_model
+    route = await resolve_llm_route(
+        db,
+        user.tenant_id,
+        use_premium=body.use_premium_llm,
+        requested_provider=body.provider,
+    )
+    context_hash = hashlib.md5(
+        f"{route.provider}:{route.model}\n{context_str}".encode()
+    ).hexdigest()
 
     cache_hit_llm = False
     cached_response = await cache_manager.get_cached_llm_response(
@@ -568,8 +564,8 @@ async def send_message(
                 context=context_str,
                 memory_context=memory_context,
                 use_premium=body.use_premium_llm,
-                provider=resolved_provider,
-                model=resolved_model,
+                provider=route.provider,
+                model=route.model,
                 user_name=user_first_name,
             )
             # Cache LLM response
@@ -619,8 +615,8 @@ async def send_message(
             context=context_str,
             memory_context=memory_context,
             use_premium=body.use_premium_llm,
-            provider=resolved_provider,
-            model=resolved_model,
+            provider=route.provider,
+            model=route.model,
             user_name=user_first_name,
         )
         cleaned_response, _, response_pii = apply_guardrails(
@@ -689,7 +685,7 @@ async def send_message(
         )
 
     # 7. Save assistant message with context tracking and skill info
-    model_used = settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
+    model_used = route.model
     skill_applied = (
         body.skill if hasattr(body, "skill") and body.skill else user.default_skill
     )
@@ -946,17 +942,12 @@ async def stream_message(
         user_id=user.id,
     )
 
-    # Resolve provider: if "default", use tenant's configured LLM provider/model
-    stream_provider = body.provider
-    stream_model = None
-    if body.provider == "default":
-        ts_result = await db.execute(
-            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
-        )
-        ts = ts_result.scalar_one_or_none()
-        if ts and ts.default_llm_provider:
-            stream_provider = ts.default_llm_provider
-            stream_model = ts.default_llm_model
+    route = await resolve_llm_route(
+        db,
+        user.tenant_id,
+        use_premium=body.use_premium_llm,
+        requested_provider=body.provider,
+    )
 
     # Create the streaming generator
     stream_user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
@@ -973,8 +964,8 @@ async def stream_message(
                 context=context_str,
                 memory_context=memory_context,
                 use_premium=body.use_premium_llm,
-                provider=stream_provider,
-                model=stream_model,
+                provider=route.provider,
+                model=route.model,
                 user_name=stream_user_first_name,
             ):
                 accumulated_text += token
@@ -1000,8 +991,8 @@ async def stream_message(
                     tenant_name=tenant_name,
                     context=context_str,
                     use_premium=body.use_premium_llm,
-                    provider=stream_provider,
-                    model=stream_model,
+                    provider=route.provider,
+                    model=route.model,
                     user_name=stream_user_first_name,
                 ):
                     accumulated_text += token
@@ -1053,9 +1044,7 @@ async def stream_message(
                 )
 
             # Save assistant message
-            model_used = (
-                settings.PREMIUM_LLM if body.use_premium_llm else settings.PRIMARY_LLM
-            )
+            model_used = route.model
             skill_applied = (
                 body.skill
                 if hasattr(body, "skill") and body.skill

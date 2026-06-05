@@ -32,6 +32,14 @@ services:
     ports:
       - "6380:6379"
 
+  litellm:
+    ports:
+      - "4000:4000"
+
+  litellm-postgres:
+    ports:
+      - "5435:5432"
+
   vectordb:
     image: pgvector/pgvector:pg16
     environment:

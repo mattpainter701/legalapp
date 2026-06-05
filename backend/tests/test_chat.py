@@ -3,6 +3,8 @@
 import pytest
 from httpx import AsyncClient
 
+from app.models.tenant import TenantSettings
+
 
 @pytest.mark.asyncio
 async def test_create_and_list_conversation(client: AsyncClient, mock_llm, mock_embeddings):
@@ -45,6 +47,39 @@ async def test_send_message_returns_assistant(client: AsyncClient, mock_llm, moc
     assert msg["role"] == "assistant"
     assert len(msg["content"]) > 0
     assert "sources" in msg
+
+
+@pytest.mark.asyncio
+async def test_premium_message_uses_tenant_premium_route(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    mock_llm,
+    mock_embeddings,
+):
+    db_session.add(
+        TenantSettings(
+            tenant_id=test_tenant.id,
+            premium_llm_provider="openrouter",
+            premium_llm_model="anthropic/claude-sonnet-4",
+        )
+    )
+    await db_session.commit()
+
+    conv = (await client.post("/api/conversations", json={})).json()
+    resp = await client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={
+            "content": "Draft a premium analysis.",
+            "include_public": True,
+            "use_premium_llm": True,
+        },
+    )
+
+    assert resp.status_code == 201
+    call = mock_llm.call_args.kwargs
+    assert call["provider"] == "openrouter"
+    assert call["model"] == "anthropic/claude-sonnet-4"
 
 
 @pytest.mark.asyncio

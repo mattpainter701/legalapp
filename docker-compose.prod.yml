@@ -34,6 +34,29 @@ services:
           memory: 4G
           cpus: '2.0'
 
+  litellm:
+    restart: unless-stopped
+    environment:
+      LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  litellm-postgres:
+    restart: unless-stopped
+    ports: []
+    environment:
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD}
+    volumes:
+      - /data/legalapp/litellm-postgres:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
   frontend:
     restart: unless-stopped
     volumes:

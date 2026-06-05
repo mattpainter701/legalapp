@@ -1,4 +1,5 @@
 from app.models.tenant import Tenant, TenantSettings
+from app.models.platform import PlatformSetting
 from app.models.user import User, UserMemory
 from app.models.document import Document, Chunk
 from app.models.conversation import Conversation, Message, UsageRecord
@@ -53,6 +54,7 @@ from app.models.api_access_log import ApiAccessLog
 __all__ = [
     "Tenant",
     "TenantSettings",
+    "PlatformSetting",
     "User",
     "UserMemory",
     "Document",
