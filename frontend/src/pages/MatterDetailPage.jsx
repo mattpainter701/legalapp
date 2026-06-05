@@ -565,7 +565,7 @@ export default function MatterDetailPage() {
               <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-4">Quick Actions</div>
               <div className="flex flex-wrap gap-3">
                 {[
-                  { label: 'Log Time', icon: Icons.clock, action: () => navigate('/time-tracking') },
+                  { label: 'Log Time', icon: Icons.clock, action: () => navigate(`/time-tracking?matter_id=${id}`) },
                   { label: 'Email Client', icon: Icons.mail, action: () => setShowCompose(true) },
                   { label: 'Add Task', icon: Icons.plus, action: () => setShowAddTask(true) },
                   { label: 'Start Chat', icon: Icons.messageSquare, action: handleStartChat },
@@ -1061,7 +1061,7 @@ export default function MatterDetailPage() {
                 </h2>
                 <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time entries and billable work logged against this matter.</p>
               </div>
-              <button onClick={() => navigate('/time-tracking')} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
+              <button onClick={() => navigate(`/time-tracking?matter_id=${id}`)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
                 <Icon d={Icons.plus} size={15} /> Log Time
               </button>
             </div>
@@ -1073,7 +1073,7 @@ export default function MatterDetailPage() {
                   <Icon d={Icons.dollar} size={32} className="mx-auto text-brand-line-2 mb-3" />
                   <p className="text-brand-ink font-serif text-lg font-bold mb-1">No time entries</p>
                   <p className="text-brand-muted text-sm font-sans mb-4">Log time against this matter from the Time Tracking section.</p>
-                  <button onClick={() => navigate('/time-tracking')} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2">
+                  <button onClick={() => navigate(`/time-tracking?matter_id=${id}`)} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2">
                     Go to Time Tracking
                   </button>
                 </div>

@@ -23,7 +23,7 @@
 
 - [x] Refactor `LLMService` to a concise LiteLLM OpenAI-compatible client only; remove direct DeepSeek/OpenCode/OpenRouter/Anthropic/Azure/Gemini execution paths from backend code
 - [x] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium` → LiteLLM aliases (`clarity-standard`, `clarity-premium`, tenant override aliases)
-- [ ] Persist requested route, resolved route, gateway alias, gateway request ID/fallback metadata when available, and model used on `usage_records`
+- [x] Persist requested route, resolved route, gateway alias, gateway request ID/fallback metadata when available, and model used on `usage_records`
 - [x] Include resolved LiteLLM alias in cache keys for all LLM-backed flows
 - [x] Route chat, stream chat, plugin skills, cold-start interviews, memory summaries, retrieval planner, prompt tests, and email agent through one resolver/gateway path
 - [x] Update platform/admin UI and API language from provider selection to gateway alias override
@@ -51,109 +51,9 @@
 - [ ] Add rollback playbook: switch global route to direct provider or emergency alias
 - [ ] Remove direct-provider default once LiteLLM stability is proven
 
-## Sprint 11 — Legal MCP Database & CourtListener Ingest Pipeline (v0.13.0)
+## Backlog — Legal MCP Database & CourtListener Ingest Pipeline
 
-**Goal:** Build a production-grade legal knowledge base with structured case law metadata, a CourtListener ingest pipeline with nightly updates, Mixedbread 1024-dim embeddings, and an MCP server (REST + SSE) with 7 domain-scoped legal tools — sold as an API product and wired into the LegalApp chat as an MCP tool.
-
-**Architecture:** Separate MCP/Vector database server. Vectordb holds `courts`, `opinions`, `opinion_citations`, `opinion_chunks`, `legal_topics`, `ingest_runs`. Main app postgres holds `mcp_usage_logs`, `mcp_rate_limits`. Ingest + embedding + MCP scheduler all run on the MCP server. Main app queries vectordb remotely via `VECTORDB_URL`. See `docs/legal_rag.md` for full design.
-
-### 1101. Legal Knowledge Base Schema (P0, LARGE) — PENDING
-- [ ] Create vectordb migration: `courts` table (court_id PK, full_name, short_name, jurisdiction_type, jurisdiction_level, jurisdiction_scope, circuit_or_state)
-- [ ] Create vectordb migration: `opinions` table (id, opinion_id UNIQUE, case_name, court_id FK, decision_date, status, docket_number, source_url, practice_areas JSONB, full_text_hash, ingested_at, updated_at) with indexes on court_id, decision_date, practice_areas GIN, status
-- [ ] Create vectordb migration: `opinion_citations` table (id, citing_opinion_id FK, cited_reporter, cited_volume, cited_page, cited_opinion_id FK nullable) with indexes on citing/cited opinion IDs and reporter triple
-- [ ] Create vectordb migration: `opinion_chunks` table (id, opinion_id FK, court_id FK, content, chunk_index, embedding Vector(1024), practice_areas JSONB, legal_topics JSONB, embedding_version int default 0, created_at) with GIN indexes on practice_areas/legal_topics, IVFFlat placeholder on embedding
-- [ ] Create vectordb migration: `legal_topics` table (id, name, slug UNIQUE, parent_id self-FK, path, description) with seed data for top-level taxonomy
-- [ ] Create vectordb migration: `ingest_runs` table (id, source, started_at, completed_at, status, opinions_processed, chunks_created, embeddings_generated, errors JSONB)
-- [ ] Seed `courts` table with ~200 CourtListener court entries (federal + state supreme + state appellate)
-- [ ] Seed `legal_topics` table with top-level legal taxonomy (constitutional, contract, tort, criminal, family, trust-estate, etc.)
-- [ ] Backfill: migrate existing `public_chunks` rows → `opinions` + `opinion_chunks`, infer court_id from court string, classify practice_areas, set embedding_version=0
-
-Design: `docs/legal_rag.md` §2
-
-### 1102. CourtListener Ingest Service (P0, LARGE) — PENDING
-- [ ] Create `mcp-server/mcp_server/courtlistener_ingest.py` — `CourtListenerIngestService` class
-- [ ] API incremental mode: CourtListener REST API `/api/rest/v3/opinions/?date_filed__gte={since}` with pagination and API key auth
-- [ ] Bulk import mode: gzipped JSONL file ingestion (preserving existing `ingest_courtlistener.py` pattern)
-- [ ] Full metadata extraction: citations list, court_id mapping, docket_number, precedential status, cluster data
-- [ ] Idempotent upserts: `ON CONFLICT (opinion_id) DO UPDATE` for opinions, `ON CONFLICT DO NOTHING` for chunks
-- [ ] Citation parsing: extract (reporter, volume, page) tuples per opinion, upsert into `opinion_citations`
-- [ ] Practice area classification: rule-based from court_id jurisdiction + case name pattern matching (no LLM cost)
-- [ ] `ingest_runs` tracking: create run on start, update counts/errors on completion
-- [ ] Config: `COURTLISTENER_API_KEY`, `COURTLISTENER_API_BASE_URL`, `COURTLISTENER_ENABLED`
-- [ ] CLI entry point: `python -m mcp_server.ingest_worker` for manual/bulk runs
-
-Design: `docs/legal_rag.md` §3
-
-### 1103. Embedding Pipeline — Mixedbread 1024-dim (P0, MEDIUM) — PENDING
-- [ ] Create `mcp-server/mcp_server/embeddings.py` — `MCPEmbeddingService` with `local`/`api`/`jetson` backends
-- [ ] `embed_public_batch()` method: batch embed `opinion_chunks WHERE embedding IS NULL OR embedding_version < current_version`, handles batching (128/call), retry, version tracking
-- [ ] `embed_public_query()` method: single query embedding with mxbai query prefix, for runtime RAG queries
-- [ ] Metadata-enriched embedding: prepend `[{jurisdiction_type}] [{practice_area}] ` to chunk text before embedding (config: `PUBLIC_EMBEDDING_ENRICH_METADATA=true`)
-- [ ] Update main app `EmbeddingService.embed_public_query()` to use mxbai-1024 with backward compat fallback
-- [ ] Update main app `search_public_chunks()` to query `opinion_chunks` + JOIN `opinions` + `opinion_citations` + `courts` with filter support
-- [ ] `embedding_version` tracking: `PUBLIC_EMBEDDING_VERSION=1` config, rows re-embedded on version mismatch
-- [ ] Re-embedding migration: backfill all chunk embeddings from BGE-384 to mxbai-1024, build new IVFFlat index
-- [ ] CLI entry point: `python -m mcp_server.embed_worker` for manual/batch embedding
-- [ ] Config: `PUBLIC_EMBEDDING_MODEL=mixedbread-ai/mxbai-embed-large-v1`, `PUBLIC_EMBEDDING_DIM=1024`, `PUBLIC_EMBEDDING_BACKEND=local`
-
-Design: `docs/legal_rag.md` §4
-
-### 1104. Nightly Ingest Scheduler (P0, MEDIUM) — PENDING
-- [ ] Create `mcp-server/mcp_server/scheduler.py` — APScheduler for MCP server jobs
-- [ ] `cl-ingest` job: nightly 3:00 AM ET — incremental CourtListener API pull → ingest → chunk → tag practice areas
-- [ ] `cl-embed` job: nightly 3:30 AM ET — embed new/updated opinion_chunks (runs after ingest)
-- [ ] `cl-stats` job: weekly Sunday 4:00 AM ET — opinion/chunk counts, court distribution, unembedded count summary
-- [ ] Agent registry entries for manual trigger on main app: `POST /scheduler/agents/cl-ingest/run`, `POST /scheduler/agents/cl-embed/run` (proxy to MCP server)
-- [ ] Admin endpoints: `GET /admin/cl/status`, `POST /admin/cl/ingest/trigger`, `POST /admin/cl/embed/trigger`, `GET /admin/cl/ingest/history` — proxy to MCP server REST API
-- [ ] `ingest_runs` logging: each run creates/updates a row with counts, errors, timing
-
-Design: `docs/legal_rag.md` §7
-
-### 1105. MCP Tool Definitions by Legal Domain (P1, LARGE) — PENDING
-- [ ] Create `mcp-server/mcp_server/mcp_tools.py` — tool registry with full JSON Schema definitions for 7 legal tools
-- [ ] `search_caselaw`: general semantic search with optional jurisdiction/practice_area/date filters, vector search on `opinion_chunks` with JOINs
-- [ ] `search_by_jurisdiction`: scoped to federal circuit, state, or specific court via `courts` table
-- [ ] `search_by_practice_area`: scoped to practice area slug via `practice_areas @> :area::jsonb` filter
-- [ ] `search_by_citation`: exact citation lookup via `opinion_citations` reporter/volume/page match
-- [ ] `get_case_details`: full opinion metadata + all chunks + related citations by opinion_id or citation
-- [ ] `get_court_info`: court profile with jurisdiction type, level, opinion count, date range
-- [ ] `search_similar_cases`: find cases similar to a given opinion using its chunk embedding as query vector
-- [ ] Filtered vector SQL: dynamic WHERE clauses for court_id, practice_areas, date ranges appended to cosine similarity query
-- [ ] Update main app `hybrid_rag_query()` to support jurisdiction/practice_area filters on public search
-
-Design: `docs/legal_rag.md` §5
-
-### 1106. MCP Protocol Server — REST + SSE (P1, MEDIUM) — PENDING
-- [ ] Create `mcp-server/` package with `pyproject.toml`, `Dockerfile`, `mcp_server/server.py`
-- [ ] Install `mcp` Python SDK as dependency
-- [ ] SSE transport: endpoint on `:8020` for AI tool consumers (Claude Desktop, Cursor) per MCP spec 2024-11-05
-- [ ] REST transport: endpoint on `:8021` with `GET /api/mcp` manifest, `POST /api/mcp/tools/call` invocation, `GET /api/mcp/usage`
-- [ ] Auth: API key validation on `initialize` params (SSE) and `X-API-Key` header (REST), tenant resolution
-- [ ] Refactor main app `backend/app/routers/mcp.py` to thin proxy: forward `/api/mcp/tools/call` to MCP server REST endpoint, keep `/api/mcp/api-key` locally
-- [ ] Docker: add `mcp`, `cl-ingest`, `embed-worker`, `cl-scheduler` services to `docker-compose.mcp.yml`
-- [ ] Config: `MCP_SSE_PORT=8020`, `MCP_REST_PORT=8021`, `MCP_SSE_ENABLED=true`, `MCP_REST_ENABLED=true`
-
-Design: `docs/legal_rag.md` §6
-
-### 1107. MCP Usage Metering & Rate Limiting (P1, MEDIUM) — PENDING
-- [ ] Create main app migration: `mcp_usage_logs` table (id, tenant_id FK, user_id FK nullable, tool_name, arguments_hash, input_tokens, output_tokens, latency_ms, status_code, created_at) with RLS, indexes on (tenant_id, created_at) and (tool_name, created_at)
-- [ ] Create main app migration: `mcp_rate_limits` table (tenant_id PK FK, monthly_limit, used_this_month, reset_at, created_at, updated_at) with RLS
-- [ ] Rate limiting middleware: per API key, `MCP_RATE_LIMIT_RPM=60` (Redis sliding window), `MCP_RATE_LIMIT_DAILY=5000` (configurable per tenant via `mcp_rate_limits`)
-- [ ] Metering on every `tools/call`: write to `mcp_usage_logs`, increment `used_this_month` in `mcp_rate_limits`
-- [ ] Admin endpoints: `GET /admin/mcp/usage` (summary with filters), `GET /admin/mcp/usage/export?format=csv`, `PUT /admin/mcp/rate-limits/{tenant_id}`
-- [ ] Tenant self-service: `GET /mcp/usage` — tenant views own usage stats
-- [ ] `mcp_rate_limits.used_this_month` auto-reset: scheduler job on 1st of each month resets counter and sets `reset_at`
-
-Design: `docs/legal_rag.md` §8
-
-### 1108. Frontend — MCP Admin Dashboard (P2, MEDIUM) — PENDING
-- [ ] AdminPage "MCP" tab: API key management (generate/regenerate, masked display)
-- [ ] MCP usage chart: calls by tool, daily/weekly/monthly toggle
-- [ ] Rate limit display per tier (free/pro/enterprise estimate)
-- [ ] CourtListener ingest status panel: last run time, total opinions, total chunks, unembedded count, court distribution
-- [ ] Manual ingest/embed trigger buttons with status feedback
-- [ ] MCP configuration section: SSE enable/disable toggle, transport ports display
-- [ ] API functions in `frontend/src/api.js`: `getMcpStatus`, `triggerClIngest`, `triggerClEmbed`, `getClHistory`, `getMcpUsage`, `exportMcpUsage`, `setMcpRateLimits`
+**Status:** Design-only. Full architecture spec in `docs/legal_rag.md`. A minimal 2-tool MCP REST endpoint exists in `backend/app/routers/mcp.py` (search_caselaw, get_chunk). The mcp-server/ package, 7 domain-scoped tools, vectordb schema, CourtListener ingest, mxbai-1024 embeddings, nightly scheduler, usage metering, SSE transport, and admin dashboard are not yet built. Tasks tabled until post-Sprint-12.
 
 ---
 
@@ -207,3 +107,69 @@ Design: `docs/legal_rag.md` §8
 
 - [ ] **Time tracking advanced:** allow rate override on invoice creation screen for admin
 - [ ] **Templates overhaul:** support PDF/DOCX native templates with field mapping (currently text-only)
+
+---
+
+## Backlog — Integration Health & Module Restoration
+
+### BK01. Google Workspace — Scope Audit & Directory Sync Fix (P0, MEDIUM)
+- [x] Fixed scope audit mismatch: `SCOPES_REQUIRED_GOOGLE` in `admin.py` changed `drive.readonly` → `drive` to match OAuth request
+- [x] Added error logging to `refresh_google_token()` in `token_vault.py` (was silent `return None`, now logs status+body like Microsoft)
+- [ ] Full scope audit against Google's required OAuth scopes for: directory user read, calendar read/write, Gmail read, Drive read/write
+- [ ] Fix 403 on directory sync — likely requires Admin SDK API enabled in GCP Console + OAuth app verification OR test user setup
+- [ ] Ensure `https://www.googleapis.com/auth/admin.directory.user.readonly` is requested during admin consent
+- [ ] Verify service account / domain-wide delegation if using service-account-based directory access
+- [ ] Re-auth flow should request all currently-configured scopes so missing scopes are added on re-authorize
+- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+
+### BK02. QuickBooks Online — OAuth Fix (P0, MEDIUM)
+- [x] Investigated Content-Type header — `application/x-www-form-urlencoded` IS correct (no typo)
+- [ ] Primary issue: `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_REDIRECT_URI` all empty in `.env` — endpoint returns HTTP 501
+- [ ] Register app at https://developer.intuit.com/ and populate `QBO_*` env vars
+- [ ] Validate CSRF state handling (Redis vs in-memory fallback) for QBO connect flow
+- [ ] Check QBO environment toggle (sandbox vs production) and token refresh logic
+- [ ] Audit `qbo_sync.py` token storage (Fernet encryption) for silent failures
+
+### BK03. Microsoft 365 — Scope Audit & User Sync Fix (P0, MEDIUM)
+- [x] Fixed scope audit mismatch: `SCOPES_REQUIRED_MS` in `admin.py` changed `Files.Read.All` → `Files.ReadWrite.All` to match OAuth request
+- [ ] 0 users synced likely due to: (a) `MICROSOFT_TENANT_ID` hardcoded to single tenant — verify correctness; (b) `User.Read.All` requires admin consent in Azure AD app registration; (c) users without `mail` or `userPrincipalName` are silently skipped
+- [ ] Verify `last_user_sync_*` columns are populated on sync completion
+- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+
+### BK04. Mediation Module — Feature Parity Audit (P1, LARGE)
+- [x] Audit complete. Module is 97% production-ready. 24 firm + 12 portal endpoints (all real code, zero stubs). 7 models, 4 frontend pages, 34 API functions.
+- [x] Backend routers: `mediation.py` (832 lines, 24 endpoints) + `mediation_portal.py` (504 lines, 12 endpoints) — ALL real DB/logic code
+- [x] Models: `mediation_cases`, `mediation_case_events`, `mediation_parties`, `mediation_invites`, `mediation_assets`, `mediation_documents`, `mediation_proposals` — all 7 defined with FKs, indexes, relationships
+- [x] Frontend: 4 pages built (Portfolio 267L, Detail 503L, PortalAccept 76L, PortalCase 388L) — all tabs functional
+- [x] API: 34 frontend functions covering all firm-side + portal-side endpoints
+- [ ] **Gap: No alembic migration** — 7 mediation tables have no migration file in `alembic/versions/`. Tables may rely on `Base.metadata.create_all()` or manual creation.
+- [ ] **Gap: No sidebar nav link** — users must navigate `/plugins` → PluginsPage card to access mediation
+- [ ] **Gap: ProposalStatusUpdate schema unused** — no accept/reject endpoint for proposals despite schema existing
+- [ ] **Gap: No document delete on portal side** — firm-side can delete but portal users cannot
+
+### BK05. Trust & Estates Module — Feature Parity Audit (P1, LARGE)
+- [x] Audit complete. Backend fully production-ready for both modules. Estate frontend fully built. Trust Accounting has zero frontend.
+- [x] Trust Accounting: `trust_accounting.py` (545 lines, 9 endpoints) — all real DB code. Models: TrustAccount + TrustTransaction. Migration 017.
+- [x] Estates: `estates.py` (1420 lines, 44 endpoints) — all real DB code. 9 models (Estate + EstateEvent + 7 sub-entities). Migrations 008, 030, 032.
+- [x] Estate frontend: PortfolioPage (335L) + DetailPage (565L, 9 tabs) + EstateSubTable (212L) — fully built.
+- [ ] **Gap: Trust Accounting has NO frontend** — no pages, no API functions in `api.js`, no routes in `App.jsx`. Backend is headless.
+- [ ] **Gap: Trust models not in `models/__init__.py`** — TrustAccount/TrustTransaction imported directly by router (cosmetic, not blocking)
+- [ ] **Gap: Estate schemas use Pydantic v1-style config** — `class Config: from_attributes = True` vs v2-style `model_config` (cosmetic)
+
+### BK06. Billing — TimeEntryResponse UUID validation crash (P0, SMALL)
+- [x] Backend: `billing_extended.py` — `model_validate()` on ORM objects without `from_attributes=True` causes 500 on UUID→str coercion
+- [x] Fixed all 10 `model_validate()` calls in `billing_extended.py` (TimeEntry, Expense, InvoiceLineItem, Payment)
+
+### BK07. Time Tracking — Auto-select matter from context (P1, SMALL)
+- [x] `MatterDetailPage.jsx` — three "Log Time" / "Go to Time Tracking" buttons now pass `?matter_id=` query param
+- [x] `TimeTrackingPage.jsx` — reads `matter_id` from URL, pre-selects in dropdown, auto-opens the Add Entry form
+
+### BK08. Time Tracking — Matters list missing / sort order (P1, SMALL)
+- [x] `TimeTrackingPage.jsx` — matters load independently of entries (entries 500 no longer blocks matters)
+- [x] Explicit `sort_by=updated_at&sort_dir=desc` on `getMattersV2()` call sorts by recent activity
+
+### BK09. Chat — LiteLLM Gateway Connection Error (P0, SMALL)
+- [x] Root cause: `docker-compose.hypervisor.yml` had no `litellm` or `litellm-postgres` services, but backend routes all LLM calls through LiteLLM
+- [x] Added `litellm-postgres`, `litellm` services + `litellm_postgres_data` volume to `docker-compose.hypervisor.yml`
+- [x] Added `litellm: service_healthy` to backend's `depends_on` in hypervisor compose
+- [ ] Redeploy hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`

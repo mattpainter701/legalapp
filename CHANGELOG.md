@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.7] — 2026-06-05
+
+### Fixed
+- **BK06:** TimeEntryResponse UUID validation crash (`billing_extended.py`) — `model_validate()` on ORM objects without `from_attributes=True` caused 500 on UUID→str coercion. Fixed all 10 calls (TimeEntry, Expense, InvoiceLineItem, Payment).
+- **BK07:** Time Tracking now auto-selects matter from context — MatterDetailPage passes `?matter_id=` query param to TimeTrackingPage.
+- **BK08:** Time Tracking matters list now loads independently and sorts by `updated_at` desc (recent activity).
+- **BK09:** Hypervisor chat broken — `docker-compose.hypervisor.yml` was missing `litellm` + `litellm-postgres` services. Added both services, healthcheck dependency, and volume.
+- **BK01:** Google Workspace scope audit mismatch (`drive.readonly` → `drive` in `admin.py:1141`). Added error logging to `refresh_google_token()`.
+- **BK03:** Microsoft 365 scope audit mismatch (`Files.Read.All` → `Files.ReadWrite.All` in `admin.py:1130`).
+
+### Audited (Non-Code)
+- **BK04:** Mediation module audit complete — 97% production-ready. Backend has 24 firm + 12 portal endpoints (all real code). Frontend has 4 pages built. Gaps: missing alembic migration for 7 mediation tables, no sidebar nav link, ProposalStatusUpdate schema unused, no portal document delete.
+- **BK05:** Trust & Estates module audit complete. Estate backend + frontend fully built. Trust Accounting backend fully built (9 endpoints, 2 models, migration 017) but has **zero frontend** — no pages, no API functions, no routes.
+
 ## [0.13.6] — 2026-06-05
 
 ### Fixed
@@ -133,26 +147,9 @@
 - **`build_smb_context()`** on `SmbService` (static method) — consolidates context formatting from `smb_search.py`.
 - **JSON config fallback** in agent `config.py` — `load()` supports both TOML and JSON formats.
 
-### Sprint 11 — Legal MCP Database & CourtListener Ingest Pipeline
+### Design — Legal MCP Database & CourtListener Ingest Pipeline
 
-### Added
-- **Legal Knowledge Base Schema**: `courts`, `opinions`, `opinion_citations`, `opinion_chunks` (Vector(1024)), `legal_topics`, `ingest_runs` tables in vectordb — structured case law metadata replacing flat `public_chunks`
-- **MCP Usage Metering**: `mcp_usage_logs` and `mcp_rate_limits` tables in main app DB with RLS, per-tenant rate limiting
-- **CourtListener Ingest Service**: `CourtListenerIngestService` with API incremental mode (nightly REST API pull) and bulk import mode (gzipped JSONL), idempotent upserts, citation parsing, rule-based practice area classification
-- **Mixedbread mxbai-embed-large-v1 Embedding Pipeline**: 1024-dim embeddings replacing BGE-small-384, with `MCPEmbeddingService` supporting local/api/jetson backends, batch embedding, metadata enrichment, and version tracking
-- **Nightly Ingest Scheduler**: `cl-ingest` (3 AM ET), `cl-embed` (3:30 AM ET), `cl-stats` (weekly Sunday) APScheduler jobs on MCP server
-- **MCP Tool Definitions (7 domain-scoped tools)**: `search_caselaw`, `search_by_jurisdiction`, `search_by_practice_area`, `search_by_citation`, `get_case_details`, `get_court_info`, `search_similar_cases` — all with jurisdiction/practice-area/date filtering
-- **MCP Protocol Server**: standalone service with SSE transport (port 8020) for AI tool consumers and REST transport (port 8021) for API customers, API key auth, usage metering
-- **Docker Compose MCP**: `docker-compose.mcp.yml` for dev with vectordb, mcp, cl-ingest, embed-worker, cl-scheduler containers
-- **Admin Endpoints**: `/admin/cl/status`, `/admin/cl/ingest/trigger`, `/admin/cl/embed/trigger`, `/admin/cl/ingest/history`, `/admin/mcp/usage`, `/admin/mcp/usage/export`, `/admin/mcp/rate-limits/{tenant_id}`
-- **Architecture Design Doc**: `docs/legal_rag.md` — full schema, ingest pipeline, embedding migration, MCP tools, metering, deployment architecture
-
-### Changed
-- `search_public_chunks()` now queries `opinion_chunks` with JOINs to `opinions` and `courts`, supports jurisdiction/practice_area/date filters
-- `EmbeddingService.embed_public_query()` upgraded to mxbai-1024 with backward compat fallback to BGE-384
-- `routers/mcp.py` refactored to thin proxy forwarding to MCP server REST endpoint
-- CourtListener ingest moved from shell script (`daily_update.sh`) to APScheduler-managed service on MCP server
-- `public_chunks` table superseded by `opinion_chunks` (kept for rollback during migration)
+- **Architecture Design Doc**: `docs/legal_rag.md` — full schema, ingest pipeline, embedding migration, MCP tools, metering, deployment architecture. Implementation tabled; only a minimal 2-tool MCP REST endpoint exists in `backend/app/routers/mcp.py`.
 
 ---
 

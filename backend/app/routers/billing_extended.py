@@ -96,7 +96,7 @@ async def create_time_entry(
     await db.commit()
     await db.refresh(entry)
 
-    return TimeEntryResponse.model_validate(entry)
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
 
 
 @router.get("/time-entries")
@@ -129,7 +129,7 @@ async def list_time_entries(
     total_amount = sum((e.amount for e in entries), Decimal("0"))
 
     return TimeEntryListResponse(
-        items=[TimeEntryResponse.model_validate(e) for e in entries],
+        items=[TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries],
         total=len(entries),
         total_hours=total_hours,
         total_amount=total_amount,
@@ -155,7 +155,7 @@ async def get_time_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Time entry not found")
 
-    return TimeEntryResponse.model_validate(entry)
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
 
 
 @router.patch("/time-entries/{entry_id}")
@@ -194,7 +194,7 @@ async def update_time_entry(
 
     await db.commit()
     await db.refresh(entry)
-    return TimeEntryResponse.model_validate(entry)
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
 
 
 @router.delete("/time-entries/{entry_id}", status_code=204)
@@ -262,7 +262,7 @@ async def create_expense(
     await db.commit()
     await db.refresh(expense)
 
-    return ExpenseResponse.model_validate(expense)
+    return ExpenseResponse.model_validate(expense, from_attributes=True)
 
 
 @router.get("/expenses")
@@ -294,7 +294,7 @@ async def list_expenses(
     total_amount = sum((e.amount for e in expenses), Decimal("0"))
 
     return ExpenseListResponse(
-        items=[ExpenseResponse.model_validate(e) for e in expenses],
+        items=[ExpenseResponse.model_validate(e, from_attributes=True) for e in expenses],
         total=len(expenses),
         total_amount=total_amount,
     )
@@ -319,7 +319,7 @@ async def get_expense(
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
 
-    return ExpenseResponse.model_validate(expense)
+    return ExpenseResponse.model_validate(expense, from_attributes=True)
 
 
 @router.patch("/expenses/{expense_id}")
@@ -353,7 +353,7 @@ async def update_expense(
 
     await db.commit()
     await db.refresh(expense)
-    return ExpenseResponse.model_validate(expense)
+    return ExpenseResponse.model_validate(expense, from_attributes=True)
 
 
 @router.delete("/expenses/{expense_id}", status_code=204)
@@ -591,8 +591,8 @@ async def _load_invoice_response(
         qbo_sync_status=invoice.qbo_sync_status,
         ledes_exported_at=invoice.ledes_exported_at,
         created_by=str(invoice.created_by),
-        line_items=[InvoiceLineItemResponse.model_validate(li) for li in line_items],
-        payments=[PaymentResponse.model_validate(p) for p in payments],
+        line_items=[InvoiceLineItemResponse.model_validate(li, from_attributes=True) for li in line_items],
+        payments=[PaymentResponse.model_validate(p, from_attributes=True) for p in payments],
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
     )
@@ -820,7 +820,7 @@ async def create_payment(
     except Exception:
         logger.warning("QBO payment sync task failed", exc_info=True)
 
-    return PaymentResponse.model_validate(payment)
+    return PaymentResponse.model_validate(payment, from_attributes=True)
 
 
 @router.get("/payments")
@@ -841,7 +841,7 @@ async def list_payments(
     result = await db.execute(stmt)
     payments = result.scalars().all()
 
-    return [PaymentResponse.model_validate(p) for p in payments]
+    return [PaymentResponse.model_validate(p, from_attributes=True) for p in payments]
 
 
 # ── Stripe Payment Link ─────────────────────────────────────────────────────

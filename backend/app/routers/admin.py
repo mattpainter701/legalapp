@@ -1127,7 +1127,7 @@ SCOPES_REQUIRED_MS = [
     "offline_access",
     "User.Read.All",
     "Mail.Read",
-    "Files.Read.All",
+    "Files.ReadWrite.All",
     "Sites.Read.All",
     "Calendars.ReadWrite",
 ]
@@ -1138,7 +1138,7 @@ SCOPES_REQUIRED_GOOGLE = [
     "profile",
     "https://www.googleapis.com/auth/admin.directory.user.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/calendar",
 ]
 

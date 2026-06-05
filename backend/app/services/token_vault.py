@@ -141,6 +141,11 @@ async def refresh_google_token(
             },
         )
         if resp.status_code != 200:
+            logger.error(
+                "Google token refresh failed: status=%d body=%s",
+                resp.status_code,
+                resp.text,
+            )
             return None
 
         data = resp.json()

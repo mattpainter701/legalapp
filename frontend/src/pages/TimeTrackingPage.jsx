@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Clock, Plus, Trash2, Filter, DollarSign } from 'lucide-react'
 import { useAuth } from '../App'
 import {
@@ -11,15 +11,17 @@ import {
 
 export default function TimeTrackingPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const preselectedMatterId = searchParams.get('matter_id') || ''
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const [entries, setEntries] = useState([])
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState(!!preselectedMatterId)
   const [filter, setFilter] = useState('all')
   const [form, setForm] = useState({
-    matter_id: '',
+    matter_id: preselectedMatterId,
     description: '',
     hours: '',
     date: new Date().toISOString().slice(0, 10),
@@ -29,14 +31,12 @@ export default function TimeTrackingPage() {
     try {
       setLoading(true)
       const params = filter !== 'all' ? { status: filter } : {}
-      const [entriesData, mattersData] = await Promise.all([
-        getTimeEntries(params),
-        getMattersV2({ page_size: 200 }),
-      ])
-      setEntries(entriesData.items || entriesData)
-      setMatters(mattersData.items || [])
-    } catch (err) {
-      console.error('Failed to load time entries', err)
+      getTimeEntries(params)
+        .then(data => setEntries(data.items || data))
+        .catch(() => {})
+      getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
+        .then(data => setMatters(data.items || []))
+        .catch(() => {})
     } finally {
       setLoading(false)
     }
@@ -56,7 +56,7 @@ export default function TimeTrackingPage() {
       })
       setShowForm(false)
       setForm({
-        matter_id: '',
+        matter_id: preselectedMatterId,
         description: '',
         hours: '',
         date: new Date().toISOString().slice(0, 10),
