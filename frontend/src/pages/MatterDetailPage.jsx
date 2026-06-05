@@ -1286,7 +1286,7 @@ export default function MatterDetailPage() {
 
             {settingsSection === 'shares' && <MatterSmbSharesTab matterId={id} />}
 
-            {settingsSection === 'details' && (
+            {settingsSection === 'details' && editing ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
                 <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
                   <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
