@@ -1410,6 +1410,7 @@ export default function MatterDetailPage() {
                 </dl>
               )}
             </div>
+          )}
 
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
               <h2 className="font-serif font-bold text-xl text-brand-ink mb-5">People</h2>
