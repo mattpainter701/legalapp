@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
 
@@ -21,6 +21,9 @@ const Icons = {
   user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
   check: 'M20 6L9 17l-5-5',
+  grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
+  list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  alert: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
 }
 
 const STATUS_COLORS = {
@@ -77,7 +80,82 @@ function DeadlineBadge({ label }) {
 
 const STATUS_OPTIONS = ['all', 'open', 'active', 'pending', 'closed']
 
-// ── My Matters row ────────────────────────────────────────────────────────────
+// ── "Needs Action" classification ─────────────────────────────────────────────
+function needsAction(m) {
+  if (m.risk_level === 'critical' || m.risk_level === 'high') return true
+  if (m.status === 'threatened') return true
+  if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('overdue')) return true
+  if (m.updated_at) {
+    try {
+      const daysStale = differenceInDays(new Date(), parseISO(m.updated_at))
+      if (daysStale > 14 && (m.status === 'open' || m.status === 'active')) return true
+    } catch { /* ignore */ }
+  }
+  return false
+}
+
+// ── Matter Card (board view) ──────────────────────────────────────────────────
+function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
+  const isToggling = togglingId === m.my_assignment_id
+  return (
+    <div
+      className={`bg-brand-surface border rounded-2xl p-4 cursor-pointer hover:border-brand-accent/30 hover:shadow-md transition-all group ${
+        showAlert ? 'border-brand-rose/30' : 'border-brand-line'
+      }`}
+      onClick={() => onNavigate(m.id)}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold text-brand-ink font-sans text-[14px] leading-snug truncate group-hover:text-brand-accent transition-colors">
+            {m.matter_name}
+          </div>
+          {m.client_name && (
+            <div className="text-[12px] text-brand-muted font-sans mt-0.5 truncate">{m.client_name}</div>
+          )}
+        </div>
+        {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose shrink-0 mt-0.5" />}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        <StatusBadge status={m.status} />
+        <RiskBadge level={m.risk_level} />
+        {m.overdue_deadline_label && <DeadlineBadge label={m.overdue_deadline_label} />}
+      </div>
+
+      {m.practice_area && (
+        <div className="text-[12px] text-brand-accent font-semibold font-sans mb-2">{m.practice_area}</div>
+      )}
+
+      {m.active_workers?.length > 0 && (
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+          <span className="text-[11px] text-brand-muted font-sans truncate">
+            {m.active_workers.slice(0, 2).join(', ')} working
+          </span>
+        </div>
+      )}
+
+      {m.my_assignment_id && (
+        <div className="mt-3 pt-3 border-t border-brand-line" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
+            disabled={isToggling}
+            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+              m.is_active_working
+                ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
+            } ${isToggling ? 'opacity-50 cursor-wait' : ''}`}
+          >
+            <Icon d={Icons.activity} size={12} />
+            {m.is_active_working ? 'Active' : 'Set Active'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── My Matters list row ───────────────────────────────────────────────────────
 function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
@@ -114,7 +192,6 @@ function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
               ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
               : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
           } ${isToggling ? 'opacity-50 cursor-wait' : ''}`}
-          title={m.is_active_working ? "Mark as not working" : "Mark as actively working"}
         >
           {m.is_active_working
             ? <><Icon d={Icons.activity} size={12} className="text-green-600" /> Active</>
@@ -139,6 +216,7 @@ export default function MatterPortfolioPage() {
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
+  const [viewMode, setViewMode] = useState('board') // 'board' | 'list'
 
   const loadMyMatters = () => {
     setMyLoading(true)
@@ -202,6 +280,17 @@ export default function MatterPortfolioPage() {
     return true
   }), [matters, statusFilter, practiceFilter, search])
 
+  // Board columns (from myMatters)
+  const boardColumns = useMemo(() => {
+    const active = myMatters.filter(m => !['closed', 'settled', 'dismissed'].includes(m.status))
+    const needsActionList = active.filter(m => needsAction(m))
+    const needsActionIds = new Set(needsActionList.map(m => m.id))
+    const activeList = active.filter(m => !needsActionIds.has(m.id) && (m.status === 'active' || m.is_active_working))
+    const activeIds = new Set(activeList.map(m => m.id))
+    const watchingList = active.filter(m => !needsActionIds.has(m.id) && !activeIds.has(m.id))
+    return { needsAction: needsActionList, active: activeList, watching: watchingList }
+  }, [myMatters])
+
   return (
     <div className="min-h-screen bg-brand-bg">
       {/* Top nav */}
@@ -225,9 +314,28 @@ export default function MatterPortfolioPage() {
         <div className="mb-12">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-serif font-bold text-2xl text-brand-ink">My Matters</h2>
-            <span className="text-[13px] text-brand-muted font-sans">
-              {myMatters.length} assigned to you
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-[13px] text-brand-muted font-sans">
+                {myMatters.length} assigned to you
+              </span>
+              {/* View toggle */}
+              <div className="flex rounded-xl border border-brand-line overflow-hidden text-[12px] font-semibold font-sans bg-brand-surface">
+                <button
+                  onClick={() => setViewMode('board')}
+                  className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'board' ? 'bg-brand-ink text-white' : 'text-brand-muted hover:text-brand-ink'}`}
+                  title="Board view"
+                >
+                  <Icon d={Icons.grid} size={13} /> Board
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${viewMode === 'list' ? 'bg-brand-ink text-white' : 'text-brand-muted hover:text-brand-ink'}`}
+                  title="List view"
+                >
+                  <Icon d={Icons.list} size={13} /> List
+                </button>
+              </div>
+            </div>
           </div>
 
           {myLoading ? (
@@ -238,9 +346,63 @@ export default function MatterPortfolioPage() {
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-10 text-center">
               <Icon d={Icons.briefcase} size={32} className="mx-auto text-brand-line-2 mb-3" />
               <p className="font-serif font-bold text-brand-ink mb-1">No matters assigned to you</p>
-              <p className="text-brand-muted text-sm font-sans">Matters you're assigned to will appear here, sorted by deadline.</p>
+              <p className="text-brand-muted text-sm font-sans">Matters you're assigned to will appear here.</p>
+            </div>
+          ) : viewMode === 'board' ? (
+            /* Board view */
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {[
+                {
+                  title: 'Needs Action',
+                  items: boardColumns.needsAction,
+                  color: 'border-brand-rose/30',
+                  headerColor: 'text-brand-rose',
+                  showAlert: true,
+                  empty: 'No matters need attention.',
+                },
+                {
+                  title: 'Active',
+                  items: boardColumns.active,
+                  color: 'border-brand-green/20',
+                  headerColor: 'text-brand-green',
+                  showAlert: false,
+                  empty: 'No actively worked matters.',
+                },
+                {
+                  title: 'Watching',
+                  items: boardColumns.watching,
+                  color: 'border-brand-line',
+                  headerColor: 'text-brand-ink',
+                  showAlert: false,
+                  empty: 'Nothing in the watch queue.',
+                },
+              ].map(col => (
+                <div key={col.title} className={`bg-brand-bg-soft border ${col.color} rounded-2xl`}>
+                  <div className="px-4 pt-4 pb-3 border-b border-brand-line/50 flex items-center justify-between">
+                    <h3 className={`font-serif font-bold text-[15px] ${col.headerColor}`}>{col.title}</h3>
+                    <span className="text-[12px] text-brand-muted font-sans">{col.items.length}</span>
+                  </div>
+                  <div className="p-3 space-y-2 min-h-[120px]">
+                    {col.items.length === 0 ? (
+                      <p className="text-brand-muted text-[12px] font-sans text-center py-6">{col.empty}</p>
+                    ) : (
+                      col.items.map(m => (
+                        <MatterCard
+                          key={m.id}
+                          m={m}
+                          onNavigate={id => navigate(`/matters/${id}`)}
+                          onToggleActive={handleToggleActive}
+                          togglingId={togglingId}
+                          showAlert={col.showAlert}
+                        />
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
+            /* List view */
             <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
               {myMatters.map(m => (
                 <MyMatterRow

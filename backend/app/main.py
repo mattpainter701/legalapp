@@ -50,6 +50,7 @@ from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
 from app.routers.cloud_admin import router as cloud_admin_router
 from app.routers.smb import router as smb_router
+from app.routers.portfolio import router as portfolio_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ app.include_router(document_templates_router)
 app.include_router(onboarding_router)
 app.include_router(licensing_router)
 app.include_router(smb_router)
+app.include_router(portfolio_router)
 
 
 # ─────────────────────────────────────────────────────
