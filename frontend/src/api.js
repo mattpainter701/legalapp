@@ -694,6 +694,10 @@ export const updateMatterMemory = (id, content) =>
 export const getMatterDashboard = (id) =>
   api.get(`/matters/${id}/dashboard-summary`).then(r => r.data)
 
+// Cloud files for a matter
+export const getMatterCloudFiles = (id) =>
+  api.get(`/matters/${id}/cloud-files`).then(r => r.data)
+
 // Email client
 export const emailMatterClient = (id, data) =>
   api.post(`/matters/${id}/email-client`, data).then(r => r.data)
@@ -760,6 +764,11 @@ export const getCloudMetadata = (params) =>
 
 export const invalidateCloudCache = () =>
   api.delete('/admin/cloud-search/cache').then(r => r.data)
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+export const searchUsers = (q) =>
+  api.get('/users/search', { params: { q } }).then(r => r.data)
 
 // ── SMB File Shares Admin ──────────────────────────────────────────────────────
 

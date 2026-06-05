@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
-import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
+import { getMattersV2, getMyMatters, setAssignmentActive, getIntegrationsHealth } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
 
 function Icon({ d, size = 16, className = '' }) {
@@ -95,7 +95,7 @@ function needsAction(m) {
 }
 
 // ── Matter Card (board view) ──────────────────────────────────────────────────
-function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
+function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert, cloudConnected }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
@@ -113,7 +113,12 @@ function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
             <div className="text-[12px] text-brand-muted font-sans mt-0.5 truncate">{m.client_name}</div>
           )}
         </div>
-        {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose shrink-0 mt-0.5" />}
+        <div className="flex items-center gap-1 shrink-0">
+          {cloudConnected && (
+            <span title="Cloud integration active" className="text-[10px] text-brand-accent">☁</span>
+          )}
+          {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose" />}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5 mb-3">
@@ -217,6 +222,7 @@ export default function MatterPortfolioPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
   const [viewMode, setViewMode] = useState('board') // 'board' | 'list'
+  const [cloudConnected, setCloudConnected] = useState(false)
 
   const loadMyMatters = () => {
     setMyLoading(true)
@@ -237,6 +243,11 @@ export default function MatterPortfolioPage() {
   useEffect(() => {
     loadMyMatters()
     loadMatters()
+    getIntegrationsHealth().then(data => {
+      const ms = data?.microsoft
+      const g = data?.google
+      setCloudConnected(!!(ms?.connected || g?.connected))
+    }).catch(() => {})
   }, [])
 
   const handleToggleActive = async (assignmentId, matterId, active) => {
@@ -313,8 +324,22 @@ export default function MatterPortfolioPage() {
         {/* ── My Matters ─────────────────────────────────────────────────────── */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-serif font-bold text-2xl text-brand-ink">My Matters</h2>
+            <div>
+              <h2 className="font-serif font-bold text-2xl text-brand-ink">My Matters</h2>
+              {boardColumns.needsAction.length > 0 && (
+                <p className="text-[13px] text-brand-rose font-sans mt-0.5 font-medium">
+                  {boardColumns.needsAction.length} matter{boardColumns.needsAction.length !== 1 ? 's' : ''} need attention
+                </p>
+              )}
+            </div>
             <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate('/calendar')}
+                className="flex items-center gap-1.5 px-3 py-2 text-[12px] font-semibold text-brand-muted border border-brand-line rounded-lg hover:text-brand-ink hover:border-brand-line-2 transition-colors bg-brand-surface"
+              >
+                <Icon d={Icons.clock} size={13} />
+                Deadline Calendar
+              </button>
               <span className="text-[13px] text-brand-muted font-sans">
                 {myMatters.length} assigned to you
               </span>
@@ -394,6 +419,7 @@ export default function MatterPortfolioPage() {
                           onToggleActive={handleToggleActive}
                           togglingId={togglingId}
                           showAlert={col.showAlert}
+                          cloudConnected={cloudConnected}
                         />
                       ))
                     )}

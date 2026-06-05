@@ -96,7 +96,7 @@ async def get_calendar_events(
                         event_type="matter_key_date",
                         matter_id=matter.id,
                         matter_name=matter.matter_name,
-                        url=f"/plugins/litigation/matters/{matter.id}",
+                        url=f"/matters/{matter.id}",
                     )
                 )
 

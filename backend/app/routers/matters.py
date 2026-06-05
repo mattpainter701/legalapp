@@ -47,6 +47,10 @@ from app.schemas.matter import (
     TimelineEntry,
 )
 from app.services.plugins.manifest import get_plugin_manifest
+from app.models.tenant_credential import TenantCredential
+from app.services.cloud_search import CloudSearchService
+
+_cloud_search = CloudSearchService()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
@@ -1875,6 +1879,73 @@ async def email_matter_client(
         "subject": subject,
         "matter_id": str(matter.id),
         "logged_at": log.occurred_at.isoformat(),
+    }
+
+
+# ── Cloud Files ──────────────────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/cloud-files")
+async def get_matter_cloud_files(
+    matter_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search cloud integrations for files related to this matter by name."""
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    matter = await _get_matter_or_404(db, matter_id, current_user.tenant_id)
+
+    # Check if tenant has any active cloud credentials
+    cred_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == current_user.tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    creds = cred_result.scalars().all()
+
+    if not creds:
+        return {"files": [], "connected": False}
+
+    # Search using matter name as keywords
+    keywords = [w for w in matter.matter_name.split() if len(w) > 2][:6]
+    if matter.case_number:
+        keywords.insert(0, matter.case_number)
+
+    plan = {
+        "keywords": keywords,
+        "max_hits": 20,
+        "date_after": "",
+        "sources": None,
+    }
+
+    try:
+        hits = await _cloud_search.search(
+            db=db,
+            plan=plan,
+            tenant_id=tenant_id,
+            user_id=str(current_user.id),
+        )
+    except Exception:
+        return {"files": [], "connected": True}
+
+    return {
+        "connected": True,
+        "files": [
+            {
+                "id": h.object_id,
+                "title": h.title,
+                "snippet": h.snippet,
+                "url": h.url,
+                "source": h.source,
+                "provider": h.provider,
+                "mime_type": h.mime_type,
+                "modified_time": h.modified_time,
+            }
+            for h in hits
+        ],
     }
 
 

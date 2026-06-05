@@ -48,12 +48,19 @@ const TYPE_STYLES = {
     label: 'bg-green-100 text-green-700',
     icon: RefreshCw,
   },
+  estate_deadline: {
+    bg: 'bg-amber-50 border-amber-200',
+    dot: 'bg-amber-500',
+    label: 'bg-amber-100 text-amber-700',
+    icon: CalendarDays,
+  },
 }
 
 const TYPE_LABELS = {
   task_due: 'Task',
   matter_key_date: 'Key Date',
   renewal: 'Renewal',
+  estate_deadline: 'Estate',
 }
 
 function EventChip({ event, onClick }) {
@@ -167,15 +174,26 @@ export default function CalendarPage() {
           <span className="text-xs text-brand-muted font-mono">
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
-          <button
-            onClick={() => handleSync('microsoft')}
-            disabled={syncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
-            title="Sync matter deadlines to Microsoft Calendar"
-          >
-            <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing…' : 'Sync to Calendar'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleSync('microsoft')}
+              disabled={syncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
+              title="Sync matter deadlines to Microsoft Calendar"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing…' : '⊞ Microsoft'}
+            </button>
+            <button
+              onClick={() => handleSync('google')}
+              disabled={syncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
+              title="Sync matter deadlines to Google Calendar"
+            >
+              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing…' : '⬡ Google'}
+            </button>
+          </div>
         </div>
       </div>
 

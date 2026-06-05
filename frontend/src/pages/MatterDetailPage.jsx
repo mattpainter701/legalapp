@@ -6,15 +6,16 @@ import {
   getMatterV2, updateMatterV2, getMatterTimeline, addMatterNote,
   getMatterBudgetV2, getMatterAssignments, addMatterAssignment,
   removeMatterAssignment, getMatterMemory, updateMatterMemory,
-  getAdminUsers, getPlugins, getCommunications, createCommunication,
+  getPlugins, getCommunications, createCommunication,
   setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
-  getTasks, updateTask, getMatterDashboard,
+  getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
 import AddTaskModal from '../components/AddTaskModal'
 import ComposeEmailModal from '../components/ComposeEmailModal'
+import UserSearchInput from '../components/UserSearchInput'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -173,11 +174,14 @@ export default function MatterDetailPage() {
 
   // Team
   const [assignments, setAssignments] = useState([])
-  const [allUsers, setAllUsers] = useState([])
   const [pluginOptions, setPluginOptions] = useState([])
   const [addingUser, setAddingUser] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
+  const [selectedUserName, setSelectedUserName] = useState('')
   const [selectedRole, setSelectedRole] = useState('associate')
+
+  // Cloud files
+  const [cloudFiles, setCloudFiles] = useState(null) // null = not loaded yet
 
   // Billing
   const [timeEntries, setTimeEntries] = useState([])
@@ -229,6 +233,7 @@ export default function MatterDetailPage() {
       const list = Array.isArray(data) ? data : data.plugins || []
       setPluginOptions(list.filter(p => p.supports_matter_assignment !== false))
     }).catch(() => {})
+    getMatterCloudFiles(id).then(setCloudFiles).catch(() => {})
   }, [id, loadMatter])
 
   useEffect(() => {
@@ -247,7 +252,6 @@ export default function MatterDetailPage() {
     }
     if (activeTab === 'team') {
       getMatterAssignments(id).then(setAssignments).catch(() => {})
-      getAdminUsers().then(data => setAllUsers(Array.isArray(data) ? data : data.users || [])).catch(() => {})
     }
     if (activeTab === 'billing') {
       setBillingLoading(true)
@@ -299,6 +303,7 @@ export default function MatterDetailPage() {
       const a = await addMatterAssignment(id, { user_id: selectedUserId, role: selectedRole })
       setAssignments(prev => [...prev, a])
       setSelectedUserId('')
+      setSelectedUserName('')
     } catch { /* silent */ }
     finally { setAddingUser(false) }
   }
@@ -391,7 +396,6 @@ export default function MatterDetailPage() {
   ]
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
-  const unassignedUsers = allUsers.filter(u => !assignedIds.has(u.id))
   const pluginLabel = (pluginName) => {
     if (!pluginName) return null
     const found = pluginOptions.find(p => (p.plugin_name || p.id) === pluginName)
@@ -662,6 +666,62 @@ export default function MatterDetailPage() {
               </div>
             </div>
 
+            {/* Cloud Files */}
+            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+              <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={18} className="text-brand-accent" />
+                  <h3 className="font-serif font-bold text-lg text-brand-ink">Cloud Files</h3>
+                </div>
+                {cloudFiles?.connected && (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-brand-green bg-brand-green/10 px-2.5 py-1 rounded-lg border border-brand-green/20">
+                    <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" /> Connected
+                  </span>
+                )}
+              </div>
+              <div className="p-4">
+                {cloudFiles === null ? (
+                  <div className="flex justify-center py-6"><div className="w-5 h-5 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+                ) : !cloudFiles.connected ? (
+                  <div className="text-center py-6">
+                    <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={28} className="mx-auto text-brand-line-2 mb-2" />
+                    <p className="text-brand-muted text-sm font-sans mb-3">No cloud integrations connected.</p>
+                    <button onClick={() => navigate('/admin')} className="text-brand-accent text-sm font-semibold hover:underline">
+                      Connect in Admin → Integrations →
+                    </button>
+                  </div>
+                ) : cloudFiles.files.length === 0 ? (
+                  <div className="text-center py-6">
+                    <p className="text-brand-muted text-sm font-sans">No cloud files found matching this matter.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {cloudFiles.files.slice(0, 10).map((f, i) => (
+                      <a
+                        key={f.id || i}
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start gap-3 p-3 rounded-xl border border-brand-line hover:border-brand-accent/30 hover:bg-brand-accent/5 transition-colors group"
+                      >
+                        <div className="shrink-0 w-8 h-8 rounded-lg bg-brand-bg-soft border border-brand-line flex items-center justify-center">
+                          <span className="text-[11px] font-bold text-brand-muted uppercase">{f.source?.slice(0, 2) || f.provider?.slice(0, 2) || '?'}</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13px] font-semibold text-brand-ink font-sans truncate group-hover:text-brand-accent">{f.title}</div>
+                          {f.snippet && <div className="text-[12px] text-brand-muted font-sans mt-0.5 line-clamp-1">{f.snippet}</div>}
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wide text-brand-muted bg-brand-bg-soft px-1.5 py-0.5 rounded border border-brand-line">{f.source || f.provider}</span>
+                          </div>
+                        </div>
+                        <Icon d="M5 12h14M12 5l7 7-7 7" size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0 mt-1 transition-colors" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Case Details (collapsible) */}
             <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
               <button
@@ -917,16 +977,16 @@ export default function MatterDetailPage() {
                   ))}
                 </div>
               )}
-              {unassignedUsers.length > 0 && (
-                <div className="border-t border-brand-line pt-5">
-                  <h3 className="text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-3">Add Team Member</h3>
+              <div className="border-t border-brand-line pt-5">
+                <h3 className="text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-3">Add Team Member</h3>
+                {selectedUserId ? (
                   <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-                    <div className="flex-1">
-                      <label className={labelCls}>User</label>
-                      <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)} className={inputCls}>
-                        <option value="">Select user…</option>
-                        {unassignedUsers.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
-                      </select>
+                    <div className="flex-1 flex items-center gap-2 px-3 py-2.5 bg-brand-accent/10 border border-brand-accent/30 rounded-lg">
+                      <div className="w-6 h-6 rounded-full bg-brand-accent/20 flex items-center justify-center text-[10px] font-bold text-brand-accent shrink-0 uppercase">
+                        {(selectedUserName || '?').slice(0, 2)}
+                      </div>
+                      <span className="text-[13px] font-semibold text-brand-ink font-sans flex-1 truncate">{selectedUserName}</span>
+                      <button onClick={() => { setSelectedUserId(''); setSelectedUserName('') }} className="text-brand-muted hover:text-brand-rose transition-colors text-xs">✕</button>
                     </div>
                     <div className="w-40">
                       <label className={labelCls}>Role</label>
@@ -938,14 +998,39 @@ export default function MatterDetailPage() {
                     </div>
                     <button
                       onClick={handleAddAssignment}
-                      disabled={!selectedUserId || addingUser}
+                      disabled={addingUser}
                       className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 transition-all whitespace-nowrap"
                     >
-                      {addingUser ? 'Adding…' : 'Add'}
+                      {addingUser ? 'Adding…' : 'Add to Team'}
                     </button>
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                    <div className="flex-1">
+                      <label className={labelCls}>Search for User</label>
+                      <UserSearchInput
+                        excludeIds={[...assignedIds]}
+                        onSelect={u => { setSelectedUserId(u.id); setSelectedUserName(u.full_name || u.email) }}
+                        placeholder="Type a name or email to search…"
+                      />
+                    </div>
+                    <div className="w-40">
+                      <label className={labelCls}>Role</label>
+                      <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
+                        {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
+                          <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      disabled
+                      className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg opacity-30 cursor-not-allowed whitespace-nowrap"
+                    >
+                      Add to Team
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1065,6 +1150,14 @@ export default function MatterDetailPage() {
                 <Icon d={Icons.plus} size={15} /> {startingConv ? 'Starting…' : 'Start New Chat'}
               </button>
             </div>
+            {cloudFiles?.connected && (
+              <div className="mx-6 mt-4 flex items-center gap-2.5 px-4 py-3 bg-brand-accent/5 border border-brand-accent/20 rounded-xl">
+                <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={16} className="text-brand-accent shrink-0" />
+                <p className="text-[13px] text-brand-ink-2 font-sans">
+                  <span className="font-semibold text-brand-ink">Cloud context active</span> — AI chats here have access to matter files from your connected OneDrive, SharePoint, and Google Drive.
+                </p>
+              </div>
+            )}
             <div className="p-6">
               {convLoading ? (
                 <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
@@ -1088,8 +1181,15 @@ export default function MatterDetailPage() {
                       <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
                       <div className="flex-1 min-w-0">
                         <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
-                        <div className="text-[12px] text-brand-muted font-sans">
-                          {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[12px] text-brand-muted font-sans">
+                            {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
+                          </span>
+                          {cloudFiles?.connected && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-brand-accent bg-brand-accent/10 px-1.5 py-0.5 rounded">
+                              <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={10} /> Cloud
+                            </span>
+                          )}
                         </div>
                       </div>
                       <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
