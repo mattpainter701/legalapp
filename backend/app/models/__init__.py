@@ -33,6 +33,7 @@ from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.error_log import ErrorLog
 from app.models.contact import Contact, Lead
+from app.models.client_portal import ClientPortalInvite
 from app.models.task import Task
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
@@ -94,6 +95,7 @@ __all__ = [
     "ErrorLog",
     "Contact",
     "Lead",
+    "ClientPortalInvite",
     "Task",
     "CommunicationLog",
     "DocumentTemplate",

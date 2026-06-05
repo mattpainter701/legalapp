@@ -242,6 +242,11 @@ class Matter(Base):
     judge: Mapped[str | None] = mapped_column(String(200), nullable=True)
     case_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Client portal access toggle (added in migration 044)
+    portal_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
     # Optional FK to the firm's client Contact record (added in migration 018)
     client_contact_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

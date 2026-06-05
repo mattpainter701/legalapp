@@ -6,13 +6,16 @@
 
 ### M1 — Client-facing core (P0)
 
-#### 1301. Client Portal (P0, LARGE) — PENDING
+#### 1301. Client Portal (P0, LARGE) — IN PROGRESS (spike landed)
 Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `PortalAcceptPage`/`PortalCasePage`) from `MediationCase` to `Matter`.
-- [ ] Migration `044_client_portal`: `client_portal_invites` (tokenized, sha256 hash); `portal_visible` on `MatterDocument`, `portal_enabled` on `Matter`; reuse `communication_log` with `channel='portal'` + `visible_to_client`
-- [ ] `routers/client_portal.py`: `/accept`, `/matter`, `/messages`, `/documents` (+upload/download via `matter_file_store`), `/invoices`, `/invoices/{id}/pay` (reuse Stripe link flow)
-- [ ] `routers/matters.py`: firm-side invite create/list/revoke
-- [ ] Frontend: `ClientPortalAcceptPage`, `ClientPortalMatterPage` (Overview/Messages/Documents/Invoices) + routes; Client Portal tab on `MatterDetailPage`; `api.js` group
-- [ ] Verify tenant + matter isolation
+- [x] Migration `044_client_portal`: `client_portal_invites` (tokenized, sha256 hash, RLS); `portal_visible` on `MatterDocument`, `portal_enabled` on `Matter`; messages reuse `communication_logs` with `channel='portal'`
+- [x] `routers/client_portal.py`: `/accept`, `/matter`, `/messages` (get/post), `/documents` (list/upload/download via `matter_file_store`), `/invoices` (surfaces Stripe pay link)
+- [x] Firm-side invite create/list/revoke (`firm_router` on `/api/matters/{id}/portal/...`); document portal-visibility toggle via `matter_documents` PATCH
+- [x] Frontend: `ClientPortalAcceptPage`, `ClientPortalMatterPage` (Overview/Messages/Documents/Invoices) + routes; Client Portal tab on `MatterDetailPage`; `api.js` group
+- [ ] Firm UI: portal-visibility toggle control in `MatterDocumentsTab` (backend ready)
+- [ ] Dedicated `/invoices/{id}/pay` portal endpoint (currently links out to existing Stripe payment link)
+- [ ] Firm-client login path (role="client") in addition to magic-link (spike is magic-link only)
+- [ ] Integration tests: tenant + matter isolation, expired/revoked invite, cross-matter access
 
 #### 1302. Native E-Signature (P0, MEDIUM) — PENDING (depends on 1301)
 - [ ] Migration `045_esignature`: `signature_requests` + `signature_signers`

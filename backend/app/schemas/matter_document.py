@@ -16,6 +16,7 @@ class MatterDocumentResponse(BaseModel):
     file_size: int | None
     description: str | None
     document_category: str | None
+    portal_visible: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -30,3 +31,4 @@ class MatterDocumentListResponse(BaseModel):
 class MatterDocumentUpdate(BaseModel):
     description: str | None = None
     document_category: str | None = None
+    portal_visible: bool | None = None

@@ -165,6 +165,8 @@ async def update_matter_document(
         doc.description = body.description
     if body.document_category is not None:
         doc.document_category = body.document_category
+    if body.portal_visible is not None:
+        doc.portal_visible = body.portal_visible
 
     await db.commit()
     await db.refresh(doc)
