@@ -1,7 +1,7 @@
-"""038 — API access log table for platform diagnostics.
+"""039 — API access log table for platform diagnostics.
 
-Revision ID: 038
-Revises: 037
+Revision ID: 039
+Revises: 038
 Create Date: 2026-06-05
 
 Adds api_access_logs table — lightweight per-request metadata (no payloads, no PII).
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "038"
-down_revision = "037"
+revision = "039"
+down_revision = "038"
 branch_labels = None
 depends_on = None
 
@@ -27,12 +27,8 @@ def upgrade() -> None:
             primary_key=True,
             server_default=sa.text("gen_random_uuid()"),
         ),
-        sa.Column(
-            "tenant_id", UUID(as_uuid=True), nullable=False
-        ),
-        sa.Column(
-            "user_id", UUID(as_uuid=True), nullable=True
-        ),
+        sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
+        sa.Column("user_id", UUID(as_uuid=True), nullable=True),
         sa.Column("endpoint", sa.String(255), nullable=False),
         sa.Column("method", sa.String(10), nullable=False),
         sa.Column("status_code", sa.Integer(), nullable=False),
@@ -45,12 +41,8 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
-        sa.ForeignKeyConstraint(
-            ["tenant_id"], ["tenants.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
     )
 
     op.create_index(
