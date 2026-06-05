@@ -24,6 +24,7 @@ class UserLicenseRow(BaseModel):
     role: str
     tokens_used: int = 0
     cost_usd: float = 0.0
+    payg_monthly_budget: float | None = None
 
     class Config:
         from_attributes = True
@@ -125,6 +126,7 @@ async def get_licensing_info(
                 role=u.role,
                 tokens_used=tokens,
                 cost_usd=cost,
+                payg_monthly_budget=float(u.payg_monthly_budget) if u.payg_monthly_budget is not None else None,
             )
         )
 

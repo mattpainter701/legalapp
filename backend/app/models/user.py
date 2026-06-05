@@ -54,6 +54,10 @@ class User(Base):
     default_billing_rate: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    # PAYG monthly spend cap (added in migration 038) — None means no cap
+    payg_monthly_budget: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
     # Enhanced user model
     practice_areas: Mapped[list | None] = mapped_column(
         JSON, default=list, server_default="[]", nullable=False
