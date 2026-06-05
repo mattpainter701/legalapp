@@ -984,3 +984,23 @@ async def get_me(
         created_at=user.created_at,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
     )
+
+
+@router.get("/calendar-providers")
+async def get_calendar_providers(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    from app.models.user_oauth_token import UserOAuthToken
+    from app.services.token_vault import get_fresh_user_token
+
+    providers = []
+    for provider in ("microsoft", "google"):
+        token = await get_fresh_user_token(
+            db, str(user.tenant_id), str(user.id), provider
+        )
+        if token:
+            providers.append(provider)
+
+    return {"providers": providers}

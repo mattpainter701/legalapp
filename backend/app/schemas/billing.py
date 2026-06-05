@@ -14,7 +14,7 @@ class TimeEntryCreate(BaseModel):
     matter_id: str
     description: str = Field(..., min_length=1)
     hours: Decimal = Field(..., gt=0)
-    hourly_rate: Decimal = Field(..., gt=0)
+    hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
     date: date
     is_billable: bool = True
     utbms_task_code: Optional[str] = None

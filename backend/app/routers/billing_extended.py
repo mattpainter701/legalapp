@@ -71,14 +71,21 @@ async def create_time_entry(
     if not matter.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    amount = body.hours * body.hourly_rate
+    hourly_rate = body.hourly_rate or user.default_billing_rate
+    if not hourly_rate:
+        raise HTTPException(
+            status_code=400,
+            detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
+        )
+
+    amount = body.hours * hourly_rate
     entry = TimeEntry(
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(body.matter_id),
         user_id=user.id,
         description=body.description,
         hours=body.hours,
-        hourly_rate=body.hourly_rate,
+        hourly_rate=hourly_rate,
         amount=amount,
         date=body.date,
         is_billable=body.is_billable,
@@ -178,8 +185,8 @@ async def update_time_entry(
 
     update_data = body.model_dump(exclude_unset=True)
     if "hours" in update_data or "hourly_rate" in update_data:
-        hours = update_data.get("hours", entry.hours)
-        rate = update_data.get("hourly_rate", entry.hourly_rate)
+        hours = Decimal(str(update_data.get("hours", entry.hours)))
+        rate = Decimal(str(update_data.get("hourly_rate", entry.hourly_rate)))
         update_data["amount"] = hours * rate
 
     for key, value in update_data.items():

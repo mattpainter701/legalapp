@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCalendarEvents, syncCalendarDeadlines } from '../api'
+import { getCalendarEvents, syncCalendarDeadlines, getCalendarProviders } from '../api'
 import { ChevronLeft, ChevronRight, CalendarDays, ClipboardList, Building2, RefreshCw } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -102,6 +102,17 @@ export default function CalendarPage() {
   const [error, setError] = useState(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState(null) // { type: 'success'|'error', text: string }
+  const [calendarProvider, setCalendarProvider] = useState(null)
+
+  useEffect(() => {
+    getCalendarProviders()
+      .then((data) => {
+        if (data.providers && data.providers.length > 0) {
+          setCalendarProvider(data.providers[0])
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const fetchEvents = useCallback(async (pivot) => {
     setLoading(true)
@@ -175,24 +186,17 @@ export default function CalendarPage() {
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleSync('microsoft')}
-              disabled={syncing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
-              title="Sync matter deadlines to Microsoft Calendar"
-            >
-              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing…' : '⊞ Microsoft'}
-            </button>
-            <button
-              onClick={() => handleSync('google')}
-              disabled={syncing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
-              title="Sync matter deadlines to Google Calendar"
-            >
-              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing…' : '⬡ Google'}
-            </button>
+            {calendarProvider && (
+              <button
+                onClick={() => handleSync(calendarProvider)}
+                disabled={syncing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink disabled:opacity-50 transition-colors"
+                title={`Sync matter deadlines to ${calendarProvider === 'google' ? 'Google' : 'Microsoft'} Calendar`}
+              >
+                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing…' : 'Sync Calendar'}
+              </button>
+            )}
           </div>
         </div>
       </div>

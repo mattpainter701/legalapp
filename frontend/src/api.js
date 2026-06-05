@@ -641,6 +641,9 @@ export const syncCalendarDeadlines = (provider = 'microsoft') =>
     .post('/email/calendar', { provider, sync_deadlines: true })
     .then(r => r.data)
 
+export const getCalendarProviders = () =>
+  api.get('/auth/calendar-providers').then(r => r.data)
+
 // ── Document Templates ──────────────────────────────────────────────────────
 
 export const getTemplates = () =>

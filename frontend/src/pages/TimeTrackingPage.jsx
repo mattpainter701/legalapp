@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Plus, Trash2, Filter, DollarSign } from 'lucide-react'
+import { useAuth } from '../App'
 import {
   getTimeEntries,
   createTimeEntry,
@@ -10,6 +11,8 @@ import {
 
 export default function TimeTrackingPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const [entries, setEntries] = useState([])
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
@@ -19,7 +22,6 @@ export default function TimeTrackingPage() {
     matter_id: '',
     description: '',
     hours: '',
-    hourly_rate: '',
     date: new Date().toISOString().slice(0, 10),
   })
 
@@ -49,7 +51,6 @@ export default function TimeTrackingPage() {
         matter_id: form.matter_id,
         description: form.description,
         hours: parseFloat(form.hours),
-        hourly_rate: parseFloat(form.hourly_rate),
         date: form.date,
         is_billable: true,
       })
@@ -58,7 +59,6 @@ export default function TimeTrackingPage() {
         matter_id: '',
         description: '',
         hours: '',
-        hourly_rate: '',
         date: new Date().toISOString().slice(0, 10),
       })
       loadData()
@@ -112,7 +112,7 @@ export default function TimeTrackingPage() {
           style={{
             background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
             padding: 16, marginBottom: 20, display: 'grid',
-            gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end',
+            gridTemplateColumns: '2fr 1fr 1fr auto', gap: 12, alignItems: 'end',
           }}
         >
           <div>
@@ -145,16 +145,6 @@ export default function TimeTrackingPage() {
               type="number" step="0.25" min="0.25"
               value={form.hours}
               onChange={(e) => setForm({ ...form, hours: e.target.value })}
-              required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
-            />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Rate ($/hr)</label>
-            <input
-              type="number" min="0"
-              value={form.hourly_rate}
-              onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
               required
               style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
             />
@@ -202,7 +192,6 @@ export default function TimeTrackingPage() {
               <th style={{ padding: 8 }}>Date</th>
               <th style={{ padding: 8 }}>Description</th>
               <th style={{ padding: 8 }}>Hours</th>
-              <th style={{ padding: 8 }}>Rate</th>
               <th style={{ padding: 8 }}>Amount</th>
               <th style={{ padding: 8 }}>Status</th>
               <th style={{ padding: 8, width: 40 }} />
@@ -218,7 +207,6 @@ export default function TimeTrackingPage() {
                   </span>
                 </td>
                 <td style={{ padding: 8 }}>{e.hours}h</td>
-                <td style={{ padding: 8 }}>${e.hourly_rate}/hr</td>
                 <td style={{ padding: 8, fontWeight: 600 }}>${e.amount.toFixed(2)}</td>
                 <td style={{ padding: 8 }}>
                   <span style={{

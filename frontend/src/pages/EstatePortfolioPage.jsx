@@ -7,6 +7,19 @@ import { Vault, Plus, Search, Filter, X } from 'lucide-react'
 
 const ESTATE_TYPES = ['Probate', 'Trust Administration', 'Estate Planning', 'Guardianship', 'Conservatorship', 'Small Estate']
 
+const ESTATE_TYPE_MAP = {
+  'Probate': 'probate',
+  'Trust Administration': 'trust_administration',
+  'Estate Planning': 'estate_planning',
+  'Guardianship': 'guardianship',
+  'Conservatorship': 'conservatorship',
+  'Small Estate': 'small_estate',
+}
+
+function toSnakeEstateType(display) {
+  return ESTATE_TYPE_MAP[display] || display.toLowerCase().replace(/\s+/g, '_')
+}
+
 const STATUS_OPTIONS = ['all', 'active', 'in_probate', 'draft', 'closed']
 
 function TypeBadge({ type }) {
@@ -57,9 +70,9 @@ export default function EstatePortfolioPage() {
     try {
       const payload = {
         estate_name: form.estate_name.trim(),
-        estate_type: form.estate_type || null,
+        estate_type: form.estate_type ? toSnakeEstateType(form.estate_type) : null,
         jurisdiction: form.jurisdiction || null,
-        gross_estate_value: form.gross_estate_value ? Number(form.gross_estate_value) : null,
+        gross_estate_value: form.gross_estate_value ? parseFloat(form.gross_estate_value) : null,
       }
       const created = await createEstate(payload)
       navigate(`/plugins/trust-estate/estates/${created.id}`)
