@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, DollarSign, CreditCard, Download } from 'lucide-react'
-import { getInvoice, updateInvoice, recordPayment, exportInvoice } from '../api'
+import { ArrowLeft, CreditCard, Download, Printer } from 'lucide-react'
+import { getInvoice, updateInvoice, recordPayment, exportInvoice, syncInvoiceToQBO } from '../api'
+
+const QBO_GREEN = '#2CA01C'
 
 const STATUS_COLORS = {
   draft: { bg: '#f3f4f6', color: '#374151' },
   sent: { bg: '#dbeafe', color: '#1e40af' },
+  invoiced: { bg: '#dbeafe', color: '#1e40af' },
   paid: { bg: '#d1fae5', color: '#065f46' },
   partially_paid: { bg: '#fef3c7', color: '#92400e' },
   overdue: { bg: '#fee2e2', color: '#991b1b' },
@@ -16,6 +19,7 @@ export default function InvoiceDetailPage() {
   const navigate = useNavigate()
   const [invoice, setInvoice] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
   const [showPayment, setShowPayment] = useState(false)
   const [paymentForm, setPaymentForm] = useState({
     amount: '',
@@ -80,6 +84,19 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  const handleSyncToQBO = async () => {
+    try {
+      setSyncing(true)
+      await syncInvoiceToQBO(id)
+      loadInvoice()
+    } catch (err) {
+      console.error('QBO sync failed', err)
+      alert('QBO sync failed. Make sure QuickBooks is connected in Admin → QuickBooks.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   if (loading) return <div style={{ padding: 24 }}>Loading...</div>
   if (!invoice) return <div style={{ padding: 24 }}>Invoice not found.</div>
 
@@ -109,15 +126,29 @@ export default function InvoiceDetailPage() {
             Issued {invoice.issue_date} · Due {invoice.due_date}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {(invoice.status === 'draft' || invoice.status === 'sent' || invoice.status === 'invoiced') && invoice.status !== 'paid' && (
+            <button
+              onClick={() => handleStatusChange(
+                invoice.status === 'draft' ? 'sent' : 'paid'
+              )}
+              style={{
+                padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+              }}
+            >
+              {invoice.status === 'draft' ? 'Mark Invoiced' : 'Mark Paid'}
+            </button>
+          )}
           <button
-            onClick={() => handleStatusChange(invoice.status === 'draft' ? 'sent' : 'paid')}
+            onClick={() => window.print()}
             style={{
+              display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
               border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
             }}
           >
-            {invoice.status === 'draft' ? 'Mark Sent' : invoice.status === 'sent' ? 'Mark Paid' : ''}
+            <Printer size={14} /> Print
           </button>
           <button
             onClick={() => handleExport('pdf')}
@@ -127,7 +158,34 @@ export default function InvoiceDetailPage() {
               border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
             }}
           >
-            <Download size={14} /> Export
+            <Download size={14} /> Export PDF
+          </button>
+          <button
+            onClick={handleSyncToQBO}
+            disabled={syncing}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '6px 14px', fontSize: 13, borderRadius: 6,
+              border: invoice.qbo_sync_status === 'synced' ? 'none' : '1px solid #d1d5db',
+              cursor: syncing ? 'wait' : 'pointer',
+              background: invoice.qbo_sync_status === 'synced' ? QBO_GREEN : '#fff',
+              color: invoice.qbo_sync_status === 'synced' ? '#fff' : '#374151',
+              opacity: syncing ? 0.7 : 1,
+            }}
+            title={invoice.qbo_sync_status === 'synced' ? `Synced to QBO (ID: ${invoice.qbo_invoice_id})` : 'Sync to QuickBooks Online'}
+          >
+            {/* QBO checkmark / sync icon */}
+            {invoice.qbo_sync_status === 'synced' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M4 12v-1a8 8 0 018-8 8 8 0 018 8v1" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <path d="M20 12l-2 2-2-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+            {syncing ? 'Syncing…' : invoice.qbo_sync_status === 'synced' ? 'Synced to QBO' : 'Sync to QBO'}
           </button>
         </div>
       </div>

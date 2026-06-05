@@ -778,6 +778,25 @@ export const recordPayment = (data) =>
 export const exportInvoice = (id, format = 'pdf') =>
   api.post(`/billing/invoices/${id}/export`, { format }, { responseType: 'blob' }).then(r => r.data)
 
+// ── QuickBooks Online ────────────────────────────────────────────────────────
+
+export const getQBOStatus = () =>
+  api.get('/integrations/qbo/status').then(r => r.data)
+export const connectQBO = () =>
+  api.get('/integrations/qbo/connect').then(r => r.data)
+export const disconnectQBO = () =>
+  api.post('/integrations/qbo/disconnect').then(r => r.data)
+export const getQBOItems = () =>
+  api.get('/integrations/qbo/items').then(r => r.data)
+export const getQBOMappings = () =>
+  api.get('/integrations/qbo/mappings').then(r => r.data)
+export const upsertQBOMapping = (data) =>
+  api.put('/integrations/qbo/mappings', data).then(r => r.data)
+export const syncInvoiceToQBO = (id) =>
+  api.post(`/integrations/qbo/sync/invoice/${id}`).then(r => r.data)
+export const syncAllToQBO = () =>
+  api.post('/integrations/qbo/sync/all').then(r => r.data)
+
 // ── Prompt Management (admin) ────────────────────────────────────────────────
 
 export const getPromptList = () =>

@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { FileText, Plus, Download, DollarSign } from 'lucide-react'
 import { getInvoices, generateInvoice, getMattersV2 } from '../api'
 
+const QBO_GREEN = '#2CA01C'
+
 const STATUS_COLORS = {
   draft: { bg: '#f3f4f6', color: '#374151' },
   sent: { bg: '#dbeafe', color: '#1e40af' },
+  invoiced: { bg: '#dbeafe', color: '#1e40af' },
   paid: { bg: '#d1fae5', color: '#065f46' },
   partially_paid: { bg: '#fef3c7', color: '#92400e' },
   overdue: { bg: '#fee2e2', color: '#991b1b' },
@@ -127,11 +130,13 @@ export default function InvoicesPage() {
               <th style={{ padding: 8 }}>Subtotal</th>
               <th style={{ padding: 8 }}>Total</th>
               <th style={{ padding: 8 }}>Status</th>
+              <th style={{ padding: 8, textAlign: 'center' }} title="QuickBooks sync status">QBO</th>
             </tr>
           </thead>
           <tbody>
             {invoices.map((inv) => {
               const cs = STATUS_COLORS[inv.status] || STATUS_COLORS.draft
+              const qboSynced = inv.qbo_sync_status === 'synced'
               return (
                 <tr
                   key={inv.id}
@@ -148,8 +153,18 @@ export default function InvoicesPage() {
                       fontSize: 11, padding: '2px 8px', borderRadius: 10,
                       background: cs.bg, color: cs.color,
                     }}>
-                      {inv.status.replace('_', ' ')}
+                      {inv.status === 'sent' ? 'invoiced' : inv.status.replace('_', ' ')}
                     </span>
+                  </td>
+                  <td style={{ padding: 8, textAlign: 'center' }}>
+                    <span
+                      title={qboSynced ? `Synced to QBO (ID: ${inv.qbo_invoice_id})` : `Not synced (${inv.qbo_sync_status || 'pending'})`}
+                      style={{
+                        display: 'inline-block',
+                        width: 10, height: 10, borderRadius: '50%',
+                        background: qboSynced ? QBO_GREEN : '#d1d5db',
+                      }}
+                    />
                   </td>
                 </tr>
               )

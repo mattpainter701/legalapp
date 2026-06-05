@@ -276,17 +276,41 @@ class QBOSyncService:
         )
         line_items = li_result.scalars().all()
 
+        # Pre-load item mappings for this tenant
+        from app.models.qbo import QBOItemMapping
+
+        mapping_result = await self.db.execute(
+            select(QBOItemMapping).where(QBOItemMapping.tenant_id == self.tenant_id)
+        )
+        item_mappings = {
+            (m.source_type, m.expense_category): (m.qbo_item_id, m.qbo_item_name)
+            for m in mapping_result.scalars().all()
+        }
+
+        def _item_ref(source_type: str, expense_category: str | None) -> dict | None:
+            key = (source_type, expense_category)
+            fallback_key = (source_type, None)
+            pair = item_mappings.get(key) or item_mappings.get(fallback_key)
+            if pair:
+                return {"value": pair[0], "name": pair[1]}
+            return None
+
         qbo_lines = []
         for li in line_items:
+            detail: dict = {
+                "UnitPrice": float(li.unit_price),
+                "Qty": float(li.quantity),
+            }
+            item_ref = _item_ref(li.source_type, None)
+            if item_ref:
+                detail["ItemRef"] = item_ref
+
             qbo_lines.append(
                 {
                     "Amount": float(li.amount),
                     "Description": li.description[:4000],
                     "DetailType": "SalesItemLineDetail",
-                    "SalesItemLineDetail": {
-                        "UnitPrice": float(li.unit_price),
-                        "Qty": float(li.quantity),
-                    },
+                    "SalesItemLineDetail": detail,
                 }
             )
 

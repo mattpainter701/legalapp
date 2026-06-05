@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     LITELLM_STANDARD_MODEL: str = "clarity-standard"
     LITELLM_PREMIUM_MODEL: str = "clarity-premium"
 
+    # QuickBooks Online OAuth2
+    QBO_CLIENT_ID: str = ""
+    QBO_CLIENT_SECRET: str = ""
+    QBO_REDIRECT_URI: str = ""       # e.g. https://yourdomain.com/api/integrations/qbo/callback
+    QBO_ENVIRONMENT: str = "sandbox"  # "sandbox" | "production"
+
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
