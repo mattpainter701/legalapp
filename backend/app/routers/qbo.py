@@ -22,11 +22,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
-from app.models.qbo import QBOIntegration
+from app.models.qbo import QBOIntegration, QBOItemMapping
 from app.schemas.qbo import (
     QBOIntegrationStatus,
     QBOIntegrationResponse,
     QBOIntegrationUpdate,
+    QBOItemOption,
+    QBOItemMappingResponse,
+    QBOItemMappingUpsert,
+    QBOSyncStatus,
 )
 from app.services.token_vault import encrypt_token, decrypt_token
 
@@ -401,3 +405,183 @@ async def qbo_disconnect(
     await db.commit()
 
     return {"status": "disconnected", "provider": "qbo"}
+
+
+# ── QBO Item catalogue ───────────────────────────────────────────────────────
+
+
+@router.get("/items")
+async def qbo_list_items(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[QBOItemOption]:
+    """Return all active Service-type Items from the connected QBO company."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
+    if not access_token:
+        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+
+    qbo = await _get_qbo_integration(db, str(user.tenant_id))
+    if not qbo or not qbo.qbo_realm_id:
+        raise HTTPException(status_code=400, detail="QBO realm ID not found")
+
+    sandbox = qbo.sandbox_mode
+    base = "https://sandbox-quickbooks.api.intuit.com" if sandbox else "https://quickbooks.api.intuit.com"
+    url = f"{base}/v3/company/{qbo.qbo_realm_id}/query"
+    query = "SELECT * FROM Item WHERE Type = 'Service' AND Active = true MAXRESULTS 200"
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            url,
+            params={"query": query},
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        )
+
+    if resp.status_code != 200:
+        logger.warning(f"QBO items fetch failed: {resp.status_code} {resp.text[:200]}")
+        raise HTTPException(status_code=502, detail="Failed to fetch QBO items")
+
+    items = resp.json().get("QueryResponse", {}).get("Item", [])
+    return [QBOItemOption(id=it["Id"], name=it["Name"]) for it in items]
+
+
+# ── Item Mappings ─────────────────────────────────────────────────────────────
+
+
+@router.get("/mappings")
+async def qbo_get_mappings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[QBOItemMappingResponse]:
+    """List all billing-type → QBO item mappings for this tenant."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    result = await db.execute(
+        select(QBOItemMapping).where(QBOItemMapping.tenant_id == user.tenant_id)
+    )
+    return [QBOItemMappingResponse.model_validate(m) for m in result.scalars().all()]
+
+
+@router.put("/mappings")
+async def qbo_upsert_mapping(
+    body: QBOItemMappingUpsert,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> QBOItemMappingResponse:
+    """Create or update a billing-type → QBO Item mapping."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    result = await db.execute(
+        select(QBOItemMapping).where(
+            QBOItemMapping.tenant_id == user.tenant_id,
+            QBOItemMapping.source_type == body.source_type,
+            QBOItemMapping.expense_category == body.expense_category,
+        )
+    )
+    mapping = result.scalar_one_or_none()
+
+    if mapping:
+        mapping.qbo_item_id = body.qbo_item_id
+        mapping.qbo_item_name = body.qbo_item_name
+    else:
+        mapping = QBOItemMapping(
+            tenant_id=user.tenant_id,
+            source_type=body.source_type,
+            expense_category=body.expense_category,
+            qbo_item_id=body.qbo_item_id,
+            qbo_item_name=body.qbo_item_name,
+        )
+        db.add(mapping)
+
+    await db.commit()
+    await db.refresh(mapping)
+    return QBOItemMappingResponse.model_validate(mapping)
+
+
+# ── Manual Sync ───────────────────────────────────────────────────────────────
+
+
+@router.post("/sync/invoice/{invoice_id}")
+async def qbo_sync_invoice(
+    invoice_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually push a single invoice to QBO."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
+    if not access_token:
+        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+
+    qbo = await _get_qbo_integration(db, str(user.tenant_id))
+    sandbox = qbo.sandbox_mode if qbo else True
+
+    from app.services.qbo_sync import QBOSyncService
+
+    svc = QBOSyncService(db, str(user.tenant_id), access_token, sandbox=sandbox)
+    result = await svc.sync_invoice_with_retry(invoice_id)
+
+    if result is None:
+        raise HTTPException(status_code=502, detail="QBO sync failed — check error logs")
+
+    return {"status": "synced", "invoice_id": invoice_id}
+
+
+@router.post("/sync/all")
+async def qbo_sync_all(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> QBOSyncStatus:
+    """Trigger a full sync of all pending invoices to QBO."""
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    await set_tenant_context(db, str(user.tenant_id))
+    access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
+    if not access_token:
+        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+
+    qbo = await _get_qbo_integration(db, str(user.tenant_id))
+    sandbox = qbo.sandbox_mode if qbo else True
+
+    from app.services.qbo_sync import QBOSyncService
+    from datetime import datetime, timezone
+
+    started_at = datetime.now(timezone.utc)
+    svc = QBOSyncService(db, str(user.tenant_id), access_token, sandbox=sandbox)
+    summary = await svc.sync_all()
+
+    completed_at = datetime.now(timezone.utc)
+    status = "success" if not summary["errors"] else (
+        "partial" if summary["invoices_synced"] > 0 else "failed"
+    )
+
+    if qbo:
+        qbo.last_sync_at = completed_at
+        qbo.last_sync_status = status
+        qbo.last_sync_error = "; ".join(summary["errors"][:3]) if summary["errors"] else None
+        await db.commit()
+
+    return QBOSyncStatus(
+        status=status,
+        invoices_synced=summary["invoices_synced"],
+        time_activities_synced=summary["time_activities_synced"],
+        errors=summary["errors"],
+        started_at=started_at,
+        completed_at=completed_at,
+    )

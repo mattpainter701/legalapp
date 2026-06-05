@@ -488,7 +488,7 @@ async def generate_invoice(
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(body.matter_id),
         invoice_number=invoice_number,
-        status="draft",
+        status="sent",
         issue_date=issue_date,
         due_date=due_date,
         subtotal=subtotal,
@@ -522,7 +522,7 @@ async def generate_invoice(
             )
             if entry:
                 entry.invoice_id = invoice.id
-                entry.status = "billed"
+                entry.status = "invoiced"
 
         # Link expenses to invoice
         if li_data["source_type"] == "expense":

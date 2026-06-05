@@ -1,4 +1,4 @@
-"""QBO (QuickBooks Online) integration model — per-tenant OAuth2 tokens."""
+"""QBO (QuickBooks Online) integration models — OAuth2 tokens and item mappings."""
 
 import uuid
 from datetime import datetime, timezone
@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -70,6 +71,62 @@ class QBOIntegration(Base):
         server_default="true",
         comment="True when connected to QBO sandbox, false for production",
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class QBOItemMapping(Base):
+    """Maps local billing source types to QuickBooks Online service Items.
+
+    Each row binds a (source_type, expense_category) pair to a QBO Item so
+    that synced invoices reference the correct income account in QBO.
+    """
+
+    __tablename__ = "qbo_item_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_type",
+            "expense_category",
+            name="uq_qbo_item_mappings_tenant_type_category",
+        ),
+        Index("idx_qbo_item_mappings_tenant_id", "tenant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="time_entry | expense | flat_fee | adjustment",
+    )
+    expense_category: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Sub-type for expense rows (filing_fee, travel, etc.)",
+    )
+    qbo_item_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="QBO Item.Id"
+    )
+    qbo_item_name: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

@@ -60,3 +60,31 @@ class QBOSyncStatus(BaseModel):
     errors: list[str] = []
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+
+
+class QBOItemOption(BaseModel):
+    """A single QBO Item (service type) available for mapping."""
+
+    id: str
+    name: str
+
+
+class QBOItemMappingResponse(BaseModel):
+    id: str
+    source_type: str
+    expense_category: Optional[str] = None
+    qbo_item_id: str
+    qbo_item_name: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class QBOItemMappingUpsert(BaseModel):
+    """Upsert a single billing-type → QBO Item mapping."""
+
+    source_type: str
+    expense_category: Optional[str] = None
+    qbo_item_id: str
+    qbo_item_name: str
