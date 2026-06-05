@@ -6,7 +6,8 @@ import {
   getMatterV2, updateMatterV2, getMatterTimeline, addMatterNote,
   getMatterBudgetV2, getMatterAssignments, addMatterAssignment,
   removeMatterAssignment, getMatterMemory, updateMatterMemory,
-  getAdminUsers, getPlugins,
+  getAdminUsers, getPlugins, getCommunications, createCommunication,
+  setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -17,6 +18,7 @@ function Icon({ d, size = 18, className = '' }) {
 }
 const Icons = {
   back: 'M19 12H5M12 5l-7 7 7 7',
+  arrowRight: 'M5 12h14M12 5l7 7-7 7',
   edit: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z',
   check: 'M20 6L9 17l-5-5',
   x: 'M18 6L6 18M6 6l12 12',
@@ -30,6 +32,9 @@ const Icons = {
   briefcase: 'M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16',
   save: 'M19 21H5a2 2 0 0 0-2-2V5a2 2 0 0 0 2-2h11l5 5v11a2 2 0 0 0-2 2zM17 21v-8H7v8M7 3v5h8',
   parties: 'M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z',
+  mail: 'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6',
+  dollar: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
+  messageSquare: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
 }
 
 // ── Small UI pieces ───────────────────────────────────────────────────────────
@@ -119,6 +124,22 @@ export default function MatterDetailPage() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [selectedRole, setSelectedRole] = useState('associate')
 
+  // Communications
+  const [communications, setCommunications] = useState([])
+  const [commsLoading, setCommsLoading] = useState(false)
+  const [showLogComm, setShowLogComm] = useState(false)
+  const [newComm, setNewComm] = useState({ direction: 'outbound', channel: 'email', subject: '', body: '' })
+  const [loggingComm, setLoggingComm] = useState(false)
+
+  // Billing
+  const [timeEntries, setTimeEntries] = useState([])
+  const [billingLoading, setBillingLoading] = useState(false)
+
+  // Chat
+  const [matterConvs, setMatterConvs] = useState([])
+  const [convLoading, setConvLoading] = useState(false)
+  const [startingConv, setStartingConv] = useState(false)
+
   // Memory
   const [memoryContent, setMemoryContent] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
@@ -154,6 +175,24 @@ export default function MatterDetailPage() {
     if (activeTab === 'team') {
       getMatterAssignments(id).then(setAssignments).catch(() => {})
       getAdminUsers().then(data => setAllUsers(Array.isArray(data) ? data : data.users || [])).catch(() => {})
+    }
+    if (activeTab === 'communications') {
+      setCommsLoading(true)
+      getCommunications({ matter_id: id }).then(data => {
+        setCommunications(Array.isArray(data) ? data : data.items || [])
+      }).catch(() => {}).finally(() => setCommsLoading(false))
+    }
+    if (activeTab === 'billing') {
+      setBillingLoading(true)
+      getMatterTimeEntries(id).then(data => {
+        setTimeEntries(Array.isArray(data) ? data : data.items || data.time_entries || [])
+      }).catch(() => {}).finally(() => setBillingLoading(false))
+    }
+    if (activeTab === 'chat') {
+      setConvLoading(true)
+      getConversations({ matter_id: id }).then(data => {
+        setMatterConvs(Array.isArray(data) ? data : [])
+      }).catch(() => {}).finally(() => setConvLoading(false))
     }
   }, [activeTab, id])
 
@@ -203,6 +242,34 @@ export default function MatterDetailPage() {
     } catch { /* silent */ }
   }
 
+  const handleToggleActive = async (assignmentId, currentlyActive) => {
+    try {
+      await setAssignmentActive(id, assignmentId, !currentlyActive)
+      setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, is_active_working: !currentlyActive } : a))
+    } catch { /* silent */ }
+  }
+
+  const handleLogComm = async () => {
+    if (!newComm.subject.trim()) return
+    setLoggingComm(true)
+    try {
+      await createCommunication({ ...newComm, matter_id: id })
+      setNewComm({ direction: 'outbound', channel: 'email', subject: '', body: '' })
+      setShowLogComm(false)
+      getCommunications({ matter_id: id }).then(data => {
+        setCommunications(Array.isArray(data) ? data : data.items || [])
+      }).catch(() => {})
+    } catch { /* silent */ } finally { setLoggingComm(false) }
+  }
+
+  const handleStartChat = async () => {
+    setStartingConv(true)
+    try {
+      const conv = await createConversation({ matter_id: id, title: `Chat: ${matter.matter_name}` })
+      navigate('/chat', { state: { conversationId: conv.id } })
+    } catch { /* silent */ } finally { setStartingConv(false) }
+  }
+
   const handleSaveMemory = async () => {
     setMemorySaving(true)
     try {
@@ -228,7 +295,7 @@ export default function MatterDetailPage() {
         <div className="text-center bg-brand-surface p-10 rounded-2xl border border-brand-line shadow-sm max-w-md w-full mx-4">
           <Icon d={Icons.briefcase} size={32} className="mx-auto text-brand-rose mb-4" />
           <p className="text-brand-ink font-serif font-bold text-xl mb-4">{error || 'Matter not found.'}</p>
-          <button onClick={() => navigate('/plugins/litigation/matters')} className="bg-brand-ink text-white px-5 py-2.5 rounded-lg font-sans font-medium text-sm hover:bg-brand-ink-2 w-full">
+          <button onClick={() => navigate('/matters')} className="bg-brand-ink text-white px-5 py-2.5 rounded-lg font-sans font-medium text-sm hover:bg-brand-ink-2 w-full">
             Back to Portfolio
           </button>
         </div>
@@ -244,6 +311,9 @@ export default function MatterDetailPage() {
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'documents', label: 'Documents', icon: Icons.file },
     { key: 'parties', label: 'Parties', icon: Icons.parties },
+    { key: 'communications', label: 'Communications', icon: Icons.mail },
+    { key: 'billing', label: 'Billing', icon: Icons.dollar },
+    { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'plugin', label: 'Plugin', icon: Icons.briefcase },
     { key: 'memory', label: 'Memory', icon: Icons.brain },
   ]
@@ -266,7 +336,7 @@ export default function MatterDetailPage() {
       {/* Topbar */}
       <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate('/plugins/litigation/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors">
+          <button onClick={() => navigate('/matters')} className="flex items-center gap-2 text-brand-ink-2 hover:text-brand-ink text-sm font-sans font-medium transition-colors">
             <Icon d={Icons.back} size={16} /> Matter Portfolio
           </button>
           <div className="h-4 w-px bg-brand-line" />
@@ -450,11 +520,17 @@ export default function MatterDetailPage() {
                     <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>
                   )}
                 </Field>
+                <Field label="Partner Attorney">
+                  {matter.partner_attorney_name && (
+                    <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>
+                  )}
+                </Field>
                 <Field label="Team">
                   {matter.assignments?.length > 0 ? (
                     <div className="flex flex-wrap gap-1.5 mt-0.5">
                       {matter.assignments.map(a => (
-                        <span key={a.id} className="inline-flex items-center gap-1 bg-brand-bg-soft border border-brand-line rounded-lg px-2.5 py-1 text-[12px] font-sans text-brand-ink-2">
+                        <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
+                          {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
                           {a.user_name}
                           {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
                         </span>
@@ -552,10 +628,9 @@ export default function MatterDetailPage() {
           <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
             <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
               <h2 className="font-serif font-bold text-xl text-brand-ink">Team Assignments</h2>
-              <p className="text-[13px] text-brand-muted font-sans mt-0.5">Users assigned for visibility and tracking on this matter.</p>
+              <p className="text-[13px] text-brand-muted font-sans mt-0.5">Users assigned for visibility and tracking on this matter. Green dot = actively working now.</p>
             </div>
             <div className="p-6 space-y-6">
-              {/* Current assignments */}
               {assignments.length === 0 ? (
                 <p className="text-brand-muted text-sm font-sans text-center py-6">No team members assigned.</p>
               ) : (
@@ -563,24 +638,43 @@ export default function MatterDetailPage() {
                   {assignments.map(a => (
                     <div key={a.id} className="flex items-center justify-between bg-brand-bg-soft rounded-xl px-4 py-3 border border-brand-line">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-brand-accent/10 flex items-center justify-center">
+                        <div className="relative w-8 h-8 rounded-full bg-brand-accent/10 flex items-center justify-center shrink-0">
                           <Icon d={Icons.user} size={15} className="text-brand-accent" />
+                          {a.is_active_working && (
+                            <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-brand-green rounded-full border-2 border-brand-surface" />
+                          )}
                         </div>
                         <div>
                           <div className="text-[14px] font-semibold text-brand-ink font-sans">{a.user_name}</div>
                           <div className="text-[12px] text-brand-muted font-sans capitalize">{a.role?.replace(/_/g, ' ')}</div>
+                          {a.is_active_working && (
+                            <div className="text-[11px] text-brand-green font-semibold mt-0.5">Actively working</div>
+                          )}
                         </div>
                         {a.is_primary && (
                           <span className="text-[11px] font-bold text-brand-accent bg-brand-accent/10 px-2 py-0.5 rounded border border-brand-accent/20">Lead</span>
                         )}
                       </div>
-                      <button
-                        onClick={() => handleRemoveAssignment(a.id)}
-                        className="text-brand-muted hover:text-brand-rose transition-colors p-1.5 rounded-lg hover:bg-brand-rose/10"
-                        title="Remove"
-                      >
-                        <Icon d={Icons.trash} size={15} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleActive(a.id, a.is_active_working)}
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded border transition-colors ${
+                            a.is_active_working
+                              ? 'bg-brand-green/10 text-brand-green border-brand-green/30 hover:bg-brand-green/20'
+                              : 'bg-brand-bg text-brand-muted border-brand-line hover:text-brand-green hover:border-brand-green/30'
+                          }`}
+                          title={a.is_active_working ? 'Mark as inactive' : 'Mark as actively working'}
+                        >
+                          {a.is_active_working ? 'Active' : 'Set Active'}
+                        </button>
+                        <button
+                          onClick={() => handleRemoveAssignment(a.id)}
+                          className="text-brand-muted hover:text-brand-rose transition-colors p-1.5 rounded-lg hover:bg-brand-rose/10"
+                          title="Remove"
+                        >
+                          <Icon d={Icons.trash} size={15} />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -625,6 +719,231 @@ export default function MatterDetailPage() {
 
         {/* ── Parties Tab ──────────────────────────────────────────────────────── */}
         {activeTab === 'parties' && <MatterPartiesTab matterId={id} />}
+
+        {/* ── Communications Tab ───────────────────────────────────────────────── */}
+        {activeTab === 'communications' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.mail} size={18} className="text-brand-accent" /> Communications
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Emails, calls, and correspondence linked to this matter.</p>
+              </div>
+              <button onClick={() => setShowLogComm(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
+                <Icon d={Icons.plus} size={15} /> Log Communication
+              </button>
+            </div>
+
+            {showLogComm && (
+              <div className="p-6 bg-brand-bg border-b border-brand-line">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className={labelCls}>Direction</label>
+                    <select value={newComm.direction} onChange={e => setNewComm(p => ({ ...p, direction: e.target.value }))} className={inputCls}>
+                      <option value="outbound">Outbound</option>
+                      <option value="inbound">Inbound</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Channel</label>
+                    <select value={newComm.channel} onChange={e => setNewComm(p => ({ ...p, channel: e.target.value }))} className={inputCls}>
+                      {['email', 'call', 'letter', 'meeting', 'sms', 'portal', 'other'].map(c => (
+                        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Subject</label>
+                    <input type="text" value={newComm.subject} onChange={e => setNewComm(p => ({ ...p, subject: e.target.value }))} placeholder="Subject…" className={inputCls} />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className={labelCls}>Notes / Body</label>
+                    <textarea value={newComm.body} onChange={e => setNewComm(p => ({ ...p, body: e.target.value }))} rows={3} placeholder="Optional notes…" className={`${inputCls} resize-none`} />
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end">
+                  <button onClick={() => setShowLogComm(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
+                  <button onClick={handleLogComm} disabled={loggingComm || !newComm.subject.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                    {loggingComm ? 'Saving…' : 'Log Communication'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="p-6">
+              {commsLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : communications.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.mail} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No communications logged</p>
+                  <p className="text-brand-muted text-sm font-sans">Log emails, calls, and meetings related to this matter.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {communications.map(c => (
+                    <div key={c.id} className="flex items-start gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-line-2 transition-colors">
+                      <span className={`shrink-0 mt-0.5 px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide border ${
+                        c.direction === 'inbound' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-brand-green/10 text-brand-green border-brand-green/20'
+                      }`}>
+                        {c.direction}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[12px] font-semibold text-brand-muted uppercase tracking-wide">{c.channel}</span>
+                          <span className="text-[12px] text-brand-muted">·</span>
+                          <span className="text-[12px] text-brand-muted font-sans">
+                            {c.occurred_at ? format(parseISO(c.occurred_at), 'MMM d, yyyy h:mm a') : ''}
+                          </span>
+                        </div>
+                        <div className="text-[14px] font-semibold text-brand-ink font-sans">{c.subject}</div>
+                        {c.body && <div className="text-[13px] text-brand-muted font-sans mt-1 line-clamp-2">{c.body}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Billing Tab ──────────────────────────────────────────────────────── */}
+        {activeTab === 'billing' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.dollar} size={18} className="text-brand-accent" /> Billing
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time entries and billable work logged against this matter.</p>
+              </div>
+              <button onClick={() => navigate('/time-tracking')} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
+                <Icon d={Icons.plus} size={15} /> Log Time
+              </button>
+            </div>
+            <div className="p-6">
+              {billingLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : timeEntries.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.dollar} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No time entries</p>
+                  <p className="text-brand-muted text-sm font-sans mb-4">Log time against this matter from the Time Tracking section.</p>
+                  <button onClick={() => navigate('/time-tracking')} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2">
+                    Go to Time Tracking
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Hours</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">
+                        {timeEntries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0).toFixed(1)}
+                      </div>
+                    </div>
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Billed</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">
+                        ${timeEntries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Entries</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">{timeEntries.length}</div>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-brand-line">
+                    <table className="w-full text-[13px] font-sans">
+                      <thead className="bg-brand-bg-soft border-b border-brand-line">
+                        <tr>
+                          {['Date', 'Description', 'User', 'Hours', 'Amount', 'Status'].map(h => (
+                            <th key={h} className="text-left px-4 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-brand-line/50">
+                        {timeEntries.map(e => (
+                          <tr key={e.id} className="hover:bg-brand-bg-soft/40 transition-colors">
+                            <td className="px-4 py-3 text-brand-muted whitespace-nowrap">{e.date ? format(parseISO(e.date), 'MMM d, yyyy') : '—'}</td>
+                            <td className="px-4 py-3 text-brand-ink max-w-xs truncate">{e.description || '—'}</td>
+                            <td className="px-4 py-3 text-brand-muted">{e.user_name || '—'}</td>
+                            <td className="px-4 py-3 text-brand-ink font-mono">{e.hours}</td>
+                            <td className="px-4 py-3 text-brand-ink font-mono">{e.amount ? `$${Number(e.amount).toLocaleString()}` : '—'}</td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase border ${
+                                e.status === 'invoiced' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' :
+                                e.status === 'approved' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                'bg-brand-bg-soft text-brand-muted border-brand-line'
+                              }`}>
+                                {e.status || 'draft'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Chat Tab ─────────────────────────────────────────────────────────── */}
+        {activeTab === 'chat' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.messageSquare} size={18} className="text-brand-accent" /> Matter Chat
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI conversations scoped to this matter's context and documents.</p>
+              </div>
+              <button
+                onClick={handleStartChat}
+                disabled={startingConv}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-colors shadow-sm disabled:opacity-50"
+              >
+                <Icon d={Icons.plus} size={15} /> {startingConv ? 'Starting…' : 'Start New Chat'}
+              </button>
+            </div>
+            <div className="p-6">
+              {convLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : matterConvs.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.messageSquare} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No conversations yet</p>
+                  <p className="text-brand-muted text-sm font-sans mb-4">Start an AI chat with this matter loaded as context — documents, notes, memory, and team info.</p>
+                  <button onClick={handleStartChat} disabled={startingConv} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                    {startingConv ? 'Starting…' : 'Start Chat About This Matter'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {matterConvs.map(conv => (
+                    <div
+                      key={conv.id}
+                      onClick={() => navigate('/chat', { state: { conversationId: conv.id } })}
+                      className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group"
+                    >
+                      <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
+                        <div className="text-[12px] text-brand-muted font-sans">
+                          {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
+                        </div>
+                      </div>
+                      <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Plugin Tab ──────────────────────────────────────────────────────── */}
         {activeTab === 'plugin' && (

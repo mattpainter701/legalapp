@@ -1,54 +1,40 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
-import { getMattersV2 } from '../api'
+import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
 
-function PlusIcon({ size = 16 }) {
+function Icon({ d, size = 16, className = '' }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d={d} />
     </svg>
   )
 }
-
-function SearchIcon({ size = 16 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  )
-}
-
-function FilterIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-    </svg>
-  )
-}
-
-function BriefcaseIcon({ size = 24, className = '' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-    </svg>
-  )
+const Icons = {
+  plus: 'M12 5v14M5 12h14',
+  search: 'M21 21l-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0',
+  filter: 'M22 3H2l8 9.46V19l4 2v-8.54L22 3z',
+  briefcase: 'M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16',
+  clock: 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zm0-14v4l3 3',
+  user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
+  check: 'M20 6L9 17l-5-5',
 }
 
 const STATUS_COLORS = {
   open: 'bg-blue-50 text-blue-700 border-blue-200',
-  active: 'bg-brand-green/10 text-brand-green border-brand-green/20',
-  pending: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
-  threatened: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
-  closed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
-  settled: 'bg-brand-bg-soft text-brand-muted border-brand-line',
-  dismissed: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+  active: 'bg-green-50 text-green-700 border-green-200',
+  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  threatened: 'bg-amber-50 text-amber-700 border-amber-200',
+  closed: 'bg-gray-100 text-gray-500 border-gray-200',
+  settled: 'bg-gray-100 text-gray-500 border-gray-200',
+  dismissed: 'bg-gray-100 text-gray-500 border-gray-200',
 }
 
 function StatusBadge({ status }) {
-  const cls = STATUS_COLORS[status?.toLowerCase()] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
+  const cls = STATUS_COLORS[status?.toLowerCase()] || 'bg-gray-100 text-gray-500 border-gray-200'
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[12px] font-sans font-semibold capitalize border ${cls}`}>
       {status || '—'}
@@ -58,10 +44,10 @@ function StatusBadge({ status }) {
 
 function RiskBadge({ level }) {
   const cfg = {
-    critical: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
-    high: 'bg-orange-100 text-orange-800 border-orange-200',
-    medium: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
-    low: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+    critical: 'bg-red-50 text-red-700 border-red-200',
+    high: 'bg-orange-50 text-orange-700 border-orange-200',
+    medium: 'bg-amber-50 text-amber-700 border-amber-200',
+    low: 'bg-green-50 text-green-700 border-green-200',
   }[level?.toLowerCase()] || null
   if (!cfg) return <span className="text-brand-muted text-[13px] font-sans">—</span>
   return (
@@ -71,10 +57,80 @@ function RiskBadge({ level }) {
   )
 }
 
+function DeadlineBadge({ label }) {
+  if (!label) return null
+  const isOverdue = label.includes('overdue')
+  const isToday = label === 'Due today'
+  const isSoon = label.startsWith('Due in')
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border ${
+      isOverdue ? 'bg-red-50 text-red-700 border-red-200' :
+      isToday ? 'bg-amber-50 text-amber-700 border-amber-200' :
+      isSoon ? 'bg-blue-50 text-blue-700 border-blue-200' :
+      'bg-gray-100 text-gray-500 border-gray-200'
+    }`}>
+      <Icon d={Icons.clock} size={11} />
+      {label}
+    </span>
+  )
+}
+
 const STATUS_OPTIONS = ['all', 'open', 'active', 'pending', 'closed']
+
+// ── My Matters row ────────────────────────────────────────────────────────────
+function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
+  const isToggling = togglingId === m.my_assignment_id
+  return (
+    <div
+      className="flex items-start gap-4 px-5 py-4 hover:bg-brand-bg-soft cursor-pointer transition-colors group border-b border-brand-line last:border-0"
+      onClick={() => onNavigate(m.id)}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 mb-1">
+          <span className="font-semibold text-brand-ink font-sans text-[14px] truncate">{m.matter_name}</span>
+          <StatusBadge status={m.status} />
+          <RiskBadge level={m.risk_level} />
+          <DeadlineBadge label={m.overdue_deadline_label} />
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[12px] text-brand-muted font-sans">
+          {m.client_name && <span>Client: <span className="text-brand-ink-2 font-medium">{m.client_name}</span></span>}
+          {m.attorney_of_record_name && <span>Attorney: <span className="text-brand-ink-2 font-medium">{m.attorney_of_record_name}</span></span>}
+          {m.practice_area && <span className="text-brand-accent font-medium">{m.practice_area}</span>}
+          <span className="capitalize text-brand-muted">Role: <span className="text-brand-ink-2">{m.my_role?.replace(/_/g, ' ')}</span></span>
+        </div>
+        {m.active_workers?.length > 0 && (
+          <div className="mt-1 flex items-center gap-1 text-[11px] text-brand-muted font-sans">
+            <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+            <span>{m.active_workers.join(', ')} {m.active_workers.length === 1 ? 'is' : 'are'} working on this</span>
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
+          disabled={isToggling}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+            m.is_active_working
+              ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+              : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
+          } ${isToggling ? 'opacity-50 cursor-wait' : ''}`}
+          title={m.is_active_working ? "Mark as not working" : "Mark as actively working"}
+        >
+          {m.is_active_working
+            ? <><Icon d={Icons.activity} size={12} className="text-green-600" /> Active</>
+            : <><Icon d={Icons.activity} size={12} /> Set Active</>
+          }
+        </button>
+        <span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+      </div>
+    </div>
+  )
+}
 
 export default function MatterPortfolioPage() {
   const navigate = useNavigate()
+  const [myMatters, setMyMatters] = useState([])
+  const [myLoading, setMyLoading] = useState(true)
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -82,6 +138,15 @@ export default function MatterPortfolioPage() {
   const [practiceFilter, setPracticeFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [togglingId, setTogglingId] = useState(null)
+
+  const loadMyMatters = () => {
+    setMyLoading(true)
+    getMyMatters()
+      .then(data => setMyMatters(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setMyLoading(false))
+  }
 
   const loadMatters = () => {
     setLoading(true)
@@ -91,7 +156,21 @@ export default function MatterPortfolioPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { loadMatters() }, [])
+  useEffect(() => {
+    loadMyMatters()
+    loadMatters()
+  }, [])
+
+  const handleToggleActive = async (assignmentId, matterId, active) => {
+    setTogglingId(assignmentId)
+    try {
+      await setAssignmentActive(matterId, assignmentId, active)
+      setMyMatters(prev => prev.map(m =>
+        m.my_assignment_id === assignmentId ? { ...m, is_active_working: active } : m
+      ))
+    } catch { /* silent */ }
+    finally { setTogglingId(null) }
+  }
 
   const practiceAreas = useMemo(() => {
     const set = new Set(matters.map(m => m.practice_area).filter(Boolean))
@@ -128,42 +207,77 @@ export default function MatterPortfolioPage() {
       {/* Top nav */}
       <div className="bg-brand-surface border-b border-brand-line px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
-          <BriefcaseIcon size={18} className="text-brand-accent" />
-          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight">Matter Portfolio</span>
+          <Icon d={Icons.briefcase} size={18} className="text-brand-accent" />
+          <span className="font-serif font-bold text-lg text-brand-ink tracking-tight">Matters</span>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px] active:translate-y-0"
         >
-          <PlusIcon size={15} />
+          <Icon d={Icons.plus} size={15} />
           New Matter
         </button>
       </div>
 
       <div className="max-w-[1400px] mx-auto px-8 py-10">
-        {/* Header */}
-        <div className="mb-10">
-          <h1 className="font-serif text-4xl font-bold text-brand-ink tracking-tight mb-2">Matter Portfolio</h1>
-          <p className="text-brand-ink-2 text-[15px] font-sans">
-            {matters.length} matter{matters.length !== 1 ? 's' : ''} tracked
+
+        {/* ── My Matters ─────────────────────────────────────────────────────── */}
+        <div className="mb-12">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-serif font-bold text-2xl text-brand-ink">My Matters</h2>
+            <span className="text-[13px] text-brand-muted font-sans">
+              {myMatters.length} assigned to you
+            </span>
+          </div>
+
+          {myLoading ? (
+            <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 flex justify-center">
+              <div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : myMatters.length === 0 ? (
+            <div className="bg-brand-surface border border-brand-line rounded-2xl p-10 text-center">
+              <Icon d={Icons.briefcase} size={32} className="mx-auto text-brand-line-2 mb-3" />
+              <p className="font-serif font-bold text-brand-ink mb-1">No matters assigned to you</p>
+              <p className="text-brand-muted text-sm font-sans">Matters you're assigned to will appear here, sorted by deadline.</p>
+            </div>
+          ) : (
+            <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+              {myMatters.map(m => (
+                <MyMatterRow
+                  key={m.id}
+                  m={m}
+                  onNavigate={id => navigate(`/matters/${id}`)}
+                  onToggleActive={handleToggleActive}
+                  togglingId={togglingId}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Portfolio Header ────────────────────────────────────────────────── */}
+        <div className="mb-6">
+          <h2 className="font-serif font-bold text-2xl text-brand-ink mb-1">All Matters</h2>
+          <p className="text-brand-ink-2 text-[14px] font-sans">
+            {matters.length} matter{matters.length !== 1 ? 's' : ''} in portfolio
           </p>
         </div>
 
         {error && (
-          <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-xl px-5 py-4 mb-8 text-brand-rose text-sm font-sans">
+          <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 mb-6 text-red-700 text-sm font-sans">
             {error}
           </div>
         )}
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-10">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
           {[
             { label: 'Total', value: stats.total, dot: 'bg-brand-ink' },
             { label: 'Open', value: stats.open, dot: 'bg-blue-500' },
-            { label: 'Active', value: stats.active, dot: 'bg-brand-green' },
-            { label: 'Pending', value: stats.pending, dot: 'bg-brand-amber' },
-            { label: 'Closed', value: stats.closed, dot: 'bg-brand-muted' },
-            { label: 'Critical Risk', value: stats.critical, dot: 'bg-brand-rose' },
+            { label: 'Active', value: stats.active, dot: 'bg-green-500' },
+            { label: 'Pending', value: stats.pending, dot: 'bg-amber-500' },
+            { label: 'Closed', value: stats.closed, dot: 'bg-gray-400' },
+            { label: 'Critical Risk', value: stats.critical, dot: 'bg-red-500' },
           ].map((s, i) => (
             <div key={i} className="bg-brand-surface border border-brand-line rounded-2xl p-5 hover:border-brand-line-2 transition-colors">
               <div className="flex items-center gap-2 mb-3">
@@ -179,7 +293,7 @@ export default function MatterPortfolioPage() {
         <div className="bg-brand-surface border border-brand-line rounded-2xl p-4 mb-6 flex flex-wrap gap-4 items-center shadow-sm">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1">
-              <FilterIcon size={14} className="text-brand-muted" />
+              <Icon d={Icons.filter} size={14} className="text-brand-muted" />
               <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
@@ -193,7 +307,7 @@ export default function MatterPortfolioPage() {
 
             {practiceAreas.length > 0 && (
               <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1">
-                <FilterIcon size={14} className="text-brand-muted" />
+                <Icon d={Icons.filter} size={14} className="text-brand-muted" />
                 <select
                   value={practiceFilter}
                   onChange={e => setPracticeFilter(e.target.value)}
@@ -207,7 +321,7 @@ export default function MatterPortfolioPage() {
           </div>
 
           <div className="flex-1 min-w-64 relative">
-            <SearchIcon size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-muted" />
+            <Icon d={Icons.search} size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-muted" />
             <input
               type="text"
               value={search}
@@ -225,14 +339,14 @@ export default function MatterPortfolioPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm">
-            <BriefcaseIcon size={48} className="mx-auto text-brand-line-2 mb-4" />
+            <Icon d={Icons.briefcase} size={48} className="mx-auto text-brand-line-2 mb-4" />
             <h3 className="text-lg font-serif font-bold text-brand-ink mb-2">No matters found</h3>
             <p className="text-brand-ink-2 font-sans text-sm mb-6">Adjust filters or open your first matter.</p>
             <button
               onClick={() => setShowCreate(true)}
               className="inline-flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm"
             >
-              <PlusIcon size={15} /> Open First Matter
+              <Icon d={Icons.plus} size={15} /> Open First Matter
             </button>
           </div>
         ) : (
@@ -256,7 +370,7 @@ export default function MatterPortfolioPage() {
                     <tr
                       key={m.id}
                       className="hover:bg-brand-bg-soft cursor-pointer transition-colors group"
-                      onClick={() => navigate(`/plugins/litigation/matters/${m.id}`)}
+                      onClick={() => navigate(`/matters/${m.id}`)}
                     >
                       <td className="px-5 py-4 pl-6 max-w-xs">
                         <div className="font-semibold text-brand-ink font-sans text-[14px] truncate">{m.matter_name || '—'}</div>
@@ -299,7 +413,7 @@ export default function MatterPortfolioPage() {
         onClose={() => setShowCreate(false)}
         onCreated={m => {
           setMatters(prev => [m, ...prev])
-          navigate(`/plugins/litigation/matters/${m.id}`)
+          navigate(`/matters/${m.id}`)
         }}
       />
     </div>

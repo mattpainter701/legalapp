@@ -35,6 +35,7 @@ from app.schemas.matter import (
     MatterResponse,
     MatterStats,
     MatterSummary,
+    MatterSummaryMyMatters,
     MatterUpdate,
     RetainerCreate,
     RetainerDrawdownRequest,
@@ -61,6 +62,7 @@ async def _get_matter_or_404(
             selectinload(Matter.assignments).selectinload(MatterAssignment.user),
             selectinload(Matter.client),
             selectinload(Matter.attorney_of_record),
+            selectinload(Matter.partner_attorney),
         )
         .where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     )
@@ -149,6 +151,10 @@ def _matter_to_response(
     if matter.attorney_of_record:
         attorney_name = getattr(matter.attorney_of_record, "full_name", None)
 
+    partner_attorney_name = None
+    if matter.partner_attorney:
+        partner_attorney_name = getattr(matter.partner_attorney, "full_name", None)
+
     assignments = []
     for a in matter.assignments:
         user_name = a.user.full_name if a.user else "Unknown"
@@ -159,6 +165,7 @@ def _matter_to_response(
                 user_name=user_name,
                 role=a.role,
                 is_primary=a.is_primary,
+                is_active_working=a.is_active_working,
                 assigned_at=a.assigned_at,
             )
         )
@@ -201,6 +208,12 @@ def _matter_to_response(
             str(matter.attorney_of_record_id) if matter.attorney_of_record_id else None
         ),
         attorney_of_record_name=attorney_name,
+        partner_attorney_id=(
+            str(matter.partner_attorney_id) if matter.partner_attorney_id else None
+        ),
+        partner_attorney_name=partner_attorney_name,
+        retention_until=matter.retention_until,
+        archived_at=matter.archived_at,
         budget_amount=matter.budget_amount,
         budget_currency=matter.budget_currency,
         budget_notification_threshold=matter.budget_notification_threshold,
@@ -384,6 +397,19 @@ async def create_matter(
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid attorney_of_record_id")
 
+    partner_attorney_uuid = None
+    if body.partner_attorney_id:
+        try:
+            partner_attorney_uuid = uuid.UUID(body.partner_attorney_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid partner_attorney_id")
+
+    # Default retention: 7 years from today
+    from datetime import date as date_type, timedelta
+    retention_until = body.key_dates and body.key_dates.get("retention_until")
+    if not retention_until:
+        retention_until = (date_type.today() + timedelta(days=365 * 7))
+
     matter = Matter(
         tenant_id=tenant_id,
         user_id=user.id,
@@ -413,6 +439,8 @@ async def create_matter(
             uuid.UUID(body.client_contact_id) if body.client_contact_id else None
         ),
         attorney_of_record_id=attorney_of_record_uuid,
+        partner_attorney_id=partner_attorney_uuid,
+        retention_until=retention_until,
         memory_content=body.memory_content,
         primary_plugin=_validate_primary_plugin(body.primary_plugin),
         plugin_workflow_state=body.plugin_workflow_state,
@@ -518,12 +546,12 @@ async def create_matter(
     return _matter_to_response(matter, budget)
 
 
-@router.get("/my", response_model=list[MatterSummary])
+@router.get("/my", response_model=list[MatterSummaryMyMatters])
 async def get_my_matters(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get matters assigned to the current user."""
+    """Get matters assigned to the current user, sorted by deadline, role-aware."""
     user = await get_current_user(request, db)
     tenant_id = user.tenant_id
 
@@ -536,6 +564,7 @@ async def get_my_matters(
         )
         .where(
             Matter.tenant_id == tenant_id,
+            Matter.is_closed.is_(False),
             Matter.id.in_(
                 select(MatterAssignment.matter_id).where(
                     MatterAssignment.user_id == user.id,
@@ -543,12 +572,14 @@ async def get_my_matters(
                 )
             ),
         )
-        .order_by(Matter.updated_at.desc())
-        .limit(50)
+        .limit(100)
     )
     result = await db.execute(q)
     matters = result.unique().scalars().all()
 
+    from datetime import date as date_type, timedelta
+
+    today = date_type.today()
     items = []
     for m in matters:
         client_name = getattr(m.client, "display_name", None) if m.client else None
@@ -560,8 +591,49 @@ async def get_my_matters(
         assigned_to = [
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
+
+        # Find current user's assignment row
+        my_assignment = next(
+            (a for a in m.assignments if a.user_id == user.id), None
+        )
+        my_role = my_assignment.role if my_assignment else "observer"
+        my_assignment_id = str(my_assignment.id) if my_assignment else ""
+        is_active_working = my_assignment.is_active_working if my_assignment else False
+
+        # Other active workers on this matter
+        active_workers = [
+            a.user.full_name
+            for a in m.assignments
+            if a.is_active_working and a.user_id != user.id and a.user and a.user.full_name
+        ]
+
+        # Next deadline from key_dates
+        next_deadline = None
+        overdue_label = None
+        if m.key_dates and isinstance(m.key_dates, dict):
+            dates = []
+            for v in m.key_dates.values():
+                if v:
+                    try:
+                        d = date_type.fromisoformat(str(v)[:10])
+                        dates.append(d)
+                    except (ValueError, TypeError):
+                        pass
+            if dates:
+                next_d = min(dates)
+                next_deadline = datetime.combine(
+                    next_d, datetime.min.time(), tzinfo=timezone.utc
+                )
+                delta = (next_d - today).days
+                if delta < 0:
+                    overdue_label = f"{abs(delta)} day{'s' if abs(delta) != 1 else ''} overdue"
+                elif delta == 0:
+                    overdue_label = "Due today"
+                elif delta <= 7:
+                    overdue_label = f"Due in {delta} day{'s' if delta != 1 else ''}"
+
         items.append(
-            MatterSummary(
+            MatterSummaryMyMatters(
                 id=str(m.id),
                 slug=m.slug,
                 matter_name=m.matter_name,
@@ -578,11 +650,19 @@ async def get_my_matters(
                 budget_amount=m.budget_amount,
                 total_billed=Decimal("0"),
                 budget_utilization_pct=None,
-                is_overdue=False,
-                next_deadline=None,
+                is_overdue=overdue_label is not None and "overdue" in overdue_label,
+                next_deadline=next_deadline,
                 created_at=m.created_at,
+                my_role=my_role,
+                my_assignment_id=my_assignment_id,
+                is_active_working=is_active_working,
+                active_workers=active_workers,
+                overdue_deadline_label=overdue_label,
             )
         )
+
+    # Sort by next_deadline ascending (nulls last)
+    items.sort(key=lambda x: (x.next_deadline is None, x.next_deadline or datetime.max.replace(tzinfo=timezone.utc)))
     return items
 
 
@@ -723,6 +803,17 @@ async def update_matter(
         aid = update_data.pop("attorney_of_record_id")
         matter.attorney_of_record_id = uuid.UUID(aid) if aid else None
 
+    if "partner_attorney_id" in update_data:
+        paid = update_data.pop("partner_attorney_id")
+        matter.partner_attorney_id = uuid.UUID(paid) if paid else None
+
+    if "is_archived" in update_data:
+        is_archived = update_data.pop("is_archived")
+        if is_archived and not matter.archived_at:
+            matter.archived_at = datetime.now(timezone.utc)
+        elif not is_archived:
+            matter.archived_at = None
+
     if "primary_plugin" in update_data:
         matter.primary_plugin = _validate_primary_plugin(
             update_data.pop("primary_plugin")
@@ -804,6 +895,7 @@ async def list_assignments(
             user_name=a.user.full_name if a.user else "Unknown",
             role=a.role,
             is_primary=a.is_primary,
+            is_active_working=a.is_active_working,
             assigned_at=a.assigned_at,
         )
         for a in assignments
@@ -860,6 +952,49 @@ async def add_assignment(
         user_name=assignment.user.full_name if assignment.user else "Unknown",
         role=assignment.role,
         is_primary=assignment.is_primary,
+        assigned_at=assignment.assigned_at,
+    )
+
+
+@router.patch(
+    "/{matter_id}/assignments/{assignment_id}/active",
+    response_model=MatterAssignmentResponse,
+)
+async def set_active_working(
+    matter_id: str,
+    assignment_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    active: bool = True,
+):
+    """Toggle the 'actively working' status on an assignment (paralegal status flag)."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+
+    result = await db.execute(
+        select(MatterAssignment)
+        .options(selectinload(MatterAssignment.user))
+        .where(
+            MatterAssignment.id == assignment_id,
+            MatterAssignment.matter_id == matter.id,
+            MatterAssignment.tenant_id == user.tenant_id,
+        )
+    )
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    assignment.is_active_working = active
+    await db.commit()
+    await db.refresh(assignment)
+
+    return MatterAssignmentResponse(
+        id=str(assignment.id),
+        user_id=str(assignment.user_id),
+        user_name=assignment.user.full_name if assignment.user else "Unknown",
+        role=assignment.role,
+        is_primary=assignment.is_primary,
+        is_active_working=assignment.is_active_working,
         assigned_at=assignment.assigned_at,
     )
 

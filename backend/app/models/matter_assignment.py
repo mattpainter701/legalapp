@@ -53,6 +53,9 @@ class MatterAssignment(Base):
     is_primary: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    is_active_working: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

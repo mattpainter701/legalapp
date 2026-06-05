@@ -66,11 +66,11 @@ export const resetPassword = (token, password) =>
   api.post('/auth/reset-password', { token, password }).then((r) => r.data)
 
 // Conversations
-export const getConversations = () =>
-  api.get('/conversations').then((r) => r.data)
+export const getConversations = (params) =>
+  api.get('/conversations', { params }).then((r) => r.data)
 
-export const createConversation = (title) =>
-  api.post('/conversations', title ? { title } : {}).then((r) => r.data)
+export const createConversation = (data) =>
+  api.post('/conversations', typeof data === 'string' ? { title: data } : (data || {})).then((r) => r.data)
 
 export const getConversation = (id) =>
   api.get(`/conversations/${id}`).then((r) => r.data)
@@ -640,6 +640,8 @@ export const addMatterAssignment = (id, data) =>
   api.post(`/matters/${id}/assignments`, data).then(r => r.data)
 export const removeMatterAssignment = (id, aid) =>
   api.delete(`/matters/${id}/assignments/${aid}`)
+export const setAssignmentActive = (matterId, assignmentId, active) =>
+  api.patch(`/matters/${matterId}/assignments/${assignmentId}/active`, null, { params: { active } }).then(r => r.data)
 
 // Notes & Activity
 export const getMatterNotes = (id, params) =>

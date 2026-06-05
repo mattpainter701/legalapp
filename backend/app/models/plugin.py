@@ -257,6 +257,19 @@ class Matter(Base):
         nullable=True,
     )
 
+    # Partner attorney — for commission tracking (roadmap)
+    partner_attorney_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Retention — legal requirement to keep closed matters 5-7 years
+    retention_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Per-matter AI memory / context document (the matter's CLAUDE.md equivalent)
     memory_content: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -285,6 +298,9 @@ class Matter(Base):
     )
     attorney_of_record: Mapped["User | None"] = relationship(
         "User", foreign_keys=[attorney_of_record_id], lazy="joined"
+    )
+    partner_attorney: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[partner_attorney_id], lazy="joined"
     )
     assignments: Mapped[list["MatterAssignment"]] = relationship(
         "MatterAssignment", back_populates="matter", cascade="all, delete-orphan"

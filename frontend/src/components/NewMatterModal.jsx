@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { createMatterV2, getContacts, getAdminUsers, getPlugins } from '../api'
+import { createMatterV2, getContacts, getAdminUsers, getPlugins, createContact } from '../api'
 
 const PRACTICE_AREAS = [
   'Litigation', 'Corporate', 'Real Estate', 'Family Law', 'Criminal Defense',
@@ -38,6 +38,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
     matter_type: '',
     client_contact_id: '',
     attorney_of_record_id: '',
+    partner_attorney_id: '',
     assigned_user_ids: [],
     status: 'open',
     case_number: '',
@@ -50,6 +51,12 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
   const [plugins, setPlugins] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  // Inline contact creation
+  const [showCreateContact, setShowCreateContact] = useState(false)
+  const [newContact, setNewContact] = useState({ first_name: '', last_name: '', email: '' })
+  const [creatingContact, setCreatingContact] = useState(false)
+  const [contactError, setContactError] = useState(null)
 
   useEffect(() => {
     if (!open) return
@@ -80,6 +87,27 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
     })
   }
 
+  const handleCreateContact = async () => {
+    if (!newContact.first_name.trim() && !newContact.email.trim()) return
+    setCreatingContact(true)
+    setContactError(null)
+    try {
+      const created = await createContact({
+        first_name: newContact.first_name.trim() || undefined,
+        last_name: newContact.last_name.trim() || undefined,
+        email: newContact.email.trim() || undefined,
+      })
+      setContacts(prev => [...prev, created])
+      set('client_contact_id', created.id)
+      setShowCreateContact(false)
+      setNewContact({ first_name: '', last_name: '', email: '' })
+    } catch {
+      setContactError('Failed to create contact.')
+    } finally {
+      setCreatingContact(false)
+    }
+  }
+
   const toggleAssignee = (uid) => {
     setForm(p => ({
       ...p,
@@ -102,6 +130,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         matter_type: form.matter_type.trim() || undefined,
         client_contact_id: form.client_contact_id || undefined,
         attorney_of_record_id: form.attorney_of_record_id || undefined,
+        partner_attorney_id: form.partner_attorney_id || undefined,
         assigned_user_ids: form.assigned_user_ids,
         status: form.status,
         case_number: form.case_number.trim() || undefined,
@@ -113,9 +142,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
       onCreated?.(created)
       setForm({
         matter_name: '', description: '', practice_area: '', matter_type: '',
-        client_contact_id: '', attorney_of_record_id: '', assigned_user_ids: [],
-        status: 'open', case_number: '', jurisdiction: '', counterparty: '',
-        primary_plugin: '',
+        client_contact_id: '', attorney_of_record_id: '', partner_attorney_id: '',
+        assigned_user_ids: [], status: 'open', case_number: '', jurisdiction: '',
+        counterparty: '', primary_plugin: '',
       })
       onClose()
     } catch (err) {
@@ -234,43 +263,101 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
 
           {/* Client */}
           <div>
-            <label className={labelCls}>Client</label>
-            <div className="relative">
-              <select
-                value={form.client_contact_id}
-                onChange={e => set('client_contact_id', e.target.value)}
-                className={`${inputCls} pr-8 appearance-none`}
+            <div className="flex items-center justify-between mb-1.5">
+              <label className={`${labelCls} mb-0`}>Client</label>
+              <button
+                type="button"
+                onClick={() => { setShowCreateContact(v => !v); setContactError(null) }}
+                className="text-[11px] font-semibold text-brand-accent hover:underline"
               >
-                <option value="">No client selected</option>
-                {contacts.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.display_name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}
-                  </option>
-                ))}
-              </select>
-              <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+                {showCreateContact ? 'Select existing' : '+ Create new contact'}
+              </button>
             </div>
+            {showCreateContact ? (
+              <div className="border border-brand-line rounded-lg p-4 bg-brand-bg-soft/50 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>First Name</label>
+                    <input type="text" value={newContact.first_name} onChange={e => setNewContact(p => ({ ...p, first_name: e.target.value }))} placeholder="First" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Last Name</label>
+                    <input type="text" value={newContact.last_name} onChange={e => setNewContact(p => ({ ...p, last_name: e.target.value }))} placeholder="Last" className={inputCls} />
+                  </div>
+                </div>
+                <div>
+                  <label className={labelCls}>Email</label>
+                  <input type="email" value={newContact.email} onChange={e => setNewContact(p => ({ ...p, email: e.target.value }))} placeholder="client@example.com" className={inputCls} />
+                </div>
+                {contactError && <p className="text-brand-rose text-[12px] font-sans">{contactError}</p>}
+                <button
+                  type="button"
+                  onClick={handleCreateContact}
+                  disabled={creatingContact || (!newContact.first_name.trim() && !newContact.email.trim())}
+                  className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 w-full"
+                >
+                  {creatingContact ? 'Creating…' : 'Create & Select Contact'}
+                </button>
+              </div>
+            ) : (
+              <div className="relative">
+                <select
+                  value={form.client_contact_id}
+                  onChange={e => set('client_contact_id', e.target.value)}
+                  className={`${inputCls} pr-8 appearance-none`}
+                >
+                  <option value="">No client selected</option>
+                  {contacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.display_name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email}
+                    </option>
+                  ))}
+                </select>
+                <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+              </div>
+            )}
           </div>
 
-          {/* Attorney of Record */}
-          <div>
-            <label className={labelCls}>Attorney of Record</label>
-            <div className="relative">
-              <select
-                value={form.attorney_of_record_id}
-                onChange={e => set('attorney_of_record_id', e.target.value)}
-                className={`${inputCls} pr-8 appearance-none`}
-              >
-                <option value="">Not assigned</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.full_name || u.email}
-                  </option>
-                ))}
-              </select>
-              <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+          {/* Attorney of Record + Partner Attorney */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Attorney of Record</label>
+              <div className="relative">
+                <select
+                  value={form.attorney_of_record_id}
+                  onChange={e => set('attorney_of_record_id', e.target.value)}
+                  className={`${inputCls} pr-8 appearance-none`}
+                >
+                  <option value="">Not assigned</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name || u.email}
+                    </option>
+                  ))}
+                </select>
+                <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+              </div>
+              <p className="text-[11px] text-brand-muted mt-1 font-sans">Responsible attorney of record.</p>
             </div>
-            <p className="text-[11px] text-brand-muted mt-1 font-sans">The named responsible attorney for this matter.</p>
+            <div>
+              <label className={labelCls}>Partner Attorney</label>
+              <div className="relative">
+                <select
+                  value={form.partner_attorney_id}
+                  onChange={e => set('partner_attorney_id', e.target.value)}
+                  className={`${inputCls} pr-8 appearance-none`}
+                >
+                  <option value="">Not assigned</option>
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name || u.email}
+                    </option>
+                  ))}
+                </select>
+                <ChevronIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+              </div>
+              <p className="text-[11px] text-brand-muted mt-1 font-sans">Supervising / originating partner.</p>
+            </div>
           </div>
 
           {/* Additional Assignees */}
