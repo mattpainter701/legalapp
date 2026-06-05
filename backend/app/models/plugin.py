@@ -195,7 +195,6 @@ class Matter(Base):
     materiality: Mapped[str | None] = mapped_column(String(50), nullable=True)
     exposure_range: Mapped[str | None] = mapped_column(String(200), nullable=True)
     outside_counsel: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    internal_owners: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     conflicts_status: Mapped[str] = mapped_column(
         String(50), default="not-run", server_default="not-run"
     )

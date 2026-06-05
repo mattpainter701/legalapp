@@ -1121,12 +1121,13 @@ async def get_practice_profile(
     profile = result.scalar_one_or_none()
 
     if profile is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No practice profile found for plugin '{plugin}'. "
-                "Run the cold-start interview first."
-            ),
+        return PracticeProfileResponse(
+            id="",
+            plugin_name=plugin,
+            profile_content="",
+            is_complete=False,
+            setup_step=0,
+            updated_at=datetime.now(timezone.utc),
         )
 
     return PracticeProfileResponse(
