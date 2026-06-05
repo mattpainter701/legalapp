@@ -63,13 +63,13 @@ async def _consume_state(request: Request, state: str) -> tuple[bool, dict | Non
 
 # ── Admin Connect flows (tenant-wide admin consent) ────────────────────────
 
-MICROSOFT_ADMIN_SCOPES = "offline_access User.Read.All Mail.Read Files.Read.All Sites.Read.All Calendars.ReadWrite"
+MICROSOFT_ADMIN_SCOPES = "offline_access User.Read.All Mail.Read Files.ReadWrite.All Sites.Read.All Calendars.ReadWrite"
 GOOGLE_ADMIN_SCOPES = (
     "openid email profile "
     "https://www.googleapis.com/auth/admin.directory.user.readonly "
     "https://www.googleapis.com/auth/gmail.readonly "
     "https://www.googleapis.com/auth/calendar "
-    "https://www.googleapis.com/auth/drive.readonly"
+    "https://www.googleapis.com/auth/drive"
 )
 
 
@@ -278,6 +278,7 @@ async def microsoft_callback(
         # auto-advance step and trigger user sync
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "microsoft")
+            await _ensure_cloud_root(db, tenant_id)
 
     return await _post_connect_redirect(db, tenant_id, "microsoft")
 
@@ -455,6 +456,7 @@ async def google_callback(
         # auto-advance step and trigger user sync
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "google")
+            await _ensure_cloud_root(db, tenant_id)
 
     return await _post_connect_redirect(db, tenant_id, "google")
 
@@ -668,3 +670,127 @@ async def google_disconnect(
     await db.commit()
 
     return {"status": "disconnected", "provider": "google"}
+
+
+# ── Cloud-init helpers & retry ────────────────────────────────────────────
+
+
+async def _ensure_cloud_root(db: AsyncSession, tenant_id: str) -> None:
+    """If the tenant has no cloud root folder yet, try to create it now.
+
+    Called after every admin OAuth connect so that re-authorizing with the
+    correct scopes automatically repairs a previously broken cloud setup.
+    """
+    import logging as _log
+
+    _logger = _log.getLogger(__name__)
+    try:
+        from app.models.tenant import Tenant
+        from app.services.cloud_init import initialize_cloud_root_folder
+
+        result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = result.scalar_one_or_none()
+        if not tenant:
+            return
+        if tenant.cloud_root_folder:
+            return  # already set — nothing to do
+
+        cloud_root = await initialize_cloud_root_folder(db, tenant_id)
+        if cloud_root:
+            tenant.cloud_root_folder = cloud_root
+            await db.commit()
+            _logger.info(
+                "Auto-created cloud root folder for tenant %s on re-auth", tenant_id
+            )
+    except Exception as exc:
+        _logger.warning("_ensure_cloud_root failed for tenant %s: %s", tenant_id, exc)
+
+
+@router.post("/cloud-init/retry")
+async def cloud_init_retry(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-create missing cloud folders for this tenant.
+
+    Creates the root 'claritylegal-records' folder if absent, then backfills
+    matter subfolders for every matter that has cloud_folder=null.  Safe to
+    call multiple times — existing folders are detected and reused.
+    """
+    from app.models.plugin import Matter
+    from app.models.tenant import Tenant
+    from app.services.cloud_init import (
+        initialize_cloud_root_folder,
+        initialize_matter_folders,
+    )
+
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No tenant context")
+
+    await set_tenant_context(db, tenant_id)
+
+    # 1. Ensure root folder exists
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    cloud_root = tenant.cloud_root_folder or {}
+    try:
+        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
+        if fresh:
+            cloud_root = fresh
+            tenant.cloud_root_folder = cloud_root
+            await db.commit()
+    except Exception as exc:
+        logger.warning("cloud_init_retry: root folder init failed: %s", exc)
+
+    if not cloud_root:
+        return {
+            "root": None,
+            "matters_initialized": 0,
+            "matters_failed": 0,
+            "error": "No cloud credentials available — connect Google or Microsoft first",
+        }
+
+    # 2. Backfill matter folders
+    matters_result = await db.execute(
+        select(Matter).where(
+            Matter.tenant_id == tenant_id,
+            Matter.cloud_folder.is_(None),
+        )
+    )
+    matters = matters_result.scalars().all()
+
+    initialized = 0
+    failed = 0
+    for matter in matters:
+        slug = getattr(matter, "slug", None) or str(matter.id)
+        try:
+            folder = await initialize_matter_folders(
+                db=db,
+                tenant_id=str(tenant_id),
+                matter_slug=slug,
+                cloud_root=cloud_root,
+            )
+            if folder:
+                matter.cloud_folder = folder
+                initialized += 1
+        except Exception as exc:
+            logger.warning(
+                "cloud_init_retry: matter %s folder init failed: %s", matter.id, exc
+            )
+            failed += 1
+
+    await db.commit()
+
+    return {
+        "root": cloud_root,
+        "matters_initialized": initialized,
+        "matters_failed": failed,
+    }

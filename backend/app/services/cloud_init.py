@@ -99,8 +99,10 @@ async def initialize_matter_folders(
                 for sub in MATTER_SUBFOLDERS:
                     sub_id = await _ensure_onedrive_folder(ms_token, sub, matter_folder)
                     subfolders[sub] = sub_id
+                web_url = await _get_onedrive_web_url(ms_token, matter_folder)
                 result["onedrive"] = {
                     "matter_folder_id": matter_folder,
+                    "url": web_url,
                     "subfolders": subfolders,
                 }
                 logger.info("Created matter folders in OneDrive: %s", matter_slug)
@@ -126,6 +128,7 @@ async def initialize_matter_folders(
                     subfolders[sub] = sub_id
                 result["google_drive"] = {
                     "matter_folder_id": matter_folder,
+                    "url": f"https://drive.google.com/drive/folders/{matter_folder}",
                     "subfolders": subfolders,
                 }
                 logger.info("Created matter folders in Google Drive: %s", matter_slug)

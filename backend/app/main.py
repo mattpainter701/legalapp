@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import engine
 from app.middleware.tenant import TenantMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.access_log import ApiAccessLogMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
@@ -159,6 +160,8 @@ app.add_middleware(
 app.add_middleware(TenantMiddleware)
 
 app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
+
+app.add_middleware(ApiAccessLogMiddleware)
 
 # ─────────────────────────────────────────────────────
 # Routers

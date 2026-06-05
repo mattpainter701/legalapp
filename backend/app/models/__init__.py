@@ -48,6 +48,7 @@ from app.models.smb_share import SmbShare
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_access_log import SmbAccessLog
 from app.models.matter_smb_share import MatterSmbShare
+from app.models.api_access_log import ApiAccessLog
 
 __all__ = [
     "Tenant",
@@ -101,4 +102,5 @@ __all__ = [
     "SmbFileIndex",
     "SmbAccessLog",
     "MatterSmbShare",
+    "ApiAccessLog",
 ]

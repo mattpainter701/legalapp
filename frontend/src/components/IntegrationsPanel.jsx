@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { getAdminPermissions, triggerUserSync } from '../api'
+import { getAdminPermissions, triggerUserSync, retryCloudInit } from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
   'User.Read.All': 'Read all user profiles',
   'Mail.Read': 'Read mail across organization',
   'Files.Read.All': 'Read all files (OneDrive + SharePoint)',
+  'Files.ReadWrite.All': 'Read & write files (OneDrive + SharePoint)',
   'Sites.Read.All': 'Access SharePoint sites',
   'Calendars.ReadWrite': 'Read and write calendars',
   openid: 'OpenID Connect',
@@ -19,8 +20,9 @@ const SCOPE_LABELS_GOOGLE = {
   'profile': 'Profile info',
   'https://www.googleapis.com/auth/admin.directory.user.readonly': 'Read directory users',
   'https://www.googleapis.com/auth/gmail.readonly': 'Read Gmail messages',
-  'https://www.googleapis.com/auth/drive.readonly': 'Read Google Drive files',
-  'https://www.googleapis.com/auth/calendar': 'Read Google Calendar',
+  'https://www.googleapis.com/auth/drive.readonly': 'Read Google Drive files (read-only)',
+  'https://www.googleapis.com/auth/drive': 'Read & write Google Drive (folders + files)',
+  'https://www.googleapis.com/auth/calendar': 'Read & write Google Calendar',
 }
 
 export default function IntegrationsPanel() {
@@ -28,6 +30,8 @@ export default function IntegrationsPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [syncing, setSyncing] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [retryResult, setRetryResult] = useState(null)
 
   const relTime = (iso) => {
     if (!iso) return 'never'
@@ -38,6 +42,19 @@ export default function IntegrationsPanel() {
     const hrs = Math.floor(mins / 60)
     if (hrs < 24) return `${hrs}h ago`
     return `${Math.floor(hrs / 24)}d ago`
+  }
+
+  const handleRetryCloudInit = async () => {
+    setRetrying(true)
+    setRetryResult(null)
+    try {
+      const result = await retryCloudInit()
+      setRetryResult(result)
+    } catch {
+      setRetryResult({ error: 'Cloud setup failed. Check that Google or Microsoft is connected.' })
+    } finally {
+      setRetrying(false)
+    }
   }
 
   const handleSyncNow = async () => {
@@ -99,13 +116,44 @@ export default function IntegrationsPanel() {
       )}
 
       {/* Overall status */}
-      <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${overallColors[data.overall_health] || overallColors.disconnected}`}>
-        <span className={`w-2 h-2 rounded-full ${
-          data.overall_health === 'healthy' ? 'bg-green-500' :
-          data.overall_health === 'attention_needed' ? 'bg-amber-500' : 'bg-red-500'
-        }`} />
-        Integrations: {data.overall_health === 'healthy' ? 'Healthy' :
-          data.overall_health === 'attention_needed' ? 'Needs Attention' : 'No integrations connected'}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${overallColors[data.overall_health] || overallColors.disconnected}`}>
+          <span className={`w-2 h-2 rounded-full ${
+            data.overall_health === 'healthy' ? 'bg-green-500' :
+            data.overall_health === 'attention_needed' ? 'bg-amber-500' : 'bg-red-500'
+          }`} />
+          Integrations: {data.overall_health === 'healthy' ? 'Healthy' :
+            data.overall_health === 'attention_needed' ? 'Needs Attention' : 'No integrations connected'}
+        </div>
+
+        {/* Cloud folder setup */}
+        <div className="flex items-center gap-3">
+          {retryResult && !retryResult.error && (
+            <span className="text-xs text-green-700 font-medium">
+              Cloud folders ready · {retryResult.matters_initialized} matter{retryResult.matters_initialized !== 1 ? 's' : ''} set up
+            </span>
+          )}
+          {retryResult?.error && (
+            <span className="text-xs text-red-600 font-medium">{retryResult.error}</span>
+          )}
+          <button
+            onClick={handleRetryCloudInit}
+            disabled={retrying}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+          >
+            {retrying ? (
+              <>
+                <span className="w-3 h-3 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+                Setting up…
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M4 12a8 8 0 018-8V2L14 4l-2 2V4a6 6 0 100 12h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                Retry cloud setup
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Microsoft card */}

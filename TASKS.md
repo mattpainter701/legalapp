@@ -1,5 +1,33 @@
 # TASKS.md
 
+### Cloud Drive Integration Fix (unplanned, completed 2026-06-05)
+
+- [x] Fixed Google Drive admin scope: `drive.readonly` → `drive` (all write ops returned 403 silently)
+- [x] Fixed Microsoft admin scope: `Files.Read.All` → `Files.ReadWrite.All`
+- [x] Added `_ensure_cloud_root()` auto-backfill on admin re-auth
+- [x] Added `POST /api/integrations/cloud-init/retry` endpoint with matter backfill
+- [x] `cloud_init.py`: matter folders now store `url` for both providers
+- [x] `api.js`: added `retryCloudInit()`
+- [x] `IntegrationsPanel.jsx`: "Retry cloud setup" button + updated scope labels
+- [x] `MatterDetailPage.jsx`: Cloud Storage field in Case Details with OneDrive/Google Drive links
+
+Files: `backend/app/routers/integrations.py`, `backend/app/services/cloud_init.py`, `frontend/src/api.js`, `frontend/src/components/IntegrationsPanel.jsx`, `frontend/src/pages/MatterDetailPage.jsx`
+
+---
+
+### 1111. Operator Console — Error Diagnostics & API Traffic Logs (P0, LARGE) — COMPLETED
+
+- [x] Fixed `LIMIT is not defined` ReferenceError — captured limit from API response, replaced all 3 `LIMIT` references
+- [x] Masked user emails in tenant detail view — shows full_name or user ID prefix instead of email addresses
+- [x] Added platform error log endpoints: `GET /api/platform/logs` (cross-tenant, paginated, filterable), `GET /api/platform/logs/summary`, `GET /api/platform/logs/tenant/{id}`, `GET /api/platform/logs/tenant/{id}/summary`
+- [x] Created `ApiAccessLog` model (migration 038) with middleware that logs every request (metadata only: tenant_id, endpoint, method, status_code, latency_ms, ip_address)
+- [x] Added platform access log endpoints: `GET /api/platform/access-logs` (filterable by tenant/endpoint/status/hours), `GET /api/platform/access-logs/summary`
+- [x] Added Logs tab to operator console with 3 sub-tabs: System Errors (summary cards + filterable table), Tenant Logs (per-tenant error drill-down), API Traffic (access log with summary stats)
+
+Files: `backend/app/routers/platform.py`, `backend/app/models/api_access_log.py`, `backend/app/middleware/access_log.py`, `backend/migrations/versions/038_api_access_log.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
+
+---
+
 ## Sprint 11 — Legal MCP Database & CourtListener Ingest Pipeline (v0.13.0)
 
 **Goal:** Build a production-grade legal knowledge base with structured case law metadata, a CourtListener ingest pipeline with nightly updates, Mixedbread 1024-dim embeddings, and an MCP server (REST + SSE) with 7 domain-scoped legal tools — sold as an API product and wired into the LegalApp chat as an MCP tool.

@@ -14,6 +14,7 @@ Endpoints:
 """
 
 import hmac
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -25,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models.conversation import UsageRecord
+from app.models.error_log import ErrorLog
+from app.models.api_access_log import ApiAccessLog
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
 
@@ -471,3 +474,586 @@ async def platform_health(
         "services": services,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Platform Log Schemas ──────────────────────────────────────────────────────
+
+
+class PlatformErrorEntry(BaseModel):
+    id: str
+    tenant_id: str
+    tenant_name: Optional[str] = None
+    user_id: Optional[str] = None
+    error_type: str
+    severity: str
+    message: str
+    endpoint: Optional[str] = None
+    method: Optional[str] = None
+    status_code: Optional[int] = None
+    is_resolved: bool
+    resolved_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+
+
+class PlatformErrorList(BaseModel):
+    errors: list[PlatformErrorEntry]
+    total: int
+    page: int
+    limit: int
+
+
+class PlatformErrorSummary(BaseModel):
+    total_errors: int
+    unresolved: int
+    by_severity: dict[str, int]
+    by_type: dict[str, int]
+    by_tenant: list[dict]
+    trend: list[dict]
+    days: int
+
+
+class TenantErrorSummary(BaseModel):
+    total_errors: int
+    unresolved: int
+    by_severity: dict[str, int]
+    by_type: dict[str, int]
+    trend: list[dict]
+    days: int
+
+
+# ── Platform Log Endpoints ────────────────────────────────────────────────────
+
+
+@router.get("/logs", response_model=PlatformErrorList)
+async def list_platform_errors(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    severity: Optional[str] = Query(None, pattern="^(critical|error|warning|info)$"),
+    error_type: Optional[str] = Query(None),
+    tenant_id: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=90),
+    unresolved_only: bool = Query(False),
+):
+    _require_platform_key(request)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    filters = [ErrorLog.created_at >= cutoff]
+    if severity:
+        filters.append(ErrorLog.severity == severity)
+    if error_type:
+        filters.append(ErrorLog.error_type == error_type)
+    if tenant_id:
+        try:
+            tid = uuid.UUID(tenant_id) if not isinstance(tenant_id, uuid.UUID) else tenant_id
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+        filters.append(ErrorLog.tenant_id == tid)
+    if unresolved_only:
+        filters.append(ErrorLog.is_resolved == False)
+
+    total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
+    total = total_result.scalar_one()
+
+    rows_result = await db.execute(
+        select(ErrorLog)
+        .where(*filters)
+        .order_by(ErrorLog.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    errors = rows_result.scalars().all()
+
+    # Resolve tenant names
+    tids = {e.tenant_id for e in errors}
+    tenant_names: dict[uuid.UUID, str] = {}
+    if tids:
+        tn_result = await db.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids)))
+        tenant_names = {str(r.id): r.name for r in tn_result.fetchall()}
+
+    return PlatformErrorList(
+        errors=[
+            PlatformErrorEntry(
+                id=str(e.id),
+                tenant_id=str(e.tenant_id),
+                tenant_name=tenant_names.get(str(e.tenant_id), "—"),
+                user_id=str(e.user_id)[:8] + "…" if e.user_id else None,
+                error_type=e.error_type,
+                severity=e.severity,
+                message=e.message,
+                endpoint=e.endpoint,
+                method=e.method,
+                status_code=e.status_code,
+                is_resolved=e.is_resolved,
+                resolved_at=e.resolved_at,
+                resolution_notes=e.resolution_notes,
+                created_at=e.created_at,
+            )
+            for e in errors
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@router.get("/logs/summary", response_model=PlatformErrorSummary)
+async def platform_error_summary(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(7, ge=1, le=90),
+):
+    _require_platform_key(request)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # All errors in period
+    base_filters = [ErrorLog.created_at >= cutoff]
+
+    total_result = await db.execute(
+        select(func.count(ErrorLog.id)).where(*base_filters)
+    )
+    total_errors = total_result.scalar_one()
+
+    unresolved_result = await db.execute(
+        select(func.count(ErrorLog.id)).where(
+            ErrorLog.created_at >= cutoff, ErrorLog.is_resolved == False
+        )
+    )
+    unresolved = unresolved_result.scalar_one()
+
+    # By severity
+    sev_result = await db.execute(
+        select(ErrorLog.severity, func.count(ErrorLog.id))
+        .where(*base_filters)
+        .group_by(ErrorLog.severity)
+    )
+    by_severity = {row.severity: row.count for row in sev_result.all()}
+
+    # By type
+    type_result = await db.execute(
+        select(ErrorLog.error_type, func.count(ErrorLog.id))
+        .where(*base_filters)
+        .group_by(ErrorLog.error_type)
+    )
+    by_type = {row.error_type: row.count for row in type_result.all()}
+
+    # By tenant (top 20)
+    bt_result = await db.execute(
+        select(
+            ErrorLog.tenant_id,
+            func.count(ErrorLog.id).label("cnt"),
+        )
+        .where(*base_filters)
+        .group_by(ErrorLog.tenant_id)
+        .order_by(func.count(ErrorLog.id).desc())
+        .limit(20)
+    )
+    bt_rows = bt_result.all()
+    tids = {r.tenant_id for r in bt_rows}
+    tn_map: dict[uuid.UUID, str] = {}
+    if tids:
+        tn_r = await db.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids)))
+        tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
+    by_tenant = [
+        {
+            "tenant_id": str(r.tenant_id),
+            "tenant_name": tn_map.get(str(r.tenant_id), "—"),
+            "count": r.cnt,
+        }
+        for r in bt_rows
+    ]
+
+    # Daily trend
+    trend_result = await db.execute(
+        select(
+            func.date(ErrorLog.created_at).label("day"),
+            ErrorLog.severity,
+            func.count(ErrorLog.id).label("cnt"),
+        )
+        .where(*base_filters)
+        .group_by(func.date(ErrorLog.created_at), ErrorLog.severity)
+        .order_by(func.date(ErrorLog.created_at))
+    )
+    trend_map: dict = {}
+    for row in trend_result.all():
+        day_str = str(row.day)
+        if day_str not in trend_map:
+            trend_map[day_str] = {"critical": 0, "error": 0, "warning": 0, "info": 0}
+        trend_map[day_str][row.severity] = row.cnt
+
+    trend = [
+        {
+            "date": day,
+            "total": sum(counts.values()),
+            "critical": counts["critical"],
+            "error": counts["error"],
+            "warning": counts["warning"],
+            "info": counts["info"],
+        }
+        for day, counts in sorted(trend_map.items())
+    ]
+
+    return PlatformErrorSummary(
+        total_errors=total_errors,
+        unresolved=unresolved,
+        by_severity=by_severity,
+        by_type=by_type,
+        by_tenant=by_tenant,
+        trend=trend,
+        days=days,
+    )
+
+
+@router.get("/logs/tenant/{tenant_id}", response_model=PlatformErrorList)
+async def tenant_error_logs(
+    tenant_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    severity: Optional[str] = Query(None, pattern="^(critical|error|warning|info)$"),
+    error_type: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=90),
+    unresolved_only: bool = Query(False),
+):
+    _require_platform_key(request)
+
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    filters = [
+        ErrorLog.tenant_id == tid,
+        ErrorLog.created_at >= cutoff,
+    ]
+    if severity:
+        filters.append(ErrorLog.severity == severity)
+    if error_type:
+        filters.append(ErrorLog.error_type == error_type)
+    if unresolved_only:
+        filters.append(ErrorLog.is_resolved == False)
+
+    total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
+    total = total_result.scalar_one()
+
+    rows_result = await db.execute(
+        select(ErrorLog)
+        .where(*filters)
+        .order_by(ErrorLog.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    errors = rows_result.scalars().all()
+
+    # Get tenant name
+    tn_result = await db.execute(select(Tenant.name).where(Tenant.id == tid))
+    tname = tn_result.scalar_one_or_none() or "—"
+
+    return PlatformErrorList(
+        errors=[
+            PlatformErrorEntry(
+                id=str(e.id),
+                tenant_id=str(e.tenant_id),
+                tenant_name=tname,
+                user_id=str(e.user_id)[:8] + "…" if e.user_id else None,
+                error_type=e.error_type,
+                severity=e.severity,
+                message=e.message,
+                endpoint=e.endpoint,
+                method=e.method,
+                status_code=e.status_code,
+                is_resolved=e.is_resolved,
+                resolved_at=e.resolved_at,
+                resolution_notes=e.resolution_notes,
+                created_at=e.created_at,
+            )
+            for e in errors
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@router.get("/logs/tenant/{tenant_id}/summary", response_model=TenantErrorSummary)
+async def tenant_error_summary(
+    tenant_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(7, ge=1, le=90),
+):
+    _require_platform_key(request)
+
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    base_filters = [ErrorLog.tenant_id == tid, ErrorLog.created_at >= cutoff]
+
+    total_result = await db.execute(
+        select(func.count(ErrorLog.id)).where(*base_filters)
+    )
+    total_errors = total_result.scalar_one()
+
+    unresolved_result = await db.execute(
+        select(func.count(ErrorLog.id)).where(
+            *base_filters, ErrorLog.is_resolved == False
+        )
+    )
+    unresolved = unresolved_result.scalar_one()
+
+    sev_result = await db.execute(
+        select(ErrorLog.severity, func.count(ErrorLog.id))
+        .where(*base_filters)
+        .group_by(ErrorLog.severity)
+    )
+    by_severity = {row.severity: row.count for row in sev_result.all()}
+
+    type_result = await db.execute(
+        select(ErrorLog.error_type, func.count(ErrorLog.id))
+        .where(*base_filters)
+        .group_by(ErrorLog.error_type)
+    )
+    by_type = {row.error_type: row.count for row in type_result.all()}
+
+    trend_result = await db.execute(
+        select(
+            func.date(ErrorLog.created_at).label("day"),
+            ErrorLog.severity,
+            func.count(ErrorLog.id).label("cnt"),
+        )
+        .where(*base_filters)
+        .group_by(func.date(ErrorLog.created_at), ErrorLog.severity)
+        .order_by(func.date(ErrorLog.created_at))
+    )
+    trend_map: dict = {}
+    for row in trend_result.all():
+        day_str = str(row.day)
+        if day_str not in trend_map:
+            trend_map[day_str] = {"critical": 0, "error": 0, "warning": 0, "info": 0}
+        trend_map[day_str][row.severity] = row.cnt
+
+    trend = [
+        {
+            "date": day,
+            "total": sum(counts.values()),
+            "critical": counts["critical"],
+            "error": counts["error"],
+            "warning": counts["warning"],
+            "info": counts["info"],
+        }
+        for day, counts in sorted(trend_map.items())
+    ]
+
+    return TenantErrorSummary(
+        total_errors=total_errors,
+        unresolved=unresolved,
+        by_severity=by_severity,
+        by_type=by_type,
+        trend=trend,
+        days=days,
+    )
+
+
+# ── API Access Log Schemas ───────────────────────────────────────────────────
+
+
+class AccessLogEntry(BaseModel):
+    id: str
+    tenant_id: str
+    tenant_name: Optional[str] = None
+    endpoint: str
+    method: str
+    status_code: int
+    latency_ms: Optional[float] = None
+    created_at: datetime
+
+
+class AccessLogList(BaseModel):
+    entries: list[AccessLogEntry]
+    total: int
+    page: int
+    limit: int
+
+
+class AccessLogSummary(BaseModel):
+    total_requests: int
+    by_status: dict[str, int]
+    avg_latency_ms: Optional[float] = None
+    by_endpoint: list[dict]
+    by_tenant: list[dict]
+    days: int
+
+
+# ── Access Log Endpoints ────────────────────────────────────────────────────
+
+
+@router.get("/access-logs", response_model=AccessLogList)
+async def list_access_logs(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: Optional[str] = Query(None),
+    endpoint: Optional[str] = Query(None),
+    status_code: Optional[int] = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    _require_platform_key(request)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    filters = [ApiAccessLog.created_at >= cutoff]
+    if tenant_id:
+        try:
+            tid = uuid.UUID(tenant_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+        filters.append(ApiAccessLog.tenant_id == tid)
+    if endpoint:
+        filters.append(ApiAccessLog.endpoint.ilike(f"%{endpoint}%"))
+    if status_code is not None:
+        filters.append(ApiAccessLog.status_code == status_code)
+
+    total_result = await db.execute(
+        select(func.count(ApiAccessLog.id)).where(*filters)
+    )
+    total = total_result.scalar_one()
+
+    rows_result = await db.execute(
+        select(ApiAccessLog)
+        .where(*filters)
+        .order_by(ApiAccessLog.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    entries = rows_result.scalars().all()
+
+    tids = {e.tenant_id for e in entries}
+    tn_map: dict[uuid.UUID, str] = {}
+    if tids:
+        tn_r = await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
+        )
+        tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
+
+    return AccessLogList(
+        entries=[
+            AccessLogEntry(
+                id=str(e.id),
+                tenant_id=str(e.tenant_id),
+                tenant_name=tn_map.get(str(e.tenant_id), "—"),
+                endpoint=e.endpoint,
+                method=e.method,
+                status_code=e.status_code,
+                latency_ms=e.latency_ms,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+    )
+
+
+@router.get("/access-logs/summary", response_model=AccessLogSummary)
+async def access_log_summary(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: Optional[str] = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    _require_platform_key(request)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    filters = [ApiAccessLog.created_at >= cutoff]
+    if tenant_id:
+        try:
+            tid = uuid.UUID(tenant_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+        filters.append(ApiAccessLog.tenant_id == tid)
+
+    total_r = await db.execute(
+        select(func.count(ApiAccessLog.id)).where(*filters)
+    )
+    total_requests = total_r.scalar_one()
+
+    # By status code
+    status_r = await db.execute(
+        select(
+            ApiAccessLog.status_code,
+            func.count(ApiAccessLog.id).label("cnt"),
+        )
+        .where(*filters)
+        .group_by(ApiAccessLog.status_code)
+    )
+    by_status = {str(row.status_code): row.cnt for row in status_r.all()}
+
+    # Avg latency
+    lat_r = await db.execute(
+        select(func.avg(ApiAccessLog.latency_ms)).where(*filters)
+    )
+    avg_latency_ms = lat_r.scalar_one()
+
+    # By endpoint (top 20)
+    ep_r = await db.execute(
+        select(
+            ApiAccessLog.endpoint,
+            func.count(ApiAccessLog.id).label("cnt"),
+        )
+        .where(*filters)
+        .group_by(ApiAccessLog.endpoint)
+        .order_by(func.count(ApiAccessLog.id).desc())
+        .limit(20)
+    )
+    by_endpoint = [
+        {"endpoint": row.endpoint, "count": row.cnt} for row in ep_r.all()
+    ]
+
+    # By tenant (top 20)
+    bt_r = await db.execute(
+        select(
+            ApiAccessLog.tenant_id,
+            func.count(ApiAccessLog.id).label("cnt"),
+        )
+        .where(*filters)
+        .group_by(ApiAccessLog.tenant_id)
+        .order_by(func.count(ApiAccessLog.id).desc())
+        .limit(20)
+    )
+    bt_rows = bt_r.all()
+    tids = {r.tenant_id for r in bt_rows}
+    tn_map: dict[uuid.UUID, str] = {}
+    if tids:
+        tn_r = await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
+        )
+        tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
+    by_tenant = [
+        {
+            "tenant_id": str(r.tenant_id),
+            "tenant_name": tn_map.get(str(r.tenant_id), "—"),
+            "count": r.cnt,
+        }
+        for r in bt_rows
+    ]
+
+    return AccessLogSummary(
+        total_requests=total_requests,
+        by_status=by_status,
+        avg_latency_ms=round(float(avg_latency_ms), 2) if avg_latency_ms else None,
+        by_endpoint=by_endpoint,
+        by_tenant=by_tenant,
+        days=hours // 24 or 1,
+    )

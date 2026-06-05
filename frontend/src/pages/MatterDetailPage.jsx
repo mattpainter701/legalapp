@@ -1358,6 +1358,124 @@ export default function MatterDetailPage() {
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
                   </div>
+                </div>
+              ) : (
+                <dl>
+                  <Field label="Practice Area">{dm.practice_area}</Field>
+                  <Field label="Matter Type">{dm.matter_type}</Field>
+                  <Field label="Plugin Workflow">
+                    {dm.primary_plugin ? (
+                      <button
+                        onClick={() => navigate(pluginRoute(dm.primary_plugin))}
+                        className="text-brand-accent font-semibold hover:underline"
+                      >
+                        {pluginLabel(dm.primary_plugin)}
+                      </button>
+                    ) : 'General matter'}
+                  </Field>
+                  <Field label="Case Number">{dm.case_number}</Field>
+                  <Field label="Stage">{dm.stage}</Field>
+                  <Field label="Jurisdiction">{dm.jurisdiction}</Field>
+                  <Field label="Court">{dm.court}</Field>
+                  <Field label="Judge">{dm.judge}</Field>
+                  <Field label="Counterparty">{dm.counterparty}</Field>
+                  {(matter.cloud_folder?.onedrive?.url || matter.cloud_folder?.google_drive?.url) && (
+                    <Field label="Cloud Storage">
+                      <div className="flex flex-wrap gap-2 mt-0.5">
+                        {matter.cloud_folder?.onedrive?.url && (
+                          <a
+                            href={matter.cloud_folder.onedrive.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100 transition-colors"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            OneDrive
+                          </a>
+                        )}
+                        {matter.cloud_folder?.google_drive?.url && (
+                          <a
+                            href={matter.cloud_folder.google_drive.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 text-xs font-medium rounded-lg hover:bg-green-100 transition-colors"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            Google Drive
+                          </a>
+                        )}
+                      </div>
+                    </Field>
+                  )}
+                </dl>
+              )}
+            </div>
+
+            <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
+              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5">People</h2>
+              <dl>
+                <Field label="Client">
+                  {matter.client_name && (
+                    <span className="font-semibold text-brand-ink">{matter.client_name}</span>
+                  )}
+                </Field>
+                <Field label="Attorney of Record">
+                  {matter.attorney_of_record_name && (
+                    <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>
+                  )}
+                </Field>
+                <Field label="Partner Attorney">
+                  {matter.partner_attorney_name && (
+                    <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>
+                  )}
+                </Field>
+                <Field label="Team">
+                  {matter.assignments?.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-0.5">
+                      {matter.assignments.map(a => (
+                        <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
+                          {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
+                          {a.user_name}
+                          {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </Field>
+              </dl>
+
+              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5 mt-8">Billing</h2>
+              <dl>
+                <Field label="Billing Method">{dm.billing_method}</Field>
+                <Field label="Billing Cycle">{dm.billing_cycle}</Field>
+                {dm.hourly_rate && <Field label="Hourly Rate">${Number(dm.hourly_rate).toLocaleString()}</Field>}
+                {dm.budget_amount && <Field label="Budget">${Number(dm.budget_amount).toLocaleString()} {dm.budget_currency}</Field>}
+              </dl>
+            </div>
+          </div>
+        )}
+
+        {/* ── Timeline Tab ─────────────────────────────────────────────────────── */}
+        {activeTab === 'timeline' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between bg-brand-bg-soft/50 rounded-t-2xl">
+              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                <Icon d={Icons.clock} size={18} className="text-brand-accent" /> Timeline
+              </h2>
+              <button onClick={() => setShowAddNote(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
+                <Icon d={Icons.plus} size={15} /> Add Note
+              </button>
+            </div>
+
+            {showAddNote && (
+              <div className="p-6 bg-brand-bg border-b border-brand-line">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className={labelCls}>Note Type</label>
+                    <select value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                      {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                    </select>
+                  </div>
                   {saveError && <p className="text-brand-rose text-sm font-sans">{saveError}</p>}
                 </div>
               </div>

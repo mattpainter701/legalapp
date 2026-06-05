@@ -212,6 +212,8 @@ export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
 export const triggerUserSync = () =>
   api.post('/scheduler/agents/user-sync/run').then((r) => r.data)
+export const retryCloudInit = () =>
+  api.post('/integrations/cloud-init/retry').then((r) => r.data)
 
 // Customer LLM
 export const configureCustomerLLM = (config) =>
@@ -467,6 +469,24 @@ export const getPlatformHealth = (key) =>
 
 export const getPlatformLLMProviders = (key) =>
   platformApi(key).get('/platform/llm-providers').then((r) => r.data)
+
+export const getPlatformLogs = (key, params = {}) =>
+  platformApi(key).get('/platform/logs', { params }).then((r) => r.data)
+
+export const getPlatformLogsSummary = (key, params = {}) =>
+  platformApi(key).get('/platform/logs/summary', { params }).then((r) => r.data)
+
+export const getPlatformTenantLogs = (key, tenantId, params = {}) =>
+  platformApi(key).get(`/platform/logs/tenant/${tenantId}`, { params }).then((r) => r.data)
+
+export const getPlatformTenantLogsSummary = (key, tenantId, params = {}) =>
+  platformApi(key).get(`/platform/logs/tenant/${tenantId}/summary`, { params }).then((r) => r.data)
+
+export const getPlatformAccessLogs = (key, params = {}) =>
+  platformApi(key).get('/platform/access-logs', { params }).then((r) => r.data)
+
+export const getPlatformAccessLogsSummary = (key, params = {}) =>
+  platformApi(key).get('/platform/access-logs/summary', { params }).then((r) => r.data)
 
 // ── Contacts ───────────────────────────────────────────────────────────────
 

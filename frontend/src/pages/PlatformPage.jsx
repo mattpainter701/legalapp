@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders } from '../api'
-import { Activity, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary } from '../api'
+import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -157,6 +157,365 @@ function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpd
   )
 }
 
+function LogsTab({ platformKey, tenants }) {
+  const [subtab, setSubtab] = useState('system')
+  const [systemErrors, setSystemErrors] = useState(null)
+  const [systemSummary, setSystemSummary] = useState(null)
+  const [logPage, setLogPage] = useState(1)
+  const [logLimit, setLogLimit] = useState(50)
+  const [logTotal, setLogTotal] = useState(0)
+  const [logDays, setLogDays] = useState(7)
+  const [logSeverity, setLogSeverity] = useState('')
+  const [logType, setLogType] = useState('')
+  const [logTenant, setLogTenant] = useState('')
+  const [logUnresolved, setLogUnresolved] = useState(false)
+  const [logLoading, setLogLoading] = useState(false)
+
+  // Tenant-specific logs
+  const [selTenant, setSelTenant] = useState('')
+  const [tenantErrors, setTenantErrors] = useState(null)
+  const [tenantSummary, setTenantSummary] = useState(null)
+  const [tlogPage, setTlogPage] = useState(1)
+  const [tlogTotal, setTlogTotal] = useState(0)
+  const [tlogLoading, setTlogLoading] = useState(false)
+
+  // API traffic
+  const [accessLogs, setAccessLogs] = useState(null)
+  const [accessSummary, setAccessSummary] = useState(null)
+  const [alogPage, setAlogPage] = useState(1)
+  const [alogTotal, setAlogTotal] = useState(0)
+  const [alogHours, setAlogHours] = useState(24)
+  const [alogLoading, setAlogLoading] = useState(false)
+  const [alogTenant, setAlogTenant] = useState('')
+  const [alogEndpoint, setAlogEndpoint] = useState('')
+
+  const loadSystemErrors = useCallback(async (pg) => {
+    setLogLoading(true)
+    try {
+      const p = pg || logPage
+      const params = { page: p, limit: logLimit, days: logDays }
+      if (logSeverity) params.severity = logSeverity
+      if (logType) params.error_type = logType
+      if (logTenant) params.tenant_id = logTenant
+      if (logUnresolved) params.unresolved_only = true
+      const [errors, summary] = await Promise.all([
+        getPlatformLogs(platformKey, params),
+        getPlatformLogsSummary(platformKey, { days: logDays }),
+      ])
+      setSystemErrors(errors.errors)
+      setLogTotal(errors.total)
+      setLogLimit(errors.limit)
+      setLogPage(errors.page)
+      setSystemSummary(summary)
+    } catch { /* silent */ }
+    finally { setLogLoading(false) }
+  }, [platformKey, logPage, logLimit, logDays, logSeverity, logType, logTenant, logUnresolved])
+
+  useEffect(() => { loadSystemErrors(1) }, [loadSystemErrors])
+
+  const loadTenantLogs = useCallback(async (pg) => {
+    if (!selTenant) return
+    setTlogLoading(true)
+    try {
+      const p = pg || tlogPage
+      const params = { page: p, limit: 50, days: logDays }
+      if (logSeverity) params.severity = logSeverity
+      const [errors, summary] = await Promise.all([
+        getPlatformTenantLogs(platformKey, selTenant, params),
+        getPlatformTenantLogsSummary(platformKey, selTenant, { days: logDays }),
+      ])
+      setTenantErrors(errors.errors)
+      setTlogTotal(errors.total)
+      setTlogPage(errors.page)
+      setTenantSummary(summary)
+    } catch { /* silent */ }
+    finally { setTlogLoading(false) }
+  }, [platformKey, selTenant, tlogPage, logDays, logSeverity])
+
+  useEffect(() => { if (selTenant) loadTenantLogs(1) }, [loadTenantLogs])
+
+  const loadAccessLogs = useCallback(async (pg) => {
+    setAlogLoading(true)
+    try {
+      const p = pg || alogPage
+      const params = { page: p, limit: 50, hours: alogHours }
+      if (alogTenant) params.tenant_id = alogTenant
+      if (alogEndpoint) params.endpoint = alogEndpoint
+      const [logs, summary] = await Promise.all([
+        getPlatformAccessLogs(platformKey, params),
+        getPlatformAccessLogsSummary(platformKey, { hours: alogHours }),
+      ])
+      setAccessLogs(logs.entries)
+      setAlogTotal(logs.total)
+      setAlogPage(logs.page)
+      setAccessSummary(summary)
+    } catch { /* silent */ }
+    finally { setAlogLoading(false) }
+  }, [platformKey, alogPage, alogHours, alogTenant, alogEndpoint])
+
+  useEffect(() => { loadAccessLogs(1) }, [loadAccessLogs])
+
+  const severityColor = (s) => {
+    if (s === 'critical') return 'text-brand-rose bg-brand-rose/10 border-brand-rose/20'
+    if (s === 'error') return 'text-red-400 bg-red-400/10 border-red-400/20'
+    if (s === 'warning') return 'text-brand-amber bg-brand-amber/10 border-brand-amber/20'
+    return 'text-brand-muted bg-brand-muted/10 border-brand-muted/20'
+  }
+
+  const statusColor = (code) => {
+    if (code >= 500) return 'text-brand-rose'
+    if (code >= 400) return 'text-brand-amber'
+    if (code >= 200) return 'text-brand-accent'
+    return 'text-brand-muted'
+  }
+
+  return (
+    <div>
+      {/* Sub-tabs */}
+      <div className="flex gap-1 mb-6 border-b border-brand-line pb-0">
+        {[
+          { id: 'system', label: 'System Errors', icon: AlertTriangle },
+          { id: 'tenant', label: 'Tenant Logs', icon: FileText },
+          { id: 'traffic', label: 'API Traffic', icon: Globe },
+        ].map((st) => (
+          <button key={st.id} onClick={() => setSubtab(st.id)} className={`flex items-center gap-1.5 px-4 py-2 text-xs font-sans font-medium border-b-2 transition-colors -mb-px ${subtab === st.id ? 'border-brand-ink text-brand-ink' : 'border-transparent text-brand-muted hover:text-brand-ink-2'}`}>
+            <st.icon size={14} />
+            {st.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Filters (shared) ── */}
+      <div className="flex flex-wrap items-center gap-3 mb-6">
+        <select value={logDays} onChange={(e) => setLogDays(Number(e.target.value))} className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface">
+          <option value={1}>24h</option>
+          <option value={3}>3d</option>
+          <option value={7}>7d</option>
+          <option value={30}>30d</option>
+        </select>
+        {subtab !== 'traffic' && (
+          <>
+            <select value={logSeverity} onChange={(e) => setLogSeverity(e.target.value)} className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface">
+              <option value="">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="error">Error</option>
+              <option value="warning">Warning</option>
+              <option value="info">Info</option>
+            </select>
+            {(subtab === 'system') && (
+              <>
+                <select value={logTenant} onChange={(e) => setLogTenant(e.target.value)} className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface max-w-[200px]">
+                  <option value="">All tenants</option>
+                  {tenants.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                </select>
+                <label className="flex items-center gap-1.5 text-xs text-brand-muted font-sans cursor-pointer">
+                  <input type="checkbox" checked={logUnresolved} onChange={(e) => setLogUnresolved(e.target.checked)} className="rounded" />
+                  Unresolved only
+                </label>
+              </>
+            )}
+          </>
+        )}
+        {subtab === 'traffic' && (
+          <>
+            <select value={alogTenant} onChange={(e) => setAlogTenant(e.target.value)} className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface max-w-[200px]">
+              <option value="">All tenants</option>
+              {tenants.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
+            </select>
+            <input type="text" value={alogEndpoint} onChange={(e) => setAlogEndpoint(e.target.value)} placeholder="Filter endpoint…" className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface w-48" />
+            <select value={alogHours} onChange={(e) => setAlogHours(Number(e.target.value))} className="border border-brand-line rounded-lg px-3 py-1.5 text-xs font-sans bg-brand-surface">
+              <option value={1}>1h</option>
+              <option value={6}>6h</option>
+              <option value={24}>24h</option>
+              <option value={72}>3d</option>
+              <option value={168}>7d</option>
+            </select>
+          </>
+        )}
+      </div>
+
+      {/* ── System Errors ── */}
+      {subtab === 'system' && (
+        <div>
+          {systemSummary && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <StatCard label="Total Errors" value={systemSummary.total_errors} icon={AlertTriangle} />
+              <StatCard label="Unresolved" value={systemSummary.unresolved} sub={systemSummary.total_errors > 0 ? `${((systemSummary.unresolved / systemSummary.total_errors) * 100).toFixed(0)}%` : null} icon={AlertTriangle} />
+              <StatCard label="Critical" value={systemSummary.by_severity?.critical || 0} icon={AlertTriangle} />
+              <StatCard label="Error" value={systemSummary.by_severity?.error || 0} icon={AlertTriangle} />
+            </div>
+          )}
+
+          <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-brand-bg-soft border-b border-brand-line">
+                  <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                    <th className="text-left px-4 py-2">Tenant</th>
+                    <th className="text-left px-4 py-2">Type</th>
+                    <th className="text-left px-4 py-2">Severity</th>
+                    <th className="text-left px-4 py-2">Message</th>
+                    <th className="text-left px-4 py-2">Endpoint</th>
+                    <th className="text-right px-4 py-2">Status</th>
+                    <th className="text-right px-4 py-2">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-line">
+                  {systemErrors?.map((e) => (
+                    <tr key={e.id} className="hover:bg-brand-bg transition-colors">
+                      <td className="px-4 py-2.5 text-xs text-brand-ink font-sans max-w-[120px] truncate" title={e.tenant_name}>{e.tenant_name}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted font-mono">{e.error_type}</td>
+                      <td className="px-4 py-2.5"><span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${severityColor(e.severity)}`}>{e.severity}</span></td>
+                      <td className="px-4 py-2.5 text-xs text-brand-ink-2 font-sans max-w-[300px] truncate" title={e.message}>{e.message}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted font-mono max-w-[150px] truncate">{e.endpoint || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans">{e.status_code || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {(!systemErrors || systemErrors.length === 0) && (
+                    <tr><td colSpan={7} className="px-5 py-8 text-sm text-brand-muted text-center font-sans">{logLoading ? 'Loading…' : 'No errors found'}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {logTotal > logLimit && (
+              <div className="flex items-center justify-between px-5 py-3 border-t border-brand-line">
+                <button onClick={() => setLogPage((p) => Math.max(1, p - 1))} disabled={logPage === 1} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">← Prev</button>
+                <span className="text-xs text-brand-muted font-sans">Page {logPage} of {Math.ceil(logTotal / logLimit)}</span>
+                <button onClick={() => setLogPage((p) => p + 1)} disabled={logPage * logLimit >= logTotal} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Tenant Logs ── */}
+      {subtab === 'tenant' && (
+        <div>
+          <div className="flex items-center gap-3 mb-6">
+            <select value={selTenant} onChange={(e) => { setSelTenant(e.target.value); setTlogPage(1) }} className="border border-brand-line rounded-lg px-3 py-1.5 text-sm font-sans bg-brand-surface">
+              <option value="">Select a tenant…</option>
+              {tenants.map((t) => (<option key={t.id} value={t.id}>{t.name} ({t.domain})</option>))}
+            </select>
+          </div>
+
+          {selTenant && tenantSummary && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <StatCard label="Total Errors" value={tenantSummary.total_errors} icon={AlertTriangle} />
+              <StatCard label="Unresolved" value={tenantSummary.unresolved} icon={AlertTriangle} />
+              <StatCard label="Critical" value={tenantSummary.by_severity?.critical || 0} icon={AlertTriangle} />
+              <StatCard label="Error" value={tenantSummary.by_severity?.error || 0} icon={AlertTriangle} />
+            </div>
+          )}
+
+          {selTenant && (
+            <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-brand-bg-soft border-b border-brand-line">
+                    <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                      <th className="text-left px-4 py-2">Type</th>
+                      <th className="text-left px-4 py-2">Severity</th>
+                      <th className="text-left px-4 py-2">Message</th>
+                      <th className="text-left px-4 py-2">User</th>
+                      <th className="text-left px-4 py-2">Endpoint</th>
+                      <th className="text-right px-4 py-2">Status</th>
+                      <th className="text-right px-4 py-2">When</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-brand-line">
+                    {tenantErrors?.map((e) => (
+                      <tr key={e.id} className="hover:bg-brand-bg transition-colors">
+                        <td className="px-4 py-2.5 text-xs text-brand-muted font-mono">{e.error_type}</td>
+                        <td className="px-4 py-2.5"><span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${severityColor(e.severity)}`}>{e.severity}</span></td>
+                        <td className="px-4 py-2.5 text-xs text-brand-ink-2 font-sans max-w-[300px] truncate" title={e.message}>{e.message}</td>
+                        <td className="px-4 py-2.5 text-xs text-brand-muted font-mono">{e.user_id || 'system'}</td>
+                        <td className="px-4 py-2.5 text-xs text-brand-muted font-mono max-w-[150px] truncate">{e.endpoint || '—'}</td>
+                        <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans">{e.status_code || '—'}</td>
+                        <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {(!tenantErrors || tenantErrors.length === 0) && (
+                      <tr><td colSpan={7} className="px-5 py-8 text-sm text-brand-muted text-center font-sans">{tlogLoading ? 'Loading…' : 'No errors found'}</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {tlogTotal > 50 && (
+                <div className="flex items-center justify-between px-5 py-3 border-t border-brand-line">
+                  <button onClick={() => setTlogPage((p) => Math.max(1, p - 1))} disabled={tlogPage === 1} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">← Prev</button>
+                  <span className="text-xs text-brand-muted font-sans">Page {tlogPage} of {Math.ceil(tlogTotal / 50)}</span>
+                  <button onClick={() => setTlogPage((p) => p + 1)} disabled={tlogPage * 50 >= tlogTotal} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!selTenant && (
+            <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm p-8 text-center">
+              <FileText size={32} className="text-brand-muted mx-auto mb-3" />
+              <p className="text-sm text-brand-muted font-sans">Select a tenant above to view their error logs and diagnostics</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── API Traffic ── */}
+      {subtab === 'traffic' && (
+        <div>
+          {accessSummary && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <StatCard label="Requests" value={accessSummary.total_requests?.toLocaleString()} sub={`${alogHours}h window`} icon={Globe} />
+              <StatCard label="2xx" value={accessSummary.by_status?.['200'] || 0} icon={Activity} />
+              <StatCard label="4xx" value={accessSummary.by_status?.['400'] + accessSummary.by_status?.['401'] + accessSummary.by_status?.['403'] + accessSummary.by_status?.['404'] + accessSummary.by_status?.['422'] + accessSummary.by_status?.['429'] || 0} icon={AlertTriangle} />
+              <StatCard label="Avg Latency" value={accessSummary.avg_latency_ms ? `${accessSummary.avg_latency_ms}ms` : '—'} icon={Zap} />
+            </div>
+          )}
+
+          <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-brand-bg-soft border-b border-brand-line">
+                  <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                    <th className="text-left px-4 py-2">Tenant</th>
+                    <th className="text-left px-4 py-2">Method</th>
+                    <th className="text-left px-4 py-2">Endpoint</th>
+                    <th className="text-right px-4 py-2">Status</th>
+                    <th className="text-right px-4 py-2">Latency</th>
+                    <th className="text-right px-4 py-2">When</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-line">
+                  {accessLogs?.map((e) => (
+                    <tr key={e.id} className="hover:bg-brand-bg transition-colors">
+                      <td className="px-4 py-2.5 text-xs text-brand-ink font-sans max-w-[120px] truncate" title={e.tenant_name}>{e.tenant_name}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted font-mono">{e.method}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-ink-2 font-mono max-w-[250px] truncate" title={e.endpoint}>{e.endpoint}</td>
+                      <td className={`px-4 py-2.5 text-xs text-right font-mono ${statusColor(e.status_code)}`}>{e.status_code}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans">{e.latency_ms != null ? `${e.latency_ms}ms` : '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-brand-muted text-right font-sans whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {(!accessLogs || accessLogs.length === 0) && (
+                    <tr><td colSpan={6} className="px-5 py-8 text-sm text-brand-muted text-center font-sans">{alogLoading ? 'Loading…' : 'No traffic recorded'}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {alogTotal > 50 && (
+              <div className="flex items-center justify-between px-5 py-3 border-t border-brand-line">
+                <button onClick={() => setAlogPage((p) => Math.max(1, p - 1))} disabled={alogPage === 1} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">← Prev</button>
+                <span className="text-xs text-brand-muted font-sans">Page {alogPage} of {Math.ceil(alogTotal / 50)}</span>
+                <button onClick={() => setAlogPage((p) => p + 1)} disabled={alogPage * 50 >= alogTotal} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(() => sessionStorage.getItem('platform_key') || null)
   const [tab, setTab] = useState('dashboard')
@@ -172,6 +531,7 @@ export default function PlatformPage() {
   const [expandedTenant, setExpandedTenant] = useState(null)
   const [tenantDetail, setTenantDetail] = useState(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [limit, setLimit] = useState(50)
   const [savingProvider, setSavingProvider] = useState(false)
 
   const handleLogin = (key) => {
@@ -189,6 +549,7 @@ export default function PlatformPage() {
       const results = await Promise.all(promises)
       setTenants(results[0].tenants)
       setTotal(results[0].total)
+      setLimit(results[0].limit || 50)
       setUsage(results[1])
       setProviders(results[2].providers)
       if (results[3]) setHealth(results[3])
@@ -224,6 +585,7 @@ export default function PlatformPage() {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'tenants', label: 'Tenants', icon: Users },
+    { id: 'logs', label: 'Logs', icon: FileText },
     { id: 'health', label: 'System', icon: Database },
   ]
 
@@ -405,8 +767,8 @@ export default function PlatformPage() {
                                           {tenantDetail.users.map((u) => (
                                             <div key={u.id} className="flex items-center justify-between text-sm py-1">
                                               <div>
-                                                <p className="text-brand-ink font-sans font-medium">{u.full_name || u.email}</p>
-                                                <p className="text-xs text-brand-muted">{u.email}</p>
+                                                <p className="text-brand-ink font-sans font-medium">{u.full_name || `User ${u.id.slice(0, 8)}`}</p>
+                                                <p className="text-xs text-brand-muted font-mono">{u.id.slice(0, 8)}&hellip;</p>
                                               </div>
                                               <span className={`text-xs px-1.5 py-0.5 rounded font-sans ${u.role === 'admin' ? 'bg-brand-ink/10 text-brand-ink' : 'bg-brand-muted/10 text-brand-muted'}`}>{u.role}</span>
                                             </div>
@@ -449,17 +811,20 @@ export default function PlatformPage() {
                   </table>
                 </div>
                 {/* Pagination */}
-                {total > LIMIT && (
+                {total > limit && (
                   <div className="flex items-center justify-between px-5 py-3 border-t border-brand-line">
                     <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">← Prev</button>
-                    <span className="text-xs text-brand-muted font-sans">Page {page} of {Math.ceil(total / LIMIT)} ({total} total)</span>
-                    <button onClick={() => setPage((p) => p + 1)} disabled={page * LIMIT >= total} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
+                    <span className="text-xs text-brand-muted font-sans">Page {page} of {Math.ceil(total / limit)} ({total} total)</span>
+                    <button onClick={() => setPage((p) => p + 1)} disabled={page * limit >= total} className="text-sm text-brand-muted hover:text-brand-ink disabled:opacity-40 font-sans">Next →</button>
                   </div>
                 )}
               </div>
             )}
           </div>
         )}
+
+        {/* ── Logs Tab ── */}
+        {tab === 'logs' && <LogsTab platformKey={platformKey} tenants={tenants} />}
 
         {/* ── Health Tab ── */}
         {tab === 'health' && (

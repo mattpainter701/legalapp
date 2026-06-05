@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.13.4] — 2026-06-05
+
+### Cloud Drive Integration Fix — Google Drive + OneDrive Folder Creation
+
+### Fixed
+- **`integrations.py`:** Google admin OAuth scope changed from `drive.readonly` → `drive` — all write operations (folder creation, sharing) were returning HTTP 403 silently.
+- **`integrations.py`:** Microsoft admin OAuth scope changed from `Files.Read.All` → `Files.ReadWrite.All` — OneDrive folder creation and sharing require write permissions.
+- **`integrations.py`:** Added `_ensure_cloud_root()` call after admin re-auth so re-authorizing automatically backfills `claritylegal-records` root folder for tenants that completed onboarding with broken scopes.
+
+### Added
+- **`integrations.py`:** `POST /api/integrations/cloud-init/retry` endpoint — admin-only, re-creates the `claritylegal-records` root folder and backfills all matters with `cloud_folder = null`, returning `{root, matters_initialized, matters_failed}`.
+- **`cloud_init.py`:** `initialize_matter_folders()` now stores `url` for OneDrive (via `_get_onedrive_web_url`) and Google Drive (direct `drive.google.com/drive/folders/{id}` URL) so matter detail pages can link directly to folders.
+- **`api.js`:** Added `retryCloudInit()` call for the new retry endpoint.
+- **`IntegrationsPanel.jsx`:** "Retry cloud setup" button in overall status row — triggers backfill and shows count of matters initialized. Updated scope labels to reflect write scopes.
+- **`MatterDetailPage.jsx`:** Cloud Storage row in Case Details card — shows "OneDrive" and/or "Google Drive" pill buttons linking to the matter's cloud folder when `matter.cloud_folder` is populated.
+
+---
+
+## [0.13.3] — 2026-06-05
+
+### Task 1111 — Operator Console: Error Diagnostics & API Traffic Logs
+
+### Fixed
+- **`PlatformPage.jsx`:** Fixed `LIMIT is not defined` ReferenceError by capturing `limit` from API response and replacing all hardcoded `LIMIT` variable references.
+- **`PlatformPage.jsx`:** Masked user emails in tenant detail view — now shows `full_name` (or "User XXXX…") and user ID prefix instead of exposing email addresses.
+
+### Added
+- **Platform error log endpoints** in `platform.py`: `GET /api/platform/logs` (cross-tenant errors, paginated, filterable by tenant/severity/type/days/unresolved), `GET /api/platform/logs/summary` (by_severity, by_type, by_tenant top 20, daily trend), `GET /api/platform/logs/tenant/{id}`, `GET /api/platform/logs/tenant/{id}/summary`. All endpoints anonymize user_id.
+- **`ApiAccessLog` model** (`api_access_log.py`) + migration 038: metadata-only request logging (tenant_id, endpoint, method, status_code, latency_ms, ip_address, user_agent_short).
+- **`ApiAccessLogMiddleware`** (`middleware/access_log.py`): Logs every request after TenantMiddleware resolves tenant_id. Skips /health, /docs, /api/platform, /static.
+- **Platform access log endpoints**: `GET /api/platform/access-logs` (paginated, filterable by tenant/endpoint/status/hours), `GET /api/platform/access-logs/summary` (total_requests, by_status, avg_latency, by_endpoint top 20, by_tenant top 20).
+- **Operator Console Logs tab**: 3 sub-tabs — System Errors (summary cards + filterable/paginated table), Tenant Logs (per-tenant drill-down with selector), API Traffic (access log with summary statistics). Added FileText/Globe/AlertTriangle icons.
+
+### Changed
+- **`models/__init__.py`:** Registered `ApiAccessLog` model.
+- **`main.py`:** Registered `ApiAccessLogMiddleware` in middleware stack (after TenantMiddleware, before RateLimitMiddleware).
+- **`frontend/src/api.js`:** Added 6 platform log/access-log API functions.
+
+---
+
 ## [0.13.2] — 2026-06-05
 
 ### Task 1109 — Calendar Sync Multi-User Fix
