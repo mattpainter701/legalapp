@@ -1,9 +1,19 @@
 import React, { useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import IntegrationPanel from './IntegrationPanel'
-import { deleteDocument, deleteConversation } from '../api'
-import { Plus, Blocks, FileText, Trash2, Settings, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User, Menu } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User, ChevronRight } from 'lucide-react'
+
+const NAV_ITEMS = [
+  { path: '/matters',        label: 'My Matters',       icon: Briefcase,    primary: true },
+  { path: '/calendar',       label: 'Calendar',         icon: CalendarDays  },
+  { path: '/communications', label: 'Communications',   icon: MessageSquare },
+  { path: '/time-tracking',  label: 'Time Tracking',    icon: Clock         },
+  { path: '/invoices',       label: 'Invoices',         icon: Receipt       },
+  { path: '/reports',        label: 'Reports',          icon: BarChart2     },
+  { path: '/templates',      label: 'Templates',        icon: FileSignature },
+  { path: '/plugins',        label: 'Add-on Modules',   icon: Blocks        },
+]
 
 function ConversationItem({
   conv,
@@ -35,8 +45,11 @@ function ConversationItem({
         }
       }}
     >
-      <span className="font-mono text-[10px] pt-[3px] text-brand-muted shrink-0">
-        {isPinned ? '📌' : String(index + 1).padStart(2, '0')}
+      <span className="shrink-0 pt-[3px] flex items-center justify-center w-[18px]">
+        {isPinned
+          ? <Pin size={11} className="text-brand-accent" fill="currentColor" />
+          : <span className="font-mono text-[10px] text-brand-muted">{String(index + 1).padStart(2, '0')}</span>
+        }
       </span>
       <span className="flex-1 truncate leading-tight" title={conv.title || 'Untitled conversation'}>
         {conv.title || 'Untitled conversation'}
@@ -126,31 +139,25 @@ export default function Sidebar({
   onClose,
 }) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [searchQuery, setSearchQuery] = useState('')
-  const [pinnedConvIds, setPinnedConvIds] = useState([])
+  const [showIntegrations, setShowIntegrations] = useState(false)
+  const [pinnedConvIds, setPinnedConvIds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('pinnedConvIds') || '[]') }
+    catch { return [] }
+  })
 
-  const handleDeleteConv = async (id) => {
-    try {
-      await deleteConversation(id)
-      onConversationDeleted(id)
-    } catch (err) {
-      console.error('Failed to delete conversation', err)
-    }
-  }
+  const isActive = (path) => pathname === path || pathname.startsWith(path + '/')
 
-  const handleDeleteDoc = async (id) => {
-    try {
-      await deleteDocument(id)
-      onDocumentDeleted(id)
-    } catch (err) {
-      console.error('Failed to delete document', err)
-    }
-  }
+  const handleDeleteConv = (id) => onConversationDeleted(id)
+  const handleDeleteDoc  = (id) => onDocumentDeleted(id)
 
   const handleTogglePin = (id) => {
-    setPinnedConvIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    )
+    setPinnedConvIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      localStorage.setItem('pinnedConvIds', JSON.stringify(next))
+      return next
+    })
   }
 
   // Filter and sort conversations
@@ -159,11 +166,9 @@ export default function Sidebar({
       (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
     )
 
-    // Separate pinned and unpinned
     const pinned = filtered.filter((c) => pinnedConvIds.includes(c.id))
     const unpinned = filtered.filter((c) => !pinnedConvIds.includes(c.id))
 
-    // Sort unpinned by date (newest first)
     unpinned.sort(
       (a, b) =>
         new Date(b.updated_at || b.created_at).getTime() -
@@ -198,7 +203,6 @@ export default function Sidebar({
       <div className="h-16 flex items-center px-4 border-b border-brand-line shrink-0">
         <Scale className="w-5 h-5 mr-2 text-brand-accent" strokeWidth={1.5} />
         <span className="font-serif font-semibold text-lg tracking-tight text-brand-ink flex-1">Clarity Legal</span>
-        {/* Close button — mobile only */}
         <button
           className="md:hidden p-1.5 text-brand-muted hover:text-brand-ink transition-colors"
           onClick={onClose}
@@ -208,82 +212,42 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* Actions */}
-      <div className="p-4 flex flex-col gap-2 border-b border-brand-line shrink-0">
-        {/* Matters — primary entry point */}
-        <button
-          onClick={() => handleNavAndClose('/matters')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-brand-ink text-white text-sm font-semibold hover:bg-brand-ink-2 transition-colors border border-brand-ink"
-        >
-          <span className="flex items-center gap-2">
-            <Briefcase className="w-4 h-4" /> My Matters
-          </span>
-        </button>
+      {/* Navigation */}
+      <div className="p-3 flex flex-col gap-0.5 border-b border-brand-line shrink-0">
+        {/* New Conversation — action button, not a nav destination */}
         <button
           onClick={() => { onNewConversation?.(); onClose?.() }}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
+          className="flex items-center justify-between w-full px-3 py-2 mb-1 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line rounded"
         >
           <span className="flex items-center gap-2">
             <Plus className="w-4 h-4" /> New Conversation
           </span>
           <span className="text-brand-muted text-xs font-mono">⌘N</span>
         </button>
-        <button
-          onClick={() => handleNavAndClose('/calendar')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <CalendarDays className="w-4 h-4" /> Calendar
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/communications')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <MessageSquare className="w-4 h-4" /> Communications
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/time-tracking')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Clock className="w-4 h-4" /> Time Tracking
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/invoices')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Receipt className="w-4 h-4" /> Invoices
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/reports')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <BarChart2 className="w-4 h-4" /> Reports
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/templates')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <FileSignature className="w-4 h-4" /> Templates
-          </span>
-        </button>
-        <button
-          onClick={() => handleNavAndClose('/plugins')}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line"
-        >
-          <span className="flex items-center gap-2">
-            <Blocks className="w-4 h-4" /> Add-on Modules
-          </span>
-        </button>
+
+        {NAV_ITEMS.map(({ path, label, icon: Icon, primary }) => {
+          const active = isActive(path)
+          if (primary) {
+            return (
+              <button
+                key={path}
+                onClick={() => handleNavAndClose(path)}
+                className={`sidebar-item w-full rounded text-white ${active ? 'bg-brand-ink-2' : 'bg-brand-ink hover:bg-brand-ink-2'}`}
+              >
+                <Icon className="w-4 h-4" /> {label}
+              </button>
+            )
+          }
+          return (
+            <button
+              key={path}
+              onClick={() => handleNavAndClose(path)}
+              className={`sidebar-item w-full rounded ${active ? 'sidebar-item-active' : 'sidebar-item-inactive'}`}
+            >
+              <Icon className="w-4 h-4" /> {label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Scrollable areas */}
@@ -309,7 +273,7 @@ export default function Sidebar({
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-2.5 text-brand-muted hover:text-brand-ink"
+                  className="absolute right-6 top-2.5 text-brand-muted hover:text-brand-ink"
                 >
                   <X size={12} />
                 </button>
@@ -363,23 +327,35 @@ export default function Sidebar({
 
         <div className="w-full h-px bg-brand-line my-2"></div>
 
-        {/* Cloud Integrations */}
-        <div className="py-4 px-4">
-          <IntegrationPanel
-            integrationStatus={{
-              google_drive: { connected: false, fileCount: 0 },
-              onedrive: { connected: false, fileCount: 0 },
-              sharepoint: { connected: false, fileCount: 0 },
-            }}
-            onConnect={(serviceId) => {
-              // TODO: Implement OAuth flow for each service
-              console.log('Connect to:', serviceId)
-            }}
-            onDisconnect={(serviceId) => {
-              // TODO: Implement disconnect
-              console.log('Disconnect from:', serviceId)
-            }}
-          />
+        {/* Cloud Integrations — collapsible */}
+        <div className="py-2">
+          <button
+            onClick={() => setShowIntegrations((v) => !v)}
+            className="w-full px-4 py-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted hover:text-brand-ink transition-colors"
+          >
+            <span>Cloud Integrations</span>
+            <ChevronRight
+              size={14}
+              className={`transition-transform duration-200 ${showIntegrations ? 'rotate-90' : ''}`}
+            />
+          </button>
+          {showIntegrations && (
+            <div className="px-4 pb-4">
+              <IntegrationPanel
+                integrationStatus={{
+                  google_drive: { connected: false, fileCount: 0 },
+                  onedrive: { connected: false, fileCount: 0 },
+                  sharepoint: { connected: false, fileCount: 0 },
+                }}
+                onConnect={(serviceId) => {
+                  console.log('Connect to:', serviceId)
+                }}
+                onDisconnect={(serviceId) => {
+                  console.log('Disconnect from:', serviceId)
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
