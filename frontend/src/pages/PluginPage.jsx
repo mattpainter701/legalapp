@@ -4,129 +4,8 @@ import { getPlugins, getPluginProfile, executeSkill, getPluginSetup, savePluginS
 import ColdStartInterview from '../components/ColdStartInterview'
 import SkillOutput from '../components/SkillOutput'
 import {
-  Scale, Lock, Landmark, Building2, UserCircle, Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake,
-  ArrowLeft, FileUp, Settings2, Play
+  ArrowLeft, ClipboardList, FileUp, Settings2, Play
 } from 'lucide-react'
-
-// ── Plugin metadata ──────────────────────────────────────────────────────────
-
-const PLUGIN_META = {
-  'commercial-legal': {
-    icon: Scale,
-    name: 'Commercial Legal',
-    skills: [
-      { id: 'contract-review', label: 'Contract Review', description: 'Analyze a contract for key risks, obligations, and recommended edits.' },
-      { id: 'nda-triage', label: 'NDA Triage', description: 'Quickly triage an NDA for one-sided provisions and risk factors.' },
-      { id: 'saas-review', label: 'SaaS Agreement Review', description: 'Review a SaaS agreement for liability, IP, and data terms.' },
-      { id: 'renewal-analysis', label: 'Renewal Analysis', description: 'Analyze contract renewal terms and auto-renewal risk.' },
-    ],
-    extraLinks: [{ label: 'Renewal Tracker', path: '/plugins/commercial/renewals' }],
-  },
-  'privacy-legal': {
-    icon: Lock,
-    name: 'Privacy Legal',
-    skills: [
-      { id: 'dpa-review', label: 'DPA Review', description: 'Review a Data Processing Agreement for GDPR/CCPA compliance gaps.' },
-      { id: 'dsar-response', label: 'DSAR Response', description: 'Draft a Data Subject Access Request response letter.' },
-      { id: 'pia-review', label: 'Privacy Impact Assessment', description: 'Conduct a Privacy Impact Assessment for a new product or process.' },
-    ],
-    extraLinks: [],
-  },
-  'litigation-legal': {
-    icon: Landmark,
-    name: 'Litigation Legal',
-    skills: [
-      { id: 'matter-intake', label: 'Matter Intake', description: 'Intake a new litigation matter with risk scoring and conflict check.' },
-      { id: 'demand-letter', label: 'Demand Letter', description: 'Draft a demand letter for a litigation dispute.' },
-      { id: 'claim-chart', label: 'Claim Chart', description: 'Generate a patent claim chart for infringement or invalidity analysis.' },
-      { id: 'case-summary', label: 'Case Summary', description: 'Summarize a case or legal filing for internal use.' },
-    ],
-    extraLinks: [{ label: 'Matter Portfolio', path: '/plugins/litigation/matters' }],
-  },
-  'corporate-legal': {
-    icon: Building2,
-    name: 'Corporate Legal',
-    skills: [
-      { id: 'ma-diligence', label: 'M&A Diligence', description: 'Generate an M&A diligence checklist and risk summary.' },
-      { id: 'closing-checklist', label: 'Closing Checklist', description: 'Create a closing checklist for a corporate transaction.' },
-      { id: 'entity-compliance', label: 'Entity Compliance', description: 'Review entity compliance status and flag deficiencies.' },
-    ],
-    extraLinks: [],
-  },
-  'employment-legal': {
-    icon: UserCircle,
-    name: 'Employment Legal',
-    skills: [
-      { id: 'hire-review', label: 'Hire Review', description: 'Review a new hire package for legal compliance risks.' },
-      { id: 'termination-review', label: 'Termination Review', description: 'Review a termination for legal risk and recommended steps.' },
-      { id: 'worker-classification', label: 'Worker Classification', description: 'Analyze worker classification (employee vs. contractor).' },
-      { id: 'leave-analysis', label: 'Leave Analysis', description: 'Review leave policy or leave request for legal compliance.' },
-    ],
-    extraLinks: [],
-  },
-  'product-legal': {
-    icon: Rocket,
-    name: 'Product Legal',
-    skills: [
-      { id: 'launch-review', label: 'Launch Review', description: 'Review a product launch for legal and regulatory risks.' },
-      { id: 'marketing-claims', label: 'Marketing Claims Check', description: 'Check marketing claims for false advertising risk.' },
-      { id: 'regulatory-triage', label: 'Regulatory Triage', description: 'Triage a product feature for regulatory classification.' },
-    ],
-    extraLinks: [],
-  },
-  'ip-legal': {
-    icon: Lightbulb,
-    name: 'IP Legal',
-    skills: [
-      { id: 'trademark-clearance', label: 'Trademark Clearance', description: 'Assess trademark clearance risk for a brand name or mark.' },
-      { id: 'fto-analysis', label: 'Freedom-to-Operate', description: 'Analyze freedom-to-operate risk for a product or technology.' },
-      { id: 'cd-letter', label: 'C&D Letter', description: 'Draft a cease and desist letter for IP infringement.' },
-    ],
-    extraLinks: [],
-  },
-  'ai-governance-legal': {
-    icon: Bot,
-    name: 'AI Governance',
-    skills: [
-      { id: 'ai-use-case-triage', label: 'AI Use Case Triage', description: 'Triage an AI use case for legal and regulatory risk.' },
-      { id: 'ai-impact-assessment', label: 'AI Impact Assessment', description: 'Conduct an AI impact assessment for a proposed system.' },
-      { id: 'vendor-ai-review', label: 'Vendor AI Review', description: 'Review vendor AI terms for risk and compliance.' },
-    ],
-    extraLinks: [],
-  },
-  'regulatory-legal': {
-    icon: ClipboardList,
-    name: 'Regulatory Legal',
-    skills: [
-      { id: 'regulatory-monitoring', label: 'Regulatory Monitoring', description: 'Summarize recent regulatory developments in a given area.' },
-      { id: 'policy-gap-analysis', label: 'Policy Gap Analysis', description: 'Identify gaps between current policies and regulatory requirements.' },
-      { id: 'nprm-comment', label: 'NPRM Comment', description: 'Draft a public comment on a Notice of Proposed Rulemaking.' },
-    ],
-    extraLinks: [],
-  },
-  'trust-estate-legal': {
-    icon: Vault,
-    name: 'Trust & Estate',
-    skills: [
-      { id: 'will-drafting-review', label: 'Will & Trust Review', description: 'Review a will or trust instrument for drafting risks and gaps.' },
-      { id: 'estate-tax-analysis', label: 'Estate Tax Analysis', description: 'Analyze estate and gift tax exposure and planning options.' },
-      { id: 'probate-checklist', label: 'Probate Checklist', description: 'Generate a probate administration checklist with key deadlines.' },
-      { id: 'beneficiary-review', label: 'Beneficiary Review', description: 'Review beneficiary designations and funding for consistency.' },
-    ],
-    extraLinks: [{ label: 'Estate Portfolio', path: '/plugins/trust-estate/estates' }],
-  },
-  'mediation-legal': {
-    icon: Handshake,
-    name: 'Mediation',
-    skills: [
-      { id: 'mediation-intake', label: 'Mediation Intake', description: 'Intake a new mediation matter with party and dispute details.' },
-      { id: 'mediation-brief', label: 'Mediation Brief', description: 'Draft a confidential mediation brief summarizing positions.' },
-      { id: 'settlement-agreement', label: 'Settlement Agreement', description: 'Draft a settlement memorandum of understanding from agreed terms.' },
-      { id: 'caucus-summary', label: 'Caucus Summary', description: 'Summarize a private caucus session and next-step recommendations.' },
-    ],
-    extraLinks: [{ label: 'Mediation Cases', path: '/plugins/mediation/cases' }],
-  },
-}
 
 // ── Extra fields per skill ────────────────────────────────────────────────────
 
@@ -339,32 +218,21 @@ export default function PluginPage() {
   const { pluginName } = useParams()
   const navigate = useNavigate()
 
-  const localMeta = PLUGIN_META[pluginName] || {}
   const [catalogPlugin, setCatalogPlugin] = useState(null)
-  const catalogSkills = (catalogPlugin?.skills || [])
-    .filter((skill) => skill !== 'cold-start-interview')
-    .map((skill) => ({
-      id: skill,
-      label: skillLabel(skill),
-      description: `Run the ${skillLabel(skill).toLowerCase()} workflow with optional matter and cloud context.`,
+
+  // Derive all plugin metadata from the backend catalog — no duplicated frontend metadata.
+  const displayName = catalogPlugin?.display_name || pluginName
+  const skills = (catalogPlugin?.skills || [])
+    .filter((s) => s !== 'cold-start-interview')
+    .map((skillId) => ({
+      id: skillId,
+      label: skillLabel(skillId),
+      description: `Run the ${skillLabel(skillId).toLowerCase()} workflow with optional matter and cloud context.`,
     }))
-  const meta = {
-    icon: localMeta.icon || Settings2,
-    name: catalogPlugin?.display_name || localMeta.name || pluginName,
-    skills: catalogSkills.length ? catalogSkills : (localMeta.skills || []),
-    extraLinks: catalogPlugin?.primary_route
-      ? [{ label: 'Plugin Workspace', path: catalogPlugin.primary_route }]
-      : (localMeta.extraLinks || []),
-  }
-
-  if (!catalogPlugin && !localMeta.name) {
-    meta.icon = Settings2
-    meta.name = pluginName
-    meta.skills = []
-    meta.extraLinks = []
-  }
-
-  const Icon = meta.icon
+  const extraLinks = catalogPlugin?.primary_route
+    ? [{ label: 'Plugin Workspace', path: catalogPlugin.primary_route }]
+    : []
+  const Icon = Settings2
 
   const [profile, setProfile] = useState(null)
   const [profileLoading, setProfileLoading] = useState(true)
@@ -373,7 +241,7 @@ export default function PluginPage() {
   const [setupData, setSetupData] = useState(null)
   const [matters, setMatters] = useState([])
   const [selectedMatterId, setSelectedMatterId] = useState('')
-  const [selectedSkill, setSelectedSkill] = useState(meta.skills[0] || null)
+  const [selectedSkill, setSelectedSkill] = useState(skills[0] || null)
   const [inputText, setInputText] = useState('')
   const [extraFields, setExtraFields] = useState({})
   const [showExtra, setShowExtra] = useState(false)
@@ -396,8 +264,8 @@ export default function PluginPage() {
   }, [pluginName])
 
   useEffect(() => {
-    if (meta.skills.length) {
-      setSelectedSkill(meta.skills[0])
+    if (skills.length) {
+      setSelectedSkill(skills[0])
     }
   }, [catalogPlugin, pluginName]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -459,7 +327,7 @@ export default function PluginPage() {
     if (!output?.memo) return
     sessionStorage.setItem(
       'pending_chat_message',
-      `[From ${meta.name} — ${selectedSkill?.label}]\n\n${output.memo}`
+      `[From ${displayName} — ${selectedSkill?.label}]\n\n${output.memo}`
     )
     navigate('/chat')
   }
@@ -491,7 +359,7 @@ export default function PluginPage() {
       {showStructuredSetup && (
         <StructuredSetupModal
           pluginName={pluginName}
-          pluginLabel={meta.name}
+          pluginLabel={displayName}
           setupData={setupData}
           onClose={() => setShowStructuredSetup(false)}
           onSaved={(saved) => {
@@ -521,7 +389,7 @@ export default function PluginPage() {
               <Icon size={20} />
             </div>
             <h2 className="text-brand-ink font-serif font-bold text-xl leading-tight">
-              {meta.name}
+              {displayName}
             </h2>
           </div>
 
@@ -564,7 +432,7 @@ export default function PluginPage() {
             Workflows
           </p>
           <nav className="space-y-1">
-            {meta.skills.map((skill) => (
+            {skills.map((skill) => (
               <button
                 key={skill.id}
                 onClick={() => {
@@ -589,13 +457,13 @@ export default function PluginPage() {
           </nav>
 
           {/* Extra links */}
-          {meta.extraLinks.length > 0 && (
+          {extraLinks.length > 0 && (
             <div className="mt-8">
               <p className="px-2 text-xs font-semibold text-brand-muted uppercase tracking-widest mb-3 font-sans">
                 Resources
               </p>
               <nav className="space-y-1">
-                {meta.extraLinks.map((link) => (
+                {extraLinks.map((link) => (
                   <button
                     key={link.path}
                     onClick={() => navigate(link.path)}
@@ -616,7 +484,7 @@ export default function PluginPage() {
         {/* Header */}
         <div className="bg-brand-surface border-b border-brand-line px-10 py-8 flex-shrink-0">
           <h1 className="font-serif font-bold text-3xl text-brand-ink tracking-tight mb-2">
-            {selectedSkill ? selectedSkill.label : meta.name}
+            {selectedSkill ? selectedSkill.label : displayName}
           </h1>
           {selectedSkill && (
             <p className="text-brand-muted text-[15px] font-sans max-w-3xl">{selectedSkill.description}</p>
@@ -799,7 +667,7 @@ export default function PluginPage() {
                 <div className="w-16 h-16 rounded-2xl bg-brand-surface border border-brand-line flex items-center justify-center text-brand-muted mb-4">
                   <Icon size={32} strokeWidth={1.5} />
                 </div>
-                <h3 className="font-serif text-xl font-semibold text-brand-ink mb-2">{meta.name}</h3>
+                <h3 className="font-serif text-xl font-semibold text-brand-ink mb-2">{displayName}</h3>
                 <p className="text-brand-muted text-sm font-sans max-w-sm">
                   Select a workflow from the sidebar to get started.
                 </p>

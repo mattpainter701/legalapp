@@ -4,11 +4,11 @@
 
 **Goal:** Turn plugins from generic prompt/profile pages into paid add-on workflow modules that can be purchased by a tenant, configured by admins, and attached to matters as the governing workflow/context layer.
 
-### 901. Plugin Catalog, Entitlements & Canonical API (P0, MEDIUM) — IN PROGRESS
+### 901. Plugin Catalog, Entitlements & Canonical API (P0, MEDIUM) — COMPLETED
 - [x] Create a canonical backend plugin catalog/manifest with display metadata, skill ids, workflow routes, matter type mappings, required/optional integrations, and setup requirements
 - [x] Add tenant-level plugin entitlement records so "purchased", "trial", "locked", and "setup required" are distinct from practice-profile existence
 - [x] Update `GET /api/plugins` to return the canonical catalog plus tenant entitlement/profile/setup status
-- [ ] Stop relying on duplicated frontend plugin metadata as the source of truth
+- [x] Stop relying on duplicated frontend plugin metadata as the source of truth
 
 Files: `backend/app/services/plugins/manifest.py`, `backend/app/models/plugin.py`, `backend/app/routers/plugins.py`, `backend/app/schemas/plugin.py`, `frontend/src/pages/PluginsPage.jsx`
 
@@ -32,11 +32,11 @@ Files: `backend/app/models/plugin.py`, `backend/app/schemas/matter.py`, `backend
 - [x] Surface integration readiness per plugin
 - [x] Use matter context + cloud metadata in plugin skill execution when a matter is attached
 
-### 905. Plugin Workspace UX & Admin Commerce States (P1, LARGE)
-- [ ] Redesign Plugins page around Purchased / Available / Trial / Locked / Setup Required states
-- [ ] Add admin controls to activate trials and configure purchased plugins
-- [ ] Move workflow modules into matter/plugin tabs instead of unrelated hardcoded islands where appropriate
-- [ ] Keep general matters usable without paid plugin purchase
+### 905. Plugin Workspace UX & Admin Commerce States (P1, LARGE) — COMPLETED
+- [x] Redesign Plugins page around Purchased / Available / Trial / Locked / Setup Required states
+- [x] Add admin controls to activate trials and configure purchased plugins
+- [x] Move workflow modules into matter/plugin tabs instead of unrelated hardcoded islands where appropriate
+- [x] Keep general matters usable without paid plugin purchase
 
 ---
 

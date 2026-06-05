@@ -17,7 +17,9 @@
 - PluginsPage: category grouping, entitlement badges (Included/Trial/Purchase/Setup Required), matter workflow detail cards
 
 ### Changed
-- Plugin manifest is now the single source of truth — frontend `PLUGIN_META` lookup is secondary
+- Plugin manifest is now the single source of truth — frontend `PLUGIN_META` removed entirely; all plugin metadata derived from backend catalog API
+- PluginsPage redesigned with state tabs (Purchased / Trials / Available / Setup Required / Locked) with per-tab counts
+- Sidebar consolidated: plugin-specific workflow links replaced with single unified "Matters" link
 - `POST /plugins/{plugin}/cold-start` now initializes structured `TenantPluginSetup` row alongside `PracticeProfile`
 - `PluginExecutor` enriched with cloud search context via `RetrievalPlanner` + `CloudSearchService` + `build_cloud_context`
 - Matters V2 router gained `primary_plugin` and `plugin_workflow_state` in create/update/list/detail
