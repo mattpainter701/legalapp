@@ -130,7 +130,7 @@ async def microsoft_connect(
         f"&scope={scopes.replace(' ', '+')}"
         f"&state={state}"
         f"&response_mode=query"
-        f"&prompt=consent"
+        f"&prompt=select_account"
     )
     return RedirectResponse(url=authorize_url)
 

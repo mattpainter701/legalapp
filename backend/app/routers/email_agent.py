@@ -116,7 +116,7 @@ async def sync_calendar(
                 status_code=400, detail=f"Unsupported provider: {body.provider}"
             )
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
 
     deadlines_created = 0
     if body.sync_deadlines:
@@ -126,7 +126,7 @@ async def sync_calendar(
             )
             deadlines_created = sync_result.get("created", 0)
         except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc))
 
     return CalendarSyncResponse(
         provider=body.provider,
