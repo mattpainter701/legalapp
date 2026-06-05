@@ -17,15 +17,17 @@
 - [x] Define standard/premium fallback profiles in `litellm_config.yaml`
 - [x] Add production secret docs for LiteLLM master key, DB password, and provider keys
 
-### 1202. Routing Refactor — Logical Route First (P0, LARGE) — CLAIMED
+### 1202. LiteLLM-Only Routing Refactor (P0, LARGE) — CLAIMED
 
-**Claimed:** 2026-06-05 — Codex. Large P0 backend refactor; prerequisite for AI Operations console, gateway audit, and cutover work.
+**Claimed:** 2026-06-05 — Codex. Replanned after LiteLLM deployment: LegalApp must stop acting as a provider router. All LLM execution goes through LiteLLM aliases; the app only resolves logical routes, assembles legal context, applies guardrails, and records audit/billing metadata.
 
-- [ ] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium`
-- [ ] Persist requested route, resolved gateway alias, final provider/model, fallback count, and gateway request ID on `usage_records`
-- [ ] Include resolved provider/model in cache keys for all LLM-backed flows
-- [ ] Route chat, stream chat, plugin skills, cold-start interviews, memory summaries, retrieval planner, prompt tests, and email agent through one resolver
-- [ ] Keep direct provider fallback behind an explicit emergency flag for one release
+- [ ] Refactor `LLMService` to a concise LiteLLM OpenAI-compatible client only; remove direct DeepSeek/OpenCode/OpenRouter/Anthropic/Azure/Gemini execution paths from backend code
+- [ ] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium` → LiteLLM aliases (`clarity-standard`, `clarity-premium`, tenant override aliases)
+- [ ] Persist requested route, resolved route, gateway alias, gateway request ID/fallback metadata when available, and model used on `usage_records`
+- [ ] Include resolved LiteLLM alias in cache keys for all LLM-backed flows
+- [ ] Route chat, stream chat, plugin skills, cold-start interviews, memory summaries, retrieval planner, prompt tests, and email agent through one resolver/gateway path
+- [ ] Update platform/admin UI and API language from provider selection to gateway alias override
+- [ ] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
 
 ### 1203. Operator Console — AI Operations (P0, LARGE) — PENDING
 - [ ] Add AI Operations tab with global standard/premium aliases and per-tenant override table
@@ -192,8 +194,16 @@ Design: `docs/legal_rag.md` §8
 - [x] Collapsible admin tab bar with toggle + dropdown picker
 - [x] Remove redundant `min-h-screen` wrappers from key pages
 
+### 1113. Bug Fixes — Calendar, Estate, Time Tracking (P0, MEDIUM) — COMPLETED
+- [x] Calendar page: single "Sync Calendar" button auto-detects connected provider (microsoft/google)
+- [x] Estate creation: map human-readable types (Probate → probate) to match backend schema, fix 422
+- [x] Time tracking: hide hourly_rate from non-admin users; use `user.default_billing_rate` as default
+- [x] Time tracking: add `Rate` column (inline-edit) to admin Users tab for `default_billing_rate`
+- [x] Reports: make `budget_currency` Optional in schema with "USD" default (fix potential 500)
+
 ---
 
 ## Future
 
-- [ ] **Time tracking rate management:** Rates per-user by admin. Add `hourly_rate` column to `users` (nullable). Admin endpoint to set. Time entry uses `user.hourly_rate` as default. Backward-compatible.
+- [ ] **Time tracking advanced:** allow rate override on invoice creation screen for admin
+- [ ] **Templates overhaul:** support PDF/DOCX native templates with field mapping (currently text-only)

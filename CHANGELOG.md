@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.6] — 2026-06-05
+
+### Fixed
+- **Calendar page:** Single "Sync Calendar" button auto-detects which provider (Microsoft/Google) the user has configured, instead of showing both buttons unconditionally.
+- **Estate creation:** Map human-readable estate types (Probate, Trust Administration, etc.) to snake_case backend values, fixing 422 validation errors on estate creation.
+- **Time tracking:** Hide `hourly_rate` field from non-admin users in time entry form. Time entries now auto-use the user's `default_billing_rate` set by admin.
+- **Admin users tab:** New inline-editable "Rate" column for setting each user's `default_billing_rate`.
+- **Reports schema:** `budget_currency` made Optional with "USD" default to prevent potential schema validation 500s.
+
+### Added
+- `GET /api/auth/calendar-providers` endpoint — returns which calendar providers the current user has configured tokens for.
+- `default_billing_rate` field added to `UserPatchRequest` so admin can set rates via `PATCH /admin/users/{user_id}`.
+
+### Changed
+- `TimeEntryCreate.hourly_rate` field is now Optional, defaults to user's `default_billing_rate`.
+- Time entry update endpoint recalculates amount correctly using Decimal precision.
+
 ## [0.13.5] — 2026-06-05
 
 ### AppShell Layout — Restore Consistent UI Across All Pages

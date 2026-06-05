@@ -165,6 +165,9 @@ export const reactivateUser = (userId) =>
 export const updateUser = (userId, data) =>
   api.patch(`/admin/users/${userId}`, data).then((r) => r.data)
 
+export const setUserBillingRate = (userId, rate) =>
+  api.patch(`/admin/users/${userId}/billing-rate`, null, { params: { default_billing_rate: rate } }).then((r) => r.data)
+
 export const inviteUser = (data) =>
   api.post('/admin/users/invite', data).then((r) => r.data)
 

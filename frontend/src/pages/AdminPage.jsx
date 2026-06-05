@@ -242,6 +242,84 @@ function BudgetCell({ user, billingTier, onSaved }) {
   )
 }
 
+// ── Rate cell (inline edit for user billing rate) ────────────────────────────
+
+function RateCell({ user, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(user.default_billing_rate != null ? String(user.default_billing_rate) : '')
+  const [saving, setSaving] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (editing && ref.current) ref.current.focus()
+  }, [editing])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const parsed = value.trim() === '' ? -1 : parseFloat(value)
+      await updateUser(user.id, { default_billing_rate: isNaN(parsed) ? -1 : parsed })
+      onSaved()
+      setEditing(false)
+    } catch {
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter') handleSave()
+    if (e.key === 'Escape') setEditing(false)
+  }
+
+  const rate = user.default_billing_rate
+
+  return (
+    <span>
+      {editing ? (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-brand-muted text-xs">$</span>
+          <input
+            ref={ref}
+            type="number"
+            min="0"
+            step="0.01"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="0.00"
+            className="w-20 px-2 py-1 border border-brand-ink/30 rounded text-xs font-sans focus:outline-none focus:ring-1 focus:ring-brand-ink/40"
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="text-[11px] bg-brand-ink text-white px-2 py-1 rounded font-sans disabled:opacity-40"
+          >
+            {saving ? '…' : 'OK'}
+          </button>
+          <button onClick={() => setEditing(false)} className="text-[11px] text-brand-muted hover:text-brand-ink">✕</button>
+        </span>
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className="text-left group"
+          title="Click to set default billing rate"
+        >
+          {rate != null ? (
+            <span className="text-brand-ink font-sans text-xs font-medium group-hover:text-brand-ink/70">
+              ${Number(rate).toFixed(2)}/hr
+            </span>
+          ) : (
+            <span className="text-xs text-brand-muted group-hover:text-brand-ink transition-colors font-sans">
+              No rate — set
+            </span>
+          )}
+        </button>
+      )}
+    </span>
+  )
+}
+
 // ── Tab: Users ───────────────────────────────────────────────────────────────
 
 function UsersTab({ billingTier }) {
@@ -376,6 +454,7 @@ function UsersTab({ billingTier }) {
             <tr className="border-b border-brand-line bg-brand-bg-soft/50">
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">User</th>
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Role</th>
+              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Rate</th>
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Joined</th>
               <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Usage (30d)</th>
               {billingTier === 'payg' && (
@@ -415,6 +494,12 @@ function UsersTab({ billingTier }) {
                     >
                       {changingRole === u.id ? '…' : u.role}
                     </button>
+                  </td>
+                  <td className="px-6 py-4">
+                    <RateCell
+                      user={u}
+                      onSaved={() => { flash('Rate updated.'); loadUsers() }}
+                    />
                   </td>
                   <td className="px-6 py-4 text-brand-muted font-sans text-xs">
                     {u.created_at ? format(new Date(u.created_at), 'MMM d, yyyy') : '—'}
@@ -472,7 +557,7 @@ function UsersTab({ billingTier }) {
             })}
             {displayUsers.length === 0 && (
               <tr>
-                <td colSpan={billingTier === 'payg' ? 7 : 6} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
+                <td colSpan={billingTier === 'payg' ? 8 : 7} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
                   No users found.
                 </td>
               </tr>

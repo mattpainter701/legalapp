@@ -1229,6 +1229,7 @@ class UserPatchRequest(_PydanticBase):
     role: Optional[str] = None          # "admin" | "user"
     full_name: Optional[str] = None
     payg_monthly_budget: Optional[float] = None   # None = clear cap; pass -1 to leave unchanged
+    default_billing_rate: Optional[float] = None   # hourly rate for time tracking
 
 
 class InviteUserRequest(_PydanticBase):
@@ -1271,6 +1272,10 @@ async def patch_user(
 
     if body.payg_monthly_budget is not None:
         user.payg_monthly_budget = body.payg_monthly_budget if body.payg_monthly_budget >= 0 else None
+
+    if body.default_billing_rate is not None:
+        from decimal import Decimal
+        user.default_billing_rate = Decimal(str(body.default_billing_rate)) if body.default_billing_rate >= 0 else None
 
     await db.commit()
     await db.refresh(user)

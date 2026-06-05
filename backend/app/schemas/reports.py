@@ -27,7 +27,7 @@ class MatterBudgetReport(BaseModel):
     matter_id: str
     matter_name: str
     budget_amount: float | None
-    budget_currency: str
+    budget_currency: str | None = "USD"
     total_hours: float
     total_billed: float
     utilization_pct: float | None  # None when budget_amount is null/zero
