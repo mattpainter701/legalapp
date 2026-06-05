@@ -18,21 +18,21 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
 
   # Premium profile: higher-quality drafting/reasoning route.
-  # Primary: OpenCode Go/OpenAI-compatible endpoint via DEEPSEEK_BASE_URL.
+  # Primary: DeepSeek via DEEPSEEK_BASE_URL (deepseek-chat is the current stable alias).
   - model_name: clarity-premium
     litellm_params:
-      model: openai/deepseek-v4-pro
+      model: openai/deepseek-chat
       api_base: os.environ/DEEPSEEK_BASE_URL
       api_key: os.environ/DEEPSEEK_API_KEY
 
   - model_name: clarity-premium-openrouter
     litellm_params:
-      model: openrouter/deepseek/deepseek-v4-pro
+      model: openrouter/deepseek/deepseek-r1:free
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: clarity-premium-openrouter-qwen
     litellm_params:
-      model: openrouter/qwen/qwen3.7-max
+      model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
 litellm_settings:

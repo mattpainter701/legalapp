@@ -59,6 +59,32 @@ LiteLLM database on localhost port `5435`.
 Production should run LiteLLM behind the internal Docker network only. Do not
 expose port 4000 publicly. Nginx should not route public traffic to LiteLLM.
 
-Use pinned image tags for production once a tested version is selected; the
-current compose file uses the upstream `main-latest` image as starter
-scaffolding only.
+### Docker Image Pinning
+
+The Dockerfile pins `ghcr.io/berriai/litellm:main-v1.72.6`. To upgrade:
+1. Check the [LiteLLM releases page](https://github.com/BerriAI/litellm/releases) for a newer tag.
+2. Update the `FROM` line in `litellm/Dockerfile` and the `image:` tag in `docker-compose.yml`.
+3. Test locally before pushing to main.
+
+### Backend Startup Dependency
+
+`docker-compose.yml` configures `backend` to wait for `litellm: service_healthy`
+before starting. This prevents chat requests failing against an unready gateway.
+If you disable LiteLLM (`LITELLM_ENABLED=false`) and want to skip running the
+litellm container entirely, remove or comment out the `litellm` entry in the
+backend `depends_on` block, or use a Docker Compose profile to exclude it.
+
+The app's startup log will emit `LiteLLM gateway reachable` or a warning with
+the connection error if LiteLLM is unreachable. Startup continues either way.
+
+### Per-Tenant Spend Tracking
+
+LiteLLM records token counts, costs, model names, and latency in its spend
+tables (`LITELLM_DATABASE_URL`). Each request is tagged with the tenant ID via
+the OpenAI `user` field. You can query `litellm_spendlogs` to get cost and
+usage breakdowns per tenant without enabling raw prompt logging.
+
+To get real-time cost visibility, add `success_callback` and `failure_callback`
+to `litellm_settings` in `litellm_config.yaml` (e.g., pointing at a logging
+endpoint or Langfuse). Raw prompt/response logging (`turn_off_message_logging`)
+must remain `true` for legal customer data.
