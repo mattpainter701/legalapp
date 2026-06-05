@@ -84,6 +84,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
 
+    # LiteLLM gateway reachability check (warn-only)
+    if settings.LITELLM_ENABLED:
+        try:
+            import httpx as _httpx
+
+            async with _httpx.AsyncClient(timeout=5.0) as _c:
+                _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
+                _r.raise_for_status()
+            logger.info("LiteLLM gateway reachable")
+        except Exception as exc:
+            logger.warning(f"LiteLLM gateway unreachable at startup: {exc}")
+
     # Start APScheduler
     try:
         scheduler = LegalScheduler()

@@ -97,24 +97,11 @@ class LLMService:
             else None
         )
         self.litellm_client = None
-        if settings.LITELLM_ENABLED or settings.LITELLM_API_KEY:
+        if settings.LITELLM_ENABLED:
             self.litellm_client = AsyncOpenAI(
                 api_key=settings.LITELLM_API_KEY or "not-needed",
                 base_url=settings.LITELLM_BASE_URL,
             )
-
-    def _build_messages(
-        self,
-        system: str,
-        conversation_history: List[dict],
-        new_message: str,
-    ) -> List[dict]:
-        """Build the message list for the LLM, injecting system as first message."""
-        messages = []
-        for msg in conversation_history:
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": new_message})
-        return messages
 
     async def complete(
         self,
@@ -126,6 +113,7 @@ class LLMService:
         provider: str = "default",
         model: str | None = None,
         user_name: str = "",
+        tenant_id: str | None = None,
     ) -> Tuple[str, int, int]:
         """
         Generate a completion.
@@ -150,7 +138,7 @@ class LLMService:
 
         # Explicit provider routing (operator-assigned or user-selected)
         if provider == "gemini":
-            return await self._complete_gemini(messages, system_prompt)
+            return await self._complete_gemini(messages, system_prompt, model=model)
         if provider == "azure":
             return await self._complete_azure(messages, system_prompt)
         if provider == "openrouter":
@@ -167,7 +155,7 @@ class LLMService:
                 else settings.LITELLM_STANDARD_MODEL
             )
             return await self._complete_litellm(
-                messages, system_prompt, resolved_model
+                messages, system_prompt, resolved_model, tenant_id=tenant_id
             )
         if provider == "opencode":
             resolved_model = model or settings.PRIMARY_LLM
@@ -210,6 +198,7 @@ class LLMService:
         memory_context: str | None = None,
         model: str | None = None,
         user_name: str = "",
+        tenant_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Generate a streaming completion, yielding tokens as they arrive.
@@ -234,7 +223,9 @@ class LLMService:
 
         if provider == "gemini":
             # Gemini doesn't have reliable streaming yet, fall back to non-streaming
-            response_text, _, _ = await self._complete_gemini(messages, system_prompt)
+            response_text, _, _ = await self._complete_gemini(
+                messages, system_prompt, model=model
+            )
             yield response_text
             return
         if provider == "azure":
@@ -257,7 +248,7 @@ class LLMService:
                 else settings.LITELLM_STANDARD_MODEL
             )
             async for chunk in self._stream_litellm(
-                messages, system_prompt, resolved_model
+                messages, system_prompt, resolved_model, tenant_id=tenant_id
             ):
                 yield chunk
             return
@@ -360,6 +351,7 @@ class LLMService:
         self,
         messages: List[dict],
         system_prompt: str,
+        model: str = "gemini-2.0-flash",
     ) -> Tuple[str, int, int]:
         """Call Google Gemini via the generateContent API."""
         import httpx
@@ -368,7 +360,7 @@ class LLMService:
         if not api_key:
             raise ValueError("GEMINI_API_KEY not configured")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
         contents = []
         for msg in messages:
@@ -476,6 +468,7 @@ class LLMService:
         messages: List[dict],
         system_prompt: str,
         model: str,
+        tenant_id: str | None = None,
     ) -> Tuple[str, int, int]:
         """Call LiteLLM Gateway via its OpenAI-compatible API."""
         if not self.litellm_client:
@@ -488,6 +481,7 @@ class LLMService:
                 messages=all_messages,
                 temperature=0.1,
                 max_tokens=4096,
+                user=tenant_id or "unknown",
             )
 
             response_text = response.choices[0].message.content or ""
@@ -642,6 +636,7 @@ class LLMService:
         messages: List[dict],
         system_prompt: str,
         model: str,
+        tenant_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream from LiteLLM Gateway."""
         if not self.litellm_client:
@@ -656,6 +651,7 @@ class LLMService:
                 temperature=0.1,
                 max_tokens=4096,
                 stream=True,
+                user=tenant_id or "unknown",
             )
 
             async for chunk in stream:

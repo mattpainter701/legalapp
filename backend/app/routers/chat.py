@@ -567,6 +567,7 @@ async def send_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
+                tenant_id=str(user.tenant_id),
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -618,6 +619,7 @@ async def send_message(
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
+            tenant_id=str(user.tenant_id),
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -967,6 +969,7 @@ async def stream_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
+                tenant_id=str(user.tenant_id),
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -994,6 +997,7 @@ async def stream_message(
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
+                    tenant_id=str(user.tenant_id),
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
