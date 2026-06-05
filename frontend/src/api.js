@@ -849,13 +849,4 @@ export const deleteSmbShare = (shareId) =>
 export const searchSmbFiles = (params) =>
   api.get('/api/v1/smb/files/search', { params }).then(r => r.data)
 
-export const getMatterSmbShares = (matterId) =>
-  api.get(`/plugins/litigation/matters/${matterId}/smb-shares`).then(r => r.data)
-
-export const addMatterSmbShare = (matterId, data) =>
-  api.post(`/plugins/litigation/matters/${matterId}/smb-shares`, data).then(r => r.data)
-
-export const removeMatterSmbShare = (matterId, bindingId) =>
-  api.delete(`/plugins/litigation/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
-
 export default api
