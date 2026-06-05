@@ -183,9 +183,7 @@ async def list_conversations(
             pass
 
     result = await db.execute(
-        select(Conversation)
-        .where(*conditions)
-        .order_by(Conversation.updated_at.desc())
+        select(Conversation).where(*conditions).order_by(Conversation.updated_at.desc())
     )
     conversations = result.scalars().all()
 
@@ -219,6 +217,7 @@ async def create_conversation(
             matter_uuid = uuid.UUID(body.matter_id)
             # Load matter name for auto-title
             from app.models.plugin import Matter as MatterModel
+
             m_result = await db.execute(
                 select(MatterModel.matter_name).where(
                     MatterModel.id == matter_uuid,
@@ -231,7 +230,9 @@ async def create_conversation(
         except (ValueError, TypeError):
             matter_uuid = None
 
-    title = body.title or (f"Chat: {matter_name}" if matter_name else "New Conversation")
+    title = body.title or (
+        f"Chat: {matter_name}" if matter_name else "New Conversation"
+    )
     conv = Conversation(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,

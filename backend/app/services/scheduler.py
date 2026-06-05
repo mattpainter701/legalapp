@@ -1257,9 +1257,7 @@ class LegalScheduler:
                 stale_agents = list(result.scalars().all())
 
                 if not stale_agents:
-                    await _log_complete(
-                        session, log, "No stale SMB agents found."
-                    )
+                    await _log_complete(session, log, "No stale SMB agents found.")
                     logger.info("[smb-heartbeat] No stale agents.")
                     return
 
@@ -1336,9 +1334,9 @@ class LegalScheduler:
         # Sort by soonest deadline
         alerts_sorted = sorted(
             alerts,
-            key=lambda a: min(d["days_until"] for d in a["deadlines"])
-            if a["deadlines"]
-            else 999,
+            key=lambda a: (
+                min(d["days_until"] for d in a["deadlines"]) if a["deadlines"] else 999
+            ),
         )
 
         for alert in alerts_sorted:

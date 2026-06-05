@@ -55,13 +55,15 @@ async def get_portfolio_upcoming(
 
     # Get upcoming tasks across those matters
     task_result = await db.execute(
-        select(Task).where(
+        select(Task)
+        .where(
             Task.tenant_id == tenant_id,
             Task.matter_id.in_(matter_ids),
             Task.due_date >= today,
             Task.due_date <= cutoff,
             Task.status.notin_(["completed", "cancelled"]),
-        ).order_by(Task.due_date, Task.priority)
+        )
+        .order_by(Task.due_date, Task.priority)
     )
     tasks = task_result.scalars().all()
 
@@ -74,17 +76,19 @@ async def get_portfolio_upcoming(
     items = []
     for t in tasks:
         m = matter_map.get(str(t.matter_id))
-        items.append({
-            "id": str(t.id),
-            "title": t.title,
-            "task_type": t.task_type,
-            "due_date": str(t.due_date),
-            "due_time": str(t.due_time) if t.due_time else None,
-            "priority": t.priority,
-            "status": t.status,
-            "matter_id": str(t.matter_id) if t.matter_id else None,
-            "matter_name": m.matter_name if m else None,
-            "client_name": _client_name(m) if m else None,
-        })
+        items.append(
+            {
+                "id": str(t.id),
+                "title": t.title,
+                "task_type": t.task_type,
+                "due_date": str(t.due_date),
+                "due_time": str(t.due_time) if t.due_time else None,
+                "priority": t.priority,
+                "status": t.status,
+                "matter_id": str(t.matter_id) if t.matter_id else None,
+                "matter_name": m.matter_name if m else None,
+                "client_name": _client_name(m) if m else None,
+            }
+        )
 
     return {"tasks": items, "total": len(items)}

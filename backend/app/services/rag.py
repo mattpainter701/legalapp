@@ -231,8 +231,7 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
             continue
 
         source_label = (
-            f"{hit_dict.get('provider', 'cloud')}/"
-            f"{hit_dict.get('source', 'unknown')}"
+            f"{hit_dict.get('provider', 'cloud')}/{hit_dict.get('source', 'unknown')}"
         )
         title = hit_dict.get("title") or "Untitled"
         url = hit_dict.get("url") or ""
@@ -295,9 +294,12 @@ async def hybrid_rag_query(
         smb_enabled = _settings.SMB_ENABLED
         if smb_enabled:
             from app.models.smb_agent import SmbAgent
+
             active_agents = await db.execute(
                 select(sa_func.count(SmbAgent.id)).where(
-                    SmbAgent.tenant_id == uuid.UUID(tenant_id) if isinstance(tenant_id, str) else SmbAgent.tenant_id,
+                    SmbAgent.tenant_id == uuid.UUID(tenant_id)
+                    if isinstance(tenant_id, str)
+                    else SmbAgent.tenant_id,
                     SmbAgent.status == "active",
                 )
             )
@@ -332,11 +334,13 @@ async def hybrid_rag_query(
                             user_id=user_id,
                         )
                         if cloud_hits:
-                            hits_with_content = await cloud_search_service.fetch_contents(
-                                db=db,
-                                hits=cloud_hits,
-                                tenant_id=tenant_id,
-                                max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                            hits_with_content = (
+                                await cloud_search_service.fetch_contents(
+                                    db=db,
+                                    hits=cloud_hits,
+                                    tenant_id=tenant_id,
+                                    max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                                )
                             )
                             cloud_context = await build_cloud_context(
                                 hits_with_content,
@@ -346,6 +350,7 @@ async def hybrid_rag_query(
                 if _settings.SMB_ENABLED and "smb" in sources:
                     try:
                         from app.services.smb import smb_service
+
                         smb_results = await smb_service.search_files(
                             db=db,
                             tenant_id=tenant_id,
@@ -354,7 +359,9 @@ async def hybrid_rag_query(
                             limit=plan.get("max_hits", 10),
                         )
                         if smb_results:
-                            smb_context = await smb_service.build_smb_context(smb_results)
+                            smb_context = await smb_service.build_smb_context(
+                                smb_results
+                            )
                     except Exception:
                         pass  # SMB search is additive — failure must not break chat
 

@@ -37,7 +37,9 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 def _require_platform_key(request: Request) -> None:
     key = request.headers.get("X-Platform-Key", "")
-    if not settings.PLATFORM_SECRET_KEY or not hmac.compare_digest(key, settings.PLATFORM_SECRET_KEY):
+    if not settings.PLATFORM_SECRET_KEY or not hmac.compare_digest(
+        key, settings.PLATFORM_SECRET_KEY
+    ):
         raise HTTPException(status_code=403, detail="Invalid or missing platform key")
 
 

@@ -1317,12 +1317,14 @@ async def execute_skill(
     context["tenant_name"] = tenant_name
     matter_context = ""
     if body.matter_id:
-        matter_context, _has_pii, pii_findings = (
-            await matter_context_service.get_safe_matter_context(
-                db=db,
-                matter_id=body.matter_id,
-                privacy_mode=getattr(user, "privacy_mode", False),
-            )
+        (
+            matter_context,
+            _has_pii,
+            pii_findings,
+        ) = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=body.matter_id,
+            privacy_mode=getattr(user, "privacy_mode", False),
         )
         if matter_context:
             context["matter_context"] = matter_context

@@ -70,9 +70,7 @@ async def agent_heartbeat(
     if str(agent.id) != agent_id:
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
-    await smb_service.record_heartbeat(
-        db, agent_id, body.model_dump(exclude_none=True)
-    )
+    await smb_service.record_heartbeat(db, agent_id, body.model_dump(exclude_none=True))
     await db.commit()
     return {"status": "ok"}
 
@@ -91,9 +89,7 @@ async def agent_sync(
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
     tenant_id = str(agent.tenant_id)
-    result = await smb_service.sync_files(
-        db, agent_id, tenant_id, share_id, body
-    )
+    result = await smb_service.sync_files(db, agent_id, tenant_id, share_id, body)
     await db.commit()
     return result
 
@@ -190,7 +186,12 @@ async def request_content_fetch(
 
     try:
         task_id, agent_id = await smb_service.request_content_fetch(
-            db, tenant_id, user_id, file_id, conversation_id, reason,
+            db,
+            tenant_id,
+            user_id,
+            file_id,
+            conversation_id,
+            reason,
             redis=redis,
         )
     except ValueError as exc:

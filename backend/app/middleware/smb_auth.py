@@ -13,7 +13,7 @@ from app.models.smb_agent import SmbAgent
 logger = logging.getLogger(__name__)
 
 _SMB_RATE_LIMIT_WINDOW = 60  # seconds
-_SMB_RATE_LIMIT_MAX = 30     # requests per window
+_SMB_RATE_LIMIT_MAX = 30  # requests per window
 
 
 async def _check_smb_rate_limit(request: Request) -> None:
@@ -57,9 +57,7 @@ async def get_smb_agent(
 
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
 
-    result = await db.execute(
-        select(SmbAgent).where(SmbAgent.api_key_hash == key_hash)
-    )
+    result = await db.execute(select(SmbAgent).where(SmbAgent.api_key_hash == key_hash))
     agent = result.scalar_one_or_none()
 
     if agent is None:

@@ -63,7 +63,9 @@ class EstateFiduciary(Base):
         UUID(as_uuid=True), ForeignKey("estates.id", ondelete="CASCADE"), nullable=False
     )
     contact_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
     )
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     role: Mapped[str] = mapped_column(
@@ -97,7 +99,9 @@ class EstateBeneficiary(Base):
         UUID(as_uuid=True), ForeignKey("estates.id", ondelete="CASCADE"), nullable=False
     )
     contact_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
     )
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     relationship_to_estate: Mapped[str | None] = mapped_column(
@@ -106,7 +110,9 @@ class EstateBeneficiary(Base):
     beneficiary_type: Mapped[str] = mapped_column(
         String(50), default="residuary", server_default="residuary"
     )
-    share_percentage: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
+    share_percentage: Mapped[Decimal | None] = mapped_column(
+        Numeric(7, 4), nullable=True
+    )
     bequest_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_charity: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"

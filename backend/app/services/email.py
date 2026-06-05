@@ -573,9 +573,7 @@ class EmailService:
 email_service = EmailService()
 
 
-async def send_portal_invite(
-    to_email: str, case_name: str, invite_url: str
-) -> bool:
+async def send_portal_invite(to_email: str, case_name: str, invite_url: str) -> bool:
     """Email a mediation-portal invite link to a party (client or opposing)."""
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     content = f"""

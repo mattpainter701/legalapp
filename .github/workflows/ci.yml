@@ -80,6 +80,7 @@ jobs:
 
       # Auth
       SECRET_KEY: ci-test-secret-key-not-for-production-use
+      TOKEN_ENCRYPTION_KEY: ci-test-token-encryption-key-32bytes!
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 1440
 

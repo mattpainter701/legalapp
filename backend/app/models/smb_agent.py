@@ -35,7 +35,9 @@ class SmbAgent(Base):
     last_heartbeat: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    pairing_code: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    pairing_code: Mapped[str | None] = mapped_column(
+        String(20), unique=True, nullable=True
+    )
     pairing_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

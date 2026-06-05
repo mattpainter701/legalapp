@@ -95,9 +95,7 @@ async def _get_case_or_404(
     return case
 
 
-async def _verify_case(
-    db: AsyncSession, case_id: str, tenant_id: uuid.UUID
-) -> None:
+async def _verify_case(db: AsyncSession, case_id: str, tenant_id: uuid.UUID) -> None:
     result = await db.execute(
         select(MediationCase.id).where(
             MediationCase.id == case_id, MediationCase.tenant_id == tenant_id
@@ -170,9 +168,7 @@ async def case_stats(request: Request, db: AsyncSession = Depends(get_db)):
         scheduled=count("scheduled"),
         settled=count("settled"),
         closed=count("closed"),
-        pending_confidentiality=sum(
-            1 for c in cases if not c.confidentiality_signed
-        ),
+        pending_confidentiality=sum(1 for c in cases if not c.confidentiality_signed),
     )
 
 
@@ -210,9 +206,7 @@ async def create_case(
 
 
 @router.get("/cases/{case_id}", response_model=MediationCaseDetail)
-async def get_case(
-    case_id: str, request: Request, db: AsyncSession = Depends(get_db)
-):
+async def get_case(case_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     case = await _get_case_or_404(db, case_id, user.tenant_id)
@@ -220,9 +214,7 @@ async def get_case(
         ms.session_to_response(e)
         for e in sorted(case.events or [], key=lambda e: e.created_at)
     ]
-    return MediationCaseDetail(
-        mediation=ms.case_to_response(case), sessions=sessions
-    )
+    return MediationCaseDetail(mediation=ms.case_to_response(case), sessions=sessions)
 
 
 @router.patch("/cases/{case_id}", response_model=MediationCaseResponse)
@@ -266,9 +258,7 @@ async def delete_case(
 # ── Sessions ──────────────────────────────────────────────────────────────
 
 
-@router.post(
-    "/cases/{case_id}/events", response_model=SessionResponse, status_code=201
-)
+@router.post("/cases/{case_id}/events", response_model=SessionResponse, status_code=201)
 async def add_session(
     case_id: str,
     body: SessionCreate,
@@ -338,14 +328,10 @@ async def list_parties(
         )
     )
     invited_ids = {str(pid) for pid in inv_result.scalars().all()}
-    return [
-        ms.party_to_response(p, invited=str(p.id) in invited_ids) for p in parties
-    ]
+    return [ms.party_to_response(p, invited=str(p.id) in invited_ids) for p in parties]
 
 
-@router.post(
-    "/cases/{case_id}/parties", response_model=PartyResponse, status_code=201
-)
+@router.post("/cases/{case_id}/parties", response_model=PartyResponse, status_code=201)
 async def create_party(
     case_id: str,
     body: PartyCreate,
@@ -371,9 +357,7 @@ async def create_party(
     return ms.party_to_response(party)
 
 
-@router.patch(
-    "/cases/{case_id}/parties/{party_id}", response_model=PartyResponse
-)
+@router.patch("/cases/{case_id}/parties/{party_id}", response_model=PartyResponse)
 async def update_party(
     case_id: str,
     party_id: str,
@@ -533,9 +517,7 @@ async def list_assets(
     return [ms.asset_to_response(a) for a in result.scalars().all()]
 
 
-@router.post(
-    "/cases/{case_id}/assets", response_model=AssetResponse, status_code=201
-)
+@router.post("/cases/{case_id}/assets", response_model=AssetResponse, status_code=201)
 async def create_asset(
     case_id: str,
     body: AssetCreate,
@@ -564,9 +546,7 @@ async def create_asset(
     return ms.asset_to_response(asset)
 
 
-@router.patch(
-    "/cases/{case_id}/assets/{asset_id}", response_model=AssetResponse
-)
+@router.patch("/cases/{case_id}/assets/{asset_id}", response_model=AssetResponse)
 async def update_asset(
     case_id: str,
     asset_id: str,
@@ -599,9 +579,7 @@ async def delete_asset(
     await db.commit()
 
 
-@router.post(
-    "/cases/{case_id}/assets/{asset_id}/approve", response_model=AssetResponse
-)
+@router.post("/cases/{case_id}/assets/{asset_id}/approve", response_model=AssetResponse)
 async def approve_asset(
     case_id: str,
     asset_id: str,
@@ -633,9 +611,7 @@ async def approve_asset(
     return ms.asset_to_response(asset)
 
 
-@router.post(
-    "/cases/{case_id}/assets/{asset_id}/send", response_model=AssetResponse
-)
+@router.post("/cases/{case_id}/assets/{asset_id}/send", response_model=AssetResponse)
 async def send_asset(
     case_id: str,
     asset_id: str,
@@ -808,9 +784,7 @@ async def list_proposals(
     proposals = result.scalars().all()
     party_names = await _party_name_map(db, case_id, user.tenant_id)
     return [
-        ms.proposal_to_response(
-            p, party_names.get(str(p.proposed_by_party_id))
-        )
+        ms.proposal_to_response(p, party_names.get(str(p.proposed_by_party_id)))
         for p in proposals
     ]
 

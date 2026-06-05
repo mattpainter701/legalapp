@@ -25,6 +25,7 @@ def _llm_error_msg(provider: str, exc: Exception) -> str:
     clean = _clean_llm_error(exc)
     return f"{provider} API error: {clean}"
 
+
 SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working for {tenant_name}. You support attorneys with research, drafting, and analysis. You are precise, discreet, and bound by professional ethics.
 
 CAPABILITIES:
