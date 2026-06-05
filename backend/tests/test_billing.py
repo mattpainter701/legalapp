@@ -7,10 +7,14 @@ from decimal import Decimal
 
 
 from app.services.billing import (
+    AZURE_INPUT_COST_PER_M,
+    AZURE_OUTPUT_COST_PER_M,
     CLAUDE_INPUT_COST_PER_M,
     CLAUDE_OUTPUT_COST_PER_M,
     DEEPSEEK_INPUT_COST_PER_M,
     DEEPSEEK_OUTPUT_COST_PER_M,
+    GEMINI_INPUT_COST_PER_M,
+    GEMINI_OUTPUT_COST_PER_M,
     PAYG_MARKUP,
     calculate_cost,
 )

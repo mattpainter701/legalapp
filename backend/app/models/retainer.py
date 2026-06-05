@@ -77,8 +77,8 @@ class Retainer(Base):
     )
 
     # Relationships
-    matter: Mapped["Matter"] = relationship("Matter", back_populates="retainers")
-    contact: Mapped["Contact"] = relationship("Contact", lazy="joined")
+    matter: Mapped["Matter"] = relationship("Matter", back_populates="retainers")  # noqa: F821
+    contact: Mapped["Contact"] = relationship("Contact", lazy="joined")  # noqa: F821
     transactions: Mapped[list["RetainerTransaction"]] = relationship(
         "RetainerTransaction",
         back_populates="retainer",
@@ -134,4 +134,4 @@ class RetainerTransaction(Base):
     retainer: Mapped["Retainer"] = relationship(
         "Retainer", back_populates="transactions"
     )
-    created_by_user: Mapped["User"] = relationship("User", lazy="joined")
+    created_by_user: Mapped["User"] = relationship("User", lazy="joined")  # noqa: F821

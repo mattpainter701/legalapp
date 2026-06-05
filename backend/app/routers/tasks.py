@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.task import Task
+from app.models.user import User
+from app.services.email import email_service
 from app.schemas.task import TaskCreate, TaskListResponse, TaskResponse, TaskUpdate
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])

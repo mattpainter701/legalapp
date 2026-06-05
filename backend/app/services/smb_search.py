@@ -9,9 +9,9 @@ the result (with configurable timeout).
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import select, func, and_, text
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -64,8 +64,12 @@ class SmbSearchResult:
             "snippet": self.snippet,
             "owner": self.owner,
             "size_bytes": self.size_bytes,
-            "modified_time": self.modified_time.isoformat() if self.modified_time else None,
-            "created_time": self.created_time.isoformat() if self.created_time else None,
+            "modified_time": self.modified_time.isoformat()
+            if self.modified_time
+            else None,
+            "created_time": self.created_time.isoformat()
+            if self.created_time
+            else None,
             "share_id": str(self.share_id) if self.share_id else None,
             "score": self.score,
         }
@@ -142,7 +146,9 @@ async def search_smb_files(
                 path=f.path,
                 filename=f.filename,
                 ext=f.ext,
-                snippet=f.snippet[: settings.SMB_SNIPPET_MAX_CHARS] if f.snippet else None,
+                snippet=f.snippet[: settings.SMB_SNIPPET_MAX_CHARS]
+                if f.snippet
+                else None,
                 owner=f.owner,
                 size_bytes=f.size_bytes,
                 modified_time=f.modified_time,
@@ -310,7 +316,9 @@ async def get_smb_stats(db: AsyncSession, tenant_id: str) -> dict:
     await set_tenant_context(db, tenant_id)
 
     agent_count = await db.execute(
-        select(func.count(SmbAgent.id)).where(SmbAgent.tenant_id == uuid.UUID(tenant_id))
+        select(func.count(SmbAgent.id)).where(
+            SmbAgent.tenant_id == uuid.UUID(tenant_id)
+        )
     )
     active_agents = await db.execute(
         select(func.count(SmbAgent.id)).where(
@@ -319,7 +327,9 @@ async def get_smb_stats(db: AsyncSession, tenant_id: str) -> dict:
         )
     )
     share_count = await db.execute(
-        select(func.count(SmbShare.id)).where(SmbShare.tenant_id == uuid.UUID(tenant_id))
+        select(func.count(SmbShare.id)).where(
+            SmbShare.tenant_id == uuid.UUID(tenant_id)
+        )
     )
     file_count = await db.execute(
         select(func.count(SmbFileIndex.id)).where(

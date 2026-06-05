@@ -146,9 +146,7 @@ class SmbService:
             values["hostname"] = data["hostname"]
 
         await db.execute(
-            update(SmbAgent)
-            .where(SmbAgent.id == _uuid(agent_id))
-            .values(**values)
+            update(SmbAgent).where(SmbAgent.id == _uuid(agent_id)).values(**values)
         )
         await db.flush()
 
@@ -198,9 +196,7 @@ class SmbService:
                     )
                     continue
 
-                snippet_val = (
-                    entry.snippet[:snippet_cap] if entry.snippet else None
-                )
+                snippet_val = entry.snippet[:snippet_cap] if entry.snippet else None
                 search_text = f"{entry.filename} {snippet_val or ''}".strip()
 
                 stmt = pg_insert(SmbFileIndex).values(
@@ -389,8 +385,8 @@ class SmbService:
         timeout_seconds: int = 120,
     ) -> str | None:
         """Poll Redis for content fetch result with exponential backoff.
-        
-        Polls up to timeout_seconds, starting at 1s intervals and 
+
+        Polls up to timeout_seconds, starting at 1s intervals and
         increasing to max 8s between polls.
         """
         if not redis:
@@ -462,7 +458,9 @@ class SmbService:
                     path=file_entry.path,
                     filename=file_entry.filename,
                     ext=file_entry.ext,
-                    snippet=file_entry.snippet[:SMB_SNIPPET_MAX_CHARS] if file_entry.snippet else None,
+                    snippet=file_entry.snippet[:SMB_SNIPPET_MAX_CHARS]
+                    if file_entry.snippet
+                    else None,
                     owner=file_entry.owner,
                     size_bytes=file_entry.size_bytes,
                     modified_time=file_entry.modified_time,
@@ -630,9 +628,7 @@ class SmbService:
 
         agent_count = (
             await db.execute(
-                select(func.count(SmbAgent.id)).where(
-                    SmbAgent.tenant_id == tid
-                )
+                select(func.count(SmbAgent.id)).where(SmbAgent.tenant_id == tid)
             )
         ).scalar_one()
 
@@ -647,9 +643,7 @@ class SmbService:
 
         share_count = (
             await db.execute(
-                select(func.count(SmbShare.id)).where(
-                    SmbShare.tenant_id == tid
-                )
+                select(func.count(SmbShare.id)).where(SmbShare.tenant_id == tid)
             )
         ).scalar_one()
 
@@ -675,8 +669,8 @@ class SmbService:
             await db.execute(
                 select(func.count(SmbAccessLog.id)).where(
                     SmbAccessLog.tenant_id == tid,
-                    SmbAccessLog.accessed_at > datetime.now(timezone.utc)
-                    - timedelta(hours=24),
+                    SmbAccessLog.accessed_at
+                    > datetime.now(timezone.utc) - timedelta(hours=24),
                 )
             )
         ).scalar_one()
@@ -706,7 +700,6 @@ class SmbService:
             .limit(limit)
         )
         return list(result.scalars().all())
-
 
     @staticmethod
     async def build_smb_context(

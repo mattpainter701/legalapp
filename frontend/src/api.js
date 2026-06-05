@@ -694,6 +694,10 @@ export const updateMatterMemory = (id, content) =>
 export const getMatterDashboard = (id) =>
   api.get(`/matters/${id}/dashboard-summary`).then(r => r.data)
 
+// Cloud files for a matter
+export const getMatterCloudFiles = (id) =>
+  api.get(`/matters/${id}/cloud-files`).then(r => r.data)
+
 // Email client
 export const emailMatterClient = (id, data) =>
   api.post(`/matters/${id}/email-client`, data).then(r => r.data)
@@ -761,6 +765,11 @@ export const getCloudMetadata = (params) =>
 export const invalidateCloudCache = () =>
   api.delete('/admin/cloud-search/cache').then(r => r.data)
 
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+export const searchUsers = (q) =>
+  api.get('/users/search', { params: { q } }).then(r => r.data)
+
 // ── SMB File Shares Admin ──────────────────────────────────────────────────────
 
 export const getSmbStatus = () =>
@@ -783,6 +792,15 @@ export const deleteSmbAgent = (agentId) =>
 
 export const getSmbShares = () =>
   api.get('/api/v1/smb/shares').then(r => r.data)
+
+export const getMatterSmbShares = (matterId) =>
+  api.get(`/api/v1/smb/matters/${matterId}/smb-shares`).then(r => r.data)
+
+export const addMatterSmbShare = (matterId, data) =>
+  api.post(`/api/v1/smb/matters/${matterId}/smb-shares`, data).then(r => r.data)
+
+export const removeMatterSmbShare = (matterId, bindingId) =>
+  api.delete(`/api/v1/smb/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
 
 export const createSmbShare = (data) =>
   api.post('/api/v1/smb/shares', data).then(r => r.data)

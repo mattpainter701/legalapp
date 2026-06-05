@@ -79,9 +79,7 @@ def session_to_response(ev: MediationCaseEvent) -> SessionResponse:
     )
 
 
-def party_to_response(
-    p: MediationParty, invited: bool = False
-) -> PartyResponse:
+def party_to_response(p: MediationParty, invited: bool = False) -> PartyResponse:
     return PartyResponse(
         id=str(p.id),
         case_id=str(p.case_id),

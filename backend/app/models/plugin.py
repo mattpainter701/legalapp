@@ -195,7 +195,6 @@ class Matter(Base):
     materiality: Mapped[str | None] = mapped_column(String(50), nullable=True)
     exposure_range: Mapped[str | None] = mapped_column(String(200), nullable=True)
     outside_counsel: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    internal_owners: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     conflicts_status: Mapped[str] = mapped_column(
         String(50), default="not-run", server_default="not-run"
     )
@@ -296,22 +295,22 @@ class Matter(Base):
     )
 
     # Relationships
-    client: Mapped["Contact | None"] = relationship(
+    client: Mapped["Contact | None"] = relationship(  # noqa: F821
         "Contact", foreign_keys=[client_contact_id], lazy="select"
     )
-    attorney_of_record: Mapped["User | None"] = relationship(
+    attorney_of_record: Mapped["User | None"] = relationship(  # noqa: F821
         "User", foreign_keys=[attorney_of_record_id], lazy="select"
     )
-    partner_attorney: Mapped["User | None"] = relationship(
+    partner_attorney: Mapped["User | None"] = relationship(  # noqa: F821
         "User", foreign_keys=[partner_attorney_id], lazy="joined"
     )
-    assignments: Mapped[list["MatterAssignment"]] = relationship(
+    assignments: Mapped[list["MatterAssignment"]] = relationship(  # noqa: F821
         "MatterAssignment", back_populates="matter", cascade="all, delete-orphan"
     )
-    notes: Mapped[list["MatterNote"]] = relationship(
+    notes: Mapped[list["MatterNote"]] = relationship(  # noqa: F821
         "MatterNote", back_populates="matter", cascade="all, delete-orphan"
     )
-    retainers: Mapped[list["Retainer"]] = relationship(
+    retainers: Mapped[list["Retainer"]] = relationship(  # noqa: F821
         "Retainer", back_populates="matter"
     )
 
@@ -476,8 +475,8 @@ class Estate(Base):
     events: Mapped[list["EstateEvent"]] = relationship(
         "EstateEvent", back_populates="estate", order_by="EstateEvent.created_at"
     )
-    matter: Mapped["Matter | None"] = relationship("Matter", foreign_keys=[matter_id])
-    client: Mapped["Contact | None"] = relationship(
+    matter: Mapped["Matter | None"] = relationship("Matter", foreign_keys=[matter_id])  # noqa: F821
+    client: Mapped["Contact | None"] = relationship(  # noqa: F821
         "Contact", foreign_keys=[client_contact_id], lazy="joined"
     )
     fiduciaries: Mapped[list["EstateFiduciary"]] = relationship(  # noqa: F821
@@ -599,31 +598,31 @@ class MediationCase(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    case_parties: Mapped[list["MediationParty"]] = relationship(
+    case_parties: Mapped[list["MediationParty"]] = relationship(  # noqa: F821
         "MediationParty",
         back_populates="case",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    assets: Mapped[list["MediationAsset"]] = relationship(
+    assets: Mapped[list["MediationAsset"]] = relationship(  # noqa: F821
         "MediationAsset",
         back_populates="case",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    documents: Mapped[list["MediationDocument"]] = relationship(
+    documents: Mapped[list["MediationDocument"]] = relationship(  # noqa: F821
         "MediationDocument",
         back_populates="case",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    proposals: Mapped[list["MediationProposal"]] = relationship(
+    proposals: Mapped[list["MediationProposal"]] = relationship(  # noqa: F821
         "MediationProposal",
         back_populates="case",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    invites: Mapped[list["MediationInvite"]] = relationship(
+    invites: Mapped[list["MediationInvite"]] = relationship(  # noqa: F821
         "MediationInvite",
         back_populates="case",
         cascade="all, delete-orphan",

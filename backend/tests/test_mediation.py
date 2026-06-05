@@ -3,10 +3,9 @@
 import uuid
 
 import pytest
-import pytest_asyncio
 
 from app.models.user import User
-from app.services.portal_token import create_portal_token, create_user_token
+from app.services.portal_token import create_portal_token
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")

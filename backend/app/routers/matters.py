@@ -47,6 +47,10 @@ from app.schemas.matter import (
     TimelineEntry,
 )
 from app.services.plugins.manifest import get_plugin_manifest
+from app.models.tenant_credential import TenantCredential
+from app.services.cloud_search import CloudSearchService
+
+_cloud_search = CloudSearchService()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
@@ -410,9 +414,10 @@ async def create_matter(
 
     # Default retention: 7 years from today
     from datetime import date as date_type, timedelta
+
     retention_until = body.key_dates and body.key_dates.get("retention_until")
     if not retention_until:
-        retention_until = (date_type.today() + timedelta(days=365 * 7))
+        retention_until = date_type.today() + timedelta(days=365 * 7)
 
     matter = Matter(
         tenant_id=tenant_id,
@@ -581,7 +586,7 @@ async def get_my_matters(
     result = await db.execute(q)
     matters = result.unique().scalars().all()
 
-    from datetime import date as date_type, timedelta
+    from datetime import date as date_type
 
     today = date_type.today()
     items = []
@@ -597,9 +602,7 @@ async def get_my_matters(
         ]
 
         # Find current user's assignment row
-        my_assignment = next(
-            (a for a in m.assignments if a.user_id == user.id), None
-        )
+        my_assignment = next((a for a in m.assignments if a.user_id == user.id), None)
         my_role = my_assignment.role if my_assignment else "observer"
         my_assignment_id = str(my_assignment.id) if my_assignment else ""
         is_active_working = my_assignment.is_active_working if my_assignment else False
@@ -608,7 +611,10 @@ async def get_my_matters(
         active_workers = [
             a.user.full_name
             for a in m.assignments
-            if a.is_active_working and a.user_id != user.id and a.user and a.user.full_name
+            if a.is_active_working
+            and a.user_id != user.id
+            and a.user
+            and a.user.full_name
         ]
 
         # Next deadline from key_dates
@@ -630,7 +636,9 @@ async def get_my_matters(
                 )
                 delta = (next_d - today).days
                 if delta < 0:
-                    overdue_label = f"{abs(delta)} day{'s' if abs(delta) != 1 else ''} overdue"
+                    overdue_label = (
+                        f"{abs(delta)} day{'s' if abs(delta) != 1 else ''} overdue"
+                    )
                 elif delta == 0:
                     overdue_label = "Due today"
                 elif delta <= 7:
@@ -666,7 +674,12 @@ async def get_my_matters(
         )
 
     # Sort by next_deadline ascending (nulls last)
-    items.sort(key=lambda x: (x.next_deadline is None, x.next_deadline or datetime.max.replace(tzinfo=timezone.utc)))
+    items.sort(
+        key=lambda x: (
+            x.next_deadline is None,
+            x.next_deadline or datetime.max.replace(tzinfo=timezone.utc),
+        )
+    )
     return items
 
 
@@ -1751,7 +1764,11 @@ async def get_matter_dashboard_summary(
     overdue_tasks = sum(1 for t in tasks if t.due_date and t.due_date < today)
     next_deadline = None
     upcoming = sorted(
-        [t for t in tasks if t.due_date and t.due_date >= today and t.due_date <= thirty_days],
+        [
+            t
+            for t in tasks
+            if t.due_date and t.due_date >= today and t.due_date <= thirty_days
+        ],
         key=lambda t: t.due_date,
     )
     if upcoming:
@@ -1785,9 +1802,7 @@ async def get_matter_dashboard_summary(
 
     # Active workers
     active_workers = [
-        a.user.full_name
-        for a in matter.assignments
-        if a.is_active_working and a.user
+        a.user.full_name for a in matter.assignments if a.is_active_working and a.user
     ]
 
     return {
@@ -1835,11 +1850,11 @@ async def email_matter_client(
     # Build simple HTML body
     html_body = f"""
     <div style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6;">
-      <p>{email_body.replace(chr(10), '<br>')}</p>
+      <p>{email_body.replace(chr(10), "<br>")}</p>
       <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
       <p style="font-size:12px;color:#999;">
         Re: {matter.matter_name}
-        {(' — ' + matter.case_number) if matter.case_number else ''}
+        {(" — " + matter.case_number) if matter.case_number else ""}
       </p>
     </div>
     """
@@ -1875,6 +1890,73 @@ async def email_matter_client(
         "subject": subject,
         "matter_id": str(matter.id),
         "logged_at": log.occurred_at.isoformat(),
+    }
+
+
+# ── Cloud Files ──────────────────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/cloud-files")
+async def get_matter_cloud_files(
+    matter_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search cloud integrations for files related to this matter by name."""
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    matter = await _get_matter_or_404(db, matter_id, current_user.tenant_id)
+
+    # Check if tenant has any active cloud credentials
+    cred_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == current_user.tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    creds = cred_result.scalars().all()
+
+    if not creds:
+        return {"files": [], "connected": False}
+
+    # Search using matter name as keywords
+    keywords = [w for w in matter.matter_name.split() if len(w) > 2][:6]
+    if matter.case_number:
+        keywords.insert(0, matter.case_number)
+
+    plan = {
+        "keywords": keywords,
+        "max_hits": 20,
+        "date_after": "",
+        "sources": None,
+    }
+
+    try:
+        hits = await _cloud_search.search(
+            db=db,
+            plan=plan,
+            tenant_id=tenant_id,
+            user_id=str(current_user.id),
+        )
+    except Exception:
+        return {"files": [], "connected": True}
+
+    return {
+        "connected": True,
+        "files": [
+            {
+                "id": h.object_id,
+                "title": h.title,
+                "snippet": h.snippet,
+                "url": h.url,
+                "source": h.source,
+                "provider": h.provider,
+                "mime_type": h.mime_type,
+                "modified_time": h.modified_time,
+            }
+            for h in hits
+        ],
     }
 
 

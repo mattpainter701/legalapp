@@ -44,12 +44,12 @@ def test_guardrails_clean_response():
         "Under *Smith v. Jones*, 123 F.3d 456 (2020) [settled], the test applies.\n\n"
         "*This is not legal advice. Please consult a qualified attorney.*"
     )
-    cleaned, needs_retry = apply_guardrails(text)
+    cleaned, needs_retry, _ = apply_guardrails(text)
     assert needs_retry is False
     assert "not legal advice" in cleaned.lower()
 
 
 def test_guardrails_triggers_retry():
     text = "As an AI language model, I think the contract is fine."
-    _, needs_retry = apply_guardrails(text)
+    _, needs_retry, _ = apply_guardrails(text)
     assert needs_retry is True

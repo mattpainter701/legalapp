@@ -80,7 +80,7 @@ from app.services.plugins.manifest import (
     list_plugin_manifests,
     valid_plugin_names,
 )
-from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
+from app.services.plugins.prompts import PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
 from app.services.rag import build_cloud_context
 from app.services.retrieval_planner import RetrievalPlanner
@@ -607,6 +607,7 @@ async def create_matter(
             tenant_id=user.tenant_id,
             names=names,
             emails=[],
+            exclude_matter_ids=[matter.id],
         )
         matter.conflicts_status = "clear" if check["clear"] else "conflict-found"
         await db.commit()
@@ -1121,12 +1122,13 @@ async def get_practice_profile(
     profile = result.scalar_one_or_none()
 
     if profile is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No practice profile found for plugin '{plugin}'. "
-                "Run the cold-start interview first."
-            ),
+        return PracticeProfileResponse(
+            id="",
+            plugin_name=plugin,
+            profile_content="",
+            is_complete=False,
+            setup_step=0,
+            updated_at=datetime.now(timezone.utc),
         )
 
     return PracticeProfileResponse(
@@ -1317,12 +1319,14 @@ async def execute_skill(
     context["tenant_name"] = tenant_name
     matter_context = ""
     if body.matter_id:
-        matter_context, _has_pii, pii_findings = (
-            await matter_context_service.get_safe_matter_context(
-                db=db,
-                matter_id=body.matter_id,
-                privacy_mode=getattr(user, "privacy_mode", False),
-            )
+        (
+            matter_context,
+            _has_pii,
+            pii_findings,
+        ) = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=body.matter_id,
+            privacy_mode=getattr(user, "privacy_mode", False),
         )
         if matter_context:
             context["matter_context"] = matter_context

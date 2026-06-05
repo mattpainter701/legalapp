@@ -298,9 +298,7 @@ async def portal_update_asset(
     if str(asset.submitted_by_party_id) != str(ctx.party_id):
         raise HTTPException(status_code=403, detail="Not your asset")
     if asset.status not in ("draft", "submitted"):
-        raise HTTPException(
-            status_code=409, detail="Asset can no longer be edited"
-        )
+        raise HTTPException(status_code=409, detail="Asset can no longer be edited")
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(asset, field, value)
     asset.updated_at = datetime.now(timezone.utc)
@@ -352,14 +350,10 @@ async def portal_decide_asset(
         )
     if body.decision not in ("approved", "disputed"):
         raise HTTPException(status_code=400, detail="Invalid decision")
-    asset.status = (
-        "opposing_approved" if body.decision == "approved" else "disputed"
-    )
+    asset.status = "opposing_approved" if body.decision == "approved" else "disputed"
     asset.opposing_decision = body.decision
     asset.opposing_decided_at = datetime.now(timezone.utc)
-    asset.dispute_reason = (
-        body.dispute_reason if body.decision == "disputed" else None
-    )
+    asset.dispute_reason = body.dispute_reason if body.decision == "disputed" else None
     asset.updated_at = asset.opposing_decided_at
     await db.commit()
     await db.refresh(asset)

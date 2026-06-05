@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import text
 
 from app.main import app
 from app.models.tenant import Tenant, TenantSettings
@@ -49,7 +50,7 @@ async def test_onboarding_status_returns_defaults(db_session, tenant_id, admin_u
     await db_session.commit()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test") as _:
         # Mock auth — we're testing the endpoint logic via direct DB inspection
         pass
 
@@ -76,7 +77,7 @@ async def test_onboarding_complete_fails_without_integration(
 
     # Verify no credentials exist
     creds = await db_session.execute(
-        """SELECT * FROM tenant_credentials WHERE tenant_id = :tid"""
+        text("SELECT 1 FROM tenant_credentials LIMIT 1")
     )
     assert creds is not None  # Just verifying table access works
 
@@ -84,6 +85,11 @@ async def test_onboarding_complete_fails_without_integration(
 @pytest.mark.anyio
 async def test_license_toggle(db_session, tenant_id, regular_user_id):
     """Toggle User.license_active on and off."""
+    tenant = Tenant(
+        id=tenant_id, name="Test Firm", domain="testfirm-lic.com"
+    )
+    db_session.add(tenant)
+
     user = User(
         id=regular_user_id,
         tenant_id=tenant_id,
@@ -107,6 +113,11 @@ async def test_license_toggle(db_session, tenant_id, regular_user_id):
 @pytest.mark.anyio
 async def test_service_account_deactivation_guard(db_session, tenant_id, admin_user_id):
     """User with TenantCredential.granted_by_user_id should not be deactivated without force."""
+    tenant = Tenant(
+        id=tenant_id, name="Test Firm", domain="testfirm-svc.com"
+    )
+    db_session.add(tenant)
+
     admin = User(
         id=admin_user_id,
         tenant_id=tenant_id,
@@ -115,6 +126,7 @@ async def test_service_account_deactivation_guard(db_session, tenant_id, admin_u
         is_active=True,
     )
     db_session.add(admin)
+    await db_session.flush()  # ensure User is visible for FK on granted_by_user_id
 
     cred = TenantCredential(
         tenant_id=tenant_id,
@@ -135,6 +147,11 @@ async def test_service_account_deactivation_guard(db_session, tenant_id, admin_u
 @pytest.mark.anyio
 async def test_permission_audit_scopes(db_session, tenant_id):
     """Permission audit returns correct scope comparison."""
+    tenant = Tenant(
+        id=tenant_id, name="Test Firm", domain="testfirm-perm.com"
+    )
+    db_session.add(tenant)
+
     cred = TenantCredential(
         tenant_id=tenant_id,
         provider="microsoft",
@@ -179,6 +196,11 @@ async def test_cloud_root_folder_storage(db_session, tenant_id):
 @pytest.mark.anyio
 async def test_customer_llm_config(db_session, tenant_id):
     """Customer LLM settings stored in TenantSettings."""
+    tenant = Tenant(
+        id=tenant_id, name="Test Firm", domain="testfirm-llm.com"
+    )
+    db_session.add(tenant)
+
     ts = TenantSettings(
         tenant_id=tenant_id,
         use_customer_llm=True,

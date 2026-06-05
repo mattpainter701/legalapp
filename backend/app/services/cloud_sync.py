@@ -625,10 +625,7 @@ class CloudSyncService:
                         ext = Path(name).suffix.lower()
                         mime = file_info.get("mimeType", "")
 
-                        if (
-                            ext not in LEGAL_EXTENSIONS
-                            and mime not in LEGAL_MIME_TYPES
-                        ):
+                        if ext not in LEGAL_EXTENSIONS and mime not in LEGAL_MIME_TYPES:
                             continue
 
                         owner_email = None

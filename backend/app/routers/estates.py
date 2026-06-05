@@ -150,9 +150,7 @@ def _estate_to_response(estate: Estate) -> EstateResponse:
                 content=e.content,
                 created_at=e.created_at,
             )
-            for e in sorted(
-                estate.events or [], key=lambda e: e.created_at
-            )
+            for e in sorted(estate.events or [], key=lambda e: e.created_at)
         ],
     )
 
@@ -229,9 +227,7 @@ async def estate_stats(request: Request, db: AsyncSession = Depends(get_db)):
         draft=count("draft"),
         closed=count("closed"),
         total_beneficiaries=sum(len(e.beneficiaries or []) for e in estates),
-        total_gross_value=sum(
-            (e.gross_estate_value or Decimal("0")) for e in estates
-        ),
+        total_gross_value=sum((e.gross_estate_value or Decimal("0")) for e in estates),
         upcoming_deadlines=upcoming,
     )
 
@@ -372,9 +368,7 @@ async def _verify_estate(
     db: AsyncSession, estate_id: str, tenant_id: uuid.UUID
 ) -> None:
     result = await db.execute(
-        select(Estate.id).where(
-            Estate.id == estate_id, Estate.tenant_id == tenant_id
-        )
+        select(Estate.id).where(Estate.id == estate_id, Estate.tenant_id == tenant_id)
     )
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Estate not found")
@@ -500,9 +494,7 @@ async def update_fiduciary(
     return _fiduciary_resp(f)
 
 
-@router.delete(
-    "/estates/{estate_id}/fiduciaries/{child_id}", status_code=204
-)
+@router.delete("/estates/{estate_id}/fiduciaries/{child_id}", status_code=204)
 async def delete_fiduciary(
     estate_id: str,
     child_id: str,
@@ -632,9 +624,7 @@ async def update_beneficiary(
     return _beneficiary_resp(b)
 
 
-@router.delete(
-    "/estates/{estate_id}/beneficiaries/{child_id}", status_code=204
-)
+@router.delete("/estates/{estate_id}/beneficiaries/{child_id}", status_code=204)
 async def delete_beneficiary(
     estate_id: str,
     child_id: str,
@@ -701,9 +691,7 @@ async def create_asset(
     return a
 
 
-@router.patch(
-    "/estates/{estate_id}/assets/{child_id}", response_model=AssetResponse
-)
+@router.patch("/estates/{estate_id}/assets/{child_id}", response_model=AssetResponse)
 async def update_asset(
     estate_id: str,
     child_id: str,
@@ -738,9 +726,7 @@ async def delete_asset(
 # ── Liabilities / claims ──────────────────────────────────────────────────────
 
 
-@router.get(
-    "/estates/{estate_id}/liabilities", response_model=List[LiabilityResponse]
-)
+@router.get("/estates/{estate_id}/liabilities", response_model=List[LiabilityResponse])
 async def list_liabilities(
     estate_id: str,
     request: Request,
@@ -884,8 +870,7 @@ async def list_distributions(
     )
     names = {str(bid): name for bid, name in ben_result.all()}
     return [
-        _distribution_resp(d, names.get(str(d.beneficiary_id)))
-        for d in distributions
+        _distribution_resp(d, names.get(str(d.beneficiary_id))) for d in distributions
     ]
 
 
@@ -1050,9 +1035,7 @@ async def update_deadline(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    d = await _get_child_or_404(
-        db, EstateDeadline, child_id, estate_id, user.tenant_id
-    )
+    d = await _get_child_or_404(db, EstateDeadline, child_id, estate_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
     if "assigned_to" in data:
         data["assigned_to"] = _as_uuid(data["assigned_to"])
@@ -1074,9 +1057,7 @@ async def delete_deadline(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    d = await _get_child_or_404(
-        db, EstateDeadline, child_id, estate_id, user.tenant_id
-    )
+    d = await _get_child_or_404(db, EstateDeadline, child_id, estate_id, user.tenant_id)
     await db.delete(d)
     await db.commit()
 
@@ -1114,9 +1095,7 @@ async def list_accounting(
     return list(result.scalars().all())
 
 
-@router.get(
-    "/estates/{estate_id}/accounting/summary", response_model=AccountingSummary
-)
+@router.get("/estates/{estate_id}/accounting/summary", response_model=AccountingSummary)
 async def accounting_summary(
     estate_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
@@ -1150,9 +1129,7 @@ def _compute_accounting_summary(entries) -> AccountingSummary:
             return e.amount
         return -e.amount
 
-    principal = sum(
-        (signed(e) for e in entries if e.account_class == "principal"), z
-    )
+    principal = sum((signed(e) for e in entries if e.account_class == "principal"), z)
     income = sum((signed(e) for e in entries if e.account_class == "income"), z)
 
     return AccountingSummary(
@@ -1263,25 +1240,33 @@ async def estate_report(
 
     if kind == "inventory":
         assets = (
-            await db.execute(
-                select(EstateAsset)
-                .where(
-                    EstateAsset.estate_id == estate_id,
-                    EstateAsset.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateAsset)
+                    .where(
+                        EstateAsset.estate_id == estate_id,
+                        EstateAsset.tenant_id == user.tenant_id,
+                    )
+                    .limit(1000)
                 )
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         liabilities = (
-            await db.execute(
-                select(EstateLiability)
-                .where(
-                    EstateLiability.estate_id == estate_id,
-                    EstateLiability.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateLiability)
+                    .where(
+                        EstateLiability.estate_id == estate_id,
+                        EstateLiability.tenant_id == user.tenant_id,
+                    )
+                    .limit(1000)
                 )
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         total_assets = sum(
             (a.current_value or a.date_of_death_value or Decimal("0") for a in assets),
             Decimal("0"),
@@ -1318,16 +1303,20 @@ async def estate_report(
 
     if kind == "accounting":
         entries = (
-            await db.execute(
-                select(EstateAccountingEntry)
-                .where(
-                    EstateAccountingEntry.estate_id == estate_id,
-                    EstateAccountingEntry.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateAccountingEntry)
+                    .where(
+                        EstateAccountingEntry.estate_id == estate_id,
+                        EstateAccountingEntry.tenant_id == user.tenant_id,
+                    )
+                    .order_by(EstateAccountingEntry.entry_date)
+                    .limit(1000)
                 )
-                .order_by(EstateAccountingEntry.entry_date)
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         summary = _compute_accounting_summary(entries)
         return {
             "report": "accounting",
@@ -1349,25 +1338,33 @@ async def estate_report(
 
     if kind == "distribution":
         bens = (
-            await db.execute(
-                select(EstateBeneficiary)
-                .where(
-                    EstateBeneficiary.estate_id == estate_id,
-                    EstateBeneficiary.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateBeneficiary)
+                    .where(
+                        EstateBeneficiary.estate_id == estate_id,
+                        EstateBeneficiary.tenant_id == user.tenant_id,
+                    )
+                    .limit(1000)
                 )
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         dists = (
-            await db.execute(
-                select(EstateDistribution)
-                .where(
-                    EstateDistribution.estate_id == estate_id,
-                    EstateDistribution.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateDistribution)
+                    .where(
+                        EstateDistribution.estate_id == estate_id,
+                        EstateDistribution.tenant_id == user.tenant_id,
+                    )
+                    .limit(1000)
                 )
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         paid_by_ben: dict[str, Decimal] = {}
         for d in dists:
             if d.status == "paid":
@@ -1391,16 +1388,20 @@ async def estate_report(
 
     if kind == "deadlines":
         deadlines = (
-            await db.execute(
-                select(EstateDeadline)
-                .where(
-                    EstateDeadline.estate_id == estate_id,
-                    EstateDeadline.tenant_id == user.tenant_id,
+            (
+                await db.execute(
+                    select(EstateDeadline)
+                    .where(
+                        EstateDeadline.estate_id == estate_id,
+                        EstateDeadline.tenant_id == user.tenant_id,
+                    )
+                    .order_by(EstateDeadline.due_date)
+                    .limit(1000)
                 )
-                .order_by(EstateDeadline.due_date)
-                .limit(1000)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return {
             "report": "deadlines",
             "estate_name": estate.estate_name or estate.title,

@@ -95,14 +95,7 @@ def apply_guardrails(
 
     if has_prohibited:
         cleaned = sanitize_response(text)
-        needs_retry = (
-            sum(
-                1
-                for phrase in ["deepseek", "claude", "gpt", "openai", "anthropic"]
-                if phrase in text.lower()
-            )
-            >= 2
-        )
+        needs_retry = True
     else:
         needs_retry = False
 

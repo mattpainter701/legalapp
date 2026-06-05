@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
     # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-    TOKEN_ENCRYPTION_KEY: str
+    TOKEN_ENCRYPTION_KEY: str = ""
 
     # Azure OpenAI (Copilot backend)
     AZURE_OPENAI_ENDPOINT: str = ""
@@ -132,10 +132,10 @@ def validate_token_encryption_key(settings: Settings) -> None:
             )
         # Validate it's a valid Fernet key
         Fernet(key.encode() if isinstance(key, str) else key)
-    except ValueError:
-        raise
+    except ValueError as e:
+        raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}") from e
     except Exception as e:
-        raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}")
+        raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}") from e
 
 
 @lru_cache()

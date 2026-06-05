@@ -15,11 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin as _require_admin
 from app.models.plugin import PromptOverride
-from app.routers.plugins import (
-    VALID_PLUGINS,
-    PLUGIN_DISPLAY_NAMES,
-    PLUGIN_SKILLS,
-)
+from app.routers.plugins import VALID_PLUGINS
+from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
 from app.schemas.plugin import (
     PromptDetail,
     PromptInfo,

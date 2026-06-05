@@ -3,7 +3,16 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,7 +25,9 @@ class SmbFileIndex(Base):
         UniqueConstraint("tenant_id", "path", name="uq_smb_file_tenant_path"),
         Index("ix_smb_file_index_tenant_share", "tenant_id", "share_id"),
         Index("ix_smb_file_index_tenant_ext", "tenant_id", "ext"),
-        Index("ix_smb_file_index_search_vector", "search_vector", postgresql_using="gin"),
+        Index(
+            "ix_smb_file_index_search_vector", "search_vector", postgresql_using="gin"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
