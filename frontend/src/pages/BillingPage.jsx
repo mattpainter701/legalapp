@@ -70,7 +70,7 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-bg">
+    <div className="">
       <div className="max-w-2xl mx-auto px-4 py-12">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">

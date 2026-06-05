@@ -1072,6 +1072,7 @@ export default function AdminPage() {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState('users')
   const [billingTier, setBillingTier] = useState('payg')
+  const [tabsCollapsed, setTabsCollapsed] = useState(false)
 
   // Fetch billing tier once so Users and Licensing tabs can use it
   useEffect(() => {
@@ -1093,27 +1094,7 @@ export default function AdminPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-brand-bg">
-      {/* Top nav — clean, no redundant sign-out */}
-      <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center gap-4 sticky top-0 z-30">
-        <button
-          onClick={() => navigate('/chat')}
-          className="flex items-center gap-1.5 text-sm font-medium text-brand-ink-2 hover:text-brand-ink transition-colors font-sans flex-shrink-0"
-        >
-          <ArrowLeft size={15} />
-          <span className="hidden sm:inline">Back to app</span>
-        </button>
-        <div className="h-5 w-px bg-brand-line hidden sm:block" />
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center flex-shrink-0">
-            <svg width="14" height="14" viewBox="0 0 32 32" fill="none">
-              <path d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z" fill="#14253B" />
-            </svg>
-          </div>
-          <span className="font-serif font-bold text-base text-brand-ink truncate">Administration</span>
-        </div>
-      </div>
-
+    <div className="">
       {/* Content */}
       <div className="max-w-6xl mx-auto px-4 md:px-8 py-8 md:py-12">
         <div className="mb-8 md:mb-10">
@@ -1125,23 +1106,51 @@ export default function AdminPage() {
           </p>
         </div>
 
-        {/* Tabs */}
-        <div className="border-b border-brand-line mb-8 overflow-x-auto">
-          <nav className="-mb-px flex gap-4 md:gap-6">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`pb-4 text-[13px] md:text-[14px] font-sans font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0 ${
-                  activeTab === tab.id
-                    ? 'border-brand-accent text-brand-ink'
-                    : 'border-transparent text-brand-muted hover:text-brand-ink hover:border-brand-line-2'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
+        {/* Collapsible Tabs */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-2">
+            <button
+              onClick={() => setTabsCollapsed(!tabsCollapsed)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium text-brand-muted hover:text-brand-ink bg-brand-surface border border-brand-line rounded-lg transition-colors flex-shrink-0"
+              title={tabsCollapsed ? 'Show tabs' : 'Hide tabs'}
+            >
+              {tabsCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <span className="hidden sm:inline">{tabsCollapsed ? 'Show tabs' : 'Hide tabs'}</span>
+            </button>
+            {tabsCollapsed && (
+              <>
+                <span className="text-sm font-sans font-semibold text-brand-ink">{tabs.find(t => t.id === activeTab)?.label || 'Admin'}</span>
+                <select
+                  value={activeTab}
+                  onChange={(e) => setActiveTab(e.target.value)}
+                  className="text-xs font-sans px-2 py-1.5 border border-brand-line rounded-lg bg-brand-surface text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent ml-auto"
+                >
+                  {tabs.map(t => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+          {!tabsCollapsed && (
+            <div className="border-b border-brand-line overflow-x-auto">
+              <nav className="-mb-px flex gap-4 md:gap-6">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`pb-4 text-[13px] md:text-[14px] font-sans font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0 ${
+                      activeTab === tab.id
+                        ? 'border-brand-accent text-brand-ink'
+                        : 'border-transparent text-brand-muted hover:text-brand-ink hover:border-brand-line-2'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          )}
         </div>
 
         {/* Tab content */}

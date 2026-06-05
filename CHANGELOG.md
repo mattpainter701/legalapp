@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.5] — 2026-06-05
+
+### AppShell Layout — Restore Consistent UI Across All Pages
+
+### Added
+- **`AppShell.jsx`:** Shared layout component wrapping all authenticated pages with sidebar (always visible on desktop, hamburger overlay on mobile) + top header bar with prominent Admin button (Shield icon) for admin users.
+- **`AppShellContext`:** React context for shared conversations/documents state across sidebar and ChatPage.
+- **AdminPage collapsible tabs:** Toggle button to collapse/expand the admin tab bar; dropdown picker when collapsed for mobile-friendly tab switching.
+
+### Changed
+- **`App.jsx`:** Created `ShellRoute` wrapper that composes `ProtectedRoute` + `AppShell` for all 25+ authenticated routes. ChatPage, MatterPortfolio, Admin, Calendar, Communications, TimeTracking, Invoices, Reports, Templates, Billing, Contacts, Tasks, Intake, Plugins, Plugin, Profile, RenewalTracker, EstatePortfolio, EstateDetail, MediationPortfolio, MediationDetail, MCP, OnboardingWizard — all now share the AppShell layout.
+- **`Sidebar.jsx`:** Logout icon changed from Settings (gear) to sign-out arrow for clarity. Already had mobile overlay support from task 1110.
+- **`ChatHeader.jsx`:** Removed admin button from "More" dropdown (moved to AppShell header).
+- **`ChatPage.jsx`:** Refactored to use shared `AppShellContext` for conversations/documents; sidebar rendering removed (handled by AppShell).
+- **Multiple pages:** Removed redundant `min-h-screen bg-brand-bg` outer wrappers from MatterPortfolioPage, BillingPage, IntakePage, ReportsPage, ContactsPage, AdminPage.
+
+### Fixed
+- Regression where sidebar was only visible in ChatPage — now present across all authenticated pages.
+- Admin button was hidden in ChatHeader dropdown menu — now prominently in AppShell top-right for all pages.
+- AdminPage now has collapsible tab navigation for better mobile UX.
+
 ## [0.13.4] — 2026-06-05
 
 ### Cloud Drive Integration Fix — Google Drive + OneDrive Folder Creation

@@ -1,37 +1,29 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../App'
-import Sidebar from '../components/Sidebar'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useAppShell } from '../components/AppShell'
 import ChatHeader from '../components/ChatHeader'
 import ChatInput from '../components/ChatInput'
 import Messages from '../components/Messages'
 import {
-  getConversations,
-  createConversation,
   getConversation,
   sendMessage,
   streamMessage,
-  getDocuments,
+  createConversation,
   uploadDocument,
-  logout,
 } from '../api'
 
 export default function ChatPage() {
-  const { user, logout: authLogout } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { conversations, setConversations, documents, setDocuments, activeConvId, setActiveConvId } = useAppShell()
 
-  // State
-  const [conversations, setConversations] = useState([])
-  const [activeConvId, setActiveConvId] = useState(null)
   const [messages, setMessages] = useState([])
-  const [documents, setDocuments] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const fileInputRef = useRef(null)
 
   const handleUploadClick = () => {
@@ -64,26 +56,6 @@ export default function ChatPage() {
     }
   }
 
-  // Load conversations and documents on mount
-  useEffect(() => {
-    Promise.all([getConversations(), getDocuments()])
-      .then(([convs, docs]) => {
-        setConversations(convs)
-        setDocuments(Array.isArray(docs) ? docs : docs?.documents || [])
-        if (convs.length > 0) {
-          loadConversation(convs[0].id)
-        }
-      })
-      .catch(console.error)
-
-    // Check for pending message from plugin skill output
-    const pending = sessionStorage.getItem('pending_chat_message')
-    if (pending) {
-      setInputValue(pending)
-      sessionStorage.removeItem('pending_chat_message')
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   const loadConversation = useCallback(async (id) => {
     setIsLoadingMessages(true)
     setActiveConvId(id)
@@ -96,7 +68,30 @@ export default function ChatPage() {
     } finally {
       setIsLoadingMessages(false)
     }
-  }, [])
+  }, [setActiveConvId])
+
+  // Load first conversation on mount, or from URL param
+  useEffect(() => {
+    const convId = searchParams.get('conv')
+    if (convId) {
+      loadConversation(convId)
+    } else if (conversations.length > 0 && !activeConvId) {
+      loadConversation(conversations[0].id)
+    }
+
+    const pending = sessionStorage.getItem('pending_chat_message')
+    if (pending) {
+      setInputValue(pending)
+      sessionStorage.removeItem('pending_chat_message')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // If conversations loaded after mount and no active conv, pick first
+  useEffect(() => {
+    if (conversations.length > 0 && !activeConvId && !searchParams.get('conv')) {
+      loadConversation(conversations[0].id)
+    }
+  }, [conversations, activeConvId, searchParams, loadConversation])
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -108,18 +103,18 @@ export default function ChatPage() {
     } catch (err) {
       console.error('Failed to create conversation', err)
     }
-  }, [])
+  }, [setConversations, setActiveConvId])
 
   const handleConversationDeleted = useCallback(
     (id) => {
-      setConversations((prev) => prev.filter((c) => c.id !== id))
+      // AppShell handles this now via context, but we still clear local state
       if (activeConvId === id) {
         setActiveConvId(null)
         setMessages([])
         setActiveConvTitle('')
       }
     },
-    [activeConvId]
+    [activeConvId, setActiveConvId]
   )
 
   const handleSend = useCallback(async () => {
@@ -128,7 +123,6 @@ export default function ChatPage() {
 
     let convId = activeConvId
 
-    // Create a conversation if none is active
     if (!convId) {
       try {
         const conv = await createConversation(content.slice(0, 60))
@@ -155,7 +149,6 @@ export default function ChatPage() {
     setIsSending(true)
 
     try {
-      // Create a placeholder assistant message for streaming
       const assistantMsgId = `stream-${Date.now()}`
       const assistantMsg = {
         id: assistantMsgId,
@@ -166,21 +159,17 @@ export default function ChatPage() {
       }
       setMessages((prev) => [...prev, assistantMsg])
 
-      // Stream the response
       let accumulatedText = ''
-      let streamComplete = false
       let streamError = null
 
       for await (const token of streamMessage(convId, content, includePublic, usePremium)) {
         if (token === '[STREAM_COMPLETE]') {
-          streamComplete = true
           break
         } else if (token.startsWith('[ERROR]')) {
-          streamError = token.slice(7) // Extract error message
+          streamError = token.slice(7)
           break
         } else {
           accumulatedText += token
-          // Update the message as tokens arrive
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
@@ -192,20 +181,15 @@ export default function ChatPage() {
       }
 
       if (streamError) {
-        console.error('Stream error:', streamError)
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMsgId
-              ? {
-                  ...msg,
-                  content: `An error occurred: ${streamError}`,
-                }
+              ? { ...msg, content: `An error occurred: ${streamError}` }
               : msg
           )
         )
       }
 
-      // Update conversation title if it was auto-generated
       setConversations((prev) =>
         prev.map((c) =>
           c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c
@@ -226,32 +210,9 @@ export default function ChatPage() {
     } finally {
       setIsSending(false)
     }
-  }, [inputValue, isSending, activeConvId, includePublic, usePremium])
-
-  const handleLogout = async () => {
-    try {
-      await logout()
-    } catch {
-      // ignore
-    }
-    authLogout()
-    navigate('/login')
-  }
-
-  const handleDocumentUploaded = (doc) => {
-    setDocuments((prev) => {
-      const exists = prev.find((d) => d.id === doc.id)
-      if (exists) return prev
-      return [doc, ...prev]
-    })
-  }
-
-  const handleDocumentDeleted = (id) => {
-    setDocuments((prev) => prev.filter((d) => d.id !== id))
-  }
+  }, [inputValue, isSending, activeConvId, includePublic, usePremium, setConversations, setActiveConvId])
 
   const handleExportConversation = () => {
-    // Export as Markdown for now
     const content = messages
       .map((msg) => `**${msg.role === 'user' ? 'You' : 'Clarity Legal'}:**\n\n${msg.content}`)
       .join('\n\n---\n\n')
@@ -266,7 +227,6 @@ export default function ChatPage() {
   }
 
   const handleSearchMessages = () => {
-    // TODO: Implement message search
     console.log('Search messages')
   }
 
@@ -276,7 +236,7 @@ export default function ChatPage() {
   })()
 
   return (
-    <div className="flex h-screen bg-brand-bg overflow-hidden relative">
+    <div className="flex flex-col h-full bg-brand-bg relative">
       {/* Background ledger ruling */}
       <div
         className="absolute inset-0 pointer-events-none z-0"
@@ -285,63 +245,45 @@ export default function ChatPage() {
           backgroundSize: '100% 24px',
           opacity: 0.15,
         }}
-      ></div>
+      />
 
-      <div className="relative z-10 flex h-full w-full">
-        <Sidebar
-          conversations={conversations}
-          activeConvId={activeConvId}
-          onSelectConversation={(id) => { loadConversation(id); setSidebarOpen(false) }}
-          onNewConversation={handleNewConversation}
-          onConversationDeleted={handleConversationDeleted}
-          documents={documents}
-          onDocumentUploaded={handleDocumentUploaded}
-          onDocumentDeleted={handleDocumentDeleted}
-          user={user}
-          onLogout={handleLogout}
-          isOpen={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
+      <div className="relative z-10 flex flex-col h-full">
+        <ChatHeader
+          activeRef={activeRef}
+          activeConvTitle={activeConvTitle}
+          usePremium={usePremium}
+          setUsePremium={setUsePremium}
+          includePublic={includePublic}
+          setIncludePublic={setIncludePublic}
+          user={null}
+          onExportConversation={handleExportConversation}
+          onSearchMessages={handleSearchMessages}
+          onOpenSidebar={() => {}}
         />
 
-        {/* Main area — on desktop, sidebar is in-flow so we don't need left offset */}
-        <div className="flex-1 flex flex-col min-w-0 bg-brand-bg md:ml-0">
-          <ChatHeader
-            activeRef={activeRef}
-            activeConvTitle={activeConvTitle}
-            usePremium={usePremium}
-            setUsePremium={setUsePremium}
-            includePublic={includePublic}
-            setIncludePublic={setIncludePublic}
-            user={user}
-            onExportConversation={handleExportConversation}
-            onSearchMessages={handleSearchMessages}
-            onOpenSidebar={() => setSidebarOpen(true)}
-          />
+        <Messages
+          messages={messages}
+          isLoading={isLoadingMessages}
+          isSending={isSending}
+        />
 
-          <Messages
-            messages={messages}
-            isLoading={isLoadingMessages}
-            isSending={isSending}
-          />
-
-          <ChatInput
-            inputValue={inputValue}
-            onInputChange={setInputValue}
-            onSend={handleSend}
-            onUploadClick={handleUploadClick}
-            onDropFiles={handleDropFiles}
-            isSending={isSending}
-            disabled={false}
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.docx,.txt"
-            multiple
-            className="hidden"
-            onChange={handleFilesSelected}
-          />
-        </div>
+        <ChatInput
+          inputValue={inputValue}
+          onInputChange={setInputValue}
+          onSend={handleSend}
+          onUploadClick={handleUploadClick}
+          onDropFiles={handleDropFiles}
+          isSending={isSending}
+          disabled={false}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.docx,.txt"
+          multiple
+          className="hidden"
+          onChange={handleFilesSelected}
+        />
       </div>
     </div>
   )

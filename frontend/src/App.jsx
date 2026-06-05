@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Routes, Route, Navigate, useParams } from 'react-router-dom'
+import AppShell from './components/AppShell'
 import LoginPage from './pages/LoginPage'
 import HomePage from './pages/HomePage'
 import SignupPage from './pages/SignupPage'
@@ -71,8 +72,6 @@ export function AuthProvider({ children }) {
   }, [token, fetchUser])
 
   const login = useCallback(async (newToken) => {
-    // DEPRECATED: No longer storing token in localStorage (now using httpOnly cookie)
-    // Keep this line for backward compatibility during transition, but new tokens come from cookies
     localStorage.setItem('token', newToken)
     setToken(newToken)
     const me = await fetchUser(newToken)
@@ -125,6 +124,16 @@ function ProtectedRoute({ children, adminOnly = false }) {
   return children
 }
 
+function ShellRoute({ children, title, adminOnly = false }) {
+  return (
+    <ProtectedRoute adminOnly={adminOnly}>
+      <AppShell title={title}>
+        {children}
+      </AppShell>
+    </ProtectedRoute>
+  )
+}
+
 function RootRedirect() {
   const { user, loading } = useAuth()
 
@@ -158,58 +167,119 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
-        {/* Portal routes — auth via httpOnly cookie from invite acceptance */}
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
-        <Route
-          path="/onboarding"
-          element={
-            <ProtectedRoute adminOnly>
-              <OnboardingWizard />
-            </ProtectedRoute>
-          }
-        />
+
+        {/* Authenticated pages wrapped in AppShell */}
         <Route
           path="/chat"
-          element={
-            <ProtectedRoute>
-              <ChatPage />
-            </ProtectedRoute>
-          }
+          element={<ShellRoute title="Chat"><ChatPage /></ShellRoute>}
         />
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute adminOnly>
-              <AdminPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins"
-          element={
-            <ProtectedRoute>
-              <PluginsPage />
-            </ProtectedRoute>
-          }
-        />
-        {/* Primary matter routes */}
         <Route
           path="/matters"
-          element={
-            <ProtectedRoute>
-              <MatterPortfolioPage />
-            </ProtectedRoute>
-          }
+          element={<ShellRoute title="My Matters"><MatterPortfolioPage /></ShellRoute>}
         />
         <Route
           path="/matters/:id"
-          element={
-            <ProtectedRoute>
-              <MatterDetailPage />
-            </ProtectedRoute>
-          }
+          element={<ShellRoute title="Matter Details"><MatterDetailPage /></ShellRoute>}
         />
+        <Route
+          path="/calendar"
+          element={<ShellRoute title="Calendar"><CalendarPage /></ShellRoute>}
+        />
+        <Route
+          path="/communications"
+          element={<ShellRoute title="Communications"><CommunicationsPage /></ShellRoute>}
+        />
+        <Route
+          path="/time-tracking"
+          element={<ShellRoute title="Time Tracking"><TimeTrackingPage /></ShellRoute>}
+        />
+        <Route
+          path="/invoices"
+          element={<ShellRoute title="Invoices"><InvoicesPage /></ShellRoute>}
+        />
+        <Route
+          path="/invoices/:id"
+          element={<ShellRoute title="Invoice"><InvoiceDetailPage /></ShellRoute>}
+        />
+        <Route
+          path="/reports"
+          element={<ShellRoute title="Reports"><ReportsPage /></ShellRoute>}
+        />
+        <Route
+          path="/templates"
+          element={<ShellRoute title="Templates"><TemplatesPage /></ShellRoute>}
+        />
+        <Route
+          path="/billing"
+          element={<ShellRoute title="Billing"><BillingPage /></ShellRoute>}
+        />
+        <Route
+          path="/contacts"
+          element={<ShellRoute title="Contacts"><ContactsPage /></ShellRoute>}
+        />
+        <Route
+          path="/contacts/:id"
+          element={<ShellRoute title="Contact"><ContactDetailPage /></ShellRoute>}
+        />
+        <Route
+          path="/tasks"
+          element={<ShellRoute title="Tasks"><TasksPage /></ShellRoute>}
+        />
+        <Route
+          path="/intake"
+          element={<ShellRoute title="Intake"><IntakePage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins"
+          element={<ShellRoute title="Add-on Modules"><PluginsPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/:pluginName"
+          element={<ShellRoute title="Plugin"><PluginPage /></ShellRoute>}
+        />
+        <Route
+          path="/profile"
+          element={<ShellRoute title="Profile"><ProfilePage /></ShellRoute>}
+        />
+
+        {/* Plugin sub-routes */}
+        <Route
+          path="/plugins/commercial/renewals"
+          element={<ShellRoute title="Renewal Tracker"><RenewalTrackerPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/trust-estate/estates"
+          element={<ShellRoute title="Trust & Estate"><EstatePortfolioPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/trust-estate/estates/:id"
+          element={<ShellRoute title="Estate"><EstateDetailPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/mediation/cases"
+          element={<ShellRoute title="Mediation Cases"><MediationPortfolioPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/mediation/cases/:id"
+          element={<ShellRoute title="Mediation Case"><MediationDetailPage /></ShellRoute>}
+        />
+
+        {/* Admin routes */}
+        <Route
+          path="/admin"
+          element={<ShellRoute title="Administration" adminOnly><AdminPage /></ShellRoute>}
+        />
+        <Route
+          path="/mcp"
+          element={<ShellRoute title="MCP" adminOnly><MCPPage /></ShellRoute>}
+        />
+        <Route
+          path="/onboarding"
+          element={<ShellRoute title="Onboarding" adminOnly><OnboardingWizard /></ShellRoute>}
+        />
+
         {/* Legacy redirects */}
         <Route path="/plugins/litigation/matters" element={<Navigate to="/matters" replace />} />
         <Route
@@ -220,167 +290,8 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="/plugins/commercial/renewals"
-          element={
-            <ProtectedRoute>
-              <RenewalTrackerPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins/trust-estate/estates"
-          element={
-            <ProtectedRoute>
-              <EstatePortfolioPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins/trust-estate/estates/:id"
-          element={
-            <ProtectedRoute>
-              <EstateDetailPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins/mediation/cases"
-          element={
-            <ProtectedRoute>
-              <MediationPortfolioPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins/mediation/cases/:id"
-          element={
-            <ProtectedRoute>
-              <MediationDetailPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/plugins/:pluginName"
-          element={
-            <ProtectedRoute>
-              <PluginPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/billing"
-          element={
-            <ProtectedRoute>
-              <BillingPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/contacts"
-          element={
-            <ProtectedRoute>
-              <ContactsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/contacts/:id"
-          element={
-            <ProtectedRoute>
-              <ContactDetailPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/tasks"
-          element={
-            <ProtectedRoute>
-              <TasksPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/intake"
-          element={
-            <ProtectedRoute>
-              <IntakePage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            <ProtectedRoute>
-              <ReportsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/calendar"
-          element={
-            <ProtectedRoute>
-              <CalendarPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/communications"
-          element={
-            <ProtectedRoute>
-              <CommunicationsPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/templates"
-          element={
-            <ProtectedRoute>
-              <TemplatesPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/mcp"
-          element={
-            <ProtectedRoute adminOnly>
-              <MCPPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/time-tracking"
-          element={
-            <ProtectedRoute>
-              <TimeTrackingPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/invoices"
-          element={
-            <ProtectedRoute>
-              <InvoicesPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/invoices/:id"
-          element={
-            <ProtectedRoute>
-              <InvoiceDetailPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <ProfilePage />
-            </ProtectedRoute>
-          }
-        />
-        {/* Platform admin — has its own auth (platform key), not protected by JWT */}
+
+        {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

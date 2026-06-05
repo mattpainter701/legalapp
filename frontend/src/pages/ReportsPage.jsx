@@ -56,7 +56,7 @@ export default function ReportsPage() {
   const { matter_status, intake_funnel, overdue_tasks, generated_at } = bundle
 
   return (
-    <div className="min-h-screen bg-brand-bg text-brand-ink">
+    <div className="">
       {/* Header */}
       <div className="border-b border-brand-line bg-brand-surface-2 px-6 py-4 flex items-center gap-4">
         <button

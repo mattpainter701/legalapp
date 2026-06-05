@@ -158,20 +158,7 @@ export default function ChatHeader({
               >
                 <Download size={14} /> Export conversation
               </button>
-              {user?.role === 'admin' && (
-                <>
-                  <div className="border-t border-brand-line"></div>
-                  <button
-                    onClick={() => {
-                      navigate('/admin')
-                      setShowMenu(false)
-                    }}
-                    className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink uppercase tracking-wider font-semibold transition-colors"
-                  >
-                    Admin
-                  </button>
-                </>
-              )}
+{/* Admin button moved to AppShell header */}
             </div>
           )}
         </div>

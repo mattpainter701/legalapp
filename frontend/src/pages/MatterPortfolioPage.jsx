@@ -303,7 +303,7 @@ export default function MatterPortfolioPage() {
   }, [myMatters])
 
   return (
-    <div className="min-h-screen bg-brand-bg">
+    <div>
       {/* Top nav */}
       <div className="bg-brand-surface border-b border-brand-line px-4 md:px-8 py-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">

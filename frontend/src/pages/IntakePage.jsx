@@ -245,7 +245,7 @@ export default function IntakePage() {
   const closedLeads = leads.filter(l => ['matter_opened','declined'].includes(l.status))
 
   return (
-    <div className="min-h-screen bg-brand-bg">
+    <div className="">
       <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
