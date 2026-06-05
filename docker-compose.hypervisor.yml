@@ -43,7 +43,7 @@ services:
     build:
       context: .
       dockerfile: litellm/Dockerfile
-    image: legalapp-litellm:main-v1.72.6
+    image: legalapp-litellm:main-latest
     depends_on:
       litellm-postgres:
         condition: service_healthy
