@@ -17,7 +17,10 @@
 - [x] Define standard/premium fallback profiles in `litellm_config.yaml`
 - [x] Add production secret docs for LiteLLM master key, DB password, and provider keys
 
-### 1202. Routing Refactor — Logical Route First (P0, LARGE) — PENDING
+### 1202. Routing Refactor — Logical Route First (P0, LARGE) — CLAIMED
+
+**Claimed:** 2026-06-05 — Codex. Large P0 backend refactor; prerequisite for AI Operations console, gateway audit, and cutover work.
+
 - [ ] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium`
 - [ ] Persist requested route, resolved gateway alias, final provider/model, fallback count, and gateway request ID on `usage_records`
 - [ ] Include resolved provider/model in cache keys for all LLM-backed flows

@@ -1,7 +1,7 @@
-"""040 — Create error_logs table for platform diagnostics.
+"""041 — Create error_logs table for platform diagnostics.
 
-Revision ID: 040
-Revises: 039
+Revision ID: 041
+Revises: 040
 Create Date: 2026-06-05
 
 Adds error_logs table — structured error logging for troubleshooting.
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "040"
-down_revision = "039"
+revision = "041"
+down_revision = "040"
 branch_labels = None
 depends_on = None
 
