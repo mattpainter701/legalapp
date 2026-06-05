@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import {
   getMatterV2, updateMatterV2, getMatterTimeline, addMatterNote,
@@ -8,10 +8,13 @@ import {
   removeMatterAssignment, getMatterMemory, updateMatterMemory,
   getAdminUsers, getPlugins, getCommunications, createCommunication,
   setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
+  getTasks, updateTask, getMatterDashboard,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
+import AddTaskModal from '../components/AddTaskModal'
+import ComposeEmailModal from '../components/ComposeEmailModal'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -37,6 +40,12 @@ const Icons = {
   dollar: 'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
   messageSquare: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
   folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
+  activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
+  send: 'M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronRight: 'M9 18l6-6-6-6',
+  checkCircle: 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3',
 }
 
 // ── Small UI pieces ───────────────────────────────────────────────────────────
@@ -93,6 +102,37 @@ function EntryBadge({ type }) {
   return <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider font-sans border ${cls}`}>{type?.replace(/_/g, ' ') || 'event'}</span>
 }
 
+// Task type badge
+const TASK_TYPE_COLORS = {
+  deadline: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+  hearing: 'bg-purple-100 text-purple-800 border-purple-200',
+  filing: 'bg-blue-100 text-blue-800 border-blue-200',
+  deposition: 'bg-orange-100 text-orange-800 border-orange-200',
+  review: 'bg-brand-bg-soft text-brand-ink-2 border-brand-line',
+  call: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+  follow_up: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+  general: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+}
+function TaskTypeBadge({ type }) {
+  const cls = TASK_TYPE_COLORS[type] || 'bg-brand-bg-soft text-brand-muted border-brand-line'
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider font-sans border ${cls}`}>{type?.replace(/_/g, ' ') || 'task'}</span>
+}
+
+function DueDateLabel({ dueDate }) {
+  if (!dueDate) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const due = new Date(dueDate)
+  due.setHours(0, 0, 0, 0)
+  const diff = differenceInDays(due, today)
+  if (diff < 0) return <span className="text-brand-rose text-[12px] font-semibold font-sans">{Math.abs(diff)}d overdue</span>
+  if (diff === 0) return <span className="text-brand-amber text-[12px] font-semibold font-sans">Due today</span>
+  if (diff <= 3) return <span className="text-brand-amber text-[12px] font-sans">Due in {diff}d</span>
+  return <span className="text-brand-muted text-[12px] font-sans">{format(due, 'MMM d')}</span>
+}
+
+const KEY_DATE_TYPES = new Set(['hearing', 'filing', 'deposition', 'deadline'])
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function MatterDetailPage() {
   const { id } = useParams()
@@ -100,7 +140,7 @@ export default function MatterDetailPage() {
   const [matter, setMatter] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState('dashboard')
 
   // Edit state
   const [editing, setEditing] = useState(false)
@@ -111,12 +151,25 @@ export default function MatterDetailPage() {
   // Budget
   const [budget, setBudget] = useState(null)
 
-  // Timeline
+  // Dashboard
+  const [dashboard, setDashboard] = useState(null)
+  const [tasks, setTasks] = useState([])
+  const [tasksLoading, setTasksLoading] = useState(false)
+  const [showDetailsPanel, setShowDetailsPanel] = useState(false)
+  const [showAddTask, setShowAddTask] = useState(false)
+  const [showCompose, setShowCompose] = useState(false)
+
+  // Activity tab (merges timeline + communications)
   const [timeline, setTimeline] = useState([])
-  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [communications, setCommunications] = useState([])
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [activityFilter, setActivityFilter] = useState('all') // 'all' | 'timeline' | 'comms'
   const [showAddNote, setShowAddNote] = useState(false)
   const [newNote, setNewNote] = useState({ note_type: 'internal', title: '', content: '' })
   const [addingNote, setAddingNote] = useState(false)
+  const [showLogComm, setShowLogComm] = useState(false)
+  const [newComm, setNewComm] = useState({ direction: 'outbound', channel: 'email', subject: '', body: '' })
+  const [loggingComm, setLoggingComm] = useState(false)
 
   // Team
   const [assignments, setAssignments] = useState([])
@@ -125,13 +178,6 @@ export default function MatterDetailPage() {
   const [addingUser, setAddingUser] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
   const [selectedRole, setSelectedRole] = useState('associate')
-
-  // Communications
-  const [communications, setCommunications] = useState([])
-  const [commsLoading, setCommsLoading] = useState(false)
-  const [showLogComm, setShowLogComm] = useState(false)
-  const [newComm, setNewComm] = useState({ direction: 'outbound', channel: 'email', subject: '', body: '' })
-  const [loggingComm, setLoggingComm] = useState(false)
 
   // Billing
   const [timeEntries, setTimeEntries] = useState([])
@@ -142,10 +188,11 @@ export default function MatterDetailPage() {
   const [convLoading, setConvLoading] = useState(false)
   const [startingConv, setStartingConv] = useState(false)
 
-  // Memory
+  // Settings (memory)
   const [memoryContent, setMemoryContent] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
   const [memorySaved, setMemorySaved] = useState(false)
+  const [settingsSection, setSettingsSection] = useState('memory')
 
   const loadMatter = useCallback(async () => {
     try {
@@ -160,6 +207,21 @@ export default function MatterDetailPage() {
     }
   }, [id])
 
+  const loadDashboard = useCallback(async () => {
+    setTasksLoading(true)
+    try {
+      const [dashData, taskData] = await Promise.all([
+        getMatterDashboard(id).catch(() => null),
+        getTasks({ matter_id: id, status: 'pending' }).catch(() => ({ items: [] })),
+      ])
+      setDashboard(dashData)
+      const taskList = Array.isArray(taskData) ? taskData : taskData.items || []
+      setTasks(taskList)
+    } finally {
+      setTasksLoading(false)
+    }
+  }, [id])
+
   useEffect(() => {
     loadMatter()
     getMatterBudgetV2(id).then(setBudget).catch(() => {})
@@ -170,19 +232,22 @@ export default function MatterDetailPage() {
   }, [id, loadMatter])
 
   useEffect(() => {
-    if (activeTab === 'timeline') {
-      setTimelineLoading(true)
-      getMatterTimeline(id).then(setTimeline).catch(() => {}).finally(() => setTimelineLoading(false))
+    if (activeTab === 'dashboard') {
+      loadDashboard()
+    }
+    if (activeTab === 'activity') {
+      setActivityLoading(true)
+      Promise.all([
+        getMatterTimeline(id).catch(() => []),
+        getCommunications({ matter_id: id }).catch(() => []),
+      ]).then(([tl, comms]) => {
+        setTimeline(Array.isArray(tl) ? tl : [])
+        setCommunications(Array.isArray(comms) ? comms : comms.items || [])
+      }).finally(() => setActivityLoading(false))
     }
     if (activeTab === 'team') {
       getMatterAssignments(id).then(setAssignments).catch(() => {})
       getAdminUsers().then(data => setAllUsers(Array.isArray(data) ? data : data.users || [])).catch(() => {})
-    }
-    if (activeTab === 'communications') {
-      setCommsLoading(true)
-      getCommunications({ matter_id: id }).then(data => {
-        setCommunications(Array.isArray(data) ? data : data.items || [])
-      }).catch(() => {}).finally(() => setCommsLoading(false))
     }
     if (activeTab === 'billing') {
       setBillingLoading(true)
@@ -196,7 +261,7 @@ export default function MatterDetailPage() {
         setMatterConvs(Array.isArray(data) ? data : [])
       }).catch(() => {}).finally(() => setConvLoading(false))
     }
-  }, [activeTab, id])
+  }, [activeTab, id, loadDashboard])
 
   const handleSave = async () => {
     setSaving(true)
@@ -221,7 +286,8 @@ export default function MatterDetailPage() {
       await addMatterNote(id, newNote)
       setNewNote({ note_type: 'internal', title: '', content: '' })
       setShowAddNote(false)
-      getMatterTimeline(id).then(setTimeline).catch(() => {})
+      const tl = await getMatterTimeline(id).catch(() => [])
+      setTimeline(Array.isArray(tl) ? tl : [])
     } catch { /* silent */ }
     finally { setAddingNote(false) }
   }
@@ -258,9 +324,8 @@ export default function MatterDetailPage() {
       await createCommunication({ ...newComm, matter_id: id })
       setNewComm({ direction: 'outbound', channel: 'email', subject: '', body: '' })
       setShowLogComm(false)
-      getCommunications({ matter_id: id }).then(data => {
-        setCommunications(Array.isArray(data) ? data : data.items || [])
-      }).catch(() => {})
+      const comms = await getCommunications({ matter_id: id }).catch(() => [])
+      setCommunications(Array.isArray(comms) ? comms : comms.items || [])
     } catch { /* silent */ } finally { setLoggingComm(false) }
   }
 
@@ -281,6 +346,14 @@ export default function MatterDetailPage() {
       setTimeout(() => setMemorySaved(false), 2000)
     } catch { /* silent */ }
     finally { setMemorySaving(false) }
+  }
+
+  const handleTaskComplete = async (taskId) => {
+    try {
+      await updateTask(taskId, { status: 'completed' })
+      setTasks(prev => prev.filter(t => t.id !== taskId))
+      setDashboard(prev => prev ? { ...prev, open_tasks: Math.max(0, prev.open_tasks - 1) } : prev)
+    } catch { /* silent */ }
   }
 
   if (loading) {
@@ -308,17 +381,13 @@ export default function MatterDetailPage() {
   const dm = editing ? editData : matter
 
   const tabs = [
-    { key: 'overview', label: 'Overview', icon: Icons.briefcase },
-    { key: 'timeline', label: 'Timeline', icon: Icons.clock },
+    { key: 'dashboard', label: 'Dashboard', icon: Icons.activity },
+    { key: 'activity', label: 'Activity', icon: Icons.clock },
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'documents', label: 'Documents', icon: Icons.file },
-    { key: 'parties', label: 'Parties', icon: Icons.parties },
-    { key: 'communications', label: 'Communications', icon: Icons.mail },
     { key: 'billing', label: 'Billing', icon: Icons.dollar },
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
-    { key: 'file-shares', label: 'File Shares', icon: Icons.folder },
-    { key: 'plugin', label: 'Plugin', icon: Icons.briefcase },
-    { key: 'memory', label: 'Memory', icon: Icons.brain },
+    { key: 'settings', label: 'Settings', icon: Icons.settings },
   ]
 
   const assignedIds = new Set(assignments.map(a => a.user_id))
@@ -333,6 +402,25 @@ export default function MatterDetailPage() {
     const found = pluginOptions.find(p => (p.plugin_name || p.id) === pluginName)
     return found?.primary_route || `/plugins/${pluginName}`
   }
+
+  // Split tasks for dashboard
+  const keyDateTasks = tasks.filter(t => KEY_DATE_TYPES.has(t.task_type))
+    .sort((a, b) => {
+      if (!a.due_date) return 1
+      if (!b.due_date) return -1
+      return new Date(a.due_date) - new Date(b.due_date)
+    })
+  const todoTasks = tasks.filter(t => !KEY_DATE_TYPES.has(t.task_type))
+
+  // Activity feed (merged + sorted)
+  const activityFeed = (() => {
+    const events = timeline.map(e => ({ ...e, _kind: 'timeline' }))
+    const comms = communications.map(c => ({ ...c, _kind: 'comm', created_at: c.occurred_at || c.created_at }))
+    return [...events, ...comms].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  })()
+  const filteredActivity = activityFilter === 'all' ? activityFeed
+    : activityFilter === 'timeline' ? activityFeed.filter(e => e._kind === 'timeline')
+    : activityFeed.filter(e => e._kind === 'comm')
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -356,7 +444,7 @@ export default function MatterDetailPage() {
               </button>
             </>
           ) : (
-            <button onClick={() => { setActiveTab('overview'); setEditing(true) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
+            <button onClick={() => { setActiveTab('settings'); setEditing(true) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
               <Icon d={Icons.edit} size={15} /> Edit
             </button>
           )}
@@ -376,6 +464,9 @@ export default function MatterDetailPage() {
               <RiskBadge level={matter.risk_level} />
               {matter.practice_area && (
                 <span className="text-[12px] font-sans font-semibold text-brand-accent bg-brand-accent/10 px-2.5 py-1 rounded-lg border border-brand-accent/20">{matter.practice_area}</span>
+              )}
+              {matter.case_number && (
+                <span className="text-[12px] font-sans text-brand-muted">#{matter.case_number}</span>
               )}
             </div>
           </div>
@@ -420,13 +511,689 @@ export default function MatterDetailPage() {
           ))}
         </div>
 
-        {/* ── Overview Tab ─────────────────────────────────────────────────────── */}
-        {activeTab === 'overview' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
-              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5">Case Details</h2>
-              {editing ? (
+        {/* ── Dashboard Tab ─────────────────────────────────────────────────────── */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* Stats bar */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                {
+                  label: 'Open Tasks',
+                  value: dashboard ? dashboard.open_tasks : '—',
+                  sub: dashboard?.overdue_tasks > 0 ? `${dashboard.overdue_tasks} overdue` : null,
+                  alert: dashboard?.overdue_tasks > 0,
+                },
+                {
+                  label: 'Budget Used',
+                  value: dashboard?.utilization_pct != null ? `${dashboard.utilization_pct}%` : (budget?.budget_amount ? `${budget.utilization_pct ?? 0}%` : '—'),
+                  sub: dashboard?.budget_amount ? `$${Number(dashboard.total_billed).toLocaleString()} billed` : null,
+                  alert: (dashboard?.utilization_pct ?? budget?.utilization_pct ?? 0) >= 85,
+                },
+                {
+                  label: 'Active Workers',
+                  value: dashboard ? (dashboard.active_workers?.length ?? 0) : (matter.assignments?.filter(a => a.is_active_working).length ?? 0),
+                  sub: dashboard?.active_workers?.length ? dashboard.active_workers.slice(0, 2).join(', ') : null,
+                  alert: false,
+                },
+                {
+                  label: 'Last Activity',
+                  value: dashboard?.last_activity_at
+                    ? (() => { try { return format(parseISO(dashboard.last_activity_at), 'MMM d') } catch { return '—' } })()
+                    : '—',
+                  sub: dashboard?.last_activity_at
+                    ? (() => { try { const d = differenceInDays(new Date(), parseISO(dashboard.last_activity_at)); return d === 0 ? 'Today' : `${d}d ago` } catch { return null } })()
+                    : null,
+                  alert: dashboard?.last_activity_at
+                    ? differenceInDays(new Date(), parseISO(dashboard.last_activity_at)) > 14
+                    : false,
+                },
+              ].map((s, i) => (
+                <div key={i} className={`bg-brand-surface border rounded-2xl p-5 shadow-sm ${s.alert ? 'border-brand-rose/30' : 'border-brand-line'}`}>
+                  <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">{s.label}</div>
+                  <div className={`text-[28px] font-serif font-bold ${s.alert ? 'text-brand-rose' : 'text-brand-ink'}`}>{s.value}</div>
+                  {s.sub && <div className={`text-[12px] font-sans mt-1 truncate ${s.alert ? 'text-brand-rose' : 'text-brand-muted'}`}>{s.sub}</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Quick Actions */}
+            <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 shadow-sm">
+              <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-4">Quick Actions</div>
+              <div className="flex flex-wrap gap-3">
+                {[
+                  { label: 'Log Time', icon: Icons.clock, action: () => navigate('/time-tracking') },
+                  { label: 'Email Client', icon: Icons.mail, action: () => setShowCompose(true) },
+                  { label: 'Add Task', icon: Icons.plus, action: () => setShowAddTask(true) },
+                  { label: 'Start Chat', icon: Icons.messageSquare, action: handleStartChat },
+                  { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setTimeout(() => setShowAddNote(true), 50) } },
+                ].map((a, i) => (
+                  <button
+                    key={i}
+                    onClick={a.action}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-brand-bg-soft border border-brand-line text-brand-ink text-[13px] font-sans font-semibold rounded-xl hover:bg-brand-surface hover:border-brand-line-2 hover:-translate-y-[1px] transition-all shadow-sm"
+                  >
+                    <Icon d={a.icon} size={15} className="text-brand-accent" />
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Key Dates + To-Do */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Key Dates (left, 2/3) */}
+              <div className="lg:col-span-2 bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+                <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+                  <h3 className="font-serif font-bold text-lg text-brand-ink">Key Dates</h3>
+                  <button onClick={() => setShowAddTask(true)} className="flex items-center gap-1.5 text-[12px] font-semibold text-brand-accent hover:underline">
+                    <Icon d={Icons.plus} size={13} /> Add
+                  </button>
+                </div>
+                <div className="p-4">
+                  {tasksLoading ? (
+                    <div className="flex justify-center py-8"><div className="w-5 h-5 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+                  ) : keyDateTasks.length === 0 ? (
+                    <div className="text-center py-10">
+                      <Icon d={Icons.clock} size={28} className="mx-auto text-brand-line-2 mb-2" />
+                      <p className="text-brand-muted text-sm font-sans">No hearings, filings, or deadlines in the next 30 days.</p>
+                      <button onClick={() => setShowAddTask(true)} className="mt-3 text-brand-accent text-sm font-semibold hover:underline">Add a date</button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {keyDateTasks.map(t => (
+                        <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl border border-brand-line hover:border-brand-line-2 bg-brand-bg-soft/40 group transition-colors">
+                          <button
+                            onClick={() => handleTaskComplete(t.id)}
+                            className="shrink-0 w-5 h-5 rounded-full border-2 border-brand-line group-hover:border-brand-accent hover:bg-brand-accent/10 transition-colors"
+                            title="Mark complete"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[14px] font-semibold text-brand-ink font-sans truncate">{t.title}</span>
+                              <TaskTypeBadge type={t.task_type} />
+                            </div>
+                            <div className="flex items-center gap-3 mt-0.5">
+                              <DueDateLabel dueDate={t.due_date} />
+                              {t.priority === 'urgent' && <span className="text-[11px] font-bold text-brand-rose uppercase tracking-wide">Urgent</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* To-Do (right, 1/3) */}
+              <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+                <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+                  <h3 className="font-serif font-bold text-lg text-brand-ink">To-Do</h3>
+                  <button onClick={() => setShowAddTask(true)} className="flex items-center gap-1.5 text-[12px] font-semibold text-brand-accent hover:underline">
+                    <Icon d={Icons.plus} size={13} /> Add
+                  </button>
+                </div>
+                <div className="p-4">
+                  {todoTasks.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Icon d={Icons.checkCircle} size={28} className="mx-auto text-brand-green mb-2" />
+                      <p className="text-brand-muted text-sm font-sans">All caught up.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {todoTasks.slice(0, 8).map(t => (
+                        <div key={t.id} className="flex items-start gap-2 p-2.5 rounded-lg hover:bg-brand-bg-soft group transition-colors">
+                          <button
+                            onClick={() => handleTaskComplete(t.id)}
+                            className="shrink-0 mt-0.5 w-4 h-4 rounded border border-brand-line group-hover:border-brand-accent transition-colors"
+                            title="Mark complete"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[13px] font-sans text-brand-ink truncate">{t.title}</div>
+                            {t.due_date && <DueDateLabel dueDate={t.due_date} />}
+                          </div>
+                        </div>
+                      ))}
+                      {todoTasks.length > 8 && (
+                        <p className="text-[12px] text-brand-muted font-sans text-center pt-1">+{todoTasks.length - 8} more</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Case Details (collapsible) */}
+            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+              <button
+                onClick={() => setShowDetailsPanel(v => !v)}
+                className="w-full flex items-center justify-between px-6 py-4 text-left"
+              >
+                <span className="font-serif font-bold text-lg text-brand-ink">Case Details</span>
+                <Icon d={showDetailsPanel ? Icons.chevronDown : Icons.chevronRight} size={18} className="text-brand-muted transition-transform" />
+              </button>
+              {showDetailsPanel && (
+                <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-2 gap-x-8 border-t border-brand-line pt-4">
+                  <dl>
+                    <Field label="Practice Area">{dm.practice_area}</Field>
+                    <Field label="Matter Type">{dm.matter_type}</Field>
+                    <Field label="Case Number">{dm.case_number}</Field>
+                    <Field label="Stage">{dm.stage}</Field>
+                    <Field label="Jurisdiction">{dm.jurisdiction}</Field>
+                    <Field label="Court">{dm.court}</Field>
+                    <Field label="Judge">{dm.judge}</Field>
+                    <Field label="Counterparty">{dm.counterparty}</Field>
+                  </dl>
+                  <dl>
+                    <Field label="Client">
+                      {matter.client_name && <span className="font-semibold text-brand-ink">{matter.client_name}</span>}
+                    </Field>
+                    <Field label="Attorney of Record">
+                      {matter.attorney_of_record_name && <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>}
+                    </Field>
+                    <Field label="Partner Attorney">
+                      {matter.partner_attorney_name && <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>}
+                    </Field>
+                    <Field label="Billing Method">{dm.billing_method}</Field>
+                    <Field label="Billing Cycle">{dm.billing_cycle}</Field>
+                    {dm.hourly_rate && <Field label="Hourly Rate">${Number(dm.hourly_rate).toLocaleString()}</Field>}
+                    {dm.budget_amount && <Field label="Budget">${Number(dm.budget_amount).toLocaleString()} {dm.budget_currency}</Field>}
+                    <Field label="Plugin Workflow">
+                      {dm.primary_plugin ? (
+                        <button onClick={() => navigate(pluginRoute(dm.primary_plugin))} className="text-brand-accent font-semibold hover:underline">
+                          {pluginLabel(dm.primary_plugin)}
+                        </button>
+                      ) : 'General matter'}
+                    </Field>
+                  </dl>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Activity Tab (Timeline + Communications) ──────────────────────────── */}
+        {activeTab === 'activity' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                    <Icon d={Icons.activity} size={18} className="text-brand-accent" /> Activity
+                  </h2>
+                  <p className="text-[13px] text-brand-muted font-sans mt-0.5">Timeline events, notes, and communications.</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {/* Filter */}
+                  <div className="flex rounded-lg border border-brand-line overflow-hidden text-[12px] font-semibold font-sans">
+                    {[['all', 'All'], ['timeline', 'Timeline'], ['comms', 'Comms']].map(([val, lbl]) => (
+                      <button
+                        key={val}
+                        onClick={() => setActivityFilter(val)}
+                        className={`px-3 py-1.5 transition-colors ${activityFilter === val ? 'bg-brand-ink text-white' : 'bg-brand-surface text-brand-muted hover:text-brand-ink'}`}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => setShowAddNote(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
+                    <Icon d={Icons.plus} size={15} /> Add Note
+                  </button>
+                  <button onClick={() => setShowLogComm(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
+                    <Icon d={Icons.mail} size={15} /> Log Comm
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Add Note form */}
+            {showAddNote && (
+              <div className="p-6 bg-brand-bg border-b border-brand-line">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className={labelCls}>Note Type</label>
+                    <select value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                      {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Title</label>
+                    <input type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={labelCls}>Content</label>
+                    <textarea value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end">
+                  <button onClick={() => setShowAddNote(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
+                  <button onClick={handleAddNote} disabled={addingNote || !newNote.title.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                    {addingNote ? 'Saving…' : 'Save Note'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Log Communication form */}
+            {showLogComm && (
+              <div className="p-6 bg-brand-bg border-b border-brand-line">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className={labelCls}>Direction</label>
+                    <select value={newComm.direction} onChange={e => setNewComm(p => ({ ...p, direction: e.target.value }))} className={inputCls}>
+                      <option value="outbound">Outbound</option>
+                      <option value="inbound">Inbound</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Channel</label>
+                    <select value={newComm.channel} onChange={e => setNewComm(p => ({ ...p, channel: e.target.value }))} className={inputCls}>
+                      {['email', 'call', 'letter', 'meeting', 'sms', 'portal', 'other'].map(c => (
+                        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Subject</label>
+                    <input type="text" value={newComm.subject} onChange={e => setNewComm(p => ({ ...p, subject: e.target.value }))} placeholder="Subject…" className={inputCls} />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className={labelCls}>Notes / Body</label>
+                    <textarea value={newComm.body} onChange={e => setNewComm(p => ({ ...p, body: e.target.value }))} rows={3} placeholder="Optional notes…" className={`${inputCls} resize-none`} />
+                  </div>
+                </div>
+                <div className="flex gap-3 justify-end">
+                  <button onClick={() => setShowLogComm(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
+                  <button onClick={handleLogComm} disabled={loggingComm || !newComm.subject.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                    {loggingComm ? 'Saving…' : 'Log Communication'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="p-6">
+              {activityLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : filteredActivity.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.activity} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No activity yet</p>
+                  <p className="text-brand-muted text-sm font-sans">Notes, events, and communications will appear here.</p>
+                </div>
+              ) : (
+                <div className="relative border-l-2 border-brand-line ml-4 space-y-8 pb-4">
+                  {filteredActivity.map((ev, i) => {
+                    if (ev._kind === 'comm') {
+                      return (
+                        <div key={ev.id || `c-${i}`} className="relative pl-6">
+                          <div className="absolute w-4 h-4 bg-brand-surface border-2 border-brand-accent/60 rounded-full -left-[9px] top-1" />
+                          <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-5 hover:border-brand-line-2 transition-colors">
+                            <div className="flex flex-wrap items-center gap-3 mb-2">
+                              <span className={`shrink-0 px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide border ${ev.direction === 'inbound' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-brand-green/10 text-brand-green border-brand-green/20'}`}>{ev.direction}</span>
+                              <span className="text-[12px] font-semibold text-brand-muted uppercase tracking-wide">{ev.channel}</span>
+                              <span className="text-[12px] text-brand-muted font-sans">
+                                {ev.occurred_at ? format(parseISO(ev.occurred_at), 'MMM d, yyyy h:mm a') : ''}
+                              </span>
+                            </div>
+                            <div className="text-[14px] font-semibold text-brand-ink font-sans">{ev.subject}</div>
+                            {ev.body && <div className="text-[13px] text-brand-muted font-sans mt-1 line-clamp-2">{ev.body}</div>}
+                          </div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div key={ev.id || i} className="relative pl-6">
+                        <div className="absolute w-4 h-4 bg-brand-surface border-2 border-brand-ink rounded-full -left-[9px] top-1" />
+                        <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-5 hover:border-brand-line-2 transition-colors">
+                          <div className="flex flex-wrap items-center gap-3 mb-2">
+                            <EntryBadge type={ev.entry_type === 'note' ? ev.metadata?.note_type || 'note' : ev.metadata?.event_type || ev.entry_type} />
+                            <span className="text-[12px] text-brand-muted font-sans">
+                              {ev.created_at ? format(parseISO(ev.created_at), 'MMM d, yyyy h:mm a') : ''}
+                            </span>
+                            {ev.created_by_name && <span className="text-[12px] text-brand-muted font-sans">· {ev.created_by_name}</span>}
+                          </div>
+                          <h4 className="text-[15px] font-bold text-brand-ink font-sans mb-1.5">{ev.title}</h4>
+                          {ev.content && <div className="text-[14px] text-brand-ink-2 font-sans leading-relaxed prose prose-sm max-w-none"><ReactMarkdown>{ev.content}</ReactMarkdown></div>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Team Tab ─────────────────────────────────────────────────────────── */}
+        {activeTab === 'team' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+              <h2 className="font-serif font-bold text-xl text-brand-ink">Team Assignments</h2>
+              <p className="text-[13px] text-brand-muted font-sans mt-0.5">Users assigned for visibility and tracking. Green dot = actively working now.</p>
+            </div>
+            <div className="p-6 space-y-6">
+              {assignments.length === 0 ? (
+                <p className="text-brand-muted text-sm font-sans text-center py-6">No team members assigned.</p>
+              ) : (
+                <div className="space-y-2">
+                  {assignments.map(a => (
+                    <div key={a.id} className="flex items-center justify-between bg-brand-bg-soft rounded-xl px-4 py-3 border border-brand-line">
+                      <div className="flex items-center gap-3">
+                        <div className="relative w-8 h-8 rounded-full bg-brand-accent/10 flex items-center justify-center shrink-0">
+                          <Icon d={Icons.user} size={15} className="text-brand-accent" />
+                          {a.is_active_working && (
+                            <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-brand-green rounded-full border-2 border-brand-surface" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="text-[14px] font-semibold text-brand-ink font-sans">{a.user_name}</div>
+                          <div className="text-[12px] text-brand-muted font-sans capitalize">{a.role?.replace(/_/g, ' ')}</div>
+                          {a.is_active_working && (
+                            <div className="text-[11px] text-brand-green font-semibold mt-0.5">Actively working</div>
+                          )}
+                        </div>
+                        {a.is_primary && (
+                          <span className="text-[11px] font-bold text-brand-accent bg-brand-accent/10 px-2 py-0.5 rounded border border-brand-accent/20">Lead</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleActive(a.id, a.is_active_working)}
+                          className={`text-[11px] font-semibold px-2.5 py-1 rounded border transition-colors ${
+                            a.is_active_working
+                              ? 'bg-brand-green/10 text-brand-green border-brand-green/30 hover:bg-brand-green/20'
+                              : 'bg-brand-bg text-brand-muted border-brand-line hover:text-brand-green hover:border-brand-green/30'
+                          }`}
+                        >
+                          {a.is_active_working ? 'Active' : 'Set Active'}
+                        </button>
+                        <button
+                          onClick={() => handleRemoveAssignment(a.id)}
+                          className="text-brand-muted hover:text-brand-rose transition-colors p-1.5 rounded-lg hover:bg-brand-rose/10"
+                        >
+                          <Icon d={Icons.trash} size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {unassignedUsers.length > 0 && (
+                <div className="border-t border-brand-line pt-5">
+                  <h3 className="text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-3">Add Team Member</h3>
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                    <div className="flex-1">
+                      <label className={labelCls}>User</label>
+                      <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)} className={inputCls}>
+                        <option value="">Select user…</option>
+                        {unassignedUsers.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                      </select>
+                    </div>
+                    <div className="w-40">
+                      <label className={labelCls}>Role</label>
+                      <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
+                        {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
+                          <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={handleAddAssignment}
+                      disabled={!selectedUserId || addingUser}
+                      className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 transition-all whitespace-nowrap"
+                    >
+                      {addingUser ? 'Adding…' : 'Add'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Documents Tab (includes Parties) ─────────────────────────────────── */}
+        {activeTab === 'documents' && (
+          <div className="space-y-8">
+            <MatterDocumentsTab matterId={id} />
+            <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+              <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.parties} size={18} className="text-brand-accent" /> Parties
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Opposing counsel, plaintiffs, defendants, and other parties.</p>
+              </div>
+              <MatterPartiesTab matterId={id} embedded />
+            </div>
+          </div>
+        )}
+
+        {/* ── Billing Tab ──────────────────────────────────────────────────────── */}
+        {activeTab === 'billing' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.dollar} size={18} className="text-brand-accent" /> Billing
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time entries and billable work logged against this matter.</p>
+              </div>
+              <button onClick={() => navigate('/time-tracking')} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft shadow-sm">
+                <Icon d={Icons.plus} size={15} /> Log Time
+              </button>
+            </div>
+            <div className="p-6">
+              {billingLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : timeEntries.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.dollar} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No time entries</p>
+                  <p className="text-brand-muted text-sm font-sans mb-4">Log time against this matter from the Time Tracking section.</p>
+                  <button onClick={() => navigate('/time-tracking')} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2">
+                    Go to Time Tracking
+                  </button>
+                </div>
+              ) : (
                 <div className="space-y-4">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Hours</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">
+                        {timeEntries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0).toFixed(1)}
+                      </div>
+                    </div>
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Billed</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">
+                        ${timeEntries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
+                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Entries</div>
+                      <div className="text-2xl font-serif font-bold text-brand-ink">{timeEntries.length}</div>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-brand-line">
+                    <table className="w-full text-[13px] font-sans">
+                      <thead className="bg-brand-bg-soft border-b border-brand-line">
+                        <tr>
+                          {['Date', 'Description', 'User', 'Hours', 'Amount', 'Status'].map(h => (
+                            <th key={h} className="text-left px-4 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-brand-line/50">
+                        {timeEntries.map(e => (
+                          <tr key={e.id} className="hover:bg-brand-bg-soft/40 transition-colors">
+                            <td className="px-4 py-3 text-brand-muted whitespace-nowrap">{e.date ? format(parseISO(e.date), 'MMM d, yyyy') : '—'}</td>
+                            <td className="px-4 py-3 text-brand-ink max-w-xs truncate">{e.description || '—'}</td>
+                            <td className="px-4 py-3 text-brand-muted">{e.user_name || '—'}</td>
+                            <td className="px-4 py-3 text-brand-ink font-mono">{e.hours}</td>
+                            <td className="px-4 py-3 text-brand-ink font-mono">{e.amount ? `$${Number(e.amount).toLocaleString()}` : '—'}</td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase border ${
+                                e.status === 'invoiced' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' :
+                                e.status === 'approved' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                                'bg-brand-bg-soft text-brand-muted border-brand-line'
+                              }`}>{e.status || 'draft'}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Chat Tab ─────────────────────────────────────────────────────────── */}
+        {activeTab === 'chat' && (
+          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                  <Icon d={Icons.messageSquare} size={18} className="text-brand-accent" /> Matter Chat
+                </h2>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI conversations scoped to this matter's context and documents.</p>
+              </div>
+              <button
+                onClick={handleStartChat}
+                disabled={startingConv}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-colors shadow-sm disabled:opacity-50"
+              >
+                <Icon d={Icons.plus} size={15} /> {startingConv ? 'Starting…' : 'Start New Chat'}
+              </button>
+            </div>
+            <div className="p-6">
+              {convLoading ? (
+                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
+              ) : matterConvs.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon d={Icons.messageSquare} size={32} className="mx-auto text-brand-line-2 mb-3" />
+                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No conversations yet</p>
+                  <p className="text-brand-muted text-sm font-sans mb-4">Start an AI chat with this matter loaded as context.</p>
+                  <button onClick={handleStartChat} disabled={startingConv} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
+                    {startingConv ? 'Starting…' : 'Start Chat About This Matter'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {matterConvs.map(conv => (
+                    <div
+                      key={conv.id}
+                      onClick={() => navigate('/chat', { state: { conversationId: conv.id } })}
+                      className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group"
+                    >
+                      <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
+                        <div className="text-[12px] text-brand-muted font-sans">
+                          {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
+                        </div>
+                      </div>
+                      <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Settings Tab (Plugin + Memory + File Shares + Edit Matter) ────────── */}
+        {activeTab === 'settings' && (
+          <div className="space-y-8">
+            {/* Section selector */}
+            <div className="flex gap-2 border-b border-brand-line pb-0">
+              {[['memory', 'Memory', Icons.brain], ['plugin', 'Plugin Workflow', Icons.briefcase], ['shares', 'File Shares', Icons.folder], ['details', 'Edit Details', Icons.edit]].map(([key, lbl, ico]) => (
+                <button
+                  key={key}
+                  onClick={() => setSettingsSection(key)}
+                  className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-semibold font-sans border-b-2 -mb-px transition-colors ${settingsSection === key ? 'border-brand-ink text-brand-ink' : 'border-transparent text-brand-muted hover:text-brand-ink-2'}`}
+                >
+                  <Icon d={ico} size={14} />{lbl}
+                </button>
+              ))}
+            </div>
+
+            {settingsSection === 'memory' && (
+              <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+                <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+                  <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                    <Icon d={Icons.brain} size={18} className="text-brand-accent" /> Matter Memory
+                  </h2>
+                  <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI context document used when chatting about this case.</p>
+                </div>
+                <div className="p-6">
+                  <textarea
+                    value={memoryContent}
+                    onChange={e => setMemoryContent(e.target.value)}
+                    rows={20}
+                    placeholder={`# ${matter.matter_name}\n\nRecord key context, strategy notes, and facts the AI assistant should know...\n\n## Client\n## Key Issues\n## Strategy\n## Important Dates`}
+                    className={`${inputCls} resize-y font-mono text-[13px] leading-relaxed`}
+                  />
+                  <div className="flex items-center justify-end gap-3 mt-4">
+                    {memorySaved && <span className="text-brand-green text-sm font-sans font-medium">Saved ✓</span>}
+                    <button
+                      onClick={handleSaveMemory}
+                      disabled={memorySaving}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm"
+                    >
+                      <Icon d={Icons.save} size={15} />
+                      {memorySaving ? 'Saving…' : 'Save Memory'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {settingsSection === 'plugin' && (
+              <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+                <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+                  <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                    <Icon d={Icons.briefcase} size={18} className="text-brand-accent" /> Plugin Workflow
+                  </h2>
+                  <p className="text-[13px] text-brand-muted font-sans mt-0.5">The optional add-on workflow attached to this matter.</p>
+                </div>
+                <div className="p-6">
+                  {matter.primary_plugin ? (
+                    <div className="border border-brand-line rounded-xl p-5 bg-brand-bg-soft/40">
+                      <p className="text-[11px] uppercase tracking-widest font-bold text-brand-muted mb-2">Assigned Workflow</p>
+                      <h3 className="font-serif font-bold text-2xl text-brand-ink mb-2">{pluginLabel(matter.primary_plugin)}</h3>
+                      <p className="text-sm text-brand-muted font-sans mb-5">Plugin skills run with this matter's memory, timeline, notes, parties, and budget context.</p>
+                      <div className="flex flex-wrap gap-3">
+                        <button onClick={() => navigate(pluginRoute(matter.primary_plugin))} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
+                          Open Plugin Workspace
+                        </button>
+                        <button onClick={() => navigate(`/plugins/${matter.primary_plugin}`)} className="px-5 py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-semibold rounded-xl hover:bg-brand-bg">
+                          Configure Workflow
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="border border-brand-line rounded-xl p-6 text-center bg-brand-bg-soft/40">
+                      <h3 className="font-serif font-bold text-xl text-brand-ink mb-2">General Matter</h3>
+                      <p className="text-sm text-brand-muted font-sans mb-5">No add-on workflow attached.</p>
+                      <button onClick={() => setSettingsSection('details')} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
+                        Assign Plugin Workflow
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {settingsSection === 'shares' && <MatterSmbSharesTab matterId={id} />}
+
+            {settingsSection === 'details' && (
+              <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+                <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
+                  <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+                    <Icon d={Icons.edit} size={18} className="text-brand-accent" /> Edit Matter Details
+                  </h2>
+                </div>
+                <div className="p-6 space-y-4">
                   <div>
                     <label className={labelCls}>Title</label>
                     <input type="text" value={editData.matter_name || ''} onChange={e => setEditData(p => ({ ...p, matter_name: e.target.value }))} className={inputCls} />
@@ -485,540 +1252,51 @@ export default function MatterDetailPage() {
                       </select>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <dl>
-                  <Field label="Practice Area">{dm.practice_area}</Field>
-                  <Field label="Matter Type">{dm.matter_type}</Field>
-                  <Field label="Plugin Workflow">
-                    {dm.primary_plugin ? (
-                      <button
-                        onClick={() => navigate(pluginRoute(dm.primary_plugin))}
-                        className="text-brand-accent font-semibold hover:underline"
-                      >
-                        {pluginLabel(dm.primary_plugin)}
-                      </button>
-                    ) : 'General matter'}
-                  </Field>
-                  <Field label="Case Number">{dm.case_number}</Field>
-                  <Field label="Stage">{dm.stage}</Field>
-                  <Field label="Jurisdiction">{dm.jurisdiction}</Field>
-                  <Field label="Court">{dm.court}</Field>
-                  <Field label="Judge">{dm.judge}</Field>
-                  <Field label="Counterparty">{dm.counterparty}</Field>
-                </dl>
-              )}
-            </div>
-
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
-              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5">People</h2>
-              <dl>
-                <Field label="Client">
-                  {matter.client_name && (
-                    <span className="font-semibold text-brand-ink">{matter.client_name}</span>
-                  )}
-                </Field>
-                <Field label="Attorney of Record">
-                  {matter.attorney_of_record_name && (
-                    <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>
-                  )}
-                </Field>
-                <Field label="Partner Attorney">
-                  {matter.partner_attorney_name && (
-                    <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>
-                  )}
-                </Field>
-                <Field label="Team">
-                  {matter.assignments?.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 mt-0.5">
-                      {matter.assignments.map(a => (
-                        <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
-                          {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
-                          {a.user_name}
-                          {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </Field>
-              </dl>
-
-              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5 mt-8">Billing</h2>
-              <dl>
-                <Field label="Billing Method">{dm.billing_method}</Field>
-                <Field label="Billing Cycle">{dm.billing_cycle}</Field>
-                {dm.hourly_rate && <Field label="Hourly Rate">${Number(dm.hourly_rate).toLocaleString()}</Field>}
-                {dm.budget_amount && <Field label="Budget">${Number(dm.budget_amount).toLocaleString()} {dm.budget_currency}</Field>}
-              </dl>
-            </div>
-          </div>
-        )}
-
-        {/* ── Timeline Tab ─────────────────────────────────────────────────────── */}
-        {activeTab === 'timeline' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between bg-brand-bg-soft/50 rounded-t-2xl">
-              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                <Icon d={Icons.clock} size={18} className="text-brand-accent" /> Timeline
-              </h2>
-              <button onClick={() => setShowAddNote(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
-                <Icon d={Icons.plus} size={15} /> Add Note
-              </button>
-            </div>
-
-            {showAddNote && (
-              <div className="p-6 bg-brand-bg border-b border-brand-line">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className={labelCls}>Note Type</label>
-                    <select value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
-                      {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-                    </select>
+                  <div className="flex gap-3 justify-end pt-4 border-t border-brand-line">
+                    <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 shadow-sm">
+                      <Icon d={Icons.save} size={15} />
+                      {saving ? 'Saving…' : 'Save Changes'}
+                    </button>
                   </div>
-                  <div>
-                    <label className={labelCls}>Title</label>
-                    <input type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className={labelCls}>Content</label>
-                    <textarea value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
-                  </div>
-                </div>
-                <div className="flex gap-3 justify-end">
-                  <button onClick={() => setShowAddNote(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
-                  <button onClick={handleAddNote} disabled={addingNote || !newNote.title.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
-                    {addingNote ? 'Saving…' : 'Save Note'}
-                  </button>
+                  {saveError && <p className="text-brand-rose text-sm font-sans">{saveError}</p>}
                 </div>
               </div>
             )}
-
-            <div className="p-6">
-              {timelineLoading ? (
-                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-              ) : timeline.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon d={Icons.clock} size={32} className="mx-auto text-brand-line-2 mb-3" />
-                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No timeline entries</p>
-                  <p className="text-brand-muted text-sm font-sans">Notes and events will appear here.</p>
-                </div>
-              ) : (
-                <div className="relative border-l-2 border-brand-line ml-4 space-y-8 pb-4">
-                  {[...timeline].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map((ev, i) => (
-                    <div key={ev.id || i} className="relative pl-6">
-                      <div className="absolute w-4 h-4 bg-brand-surface border-2 border-brand-ink rounded-full -left-[9px] top-1" />
-                      <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-5 hover:border-brand-line-2 transition-colors">
-                        <div className="flex flex-wrap items-center gap-3 mb-2">
-                          <EntryBadge type={ev.entry_type === 'note' ? ev.metadata?.note_type || 'note' : ev.metadata?.event_type || ev.entry_type} />
-                          <span className="text-[12px] text-brand-muted font-sans">
-                            {ev.created_at ? format(parseISO(ev.created_at), 'MMM d, yyyy h:mm a') : ''}
-                          </span>
-                          {ev.created_by_name && <span className="text-[12px] text-brand-muted font-sans">· {ev.created_by_name}</span>}
-                        </div>
-                        <h4 className="text-[15px] font-bold text-brand-ink font-sans mb-1.5">{ev.title}</h4>
-                        {ev.content && <div className="text-[14px] text-brand-ink-2 font-sans leading-relaxed prose prose-sm max-w-none"><ReactMarkdown>{ev.content}</ReactMarkdown></div>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Team Tab ─────────────────────────────────────────────────────────── */}
-        {activeTab === 'team' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
-              <h2 className="font-serif font-bold text-xl text-brand-ink">Team Assignments</h2>
-              <p className="text-[13px] text-brand-muted font-sans mt-0.5">Users assigned for visibility and tracking on this matter. Green dot = actively working now.</p>
-            </div>
-            <div className="p-6 space-y-6">
-              {assignments.length === 0 ? (
-                <p className="text-brand-muted text-sm font-sans text-center py-6">No team members assigned.</p>
-              ) : (
-                <div className="space-y-2">
-                  {assignments.map(a => (
-                    <div key={a.id} className="flex items-center justify-between bg-brand-bg-soft rounded-xl px-4 py-3 border border-brand-line">
-                      <div className="flex items-center gap-3">
-                        <div className="relative w-8 h-8 rounded-full bg-brand-accent/10 flex items-center justify-center shrink-0">
-                          <Icon d={Icons.user} size={15} className="text-brand-accent" />
-                          {a.is_active_working && (
-                            <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-brand-green rounded-full border-2 border-brand-surface" />
-                          )}
-                        </div>
-                        <div>
-                          <div className="text-[14px] font-semibold text-brand-ink font-sans">{a.user_name}</div>
-                          <div className="text-[12px] text-brand-muted font-sans capitalize">{a.role?.replace(/_/g, ' ')}</div>
-                          {a.is_active_working && (
-                            <div className="text-[11px] text-brand-green font-semibold mt-0.5">Actively working</div>
-                          )}
-                        </div>
-                        {a.is_primary && (
-                          <span className="text-[11px] font-bold text-brand-accent bg-brand-accent/10 px-2 py-0.5 rounded border border-brand-accent/20">Lead</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleToggleActive(a.id, a.is_active_working)}
-                          className={`text-[11px] font-semibold px-2.5 py-1 rounded border transition-colors ${
-                            a.is_active_working
-                              ? 'bg-brand-green/10 text-brand-green border-brand-green/30 hover:bg-brand-green/20'
-                              : 'bg-brand-bg text-brand-muted border-brand-line hover:text-brand-green hover:border-brand-green/30'
-                          }`}
-                          title={a.is_active_working ? 'Mark as inactive' : 'Mark as actively working'}
-                        >
-                          {a.is_active_working ? 'Active' : 'Set Active'}
-                        </button>
-                        <button
-                          onClick={() => handleRemoveAssignment(a.id)}
-                          className="text-brand-muted hover:text-brand-rose transition-colors p-1.5 rounded-lg hover:bg-brand-rose/10"
-                          title="Remove"
-                        >
-                          <Icon d={Icons.trash} size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Add new */}
-              {unassignedUsers.length > 0 && (
-                <div className="border-t border-brand-line pt-5">
-                  <h3 className="text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-3">Add Team Member</h3>
-                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-                    <div className="flex-1">
-                      <label className={labelCls}>User</label>
-                      <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)} className={inputCls}>
-                        <option value="">Select user…</option>
-                        {unassignedUsers.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
-                      </select>
-                    </div>
-                    <div className="sm:w-40">
-                      <label className={labelCls}>Role</label>
-                      <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
-                        {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
-                          <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <button
-                      onClick={handleAddAssignment}
-                      disabled={!selectedUserId || addingUser}
-                      className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 transition-all whitespace-nowrap"
-                    >
-                      {addingUser ? 'Adding…' : 'Add'}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Documents Tab ────────────────────────────────────────────────────── */}
-        {activeTab === 'documents' && <MatterDocumentsTab matterId={id} />}
-
-        {/* ── Parties Tab ──────────────────────────────────────────────────────── */}
-        {activeTab === 'parties' && <MatterPartiesTab matterId={id} />}
-
-        {/* ── Communications Tab ───────────────────────────────────────────────── */}
-        {activeTab === 'communications' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
-              <div>
-                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                  <Icon d={Icons.mail} size={18} className="text-brand-accent" /> Communications
-                </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Emails, calls, and correspondence linked to this matter.</p>
-              </div>
-              <button onClick={() => setShowLogComm(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
-                <Icon d={Icons.plus} size={15} /> Log Communication
-              </button>
-            </div>
-
-            {showLogComm && (
-              <div className="p-6 bg-brand-bg border-b border-brand-line">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                  <div>
-                    <label className={labelCls}>Direction</label>
-                    <select value={newComm.direction} onChange={e => setNewComm(p => ({ ...p, direction: e.target.value }))} className={inputCls}>
-                      <option value="outbound">Outbound</option>
-                      <option value="inbound">Inbound</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Channel</label>
-                    <select value={newComm.channel} onChange={e => setNewComm(p => ({ ...p, channel: e.target.value }))} className={inputCls}>
-                      {['email', 'call', 'letter', 'meeting', 'sms', 'portal', 'other'].map(c => (
-                        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Subject</label>
-                    <input type="text" value={newComm.subject} onChange={e => setNewComm(p => ({ ...p, subject: e.target.value }))} placeholder="Subject…" className={inputCls} />
-                  </div>
-                  <div className="md:col-span-3">
-                    <label className={labelCls}>Notes / Body</label>
-                    <textarea value={newComm.body} onChange={e => setNewComm(p => ({ ...p, body: e.target.value }))} rows={3} placeholder="Optional notes…" className={`${inputCls} resize-none`} />
-                  </div>
-                </div>
-                <div className="flex gap-3 justify-end">
-                  <button onClick={() => setShowLogComm(false)} className="px-4 py-2 text-brand-muted text-sm font-sans hover:text-brand-ink">Cancel</button>
-                  <button onClick={handleLogComm} disabled={loggingComm || !newComm.subject.trim()} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
-                    {loggingComm ? 'Saving…' : 'Log Communication'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="p-6">
-              {commsLoading ? (
-                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-              ) : communications.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon d={Icons.mail} size={32} className="mx-auto text-brand-line-2 mb-3" />
-                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No communications logged</p>
-                  <p className="text-brand-muted text-sm font-sans">Log emails, calls, and meetings related to this matter.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {communications.map(c => (
-                    <div key={c.id} className="flex items-start gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-line-2 transition-colors">
-                      <span className={`shrink-0 mt-0.5 px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide border ${
-                        c.direction === 'inbound' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-brand-green/10 text-brand-green border-brand-green/20'
-                      }`}>
-                        {c.direction}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[12px] font-semibold text-brand-muted uppercase tracking-wide">{c.channel}</span>
-                          <span className="text-[12px] text-brand-muted">·</span>
-                          <span className="text-[12px] text-brand-muted font-sans">
-                            {c.occurred_at ? format(parseISO(c.occurred_at), 'MMM d, yyyy h:mm a') : ''}
-                          </span>
-                        </div>
-                        <div className="text-[14px] font-semibold text-brand-ink font-sans">{c.subject}</div>
-                        {c.body && <div className="text-[13px] text-brand-muted font-sans mt-1 line-clamp-2">{c.body}</div>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Billing Tab ──────────────────────────────────────────────────────── */}
-        {activeTab === 'billing' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
-              <div>
-                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                  <Icon d={Icons.dollar} size={18} className="text-brand-accent" /> Billing
-                </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Time entries and billable work logged against this matter.</p>
-              </div>
-              <button onClick={() => navigate('/time-tracking')} className="flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft transition-colors shadow-sm">
-                <Icon d={Icons.plus} size={15} /> Log Time
-              </button>
-            </div>
-            <div className="p-6">
-              {billingLoading ? (
-                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-              ) : timeEntries.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon d={Icons.dollar} size={32} className="mx-auto text-brand-line-2 mb-3" />
-                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No time entries</p>
-                  <p className="text-brand-muted text-sm font-sans mb-4">Log time against this matter from the Time Tracking section.</p>
-                  <button onClick={() => navigate('/time-tracking')} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2">
-                    Go to Time Tracking
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
-                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Hours</div>
-                      <div className="text-2xl font-serif font-bold text-brand-ink">
-                        {timeEntries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0).toFixed(1)}
-                      </div>
-                    </div>
-                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
-                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Total Billed</div>
-                      <div className="text-2xl font-serif font-bold text-brand-ink">
-                        ${timeEntries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0).toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 text-center">
-                      <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1">Entries</div>
-                      <div className="text-2xl font-serif font-bold text-brand-ink">{timeEntries.length}</div>
-                    </div>
-                  </div>
-                  <div className="overflow-x-auto rounded-xl border border-brand-line">
-                    <table className="w-full text-[13px] font-sans">
-                      <thead className="bg-brand-bg-soft border-b border-brand-line">
-                        <tr>
-                          {['Date', 'Description', 'User', 'Hours', 'Amount', 'Status'].map(h => (
-                            <th key={h} className="text-left px-4 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-brand-line/50">
-                        {timeEntries.map(e => (
-                          <tr key={e.id} className="hover:bg-brand-bg-soft/40 transition-colors">
-                            <td className="px-4 py-3 text-brand-muted whitespace-nowrap">{e.date ? format(parseISO(e.date), 'MMM d, yyyy') : '—'}</td>
-                            <td className="px-4 py-3 text-brand-ink max-w-xs truncate">{e.description || '—'}</td>
-                            <td className="px-4 py-3 text-brand-muted">{e.user_name || '—'}</td>
-                            <td className="px-4 py-3 text-brand-ink font-mono">{e.hours}</td>
-                            <td className="px-4 py-3 text-brand-ink font-mono">{e.amount ? `$${Number(e.amount).toLocaleString()}` : '—'}</td>
-                            <td className="px-4 py-3">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold uppercase border ${
-                                e.status === 'invoiced' ? 'bg-brand-green/10 text-brand-green border-brand-green/20' :
-                                e.status === 'approved' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                                'bg-brand-bg-soft text-brand-muted border-brand-line'
-                              }`}>
-                                {e.status || 'draft'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Chat Tab ─────────────────────────────────────────────────────────── */}
-        {activeTab === 'chat' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl flex items-center justify-between">
-              <div>
-                <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                  <Icon d={Icons.messageSquare} size={18} className="text-brand-accent" /> Matter Chat
-                </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI conversations scoped to this matter's context and documents.</p>
-              </div>
-              <button
-                onClick={handleStartChat}
-                disabled={startingConv}
-                className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-colors shadow-sm disabled:opacity-50"
-              >
-                <Icon d={Icons.plus} size={15} /> {startingConv ? 'Starting…' : 'Start New Chat'}
-              </button>
-            </div>
-            <div className="p-6">
-              {convLoading ? (
-                <div className="flex justify-center py-12"><div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
-              ) : matterConvs.length === 0 ? (
-                <div className="text-center py-16">
-                  <Icon d={Icons.messageSquare} size={32} className="mx-auto text-brand-line-2 mb-3" />
-                  <p className="text-brand-ink font-serif text-lg font-bold mb-1">No conversations yet</p>
-                  <p className="text-brand-muted text-sm font-sans mb-4">Start an AI chat with this matter loaded as context — documents, notes, memory, and team info.</p>
-                  <button onClick={handleStartChat} disabled={startingConv} className="px-5 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50">
-                    {startingConv ? 'Starting…' : 'Start Chat About This Matter'}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {matterConvs.map(conv => (
-                    <div
-                      key={conv.id}
-                      onClick={() => navigate('/chat', { state: { conversationId: conv.id } })}
-                      className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group"
-                    >
-                      <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
-                        <div className="text-[12px] text-brand-muted font-sans">
-                          {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
-                        </div>
-                      </div>
-                      <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {/* ── File Shares Tab ─────────────────────────────────────────────────── */}
-        {activeTab === 'file-shares' && <MatterSmbSharesTab matterId={id} />}
-
-        {/* ── Plugin Tab ──────────────────────────────────────────────────────── */}
-        {activeTab === 'plugin' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
-              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                <Icon d={Icons.briefcase} size={18} className="text-brand-accent" /> Plugin Workflow
-              </h2>
-              <p className="text-[13px] text-brand-muted font-sans mt-0.5">The optional add-on workflow attached to this matter's context bucket.</p>
-            </div>
-            <div className="p-6">
-              {matter.primary_plugin ? (
-                <div className="border border-brand-line rounded-xl p-5 bg-brand-bg-soft/40">
-                  <p className="text-[11px] uppercase tracking-widest font-bold text-brand-muted mb-2">Assigned Workflow</p>
-                  <h3 className="font-serif font-bold text-2xl text-brand-ink mb-2">{pluginLabel(matter.primary_plugin)}</h3>
-                  <p className="text-sm text-brand-muted font-sans mb-5">Plugin skills run with this matter's memory, timeline, notes, parties, budget context, and connected cloud context when available.</p>
-                  <div className="flex flex-wrap gap-3">
-                    <button onClick={() => navigate(pluginRoute(matter.primary_plugin))} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
-                      Open Plugin Workspace
-                    </button>
-                    <button onClick={() => navigate(`/plugins/${matter.primary_plugin}`)} className="px-5 py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-semibold rounded-xl hover:bg-brand-bg">
-                      Configure Workflow
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="border border-brand-line rounded-xl p-6 text-center bg-brand-bg-soft/40">
-                  <h3 className="font-serif font-bold text-xl text-brand-ink mb-2">General Matter</h3>
-                  <p className="text-sm text-brand-muted font-sans mb-5">This matter uses the base matter context without a paid add-on workflow.</p>
-                  <button onClick={() => { setActiveTab('overview'); setEditing(true) }} className="px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2">
-                    Assign Plugin Workflow
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Memory Tab ───────────────────────────────────────────────────────── */}
-        {activeTab === 'memory' && (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-            <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
-              <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                <Icon d={Icons.brain} size={18} className="text-brand-accent" /> Matter Memory
-              </h2>
-              <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI context document for this matter. Used when chatting about this case.</p>
-            </div>
-            <div className="p-6">
-              <textarea
-                value={memoryContent}
-                onChange={e => setMemoryContent(e.target.value)}
-                rows={20}
-                placeholder={`# ${matter.matter_name}\n\nRecord key context, strategy notes, and facts the AI assistant should know about this matter...\n\n## Client\n## Key Issues\n## Strategy\n## Important Dates`}
-                className={`${inputCls} resize-y font-mono text-[13px] leading-relaxed`}
-              />
-              <div className="flex items-center justify-end gap-3 mt-4">
-                {memorySaved && <span className="text-brand-green text-sm font-sans font-medium">Saved ✓</span>}
-                <button
-                  onClick={handleSaveMemory}
-                  disabled={memorySaving}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm"
-                >
-                  <Icon d={Icons.save} size={15} />
-                  {memorySaving ? 'Saving…' : 'Save Memory'}
-                </button>
-              </div>
-            </div>
           </div>
         )}
       </div>
+
+      {/* Modals */}
+      {showAddTask && (
+        <AddTaskModal
+          matterId={id}
+          teamMembers={assignments}
+          onCreated={(task) => {
+            setTasks(prev => [...prev, task])
+            setDashboard(prev => prev ? { ...prev, open_tasks: (prev.open_tasks || 0) + 1 } : prev)
+            setShowAddTask(false)
+          }}
+          onClose={() => setShowAddTask(false)}
+        />
+      )}
+
+      {showCompose && (
+        <ComposeEmailModal
+          matterId={id}
+          matterName={matter.matter_name}
+          caseNumber={matter.case_number}
+          clientEmail={matter.client?.email || null}
+          onSent={(result) => {
+            setShowCompose(false)
+            if (activeTab === 'activity') {
+              getCommunications({ matter_id: id }).then(data => {
+                setCommunications(Array.isArray(data) ? data : data.items || [])
+              }).catch(() => {})
+            }
+          }}
+          onClose={() => setShowCompose(false)}
+        />
+      )}
     </div>
   )
 }

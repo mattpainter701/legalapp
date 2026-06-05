@@ -13,13 +13,16 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.billing import TimeEntry, Invoice, Payment
+from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
 from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer, RetainerTransaction
+from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
+from app.services.email import EmailService
 from app.services.cloud_init import initialize_matter_folders, share_matter_folders
 from app.schemas.matter import (
     BudgetUtilization,
@@ -1715,6 +1718,164 @@ async def update_matter_memory(
         matter_id=str(matter.id),
         memory_content=matter.memory_content,
     )
+
+
+# ── Dashboard Summary ────────────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/dashboard-summary")
+async def get_matter_dashboard_summary(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return aggregated dashboard stats for a matter in one request."""
+    from datetime import timedelta
+
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+
+    today = date.today()
+    thirty_days = today + timedelta(days=30)
+
+    # Task stats
+    task_result = await db.execute(
+        select(Task).where(
+            Task.tenant_id == user.tenant_id,
+            Task.matter_id == matter.id,
+            Task.status.notin_(["completed", "cancelled"]),
+        )
+    )
+    tasks = task_result.scalars().all()
+    open_tasks = len(tasks)
+    overdue_tasks = sum(1 for t in tasks if t.due_date and t.due_date < today)
+    next_deadline = None
+    upcoming = sorted(
+        [t for t in tasks if t.due_date and t.due_date >= today and t.due_date <= thirty_days],
+        key=lambda t: t.due_date,
+    )
+    if upcoming:
+        t = upcoming[0]
+        next_deadline = {
+            "id": str(t.id),
+            "title": t.title,
+            "task_type": t.task_type,
+            "due_date": str(t.due_date),
+            "priority": t.priority,
+        }
+
+    # Budget
+    budget = await _compute_budget_utilization(db, matter.id, user.tenant_id)
+    if matter.budget_amount:
+        budget.budget_amount = matter.budget_amount
+        budget.budget_currency = matter.budget_currency or "USD"
+        if matter.budget_amount > 0:
+            pct = int((float(budget.total_billed) / float(matter.budget_amount)) * 100)
+            budget.utilization_pct = min(pct, 100)
+            budget.remaining = matter.budget_amount - budget.total_billed
+
+    # Last activity
+    event_result = await db.execute(
+        select(MatterEvent.created_at)
+        .where(MatterEvent.matter_id == matter.id)
+        .order_by(MatterEvent.created_at.desc())
+        .limit(1)
+    )
+    last_event_at = event_result.scalar_one_or_none()
+
+    # Active workers
+    active_workers = [
+        a.user.full_name
+        for a in matter.assignments
+        if a.is_active_working and a.user
+    ]
+
+    return {
+        "open_tasks": open_tasks,
+        "overdue_tasks": overdue_tasks,
+        "next_deadline": next_deadline,
+        "budget_amount": float(budget.budget_amount) if budget.budget_amount else None,
+        "budget_currency": budget.budget_currency,
+        "total_billed": float(budget.total_billed),
+        "utilization_pct": budget.utilization_pct,
+        "last_activity_at": last_event_at.isoformat() if last_event_at else None,
+        "active_workers": active_workers,
+    }
+
+
+# ── Email Client ──────────────────────────────────────────────────────────────
+
+
+@router.post("/{matter_id}/email-client")
+async def email_matter_client(
+    matter_id: str,
+    body: dict,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Send an email to the matter's client and log it as a communication."""
+    user = await get_current_user(request, db)
+    matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
+
+    subject = body.get("subject", "").strip()
+    email_body = body.get("body", "").strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="subject is required")
+
+    # Resolve recipient email
+    to_email = body.get("to_email", "").strip()
+    if not to_email and matter.client:
+        to_email = getattr(matter.client, "email", None) or ""
+    if not to_email:
+        raise HTTPException(
+            status_code=422,
+            detail="No client email on file. Provide to_email in the request body.",
+        )
+
+    # Build simple HTML body
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6;">
+      <p>{email_body.replace(chr(10), '<br>')}</p>
+      <hr style="border:none;border-top:1px solid #ddd;margin:20px 0;">
+      <p style="font-size:12px;color:#999;">
+        Re: {matter.matter_name}
+        {(' — ' + matter.case_number) if matter.case_number else ''}
+      </p>
+    </div>
+    """
+
+    svc = EmailService()
+    sent = await svc.send_email(
+        to=[to_email],
+        subject=subject,
+        html_body=html_body,
+        text_body=email_body,
+    )
+
+    # Log regardless of send outcome (outbound attempt is recorded)
+    log = CommunicationLog(
+        tenant_id=user.tenant_id,
+        direction="outbound",
+        channel="email",
+        status="sent" if sent else "logged",
+        subject=subject,
+        body=email_body,
+        matter_id=matter.id,
+        contact_id=matter.client_contact_id,
+        created_by_user_id=user.id,
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+
+    return {
+        "id": str(log.id),
+        "sent": sent,
+        "to": to_email,
+        "subject": subject,
+        "matter_id": str(matter.id),
+        "logged_at": log.occurred_at.isoformat(),
+    }
 
 
 # ── Slug generation ───────────────────────────────────────────────────────────

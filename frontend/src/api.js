@@ -690,6 +690,18 @@ export const getMatterMemory = (id) =>
 export const updateMatterMemory = (id, content) =>
   api.put(`/matters/${id}/memory`, { content }).then(r => r.data)
 
+// Dashboard summary
+export const getMatterDashboard = (id) =>
+  api.get(`/matters/${id}/dashboard-summary`).then(r => r.data)
+
+// Email client
+export const emailMatterClient = (id, data) =>
+  api.post(`/matters/${id}/email-client`, data).then(r => r.data)
+
+// Portfolio upcoming tasks
+export const getPortfolioUpcoming = (days = 14) =>
+  api.get('/portfolio/upcoming', { params: { days } }).then(r => r.data)
+
 // ── Billing Extended ──────────────────────────────────────────────────────────
 export const getTimeEntries = (params) =>
   api.get('/billing/time-entries', { params }).then(r => r.data)
