@@ -195,5 +195,4 @@ async def generate_recurring_invoices() -> dict:
 
 def _make_invoice_number(tenant_id: uuid.UUID, today: date, seq: int) -> str:
     """Generate a unique invoice number like INV-2026-00042."""
-    short = str(tenant_id)[:8]
     return f"INV-{today.year}-{seq:05d}"

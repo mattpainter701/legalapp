@@ -2,7 +2,6 @@
 
 import hashlib
 import logging
-import time
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select

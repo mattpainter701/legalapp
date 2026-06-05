@@ -80,7 +80,7 @@ from app.services.plugins.manifest import (
     list_plugin_manifests,
     valid_plugin_names,
 )
-from app.services.plugins.prompts import PLUGIN_DISPLAY_NAMES, PLUGIN_SKILLS
+from app.services.plugins.prompts import PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
 from app.services.rag import build_cloud_context
 from app.services.retrieval_planner import RetrievalPlanner

@@ -298,6 +298,6 @@ class EstateAccountingEntry(Base):
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _updated_at()
 
-    estate: Mapped["Estate"] = relationship(
+    estate: Mapped["Estate"] = relationship(  # noqa: F821
         "Estate", back_populates="accounting_entries"
-    )  # noqa: F821
+    )

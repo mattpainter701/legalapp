@@ -49,7 +49,7 @@ async def test_onboarding_status_returns_defaults(db_session, tenant_id, admin_u
     await db_session.commit()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test") as _:
         # Mock auth — we're testing the endpoint logic via direct DB inspection
         pass
 

@@ -74,5 +74,5 @@ class MatterAssignment(Base):
     )
 
     # Relationships
-    matter: Mapped["Matter"] = relationship("Matter", back_populates="assignments")
-    user: Mapped["User"] = relationship("User", lazy="joined")
+    matter: Mapped["Matter"] = relationship("Matter", back_populates="assignments")  # noqa: F821
+    user: Mapped["User"] = relationship("User", lazy="joined")  # noqa: F821

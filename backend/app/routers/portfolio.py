@@ -1,6 +1,5 @@
 """Portfolio router — cross-matter views for the current user."""
 
-import uuid
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends

@@ -71,5 +71,5 @@ class MatterNote(Base):
     )
 
     # Relationships
-    matter: Mapped["Matter"] = relationship("Matter", back_populates="notes")
-    author: Mapped["User | None"] = relationship("User", lazy="joined")
+    matter: Mapped["Matter"] = relationship("Matter", back_populates="notes")  # noqa: F821
+    author: Mapped["User | None"] = relationship("User", lazy="joined")  # noqa: F821

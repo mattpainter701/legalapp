@@ -9,9 +9,9 @@ the result (with configurable timeout).
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import select, func, and_, text
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
