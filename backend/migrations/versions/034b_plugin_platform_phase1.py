@@ -1,7 +1,7 @@
-"""034 — Plugin platform phase 1: entitlements and matter plugin binding.
+"""034b — Plugin platform phase 1: entitlements and matter plugin binding.
 
-Revision ID: 034
-Revises: 033
+Revision ID: 034b
+Revises: 034
 Create Date: 2026-06-04
 
 Changes:
@@ -13,8 +13,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "034"
-down_revision = "033"
+revision = "034b"
+down_revision = "034"
 branch_labels = None
 depends_on = None
 
@@ -30,9 +30,7 @@ def upgrade() -> None:
         ),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("plugin_name", sa.String(100), nullable=False),
-        sa.Column(
-            "status", sa.String(50), nullable=False, server_default="purchased"
-        ),
+        sa.Column("status", sa.String(50), nullable=False, server_default="purchased"),
         sa.Column("source", sa.String(100), nullable=True),
         sa.Column("seat_limit", sa.Integer(), nullable=True),
         sa.Column("config", sa.JSON(), nullable=True),
@@ -78,7 +76,9 @@ def upgrade() -> None:
     )
 
     op.add_column("matters", sa.Column("primary_plugin", sa.String(100), nullable=True))
-    op.add_column("matters", sa.Column("plugin_workflow_state", sa.JSON(), nullable=True))
+    op.add_column(
+        "matters", sa.Column("plugin_workflow_state", sa.JSON(), nullable=True)
+    )
     op.create_index("idx_matters_primary_plugin", "matters", ["primary_plugin"])
 
 

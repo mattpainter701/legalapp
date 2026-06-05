@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 revision = "035"
-down_revision = "034"
+down_revision = "034b"
 branch_labels = None
 depends_on = None
 
@@ -57,8 +57,12 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("tenant_id", "plugin_name", name="uq_tenant_plugin_setup"),
     )
-    op.create_index("idx_tenant_plugin_setups_tenant", "tenant_plugin_setups", ["tenant_id"])
-    op.create_index("idx_tenant_plugin_setups_plugin", "tenant_plugin_setups", ["plugin_name"])
+    op.create_index(
+        "idx_tenant_plugin_setups_tenant", "tenant_plugin_setups", ["tenant_id"]
+    )
+    op.create_index(
+        "idx_tenant_plugin_setups_plugin", "tenant_plugin_setups", ["plugin_name"]
+    )
     op.execute("ALTER TABLE tenant_plugin_setups ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE tenant_plugin_setups FORCE ROW LEVEL SECURITY")
     op.execute(

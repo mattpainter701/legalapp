@@ -1,7 +1,7 @@
-"""036 — SMB file share relay agent tables.
+"""037 — SMB file share relay agent tables.
 
-Revision ID: 036
-Revises: 035
+Revision ID: 037
+Revises: 036
 Create Date: 2026-06-04
 
 Adds five tables for on-prem SMB file share scanning and metadata-only indexing:
@@ -18,19 +18,30 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 
-revision = "036"
-down_revision = "035"
+revision = "037"
+down_revision = "036"
 branch_labels = None
 depends_on = None
 
-RLS_TABLES = ["smb_agents", "smb_shares", "smb_file_index", "smb_access_log", "matter_smb_shares"]
+RLS_TABLES = [
+    "smb_agents",
+    "smb_shares",
+    "smb_file_index",
+    "smb_access_log",
+    "matter_smb_shares",
+]
 
 
 def upgrade() -> None:
     # ── smb_agents ──────────────────────────────────────────────────────────
     op.create_table(
         "smb_agents",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("agent_name", sa.String(200), nullable=False),
         sa.Column("api_key_hash", sa.String(500), nullable=False),
@@ -41,27 +52,54 @@ def upgrade() -> None:
         sa.Column("last_heartbeat", sa.DateTime(timezone=True), nullable=True),
         sa.Column("pairing_code", sa.String(20), nullable=True, unique=True),
         sa.Column("pairing_expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
     )
 
     # ── smb_shares ──────────────────────────────────────────────────────────
     op.create_table(
         "smb_shares",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("agent_id", UUID(as_uuid=True), nullable=False),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("share_path", sa.String(500), nullable=False),
         sa.Column("display_name", sa.String(200), nullable=True),
         sa.Column("file_extensions", ARRAY(sa.String()), nullable=True),
         sa.Column("max_depth", sa.Integer(), nullable=False, server_default="10"),
-        sa.Column("scan_schedule", sa.String(50), nullable=False, server_default="0 */6 * * *"),
+        sa.Column(
+            "scan_schedule", sa.String(50), nullable=False, server_default="0 */6 * * *"
+        ),
         sa.Column("last_scan_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_scan_status", sa.String(20), nullable=True),
         sa.Column("last_scan_file_count", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["agent_id"], ["smb_agents.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("agent_id", "share_path", name="uq_smb_shares_agent_path"),
     )
@@ -69,7 +107,12 @@ def upgrade() -> None:
     # ── smb_file_index ──────────────────────────────────────────────────────
     op.create_table(
         "smb_file_index",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("share_id", UUID(as_uuid=True), nullable=True),
         sa.Column("agent_id", UUID(as_uuid=True), nullable=True),
@@ -84,14 +127,28 @@ def upgrade() -> None:
         sa.Column("created_time", sa.DateTime(timezone=True), nullable=True),
         sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("search_vector", TSVECTOR, nullable=True),
-        sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["share_id"], ["smb_shares.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["agent_id"], ["smb_agents.id"], ondelete="SET NULL"),
         sa.UniqueConstraint("tenant_id", "path", name="uq_smb_file_tenant_path"),
     )
-    op.create_index("ix_smb_file_index_tenant_share", "smb_file_index", ["tenant_id", "share_id"])
-    op.create_index("ix_smb_file_index_tenant_ext", "smb_file_index", ["tenant_id", "ext"])
+    op.create_index(
+        "ix_smb_file_index_tenant_share", "smb_file_index", ["tenant_id", "share_id"]
+    )
+    op.create_index(
+        "ix_smb_file_index_tenant_ext", "smb_file_index", ["tenant_id", "ext"]
+    )
     op.create_index(
         "ix_smb_file_index_search_vector",
         "smb_file_index",
@@ -124,7 +181,12 @@ def upgrade() -> None:
     # ── smb_access_log ───────────────────────────────────────────────────────
     op.create_table(
         "smb_access_log",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("user_id", UUID(as_uuid=True), nullable=True),
         sa.Column("agent_id", UUID(as_uuid=True), nullable=True),
@@ -132,26 +194,45 @@ def upgrade() -> None:
         sa.Column("conversation_id", UUID(as_uuid=True), nullable=True),
         sa.Column("access_reason", sa.String(50), nullable=True),
         sa.Column("bytes_sent", sa.Integer(), nullable=True),
-        sa.Column("accessed_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "accessed_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["agent_id"], ["smb_agents.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["conversation_id"], ["conversations.id"], ondelete="SET NULL"
+        ),
     )
 
     # ── matter_smb_shares ──────────────────────────────────────────────────
     op.create_table(
         "matter_smb_shares",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("matter_id", UUID(as_uuid=True), nullable=False),
         sa.Column("share_id", UUID(as_uuid=True), nullable=False),
         sa.Column("folder_path", sa.String(500), nullable=True),
         sa.Column("display_label", sa.String(200), nullable=True),
         sa.Column("auto_scan", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["matter_id"], ["matters.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["share_id"], ["smb_shares.id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("matter_id", "share_id", "folder_path", name="uq_matter_smb_share"),
+        sa.UniqueConstraint(
+            "matter_id", "share_id", "folder_path", name="uq_matter_smb_share"
+        ),
     )
 
     # ── RLS policies ────────────────────────────────────────────────────────
@@ -185,7 +266,9 @@ def downgrade() -> None:
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
 
     # Drop trigger and function
-    op.execute("DROP TRIGGER IF EXISTS trg_smb_file_index_search_vector ON smb_file_index")
+    op.execute(
+        "DROP TRIGGER IF EXISTS trg_smb_file_index_search_vector ON smb_file_index"
+    )
     op.execute("DROP FUNCTION IF EXISTS smb_file_index_search_vector_update()")
 
     # Drop indexes
