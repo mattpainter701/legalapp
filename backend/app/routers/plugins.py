@@ -378,6 +378,8 @@ async def _build_plugin_cloud_context(
 
         plan = await retrieval_planner.plan(
             user_question=question,
+            db=db,
+            tenant_id=tenant_id,
             tenant_name=tenant_name,
             matter_context=matter_context,
             active_providers=active_providers,
@@ -1249,7 +1251,9 @@ async def cold_start_interview(
 
     # Record usage
     model_used = result_data.get("model_used") or (
-        settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+        settings.LITELLM_PREMIUM_MODEL
+        if body.use_premium
+        else settings.LITELLM_STANDARD_MODEL
     )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
     tokens_out_val = result_data.get(
@@ -1266,6 +1270,11 @@ async def cold_start_interview(
         tenant_id=user.tenant_id,
         user_id=user.id,
         conversation_id=None,
+        requested_route=result_data.get("requested_route"),
+        resolved_route=result_data.get("resolved_route"),
+        gateway_provider=result_data.get("gateway_provider"),
+        gateway_alias=result_data.get("gateway_alias"),
+        final_model=result_data.get("gateway_alias") or model_used,
         model_used=model_used,
         tokens_in=tokens_in_val,
         tokens_out=tokens_out_val,
@@ -1365,7 +1374,9 @@ async def execute_skill(
 
     # Record usage
     model_used = result_data.get("model_used") or (
-        settings.PREMIUM_LLM if body.use_premium else settings.PRIMARY_LLM
+        settings.LITELLM_PREMIUM_MODEL
+        if body.use_premium
+        else settings.LITELLM_STANDARD_MODEL
     )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
     tokens_out_val = result_data.get(
@@ -1382,6 +1393,11 @@ async def execute_skill(
         tenant_id=user.tenant_id,
         user_id=user.id,
         conversation_id=None,
+        requested_route=result_data.get("requested_route"),
+        resolved_route=result_data.get("resolved_route"),
+        gateway_provider=result_data.get("gateway_provider"),
+        gateway_alias=result_data.get("gateway_alias"),
+        final_model=result_data.get("gateway_alias") or model_used,
         model_used=model_used,
         tokens_in=tokens_in_val,
         tokens_out=tokens_out_val,

@@ -214,6 +214,7 @@ Draft a professional response email. The attorney will review before sending. Do
         email: dict,
         llm_service: Any,
         tenant_name: str,
+        model: str | None = None,
     ) -> dict:
         prompt = self.LLM_CLASSIFICATION_PROMPT.format(
             subject=email.get("subject", ""),
@@ -223,7 +224,12 @@ Draft a professional response email. The attorney will review before sending. Do
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text, _, _ = await llm_service.complete(
-                messages, tenant_name, context="", use_premium=False
+                messages,
+                tenant_name,
+                context="",
+                use_premium=False,
+                provider="litellm",
+                model=model,
             )
             response_text = response_text.strip()
             if response_text.startswith("```"):
@@ -250,6 +256,7 @@ Draft a professional response email. The attorney will review before sending. Do
         llm_service: Any,
         tenant_name: str,
         practice_context: str = "General legal practice",
+        model: str | None = None,
     ) -> str:
         prompt = self.LLM_DRAFT_PROMPT.format(
             subject=email.get("subject", ""),
@@ -261,7 +268,12 @@ Draft a professional response email. The attorney will review before sending. Do
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text, _, _ = await llm_service.complete(
-                messages, tenant_name, context="", use_premium=True
+                messages,
+                tenant_name,
+                context="",
+                use_premium=True,
+                provider="litellm",
+                model=model,
             )
             return response_text.strip()
         except Exception as exc:
@@ -277,6 +289,8 @@ Draft a professional response email. The attorney will review before sending. Do
         llm_service: Any,
         tenant_name: str,
         max_emails: int = 20,
+        standard_model: str | None = None,
+        premium_model: str | None = None,
     ) -> list[dict]:
         results = []
 
@@ -296,12 +310,21 @@ Draft a professional response email. The attorney will review before sending. Do
             raise ValueError(f"Unknown email provider: {provider}")
 
         for email in emails:
-            classification = await self.classify_email(email, llm_service, tenant_name)
+            classification = await self.classify_email(
+                email,
+                llm_service,
+                tenant_name,
+                model=standard_model,
+            )
 
             draft_response = None
             if classification.get("requires_response"):
                 draft_response = await self.draft_response(
-                    email, classification, llm_service, tenant_name
+                    email,
+                    classification,
+                    llm_service,
+                    tenant_name,
+                    model=premium_model,
                 )
 
             await _auto_log_and_task(db, tenant_id, user_id, email, classification)

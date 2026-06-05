@@ -21,13 +21,13 @@
 
 **Claimed:** 2026-06-05 — Codex. Replanned after LiteLLM deployment: LegalApp must stop acting as a provider router. All LLM execution goes through LiteLLM aliases; the app only resolves logical routes, assembles legal context, applies guardrails, and records audit/billing metadata.
 
-- [ ] Refactor `LLMService` to a concise LiteLLM OpenAI-compatible client only; remove direct DeepSeek/OpenCode/OpenRouter/Anthropic/Azure/Gemini execution paths from backend code
-- [ ] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium` → LiteLLM aliases (`clarity-standard`, `clarity-premium`, tenant override aliases)
+- [x] Refactor `LLMService` to a concise LiteLLM OpenAI-compatible client only; remove direct DeepSeek/OpenCode/OpenRouter/Anthropic/Azure/Gemini execution paths from backend code
+- [x] Replace provider-first route resolution with logical route resolution: `standard`, `premium`, `tenant-standard`, `tenant-premium` → LiteLLM aliases (`clarity-standard`, `clarity-premium`, tenant override aliases)
 - [ ] Persist requested route, resolved route, gateway alias, gateway request ID/fallback metadata when available, and model used on `usage_records`
-- [ ] Include resolved LiteLLM alias in cache keys for all LLM-backed flows
-- [ ] Route chat, stream chat, plugin skills, cold-start interviews, memory summaries, retrieval planner, prompt tests, and email agent through one resolver/gateway path
-- [ ] Update platform/admin UI and API language from provider selection to gateway alias override
-- [ ] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
+- [x] Include resolved LiteLLM alias in cache keys for all LLM-backed flows
+- [x] Route chat, stream chat, plugin skills, cold-start interviews, memory summaries, retrieval planner, prompt tests, and email agent through one resolver/gateway path
+- [x] Update platform/admin UI and API language from provider selection to gateway alias override
+- [x] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
 
 ### 1203. Operator Console — AI Operations (P0, LARGE) — PENDING
 - [ ] Add AI Operations tab with global standard/premium aliases and per-tenant override table

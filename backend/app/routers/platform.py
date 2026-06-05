@@ -14,7 +14,6 @@ Endpoints:
 """
 
 import hmac
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -76,10 +75,8 @@ class TenantUpdate(BaseModel):
     billing_tier: Optional[str] = None
     is_active: Optional[bool] = None
     seat_count: Optional[int] = None
-    llm_provider: Optional[str] = (
-        None  # "deepseek"|"opencode"|"openrouter"|"litellm"|"anthropic"|"azure"|"gemini"
-    )
-    llm_model: Optional[str] = None  # optional model override
+    llm_provider: Optional[str] = None  # compatibility field; only "litellm" is valid
+    llm_model: Optional[str] = None  # optional LiteLLM alias override
     standard_llm_provider: Optional[str] = None
     standard_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
@@ -454,49 +451,6 @@ async def _fetch_openai_compatible_models(
     ]
 
 
-async def _fetch_anthropic_models() -> list[str]:
-    if not settings.ANTHROPIC_API_KEY:
-        return []
-    import httpx
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.get(
-            "https://api.anthropic.com/v1/models",
-            headers={
-                "x-api-key": settings.ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return [
-        item.get("id")
-        for item in data.get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
-
-
-async def _fetch_gemini_models() -> list[str]:
-    if not settings.GEMINI_API_KEY:
-        return []
-    import httpx
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.get(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            params={"key": settings.GEMINI_API_KEY},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    models = []
-    for item in data.get("models", []):
-        methods = item.get("supportedGenerationMethods", [])
-        name = item.get("name", "").removeprefix("models/")
-        if name and "generateContent" in methods:
-            models.append(name)
-    return models
-
-
 async def _safe_models(coro, fallback: list[str]) -> list[str]:
     try:
         models = await coro
@@ -508,29 +462,11 @@ async def _safe_models(coro, fallback: list[str]) -> list[str]:
 
 @router.get("/llm-providers")
 async def list_llm_providers(request: Request):
-    """List available LLM providers and their status (checks env vars)."""
+    """List the LiteLLM gateway and configured aliases."""
     _require_platform_key(request)
 
     def _provider(key: str, label: str, free_tier: bool, models: list[str]) -> dict:
-        configured = bool(
-            (key == "deepseek" and (settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY))
-            or (
-                key == "opencode"
-                and (settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY)
-            )
-            or (key == "openrouter" and settings.OPENROUTER_API_KEY)
-            or (
-                key == "litellm"
-                and (settings.LITELLM_ENABLED or bool(settings.LITELLM_API_KEY))
-            )
-            or (key == "anthropic" and settings.ANTHROPIC_API_KEY)
-            or (
-                key == "azure"
-                and settings.AZURE_OPENAI_ENDPOINT
-                and settings.AZURE_OPENAI_KEY
-            )
-            or (key == "gemini" and settings.GEMINI_API_KEY)
-        )
+        configured = bool(settings.LITELLM_ENABLED or settings.LITELLM_API_KEY)
         return {
             "key": key,
             "label": label,
@@ -539,75 +475,19 @@ async def list_llm_providers(request: Request):
             "models": models,
         }
 
-    openrouter_models = [
-        m.strip() for m in settings.OPENROUTER_FREE_MODELS.split(",") if m.strip()
-    ]
-
-    deepseek_key = settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY
-    opencode_key = settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY
-    (
-        deepseek_models,
-        opencode_models,
-        fetched_openrouter_models,
-        litellm_models,
-        anthropic_models,
-        gemini_models,
-    ) = await asyncio.gather(
-        _safe_models(
-            _fetch_openai_compatible_models(
-                base_url=settings.DEEPSEEK_BASE_URL,
-                api_key=deepseek_key,
+    litellm_models = await _safe_models(
+        _fetch_openai_compatible_models(
+            base_url=settings.LITELLM_BASE_URL,
+            api_key=(
+                settings.LITELLM_API_KEY
+                or ("not-needed" if settings.LITELLM_ENABLED else "")
             ),
-            [settings.PRIMARY_LLM],
         ),
-        _safe_models(
-            _fetch_openai_compatible_models(
-                base_url=settings.OPENCODE_ZEN_BASE_URL,
-                api_key=opencode_key,
-            ),
-            [settings.PRIMARY_LLM],
-        ),
-        _safe_models(
-            _fetch_openai_compatible_models(
-                base_url=settings.OPENROUTER_BASE_URL,
-                api_key=settings.OPENROUTER_API_KEY,
-            ),
-            openrouter_models if openrouter_models else ["google/gemma-4-31b-it:free"],
-        ),
-        _safe_models(
-            _fetch_openai_compatible_models(
-                base_url=settings.LITELLM_BASE_URL,
-                api_key=(
-                    settings.LITELLM_API_KEY
-                    or ("not-needed" if settings.LITELLM_ENABLED else "")
-                ),
-            ),
-            [settings.LITELLM_STANDARD_MODEL, settings.LITELLM_PREMIUM_MODEL],
-        ),
-        _safe_models(_fetch_anthropic_models(), [settings.PREMIUM_LLM]),
-        _safe_models(_fetch_gemini_models(), ["gemini-2.0-flash"]),
+        [settings.LITELLM_STANDARD_MODEL, settings.LITELLM_PREMIUM_MODEL],
     )
 
     providers = [
-        _provider("deepseek", "DeepSeek", False, deepseek_models),
-        _provider("opencode", "OpenCode Zen", True, opencode_models),
-        _provider(
-            "openrouter",
-            "OpenRouter",
-            True,
-            fetched_openrouter_models,
-        ),
         _provider("litellm", "LiteLLM Gateway", False, litellm_models),
-        _provider("anthropic", "Anthropic Claude", False, anthropic_models),
-        _provider(
-            "azure",
-            "Azure OpenAI",
-            False,
-            [settings.AZURE_OPENAI_DEPLOYMENT]
-            if settings.AZURE_OPENAI_DEPLOYMENT
-                else [],
-        ),
-        _provider("gemini", "Google Gemini", True, gemini_models),
     ]
 
     return {"providers": providers}
@@ -635,7 +515,7 @@ async def platform_health(
         for r in rows.fetchall()
     ]
 
-    # Real provider health from env vars
+    # Upstream provider health belongs to LiteLLM; the app reports gateway status.
     services = [
         {
             "name": "PostgreSQL",
@@ -650,30 +530,8 @@ async def platform_health(
             "online": True,
         },
         {
-            "name": "DeepSeek / OpenCode",
-            "online": bool(settings.DEEPSEEK_API_KEY or settings.OPENCODE_KEY),
-        },
-        {
-            "name": "OpenCode Zen",
-            "online": bool(settings.OPENCODE_KEY or settings.DEEPSEEK_API_KEY),
-        },
-        {
-            "name": "OpenRouter",
-            "online": bool(settings.OPENROUTER_API_KEY),
-        },
-        {
-            "name": "Anthropic Claude",
-            "online": bool(settings.ANTHROPIC_API_KEY),
-        },
-        {
-            "name": "Azure OpenAI",
-            "online": bool(
-                settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_KEY
-            ),
-        },
-        {
-            "name": "Google Gemini",
-            "online": bool(settings.GEMINI_API_KEY),
+            "name": "LiteLLM Gateway",
+            "online": bool(settings.LITELLM_ENABLED or settings.LITELLM_API_KEY),
         },
     ]
 
@@ -756,12 +614,16 @@ async def list_platform_errors(
         filters.append(ErrorLog.error_type == error_type)
     if tenant_id:
         try:
-            tid = uuid.UUID(tenant_id) if not isinstance(tenant_id, uuid.UUID) else tenant_id
+            tid = (
+                uuid.UUID(tenant_id)
+                if not isinstance(tenant_id, uuid.UUID)
+                else tenant_id
+            )
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
         filters.append(ErrorLog.tenant_id == tid)
     if unresolved_only:
-        filters.append(ErrorLog.is_resolved == False)
+        filters.append(ErrorLog.is_resolved.is_(False))
 
     total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
     total = total_result.scalar_one()
@@ -779,7 +641,9 @@ async def list_platform_errors(
     tids = {e.tenant_id for e in errors}
     tenant_names: dict[uuid.UUID, str] = {}
     if tids:
-        tn_result = await db.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids)))
+        tn_result = await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
+        )
         tenant_names = {str(r.id): r.name for r in tn_result.fetchall()}
 
     return PlatformErrorList(
@@ -828,7 +692,7 @@ async def platform_error_summary(
 
     unresolved_result = await db.execute(
         select(func.count(ErrorLog.id)).where(
-            ErrorLog.created_at >= cutoff, ErrorLog.is_resolved == False
+            ErrorLog.created_at >= cutoff, ErrorLog.is_resolved.is_(False)
         )
     )
     unresolved = unresolved_result.scalar_one()
@@ -864,7 +728,9 @@ async def platform_error_summary(
     tids = {r.tenant_id for r in bt_rows}
     tn_map: dict[uuid.UUID, str] = {}
     if tids:
-        tn_r = await db.execute(select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids)))
+        tn_r = await db.execute(
+            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
+        )
         tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
     by_tenant = [
         {
@@ -946,7 +812,7 @@ async def tenant_error_logs(
     if error_type:
         filters.append(ErrorLog.error_type == error_type)
     if unresolved_only:
-        filters.append(ErrorLog.is_resolved == False)
+        filters.append(ErrorLog.is_resolved.is_(False))
 
     total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
     total = total_result.scalar_one()
@@ -1014,7 +880,7 @@ async def tenant_error_summary(
 
     unresolved_result = await db.execute(
         select(func.count(ErrorLog.id)).where(
-            *base_filters, ErrorLog.is_resolved == False
+            *base_filters, ErrorLog.is_resolved.is_(False)
         )
     )
     unresolved = unresolved_result.scalar_one()
@@ -1132,9 +998,7 @@ async def list_access_logs(
     if status_code is not None:
         filters.append(ApiAccessLog.status_code == status_code)
 
-    total_result = await db.execute(
-        select(func.count(ApiAccessLog.id)).where(*filters)
-    )
+    total_result = await db.execute(select(func.count(ApiAccessLog.id)).where(*filters))
     total = total_result.scalar_one()
 
     rows_result = await db.execute(
@@ -1192,9 +1056,7 @@ async def access_log_summary(
             raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
         filters.append(ApiAccessLog.tenant_id == tid)
 
-    total_r = await db.execute(
-        select(func.count(ApiAccessLog.id)).where(*filters)
-    )
+    total_r = await db.execute(select(func.count(ApiAccessLog.id)).where(*filters))
     total_requests = total_r.scalar_one()
 
     # By status code
@@ -1209,9 +1071,7 @@ async def access_log_summary(
     by_status = {str(row.status_code): row.cnt for row in status_r.all()}
 
     # Avg latency
-    lat_r = await db.execute(
-        select(func.avg(ApiAccessLog.latency_ms)).where(*filters)
-    )
+    lat_r = await db.execute(select(func.avg(ApiAccessLog.latency_ms)).where(*filters))
     avg_latency_ms = lat_r.scalar_one()
 
     # By endpoint (top 20)
@@ -1225,9 +1085,7 @@ async def access_log_summary(
         .order_by(func.count(ApiAccessLog.id).desc())
         .limit(20)
     )
-    by_endpoint = [
-        {"endpoint": row.endpoint, "count": row.cnt} for row in ep_r.all()
-    ]
+    by_endpoint = [{"endpoint": row.endpoint, "count": row.cnt} for row in ep_r.all()]
 
     # By tenant (top 20)
     bt_r = await db.execute(

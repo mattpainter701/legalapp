@@ -40,6 +40,7 @@ from app.schemas.admin import (
     ErrorResolveRequest,
     ErrorResolveResponse,
 )
+from app.services.llm_routing import VALID_LLM_PROVIDERS
 
 settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -495,6 +496,13 @@ async def update_tenant_settings(
 
     # Update only provided fields
     update_data = body.model_dump(exclude_unset=True)
+    for provider_field in ("default_llm_provider", "premium_llm_provider"):
+        if provider_field in update_data and update_data[provider_field] is not None:
+            if update_data[provider_field] not in VALID_LLM_PROVIDERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{provider_field} must be 'litellm'",
+                )
     for field, value in update_data.items():
         if hasattr(settings_record, field):
             setattr(settings_record, field, value)
@@ -1226,10 +1234,12 @@ async def get_permissions_audit(
 
 
 class UserPatchRequest(_PydanticBase):
-    role: Optional[str] = None          # "admin" | "user"
+    role: Optional[str] = None  # "admin" | "user"
     full_name: Optional[str] = None
-    payg_monthly_budget: Optional[float] = None   # None = clear cap; pass -1 to leave unchanged
-    default_billing_rate: Optional[float] = None   # hourly rate for time tracking
+    payg_monthly_budget: Optional[float] = (
+        None  # None = clear cap; pass -1 to leave unchanged
+    )
+    default_billing_rate: Optional[float] = None  # hourly rate for time tracking
 
 
 class InviteUserRequest(_PydanticBase):
@@ -1264,18 +1274,27 @@ async def patch_user(
 
     if body.role is not None:
         if body.role not in ("admin", "user"):
-            raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
+            raise HTTPException(
+                status_code=400, detail="role must be 'admin' or 'user'"
+            )
         user.role = body.role
 
     if body.full_name is not None:
         user.full_name = body.full_name
 
     if body.payg_monthly_budget is not None:
-        user.payg_monthly_budget = body.payg_monthly_budget if body.payg_monthly_budget >= 0 else None
+        user.payg_monthly_budget = (
+            body.payg_monthly_budget if body.payg_monthly_budget >= 0 else None
+        )
 
     if body.default_billing_rate is not None:
         from decimal import Decimal
-        user.default_billing_rate = Decimal(str(body.default_billing_rate)) if body.default_billing_rate >= 0 else None
+
+        user.default_billing_rate = (
+            Decimal(str(body.default_billing_rate))
+            if body.default_billing_rate >= 0
+            else None
+        )
 
     await db.commit()
     await db.refresh(user)
@@ -1332,7 +1351,10 @@ async def invite_user(
         select(User).where(User.tenant_id == admin.tenant_id, User.email == body.email)
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="A user with this email already exists in your tenant.")
+        raise HTTPException(
+            status_code=409,
+            detail="A user with this email already exists in your tenant.",
+        )
 
     # Create inactive user with a random password (they will set their own via invite link)
     invite_token = secrets.token_urlsafe(32)
@@ -1380,7 +1402,9 @@ async def invite_user(
         html_body=html_body,
     )
 
-    return InviteUserResponse(status="invited", user_id=str(new_user.id), email=new_user.email)
+    return InviteUserResponse(
+        status="invited", user_id=str(new_user.id), email=new_user.email
+    )
 
 
 # ─────────────────────────────────────────────────────
@@ -1389,9 +1413,9 @@ async def invite_user(
 
 
 class AlertConfig(_PydanticBase):
-    spend_alert_usd: Optional[float] = None       # monthly tenant-wide threshold in USD
-    spend_alert_pct: int = 80                      # alert at this % of budget
-    alert_emails: list[str] = []                   # recipients
+    spend_alert_usd: Optional[float] = None  # monthly tenant-wide threshold in USD
+    spend_alert_pct: int = 80  # alert at this % of budget
+    alert_emails: list[str] = []  # recipients
     weekly_digest_enabled: bool = True
 
 

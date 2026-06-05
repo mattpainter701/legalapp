@@ -11,8 +11,6 @@ import {
   getAdminTenant,
   getAdminSettings,
   updateAdminSettings,
-  configureCustomerLLM,
-  resetCustomerLLM,
   getAlertConfig,
   updateAlertConfig,
 } from '../api'
@@ -710,15 +708,6 @@ function TenantTab() {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-const PROVIDERS = [
-  { value: 'deepseek', label: 'DeepSeek (via OpenCode Go)', desc: 'DeepSeek V4 Flash/Pro — fast, affordable' },
-  { value: 'opencode', label: 'OpenCode Zen (free)', desc: 'Free-tier models via zen.opencode.ai' },
-  { value: 'openrouter', label: 'OpenRouter', desc: 'Multi-model gateway — Gemma, Llama, Qwen free tiers' },
-  { value: 'gemini', label: 'Google Gemini', desc: 'Gemini 2.0 Flash — requires GEMINI_API_KEY' },
-  { value: 'azure', label: 'Azure OpenAI (Copilot)', desc: 'GPT-4o — requires Azure credentials' },
-  { value: 'anthropic', label: 'Anthropic Claude', desc: 'Claude Opus/Sonnet — requires ANTHROPIC_API_KEY' },
-]
-
 function AlertsSection() {
   const [cfg, setCfg] = useState({
     spend_alert_usd: '',
@@ -954,7 +943,6 @@ function FeatureFlagsSection({ settings, onUpdate }) {
 
 function SettingsTab() {
   const [includePublic, setIncludePublic] = useState(true)
-  const [provider, setProvider] = useState('')
   const [modelOverride, setModelOverride] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -965,7 +953,6 @@ function SettingsTab() {
   useEffect(() => {
     getAdminSettings()
       .then((s) => {
-        setProvider(s.default_llm_provider || '')
         setModelOverride(s.default_llm_model || '')
         const cfg = s.custom_config || {}
         setExistingConfig(cfg)
@@ -980,7 +967,7 @@ function SettingsTab() {
     setSaving(true)
     try {
       await updateAdminSettings({
-        default_llm_provider: provider || null,
+        default_llm_provider: modelOverride ? 'litellm' : null,
         default_llm_model: modelOverride || null,
         custom_config: { ...existingConfig, include_public_case_law: includePublic },
       })
@@ -1013,44 +1000,27 @@ function SettingsTab() {
         </div>
       </div>
 
-      {/* LLM Provider */}
+      {/* LiteLLM Gateway */}
       <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
         <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
-          <h3 className="font-serif font-bold text-xl text-brand-ink">LLM Provider</h3>
+          <h3 className="font-serif font-bold text-xl text-brand-ink">LiteLLM Gateway</h3>
           <p className="text-sm text-brand-ink-2 font-sans mt-1">
-            Default AI provider and model for your tenant. Backend falls back to platform default when nothing is selected.
+            Optional tenant gateway alias override. Provider routing and fallback chains are managed in LiteLLM.
           </p>
         </div>
         <div className="divide-y divide-brand-line px-8 py-5 space-y-5">
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-2">Provider</label>
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
-            >
-              <option value="">Platform default</option>
-              {PROVIDERS.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-            {provider && (
-              <p className="text-xs text-brand-ink-2 mt-1.5 ml-1 font-sans">
-                {PROVIDERS.find((p) => p.value === provider)?.desc}
-              </p>
-            )}
-          </div>
-          <div>
             <label className="block text-sm font-sans font-semibold text-brand-ink mb-2">
-              Model override <span className="text-brand-ink-2 font-normal">(optional)</span>
+              Standard alias override <span className="text-brand-ink-2 font-normal">(optional)</span>
             </label>
             <input
               type="text"
               value={modelOverride}
               onChange={(e) => setModelOverride(e.target.value)}
-              placeholder="e.g. deepseek-v4-flash, claude-opus-4-8"
+              placeholder="e.g. clarity-standard, clarity-standard-openrouter-free"
               className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20 placeholder:text-brand-muted"
             />
+            <p className="text-xs text-brand-muted font-sans mt-1.5">Leave blank to use the platform standard alias.</p>
           </div>
           <div className="flex items-center gap-3 pt-2">
             <button
@@ -1067,9 +1037,6 @@ function SettingsTab() {
         </div>
       </div>
 
-      {/* Customer LLM */}
-      <CustomerLLMSection />
-
       {/* Feature Flags */}
       {featureSettings && (
         <FeatureFlagsSection settings={featureSettings} onUpdate={(s) => setFeatureSettings(s)} />
@@ -1077,77 +1044,6 @@ function SettingsTab() {
 
       {/* Alerts & Budgets */}
       <AlertsSection />
-    </div>
-  )
-}
-
-function CustomerLLMSection() {
-  const [config, setConfig] = useState({ use_customer_llm: false, customer_llm_provider: '', api_key: '', endpoint: '', deployment: '' })
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState(null)
-
-  const handleSave = async () => {
-    setSaving(true)
-    try {
-      await configureCustomerLLM(config)
-      setMsg({ type: 'success', text: 'Saved.' })
-    } catch (err) {
-      setMsg({ type: 'error', text: err?.response?.data?.detail || 'Failed.' })
-    } finally {
-      setSaving(false)
-      setTimeout(() => setMsg(null), 4000)
-    }
-  }
-
-  const handleReset = async () => {
-    setSaving(true)
-    try {
-      await resetCustomerLLM()
-      setConfig({ use_customer_llm: false, customer_llm_provider: '', api_key: '', endpoint: '', deployment: '' })
-      setMsg({ type: 'success', text: 'Reset to platform LLM.' })
-    } catch {
-      setMsg({ type: 'error', text: 'Failed.' })
-    } finally {
-      setSaving(false)
-      setTimeout(() => setMsg(null), 4000)
-    }
-  }
-
-  return (
-    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
-      <div className="px-8 py-6 border-b border-brand-line bg-brand-bg-soft/50">
-        <h3 className="font-serif font-bold text-xl text-brand-ink">Customer LLM</h3>
-        <p className="text-sm text-brand-ink-2 font-sans mt-1">Use your firm's own Gemini or Microsoft Copilot subscription.</p>
-      </div>
-      <div className="px-8 py-5 space-y-4">
-        {msg && (
-          <div className={`px-4 py-2 rounded-lg text-xs font-medium ${msg.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>
-        )}
-        <label className="flex items-center gap-3">
-          <input type="checkbox" checked={config.use_customer_llm} onChange={(e) => setConfig({ ...config, use_customer_llm: e.target.checked })} className="w-4 h-4 rounded border-brand-line" />
-          <span className="text-sm font-sans text-brand-ink">Use firm's own LLM subscription</span>
-        </label>
-        {config.use_customer_llm && (
-          <>
-            <select value={config.customer_llm_provider} onChange={(e) => setConfig({ ...config, customer_llm_provider: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm">
-              <option value="">Select provider…</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="copilot">Microsoft Copilot (Azure OpenAI)</option>
-            </select>
-            <input type="password" placeholder="API Key" value={config.api_key} onChange={(e) => setConfig({ ...config, api_key: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
-            <input type="text" placeholder="Endpoint URL" value={config.endpoint} onChange={(e) => setConfig({ ...config, endpoint: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
-            <input type="text" placeholder="Deployment name" value={config.deployment} onChange={(e) => setConfig({ ...config, deployment: e.target.value })} className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm" />
-          </>
-        )}
-        <div className="flex gap-3 pt-2">
-          <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-semibold rounded-lg hover:opacity-90 disabled:opacity-40">
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-          <button onClick={handleReset} disabled={saving} className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft">
-            Reset to Platform LLM
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

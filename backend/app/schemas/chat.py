@@ -23,7 +23,7 @@ class MessageCreate(BaseModel):
     content: str
     include_public: bool = True
     use_premium_llm: bool = False
-    provider: str = "default"  # "default" | "openrouter" | "gemini" | "azure"
+    provider: str = "default"  # compatibility route: "default" | "standard" | "premium"
     skill: Optional[str] = None  # e.g., "commercial-legal", "litigation-legal"
     matter_id: Optional[str] = None  # UUID of related matter for context injection
     attachment_ids: list[

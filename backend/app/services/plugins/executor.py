@@ -163,6 +163,10 @@ class PluginExecutor:
                 "requires_attorney_review": True,
                 "tokens_used": 0,
                 "model_used": fallback_route(False).model,
+                "requested_route": "standard",
+                "resolved_route": "standard",
+                "gateway_provider": "litellm",
+                "gateway_alias": fallback_route(False).gateway_alias,
             }
 
         # Resolve prompt: tenant override -> code default -> generic fallback
@@ -205,4 +209,8 @@ class PluginExecutor:
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "model_used": route.model,
+            "requested_route": route.requested_route,
+            "resolved_route": route.resolved_route,
+            "gateway_provider": route.gateway_provider,
+            "gateway_alias": route.gateway_alias,
         }

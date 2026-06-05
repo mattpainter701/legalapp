@@ -226,6 +226,8 @@ async def cloud_search_test(
 
     plan = await planner.plan(
         user_question=body.query,
+        db=db,
+        tenant_id=tenant_id,
         active_providers=list(provider_set) if provider_set else None,
     )
 

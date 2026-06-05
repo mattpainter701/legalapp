@@ -137,8 +137,8 @@ class TenantSettings(Base):
     customer_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     customer_llm_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Operator-assigned default LLM provider + model (platform-level providers only)
-    # "deepseek" | "opencode" | "openrouter" | "litellm" | "anthropic" | "azure" | "gemini"
+    # Operator-assigned LiteLLM gateway aliases. Provider field is retained for
+    # backward compatibility and should be "litellm" when set.
     default_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     default_llm_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     premium_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)

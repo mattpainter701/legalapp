@@ -311,6 +311,8 @@ async def hybrid_rag_query(
             try:
                 plan = await retrieval_planner.plan(
                     user_question=question,
+                    db=db,
+                    tenant_id=tenant_id,
                     tenant_name=tenant_name,
                     matter_context=matter_context_str,
                     active_providers=connected if connected else None,

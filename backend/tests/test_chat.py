@@ -7,8 +7,12 @@ from app.models.tenant import TenantSettings
 
 
 @pytest.mark.asyncio
-async def test_create_and_list_conversation(client: AsyncClient, mock_llm, mock_embeddings):
-    create_resp = await client.post("/api/conversations", json={"title": "Research: injunctions"})
+async def test_create_and_list_conversation(
+    client: AsyncClient, mock_llm, mock_embeddings
+):
+    create_resp = await client.post(
+        "/api/conversations", json={"title": "Research: injunctions"}
+    )
     assert create_resp.status_code == 201
     data = create_resp.json()
     assert data["title"] == "Research: injunctions"
@@ -32,7 +36,9 @@ async def test_get_conversation(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_send_message_returns_assistant(client: AsyncClient, mock_llm, mock_embeddings):
+async def test_send_message_returns_assistant(
+    client: AsyncClient, mock_llm, mock_embeddings
+):
     conv = (await client.post("/api/conversations", json={})).json()
     resp = await client.post(
         f"/api/conversations/{conv['id']}/messages",
@@ -60,8 +66,8 @@ async def test_premium_message_uses_tenant_premium_route(
     db_session.add(
         TenantSettings(
             tenant_id=test_tenant.id,
-            premium_llm_provider="openrouter",
-            premium_llm_model="anthropic/claude-sonnet-4",
+            premium_llm_provider="litellm",
+            premium_llm_model="clarity-premium-openrouter",
         )
     )
     await db_session.commit()
@@ -78,8 +84,8 @@ async def test_premium_message_uses_tenant_premium_route(
 
     assert resp.status_code == 201
     call = mock_llm.call_args.kwargs
-    assert call["provider"] == "openrouter"
-    assert call["model"] == "anthropic/claude-sonnet-4"
+    assert call["provider"] == "litellm"
+    assert call["model"] == "clarity-premium-openrouter"
 
 
 @pytest.mark.asyncio

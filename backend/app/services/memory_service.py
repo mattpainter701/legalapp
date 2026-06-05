@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User, UserMemory
 from app.models.conversation import Message
 from app.services.llm import LLMService
+from app.services.llm_routing import resolve_llm_route
 
 
 class MemoryService:
@@ -151,11 +152,14 @@ Conversation:
 
 Summary:"""
 
+        route = await resolve_llm_route(db, tenant_id, use_premium=False)
         summary_text, _, _ = await self.llm.complete(
             messages=[{"role": "user", "content": summary_prompt}],
             tenant_name=tenant_name,
             context="",
             use_premium=False,
+            provider=route.provider,
+            model=route.model,
         )
 
         # Store as interaction_pattern memory

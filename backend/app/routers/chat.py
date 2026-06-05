@@ -539,9 +539,7 @@ async def send_message(
         use_premium=body.use_premium_llm,
         requested_provider=body.provider,
     )
-    context_hash = hashlib.md5(
-        f"{route.provider}:{route.model}\n{context_str}".encode()
-    ).hexdigest()
+    context_hash = hashlib.md5(f"{route.cache_key}\n{context_str}".encode()).hexdigest()
 
     cache_hit_llm = False
     cached_response = await cache_manager.get_cached_llm_response(
@@ -567,7 +565,6 @@ async def send_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
-                tenant_id=str(user.tenant_id),
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -619,7 +616,6 @@ async def send_message(
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
-            tenant_id=str(user.tenant_id),
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -720,6 +716,11 @@ async def send_message(
         tenant_id=user.tenant_id,
         user_id=user.id,
         conversation_id=conv.id,
+        requested_route=route.requested_route,
+        resolved_route=route.resolved_route,
+        gateway_provider=route.gateway_provider,
+        gateway_alias=route.gateway_alias,
+        final_model=route.gateway_alias,
         model_used=model_used,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
@@ -969,7 +970,6 @@ async def stream_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
-                tenant_id=str(user.tenant_id),
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -997,7 +997,6 @@ async def stream_message(
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
-                    tenant_id=str(user.tenant_id),
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
@@ -1085,6 +1084,11 @@ async def stream_message(
                 tenant_id=user.tenant_id,
                 user_id=user.id,
                 conversation_id=conv.id,
+                requested_route=route.requested_route,
+                resolved_route=route.resolved_route,
+                gateway_provider=route.gateway_provider,
+                gateway_alias=route.gateway_alias,
+                final_model=route.gateway_alias,
                 model_used=model_used,
                 tokens_in=int(tokens_in),
                 tokens_out=int(tokens_out),

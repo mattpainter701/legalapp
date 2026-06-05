@@ -8,6 +8,7 @@ import logging
 from typing import TypedDict
 
 from app.services.llm import LLMService
+from app.services.llm_routing import resolve_llm_route
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,8 @@ class RetrievalPlanner:
     async def plan(
         self,
         user_question: str,
+        db=None,
+        tenant_id=None,
         tenant_name: str = "Legal",
         matter_context: str | None = None,
         active_providers: list[str] | None = None,
@@ -117,10 +120,16 @@ class RetrievalPlanner:
             user_question=user_question,
         )
 
+        route = None
+        if db is not None and tenant_id is not None:
+            route = await resolve_llm_route(db, tenant_id, use_premium=False)
+
         response_text, _, _ = await self.llm.complete(
             messages=[{"role": "user", "content": user_question}],
             tenant_name=tenant_name,
             context=system_prompt,
+            provider=route.provider if route else "litellm",
+            model=route.model if route else None,
         )
 
         plan = self._parse_response(response_text)

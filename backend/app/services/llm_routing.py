@@ -12,11 +12,13 @@ from app.models.tenant import TenantSettings
 settings = get_settings()
 
 LLM_ROUTING_KEY = "llm_routing"
-VALID_LLM_PROVIDERS = {
+LITELLM_PROVIDER = "litellm"
+VALID_LLM_PROVIDERS = {LITELLM_PROVIDER}
+VALID_LLM_ROUTES = {"standard", "premium", "tenant-standard", "tenant-premium"}
+LEGACY_DIRECT_PROVIDERS = {
     "deepseek",
     "opencode",
     "openrouter",
-    "litellm",
     "anthropic",
     "azure",
     "gemini",
@@ -25,8 +27,22 @@ VALID_LLM_PROVIDERS = {
 
 @dataclass(frozen=True)
 class LLMRoute:
-    provider: str
-    model: str
+    requested_route: str
+    resolved_route: str
+    gateway_alias: str
+    gateway_provider: str = LITELLM_PROVIDER
+
+    @property
+    def provider(self) -> str:
+        return self.gateway_provider
+
+    @property
+    def model(self) -> str:
+        return self.gateway_alias
+
+    @property
+    def cache_key(self) -> str:
+        return f"{self.gateway_provider}:{self.gateway_alias}"
 
 
 def _clean(value: str | None) -> str | None:
@@ -35,42 +51,39 @@ def _clean(value: str | None) -> str | None:
 
 
 def provider_default_model(provider: str, use_premium: bool = False) -> str:
-    if provider == "litellm":
-        return (
-            settings.LITELLM_PREMIUM_MODEL
-            if use_premium
-            else settings.LITELLM_STANDARD_MODEL
-        )
-    if provider == "anthropic":
-        return settings.PREMIUM_LLM
-    if provider == "azure":
-        return settings.AZURE_OPENAI_DEPLOYMENT or settings.PREMIUM_LLM
-    if provider == "gemini":
-        return "gemini-2.0-flash"
-    if provider == "openrouter":
-        configured = [
-            m.strip() for m in settings.OPENROUTER_FREE_MODELS.split(",") if m.strip()
-        ]
-        if configured:
-            return configured[0]
-    return settings.PREMIUM_LLM if use_premium else settings.PRIMARY_LLM
+    """Compatibility wrapper: every route resolves to a LiteLLM alias."""
+    return (
+        settings.LITELLM_PREMIUM_MODEL
+        if use_premium
+        else settings.LITELLM_STANDARD_MODEL
+    )
 
 
 def fallback_route(use_premium: bool) -> LLMRoute:
-    if settings.LITELLM_ENABLED:
-        return LLMRoute(
-            provider="litellm",
-            model=provider_default_model("litellm", use_premium=use_premium),
-        )
-    if use_premium:
-        model = settings.PREMIUM_LLM
-        provider = (
-            "anthropic"
-            if model.lower().startswith(("claude", "anthropic"))
-            else "deepseek"
-        )
-        return LLMRoute(provider=provider, model=model)
-    return LLMRoute(provider="deepseek", model=settings.PRIMARY_LLM)
+    route_name = "premium" if use_premium else "standard"
+    return LLMRoute(
+        requested_route=route_name,
+        resolved_route=route_name,
+        gateway_alias=provider_default_model(LITELLM_PROVIDER, use_premium),
+    )
+
+
+def _normalize_requested_route(requested: str | None, *, use_premium: bool) -> str:
+    requested = (_clean(requested) or "default").lower()
+    if requested in {"default", LITELLM_PROVIDER}:
+        return "premium" if use_premium else "standard"
+    if requested in VALID_LLM_ROUTES:
+        return requested
+    if requested in LEGACY_DIRECT_PROVIDERS:
+        return "premium" if use_premium else "standard"
+    return "premium" if use_premium else "standard"
+
+
+def _model_from_values(provider: str | None, model: str | None) -> str | None:
+    provider = (_clean(provider) or LITELLM_PROVIDER).lower()
+    if provider != LITELLM_PROVIDER:
+        return None
+    return _clean(model)
 
 
 def route_from_values(
@@ -79,26 +92,23 @@ def route_from_values(
     *,
     use_premium: bool,
 ) -> LLMRoute | None:
-    provider = _clean(provider)
-    model = _clean(model)
-    if not provider and not model:
+    alias = _model_from_values(provider, model)
+    if not alias:
         return None
-    if not provider:
-        provider = fallback_route(use_premium).provider
+    route_name = "premium" if use_premium else "standard"
     return LLMRoute(
-        provider=provider,
-        model=model or provider_default_model(provider, use_premium=use_premium),
+        requested_route=route_name,
+        resolved_route=route_name,
+        gateway_alias=alias,
     )
 
 
 def default_platform_llm_config() -> dict[str, str | None]:
-    standard = fallback_route(False)
-    premium = fallback_route(True)
     return {
-        "standard_provider": standard.provider,
-        "standard_model": standard.model,
-        "premium_provider": premium.provider,
-        "premium_model": premium.model,
+        "standard_provider": LITELLM_PROVIDER,
+        "standard_model": settings.LITELLM_STANDARD_MODEL,
+        "premium_provider": LITELLM_PROVIDER,
+        "premium_model": settings.LITELLM_PREMIUM_MODEL,
     }
 
 
@@ -106,9 +116,16 @@ def _normalize_config(value: dict[str, Any] | None) -> dict[str, str | None]:
     config = default_platform_llm_config()
     if not value:
         return config
-    for key in config:
-        if key in value:
-            config[key] = _clean(value.get(key))
+    standard_provider = _clean(value.get("standard_provider"))
+    premium_provider = _clean(value.get("premium_provider"))
+    if standard_provider in (None, LITELLM_PROVIDER):
+        config["standard_model"] = (
+            _clean(value.get("standard_model")) or settings.LITELLM_STANDARD_MODEL
+        )
+    if premium_provider in (None, LITELLM_PROVIDER):
+        config["premium_model"] = (
+            _clean(value.get("premium_model")) or settings.LITELLM_PREMIUM_MODEL
+        )
     return config
 
 
@@ -130,9 +147,12 @@ async def upsert_platform_llm_config(
     row = result.scalar_one_or_none()
     current = _normalize_config(row.value if row else None)
     for key, value in updates.items():
-        if key in current:
+        if key in {"standard_provider", "premium_provider"}:
+            current[key] = LITELLM_PROVIDER
+        elif key in current:
             current[key] = _clean(value)
 
+    current = _normalize_config(current)
     if row is None:
         row = PlatformSetting(key=LLM_ROUTING_KEY, value=current)
         db.add(row)
@@ -150,45 +170,55 @@ async def resolve_llm_route(
     requested_provider: str = "default",
     requested_model: str | None = None,
 ) -> LLMRoute:
-    requested_provider = _clean(requested_provider) or "default"
-    if requested_provider != "default":
-        return route_from_values(
-            requested_provider,
-            requested_model,
-            use_premium=use_premium,
-        ) or fallback_route(use_premium)
+    requested_route = _normalize_requested_route(
+        requested_provider,
+        use_premium=use_premium,
+    )
+
+    explicit_alias = _clean(requested_model)
+    requested_provider_clean = (_clean(requested_provider) or "default").lower()
+    if explicit_alias and requested_provider_clean in {"default", LITELLM_PROVIDER}:
+        return LLMRoute(
+            requested_route=requested_route,
+            resolved_route=requested_route,
+            gateway_alias=explicit_alias,
+        )
 
     ts_result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
     ts = ts_result.scalar_one_or_none()
     if ts:
-        if use_premium:
-            route = route_from_values(
-                ts.premium_llm_provider,
-                ts.premium_llm_model,
-                use_premium=True,
-            )
-        else:
-            route = route_from_values(
-                ts.default_llm_provider,
-                ts.default_llm_model,
-                use_premium=False,
-            )
-        if route:
-            return route
+        if requested_route in {"premium", "tenant-premium"}:
+            alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)
+            if alias:
+                return LLMRoute(
+                    requested_route=requested_route,
+                    resolved_route="tenant-premium",
+                    gateway_alias=alias,
+                )
+        elif requested_route in {"standard", "tenant-standard"}:
+            alias = _model_from_values(ts.default_llm_provider, ts.default_llm_model)
+            if alias:
+                return LLMRoute(
+                    requested_route=requested_route,
+                    resolved_route="tenant-standard",
+                    gateway_alias=alias,
+                )
 
     platform_config = await get_platform_llm_config(db)
-    if use_premium:
-        route = route_from_values(
-            platform_config.get("premium_provider"),
-            platform_config.get("premium_model"),
-            use_premium=True,
+    if requested_route in {"premium", "tenant-premium"}:
+        return LLMRoute(
+            requested_route=requested_route,
+            resolved_route="premium",
+            gateway_alias=(
+                platform_config.get("premium_model") or settings.LITELLM_PREMIUM_MODEL
+            ),
         )
-    else:
-        route = route_from_values(
-            platform_config.get("standard_provider"),
-            platform_config.get("standard_model"),
-            use_premium=False,
-        )
-    return route or fallback_route(use_premium)
+    return LLMRoute(
+        requested_route=requested_route,
+        resolved_route="standard",
+        gateway_alias=(
+            platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
+        ),
+    )

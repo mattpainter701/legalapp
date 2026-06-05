@@ -249,15 +249,19 @@ async def test_prompt(
     # Short-circuit: LLM might not be available offline, return the rendered prompt
     # as the "response" so the admin can verify formatting
     from app.services.llm import LLMService
+    from app.services.llm_routing import resolve_llm_route
 
     llm = LLMService()
+    route = await resolve_llm_route(db, admin.tenant_id, use_premium=False)
     try:
         response_text, tokens_in, tokens_out = await llm.complete(
             messages=[{"role": "user", "content": body.sample_input}],
             tenant_name="Admin Console",
             context=system_prompt,
+            provider=route.provider,
+            model=route.model,
         )
-        model_used = "deepseek-chat"
+        model_used = route.model
     except Exception as e:
         # If LLM call fails, return the rendered prompt as a preview
         return PromptTestResponse(

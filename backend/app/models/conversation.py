@@ -107,6 +107,14 @@ class UsageRecord(Base):
         UUID(as_uuid=True),
         nullable=True,
     )
+    requested_route: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    resolved_route: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    gateway_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    gateway_alias: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    gateway_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    gateway_fallback_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    final_provider: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    final_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)

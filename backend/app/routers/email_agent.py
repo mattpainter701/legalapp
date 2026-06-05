@@ -16,6 +16,7 @@ from app.schemas.email_agent import (
 from app.services.email_agent import email_agent
 from app.services.calendar_sync import calendar_sync
 from app.services.llm import LLMService
+from app.services.llm_routing import resolve_llm_route
 
 settings = get_settings()
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -39,6 +40,8 @@ async def scan_emails(
     llm = LLMService()
     tenant_name = getattr(user, "tenant", None)
     tenant_name = tenant_name.name if tenant_name else "Clarity Legal"
+    standard_route = await resolve_llm_route(db, tenant_id, use_premium=False)
+    premium_route = await resolve_llm_route(db, tenant_id, use_premium=True)
 
     results = await email_agent.process_emails(
         db=db,
@@ -48,6 +51,8 @@ async def scan_emails(
         llm_service=llm,
         tenant_name=tenant_name,
         max_emails=body.max_emails,
+        standard_model=standard_route.model,
+        premium_model=premium_route.model,
     )
 
     processed = [
@@ -76,9 +81,15 @@ async def draft_email_response(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    await get_current_user(request, db)
+    user = await get_current_user(request, db)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="No tenant context")
+    await set_tenant_context(db, tenant_id)
     llm = LLMService()
-    tenant_name = "Clarity Legal"
+    tenant_name_obj = getattr(user, "tenant", None)
+    tenant_name = tenant_name_obj.name if tenant_name_obj else "Clarity Legal"
+    premium_route = await resolve_llm_route(db, tenant_id, use_premium=True)
 
     draft = await email_agent.draft_response(
         email=body.get("email", {}),
@@ -86,6 +97,7 @@ async def draft_email_response(
         llm_service=llm,
         tenant_name=tenant_name,
         practice_context=body.get("practice_context", "General legal practice"),
+        model=premium_route.model,
     )
 
     return {"draft_response": draft}

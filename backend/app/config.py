@@ -59,11 +59,15 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str = ""
     LITELLM_STANDARD_MODEL: str = "clarity-standard"
     LITELLM_PREMIUM_MODEL: str = "clarity-premium"
+    LITELLM_DB_PASSWORD: str = ""
+    LITELLM_DATABASE_URL: str = ""
 
     # QuickBooks Online OAuth2
     QBO_CLIENT_ID: str = ""
     QBO_CLIENT_SECRET: str = ""
-    QBO_REDIRECT_URI: str = ""       # e.g. https://yourdomain.com/api/integrations/qbo/callback
+    QBO_REDIRECT_URI: str = (
+        ""  # e.g. https://yourdomain.com/api/integrations/qbo/callback
+    )
     QBO_ENVIRONMENT: str = "sandbox"  # "sandbox" | "production"
 
     STRIPE_SECRET_KEY: str = ""
