@@ -87,6 +87,17 @@ export default function AppShell({ children, title }) {
     navigate('/login')
   }
 
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+        e.preventDefault()
+        handleNewConversation()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleNewConversation])
+
   const ctxValue = {
     conversations,
     setConversations,
@@ -137,20 +148,15 @@ export default function AppShell({ children, title }) {
               {user?.role === 'admin' && (
                 <button
                   onClick={() => navigate('/admin')}
-                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-ink/10 text-brand-ink text-xs font-sans font-semibold uppercase tracking-wider rounded-lg border border-brand-ink/20 hover:bg-brand-ink/20 transition-colors"
                   title="Administration"
+                  className="p-0 bg-transparent border-0"
                 >
-                  <Shield size={13} />
-                  Admin
-                </button>
-              )}
-              {user?.role === 'admin' && (
-                <button
-                  onClick={() => navigate('/admin')}
-                  className="sm:hidden p-2 text-brand-ink/70 hover:text-brand-ink hover:bg-brand-line/40 rounded-lg transition-colors"
-                  title="Administration"
-                >
-                  <Shield size={18} />
+                  <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-ink/10 text-brand-ink text-xs font-sans font-semibold uppercase tracking-wider rounded-lg border border-brand-ink/20 hover:bg-brand-ink/20 transition-colors">
+                    <Shield size={13} /> Admin
+                  </span>
+                  <span className="sm:hidden inline-flex items-center p-2 text-brand-ink/70 hover:text-brand-ink hover:bg-brand-line/40 rounded-lg transition-colors">
+                    <Shield size={18} />
+                  </span>
                 </button>
               )}
             </div>
