@@ -53,9 +53,7 @@ class SignatureRequest(Base):
     provider: Mapped[str] = mapped_column(
         String(50), default="internal", server_default="internal"
     )
-    provider_envelope_id: Mapped[str | None] = mapped_column(
-        String(200), nullable=True
-    )
+    provider_envelope_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

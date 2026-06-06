@@ -159,9 +159,7 @@ async def accept_invite(
 ):
     token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
     result = await db.execute(
-        select(ClientPortalInvite).where(
-            ClientPortalInvite.token_hash == token_hash
-        )
+        select(ClientPortalInvite).where(ClientPortalInvite.token_hash == token_hash)
     )
     invite = result.scalar_one_or_none()
     if invite is None or invite.revoked:
@@ -319,7 +317,9 @@ async def portal_list_documents(
     ]
 
 
-@router.post("/documents/upload", response_model=PortalDocumentResponse, status_code=201)
+@router.post(
+    "/documents/upload", response_model=PortalDocumentResponse, status_code=201
+)
 async def portal_upload_document(
     request: Request,
     file: UploadFile = File(...),
@@ -439,9 +439,7 @@ async def portal_list_invoices(
 # ── Firm-side invite management ─────────────────────────────────────────────
 
 
-async def _get_matter_for_firm(
-    db: AsyncSession, matter_id: str, tenant_id
-) -> Matter:
+async def _get_matter_for_firm(db: AsyncSession, matter_id: str, tenant_id) -> Matter:
     result = await db.execute(
         select(Matter).where(Matter.id == matter_id, Matter.tenant_id == tenant_id)
     )
@@ -519,9 +517,7 @@ async def create_portal_invite(
     )
 
 
-@firm_router.get(
-    "/{matter_id}/portal/invites", response_model=List[FirmInviteResponse]
-)
+@firm_router.get("/{matter_id}/portal/invites", response_model=List[FirmInviteResponse])
 async def list_portal_invites(
     matter_id: str,
     request: Request,
@@ -552,9 +548,7 @@ async def list_portal_invites(
     ]
 
 
-@firm_router.delete(
-    "/{matter_id}/portal/invites/{invite_id}", status_code=204
-)
+@firm_router.delete("/{matter_id}/portal/invites/{invite_id}", status_code=204)
 async def revoke_portal_invite(
     matter_id: str,
     invite_id: str,

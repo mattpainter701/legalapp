@@ -165,9 +165,7 @@ async def create_signature_request(
     return await _to_response(db, req)
 
 
-@router.get(
-    "/{matter_id}/signatures", response_model=List[SignatureRequestResponse]
-)
+@router.get("/{matter_id}/signatures", response_model=List[SignatureRequestResponse])
 async def list_signature_requests(
     matter_id: str,
     request: Request,
@@ -309,9 +307,7 @@ async def portal_sign(
     # Resolve the signer: explicit signer_id, else the next pending in order.
     signer = None
     if body.signer_id:
-        signer = next(
-            (s for s in req.signers if str(s.id) == body.signer_id), None
-        )
+        signer = next((s for s in req.signers if str(s.id) == body.signer_id), None)
         if signer is None:
             raise HTTPException(status_code=404, detail="Signer not found")
         if signer.status != "pending":

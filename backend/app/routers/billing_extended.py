@@ -129,7 +129,9 @@ async def list_time_entries(
     total_amount = sum((e.amount for e in entries), Decimal("0"))
 
     return TimeEntryListResponse(
-        items=[TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries],
+        items=[
+            TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries
+        ],
         total=len(entries),
         total_hours=total_hours,
         total_amount=total_amount,
@@ -294,7 +296,9 @@ async def list_expenses(
     total_amount = sum((e.amount for e in expenses), Decimal("0"))
 
     return ExpenseListResponse(
-        items=[ExpenseResponse.model_validate(e, from_attributes=True) for e in expenses],
+        items=[
+            ExpenseResponse.model_validate(e, from_attributes=True) for e in expenses
+        ],
         total=len(expenses),
         total_amount=total_amount,
     )
@@ -591,8 +595,13 @@ async def _load_invoice_response(
         qbo_sync_status=invoice.qbo_sync_status,
         ledes_exported_at=invoice.ledes_exported_at,
         created_by=str(invoice.created_by),
-        line_items=[InvoiceLineItemResponse.model_validate(li, from_attributes=True) for li in line_items],
-        payments=[PaymentResponse.model_validate(p, from_attributes=True) for p in payments],
+        line_items=[
+            InvoiceLineItemResponse.model_validate(li, from_attributes=True)
+            for li in line_items
+        ],
+        payments=[
+            PaymentResponse.model_validate(p, from_attributes=True) for p in payments
+        ],
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
     )

@@ -57,11 +57,7 @@ def build_certificate(
         y -= 0.3 * inch
         c.setFont("Helvetica", 10)
         for s in signers:
-            signed = (
-                s.signed_at.strftime("%Y-%m-%d %H:%M UTC")
-                if s.signed_at
-                else "—"
-            )
+            signed = s.signed_at.strftime("%Y-%m-%d %H:%M UTC") if s.signed_at else "—"
             lines = [
                 f"Name: {s.name}  <{s.email}>",
                 f"Signature: {s.typed_signature or '—'}",
