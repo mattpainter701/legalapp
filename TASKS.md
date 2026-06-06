@@ -29,6 +29,22 @@
 - [x] Update platform/admin UI and API language from provider selection to gateway alias override
 - [x] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
 
+### 1206. Provider Route Builder — Intuitive AI Routing Console (P0, LARGE) — PENDING
+
+**Goal:** Replace manual `litellm_config.yaml` edits with a UI-driven provider console. Operator picks a provider endpoint (OpenCode zen, OpenCode go, OpenRouter, DeepSeek direct, etc.), selects an API key from the stored key vault, fetches the provider's live model list, picks a model, and saves it as the standard/premium route. LiteLLM config is regenerated and hot-reloaded automatically.
+
+- [ ] Backend: `GET /api/platform/llm/providers` — returns list of known provider presets (name, base_url, models_endpoint, auth_scheme)
+- [ ] Backend: `POST /api/platform/llm/providers/models` — proxies `GET {base_url}/models` using the specified key_id; returns model list
+- [ ] Backend: `GET /api/platform/llm/routes` — returns current standard/premium route config (provider, key_id, model, fallbacks)
+- [ ] Backend: `PUT /api/platform/llm/routes` — saves route config, regenerates and writes `litellm_config.yaml`, signals LiteLLM hot-reload
+- [ ] Backend: `POST /api/platform/llm/routes/test` — fires a synthetic prompt against the configured route, returns latency + model used
+- [ ] Frontend: Replace "Provider: LiteLLM Gateway / Model: clarity-standard" dropdown with full route builder: provider select → key select → fetch models → model select
+- [ ] Frontend: Separate standard and premium route cards; each has primary provider + model and ordered fallback chain (add/remove/reorder)
+- [ ] Frontend: "Test route" button on each card — shows latency, resolved model, and first 100 chars of response
+- [ ] Provider presets to ship: OpenCode zen (`opencode.ai/zen/v1`), OpenCode go (`opencode.ai/zen/go/v1`), OpenRouter (`openrouter.ai/api/v1`), DeepSeek (`api.deepseek.com/v1`), Anthropic via LiteLLM
+
+Files: `backend/app/routers/platform_admin.py`, `backend/app/services/llm.py`, `litellm_config.yaml`, `frontend/src/pages/admin/`
+
 ### 1203. Operator Console — AI Operations (P0, LARGE) — PENDING
 - [ ] Add AI Operations tab with global standard/premium aliases and per-tenant override table
 - [ ] Add model/provider disable switch with immediate route validation
