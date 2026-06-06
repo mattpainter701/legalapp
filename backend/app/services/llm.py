@@ -109,11 +109,15 @@ class LLMService:
         provider: str = "litellm",
         model: str | None = None,
         user_name: str = "",
+        response_format: dict | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
         ``provider`` is retained only for old call-site compatibility and is
         ignored; ``model`` must be a LiteLLM model alias.
+        ``response_format`` accepts e.g. ``{"type": "json_object"}`` for
+        structured output — LiteLLM drops it silently for models that don't
+        support it (drop_params: true in gateway config).
         """
         system_prompt = self._build_system_prompt(
             tenant_name=tenant_name,
@@ -126,14 +130,18 @@ class LLMService:
         logger.debug("LLM complete request_id=%s model=%s", request_id, gateway_model)
         all_messages = [_build_system_message(system_prompt)] + messages
 
+        create_kwargs: dict = dict(
+            model=gateway_model,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            extra_headers={"x-request-id": request_id},
+        )
+        if response_format:
+            create_kwargs["response_format"] = response_format
+
         try:
-            response = await self.client.chat.completions.create(
-                model=gateway_model,
-                messages=all_messages,
-                temperature=0.1,
-                max_tokens=4096,
-                extra_headers={"x-request-id": request_id},
-            )
+            response = await self.client.chat.completions.create(**create_kwargs)
             response_text = response.choices[0].message.content or ""
             tokens_in = response.usage.prompt_tokens if response.usage else 0
             tokens_out = response.usage.completion_tokens if response.usage else 0

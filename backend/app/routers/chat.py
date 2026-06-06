@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -125,41 +125,74 @@ def _message_to_response(msg: Message) -> MessageResponse:
     )
 
 
-async def _trigger_auto_memory_generation(
-    db: AsyncSession,
-    user: User,
+async def _trigger_auto_memory_generation_bg(
+    user_id: str,
+    tenant_id: str,
     conversation_id: str,
+    tenant_name: str,
 ) -> None:
-    """
-    Trigger auto-memory generation if conversation has >= 10 messages.
-    Extracts conversation summary and key facts into UserMemory.
-    """
-    # Count messages in conversation
-    count_result = await db.execute(
-        select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
-    )
-    message_count = count_result.scalar() or 0
+    """Background-safe memory generation — creates its own DB session."""
+    from app.database import async_session_maker, set_tenant_context
 
-    # Trigger memory generation every 10 messages
-    if message_count % 10 == 0 and message_count > 0:
-        try:
-            await memory_service.summarize_conversation(
-                db=db,
-                user_id=user.id,
-                tenant_id=user.tenant_id,
-                conversation_id=conversation_id,
-                tenant_name=user.tenant.name if user.tenant else "Legal",
+    async with async_session_maker() as db:
+        await set_tenant_context(db, tenant_id)
+        count_result = await db.execute(
+            select(func.count(Message.id)).where(
+                Message.conversation_id == conversation_id
             )
-            # Update overall user memory summary
-            await memory_service.update_user_memory_summary(
-                db=db,
-                user_id=user.id,
-                tenant_id=user.tenant_id,
-                tensor_name=user.tenant.name if user.tenant else "Legal",
+        )
+        message_count = count_result.scalar() or 0
+
+        if message_count % 10 == 0 and message_count > 0:
+            try:
+                await memory_service.summarize_conversation(
+                    db=db,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    tenant_name=tenant_name,
+                )
+                await memory_service.update_user_memory_summary(
+                    db=db,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    tensor_name=tenant_name,
+                )
+                await db.commit()
+            except Exception:
+                logger.warning("Auto-memory generation failed", exc_info=True)
+
+
+async def _check_token_budget(db: AsyncSession, user) -> None:
+    """Raise HTTP 429 if the tenant has exhausted their daily token budget."""
+    from app.models.tenant import TenantSettings
+
+    settings_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+    )
+    tenant_settings = settings_result.scalar_one_or_none()
+    if not tenant_settings or not tenant_settings.max_daily_tokens:
+        return
+
+    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
+        tzinfo=timezone.utc
+    )
+    token_result = await db.execute(
+        select(
+            func.coalesce(
+                func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0
             )
-            await db.commit()
-        except Exception:
-            logger.warning("Auto-memory generation failed", exc_info=True)
+        ).where(
+            UsageRecord.tenant_id == user.tenant_id,
+            UsageRecord.created_at >= today_start,
+        )
+    )
+    tokens_today = token_result.scalar() or 0
+    if tokens_today >= tenant_settings.max_daily_tokens:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily token limit reached. Contact your administrator.",
+        )
 
 
 @router.get("", response_model=List[ConversationResponse])
@@ -319,6 +352,7 @@ async def send_message(
     conversation_id: str,
     body: MessageCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -349,6 +383,9 @@ async def send_message(
 
     if conv.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # 1a. Enforce daily token budget (fail fast before any work is done)
+    await _check_token_budget(db, user)
 
     # 2. Check for PII in user input
     pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
@@ -740,8 +777,14 @@ async def send_message(
     await db.commit()
     await db.refresh(assistant_msg)
 
-    # Trigger auto-memory generation if message threshold reached
-    await _trigger_auto_memory_generation(db, user, str(conv.id))
+    # Trigger auto-memory generation in background (non-blocking)
+    background_tasks.add_task(
+        _trigger_auto_memory_generation_bg,
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        conversation_id=str(conv.id),
+        tenant_name=user.tenant.name if user.tenant else "Legal",
+    )
 
     return _message_to_response(assistant_msg)
 
@@ -751,6 +794,7 @@ async def stream_message(
     conversation_id: str,
     body: MessageCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -779,6 +823,15 @@ async def stream_message(
     if conv.user_id != user.id and user.role != "admin":
         return StreamingResponse(
             _error_stream("Access denied"),
+            media_type="text/event-stream",
+        )
+
+    # 1a. Enforce daily token budget
+    try:
+        await _check_token_budget(db, user)
+    except HTTPException as budget_exc:
+        return StreamingResponse(
+            _error_stream(budget_exc.detail),
             media_type="text/event-stream",
         )
 
@@ -1107,8 +1160,15 @@ async def stream_message(
 
             await db.commit()
 
-            # Trigger auto-memory generation
-            await _trigger_auto_memory_generation(db, user, str(conv.id))
+            # Fire memory generation without blocking the stream completion
+            asyncio.create_task(
+                _trigger_auto_memory_generation_bg(
+                    user_id=str(user.id),
+                    tenant_id=str(user.tenant_id),
+                    conversation_id=str(conv.id),
+                    tenant_name=user.tenant.name if user.tenant else "Legal",
+                )
+            )
 
             # Send completion marker
             yield "data: [STREAM_COMPLETE]\n\n"
