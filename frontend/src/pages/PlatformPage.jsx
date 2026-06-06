@@ -925,6 +925,8 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   const [syncing, setSyncing] = useState(false)
   const [addError, setAddError] = useState(null)
   const [syncResult, setSyncResult] = useState(null)
+  const [probingKey, setProbingKey] = useState(null)
+  const [keyModels, setKeyModels] = useState({})
 
   const handleAdd = async (e) => {
     e.preventDefault()
@@ -960,6 +962,16 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
     } catch (e) {
       setSyncResult({ synced: [], errors: [e?.response?.data?.detail || 'Sync failed'] })
     } finally { setSyncing(false) }
+  }
+
+  const handleProbeKey = async (keyId) => {
+    setProbingKey(keyId)
+    try {
+      const data = await fetchProviderModels(platformKey, keyId)
+      setKeyModels((prev) => ({ ...prev, [keyId]: data.models || [] }))
+    } catch (e) {
+      setKeyModels((prev) => ({ ...prev, [keyId]: { error: e?.response?.data?.detail || 'Probe failed' } }))
+    } finally { setProbingKey(null) }
   }
 
   return (
@@ -1032,19 +1044,45 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
 
       <div className="divide-y divide-brand-line">
         {keys.length === 0 && (
-          <p className="px-5 py-6 text-sm text-brand-muted font-sans text-center">No keys stored. Add one or sync from environment variables.</p>
+          <div className="px-5 py-8 text-sm text-brand-muted font-sans text-center space-y-2">
+            <p>No API keys stored in the vault.</p>
+            <p className="text-xs">Click <strong>Sync from env</strong> to import keys from <code className="bg-brand-bg px-1 rounded">DEEPSEEK_API_KEY</code>, <code className="bg-brand-bg px-1 rounded">OPENCODE_API_KEY</code>, or <code className="bg-brand-bg px-1 rounded">OPENROUTER_API_KEY</code>, or <strong>Add key</strong> to enter one manually.</p>
+          </div>
         )}
         {keys.map((k) => {
           const preset = presets.find((p) => p.id === k.provider_id)
+          const modelsForKey = keyModels[k.id]
+          const isProbing = probingKey === k.id
+          const modelCount = Array.isArray(modelsForKey) ? modelsForKey.length : null
+          const probeError = modelsForKey?.error
           return (
-            <div key={k.id} className="px-5 py-3 flex items-center justify-between hover:bg-brand-bg transition-colors">
-              <div>
-                <p className="text-sm font-medium text-brand-ink font-sans">{k.name}</p>
-                <p className="text-xs text-brand-muted font-sans">{preset?.name || k.provider_id} · …{k.key_hint}</p>
+            <div key={k.id} className="px-5 py-3 flex items-center justify-between hover:bg-brand-bg transition-colors gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium text-brand-ink font-sans">{k.name}</p>
+                  {preset && (
+                    <span className="text-[10px] uppercase tracking-wider text-brand-muted bg-brand-bg px-1.5 py-0.5 rounded font-sans">{preset.name}</span>
+                  )}
+                </div>
+                <p className="text-xs text-brand-muted font-sans mt-0.5">
+                  {preset?.description || k.provider_id}{modelCount !== null ? ` · ${modelCount} models available` : ''}
+                  {probeError ? ` · ${probeError}` : ''}
+                </p>
               </div>
-              <button onClick={() => handleDelete(k.id)} className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
-                <Trash2 size={14} />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => handleProbeKey(k.id)}
+                  disabled={isProbing}
+                  title="Fetch available models for this key"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
+                >
+                  <RefreshCw size={11} className={isProbing ? 'animate-spin' : ''} />
+                  Models
+                </button>
+                <button onClick={() => handleDelete(k.id)} title="Delete this key from the vault" className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           )
         })}
@@ -1143,12 +1181,14 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => onApply('standard', 'primary', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std</button>
-              <button onClick={() => onApply('standard', 'alternate', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std LB</button>
-              <button onClick={() => onApply('standard', 'fallback', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std FB</button>
-              <button onClick={() => onApply('premium', 'primary', model)} className="px-2.5 py-1.5 text-xs font-sans bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2">Premium</button>
-              <button onClick={() => onApply('premium', 'alternate', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Prem LB</button>
-              <button onClick={() => onApply('premium', 'fallback', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Prem FB</button>
+              <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mr-1">Standard:</span>
+              <button onClick={() => onApply('standard', 'primary', model)} title="Set as standard primary — the default model for standard-tier requests" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Primary</button>
+              <button onClick={() => onApply('standard', 'alternate', model)} title="Add as standard load-balanced target — LiteLLM distributes requests across all balanced targets" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Balanced</button>
+              <button onClick={() => onApply('standard', 'fallback', model)} title="Add as standard fallback — tried only when primary and balanced targets fail" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Fallback</button>
+              <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mx-1 border-l border-brand-line pl-2">Premium:</span>
+              <button onClick={() => onApply('premium', 'primary', model)} title="Set as premium primary — the default model for premium-tier requests" className="px-2.5 py-1.5 text-xs font-sans bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2">Primary</button>
+              <button onClick={() => onApply('premium', 'alternate', model)} title="Add as premium load-balanced target" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Balanced</button>
+              <button onClick={() => onApply('premium', 'fallback', model)} title="Add as premium fallback" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Fallback</button>
             </div>
           </div>
         ))}
