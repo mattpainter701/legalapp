@@ -423,14 +423,20 @@ async def qbo_list_items(
     await set_tenant_context(db, str(user.tenant_id))
     access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
     if not access_token:
-        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+        raise HTTPException(
+            status_code=400, detail="QBO not connected or token expired"
+        )
 
     qbo = await _get_qbo_integration(db, str(user.tenant_id))
     if not qbo or not qbo.qbo_realm_id:
         raise HTTPException(status_code=400, detail="QBO realm ID not found")
 
     sandbox = qbo.sandbox_mode
-    base = "https://sandbox-quickbooks.api.intuit.com" if sandbox else "https://quickbooks.api.intuit.com"
+    base = (
+        "https://sandbox-quickbooks.api.intuit.com"
+        if sandbox
+        else "https://quickbooks.api.intuit.com"
+    )
     url = f"{base}/v3/company/{qbo.qbo_realm_id}/query"
     query = "SELECT * FROM Item WHERE Type = 'Service' AND Active = true MAXRESULTS 200"
 
@@ -438,7 +444,10 @@ async def qbo_list_items(
         resp = await client.get(
             url,
             params={"query": query},
-            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
         )
 
     if resp.status_code != 200:
@@ -525,7 +534,9 @@ async def qbo_sync_invoice(
     await set_tenant_context(db, str(user.tenant_id))
     access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
     if not access_token:
-        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+        raise HTTPException(
+            status_code=400, detail="QBO not connected or token expired"
+        )
 
     qbo = await _get_qbo_integration(db, str(user.tenant_id))
     sandbox = qbo.sandbox_mode if qbo else True
@@ -536,7 +547,9 @@ async def qbo_sync_invoice(
     result = await svc.sync_invoice_with_retry(invoice_id)
 
     if result is None:
-        raise HTTPException(status_code=502, detail="QBO sync failed — check error logs")
+        raise HTTPException(
+            status_code=502, detail="QBO sync failed — check error logs"
+        )
 
     return {"status": "synced", "invoice_id": invoice_id}
 
@@ -554,7 +567,9 @@ async def qbo_sync_all(
     await set_tenant_context(db, str(user.tenant_id))
     access_token = await _get_fresh_qbo_token(db, str(user.tenant_id))
     if not access_token:
-        raise HTTPException(status_code=400, detail="QBO not connected or token expired")
+        raise HTTPException(
+            status_code=400, detail="QBO not connected or token expired"
+        )
 
     qbo = await _get_qbo_integration(db, str(user.tenant_id))
     sandbox = qbo.sandbox_mode if qbo else True
@@ -567,14 +582,18 @@ async def qbo_sync_all(
     summary = await svc.sync_all()
 
     completed_at = datetime.now(timezone.utc)
-    status = "success" if not summary["errors"] else (
-        "partial" if summary["invoices_synced"] > 0 else "failed"
+    status = (
+        "success"
+        if not summary["errors"]
+        else ("partial" if summary["invoices_synced"] > 0 else "failed")
     )
 
     if qbo:
         qbo.last_sync_at = completed_at
         qbo.last_sync_status = status
-        qbo.last_sync_error = "; ".join(summary["errors"][:3]) if summary["errors"] else None
+        qbo.last_sync_error = (
+            "; ".join(summary["errors"][:3]) if summary["errors"] else None
+        )
         await db.commit()
 
     return QBOSyncStatus(

@@ -187,17 +187,13 @@ async def job_lock(name: str):
     key = _lock_key(name)
     async with async_session_maker() as session:
         got = (
-            await session.execute(
-                text("SELECT pg_try_advisory_lock(:k)"), {"k": key}
-            )
+            await session.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})
         ).scalar()
         try:
             yield bool(got)
         finally:
             if got:
-                await session.execute(
-                    text("SELECT pg_advisory_unlock(:k)"), {"k": key}
-                )
+                await session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
                 await session.commit()
 
 
@@ -440,9 +436,7 @@ class LegalScheduler:
 
         # estate-deadline-watcher: daily 8:05 AM ET
         self.scheduler.add_job(
-            self._guarded(
-                "estate-deadline-watcher", self.run_estate_deadline_watcher
-            ),
+            self._guarded("estate-deadline-watcher", self.run_estate_deadline_watcher),
             CronTrigger(hour=8, minute=5),
             id="estate-deadline-watcher",
             name="Estate Deadline Watcher",

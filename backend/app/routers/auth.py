@@ -251,7 +251,9 @@ async def _revoke_refresh_family(request: Request, family: str) -> None:
     await redis.delete(_refresh_family_key(family))
 
 
-def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+def _set_auth_cookies(
+    response: Response, access_token: str, refresh_token: str
+) -> None:
     """Set both the access and refresh cookies with consistent, hardened flags."""
     flags = _cookie_flags()
     response.set_cookie(
@@ -1111,7 +1113,9 @@ async def logout(request: Request, response: Response):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+async def refresh(
+    request: Request, response: Response, db: AsyncSession = Depends(get_db)
+):
     """Rotate a refresh token: issue a fresh access + refresh token, single-use.
 
     Reads the refresh token from the ``refresh_token`` cookie (falling back to a

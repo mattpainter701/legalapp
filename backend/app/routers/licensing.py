@@ -126,7 +126,9 @@ async def get_licensing_info(
                 role=u.role,
                 tokens_used=tokens,
                 cost_usd=cost,
-                payg_monthly_budget=float(u.payg_monthly_budget) if u.payg_monthly_budget is not None else None,
+                payg_monthly_budget=float(u.payg_monthly_budget)
+                if u.payg_monthly_budget is not None
+                else None,
             )
         )
 

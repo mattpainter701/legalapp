@@ -72,9 +72,7 @@ async def clear_tenant_context(session: AsyncSession) -> None:
     (fail-closed). Useful before/after a cross-tenant operation on a reused
     session.
     """
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', '', true)")
-    )
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
 
 async def enable_rls_bypass(session: AsyncSession) -> None:
@@ -90,6 +88,4 @@ async def enable_rls_bypass(session: AsyncSession) -> None:
     be called from tenant-scoped request handlers — doing so would defeat
     tenant isolation.
     """
-    await session.execute(
-        text("SELECT set_config('app.rls_bypass', 'on', true)")
-    )
+    await session.execute(text("SELECT set_config('app.rls_bypass', 'on', true)"))
