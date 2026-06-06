@@ -512,6 +512,35 @@ export const getPlatformLLMConfig = (key) =>
 export const updatePlatformLLMConfig = (key, data) =>
   platformApi(key).put('/platform/llm-config', data).then((r) => r.data)
 
+// ── Provider Route Builder (Task 1206) ────────────────────────────────────
+
+export const getLLMProviderPresets = (key) =>
+  platformApi(key).get('/platform/llm/providers').then((r) => r.data)
+
+export const getLLMProviderKeys = (key) =>
+  platformApi(key).get('/platform/llm/provider-keys').then((r) => r.data)
+
+export const addLLMProviderKey = (key, data) =>
+  platformApi(key).post('/platform/llm/provider-keys', data).then((r) => r.data)
+
+export const deleteLLMProviderKey = (key, keyId) =>
+  platformApi(key).delete(`/platform/llm/provider-keys/${keyId}`).then((r) => r.data)
+
+export const syncEnvKeys = (key) =>
+  platformApi(key).post('/platform/llm/provider-keys/sync-env').then((r) => r.data)
+
+export const fetchProviderModels = (key, keyId) =>
+  platformApi(key).post(`/platform/llm/provider-keys/${keyId}/fetch-models`).then((r) => r.data)
+
+export const getLLMRoutes = (key) =>
+  platformApi(key).get('/platform/llm/routes').then((r) => r.data)
+
+export const saveLLMRoutes = (key, data) =>
+  platformApi(key).put('/platform/llm/routes', data).then((r) => r.data)
+
+export const testLLMRoute = (key, data) =>
+  platformApi(key).post('/platform/llm/routes/test', data).then((r) => r.data)
+
 export const getPlatformLogs = (key, params = {}) =>
   platformApi(key).get('/platform/logs', { params }).then((r) => r.data)
 

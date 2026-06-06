@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLLMConfig, updatePlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary } from '../api'
-import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe } from 'lucide-react'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLLMConfig, updatePlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
+import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -636,6 +636,421 @@ function LogsTab({ platformKey, tenants }) {
   )
 }
 
+// ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
+
+function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const [models, setModels] = useState([])
+  const [modelsError, setModelsError] = useState(null)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+
+  const selectedKey = allKeys.find((k) => k.id === route.key_id)
+  const selectedPreset = presets.find((p) => p.id === route.provider_id)
+  const keysForPreset = route.provider_id ? allKeys.filter((k) => k.provider_id === route.provider_id) : allKeys
+
+  const set = (field, value) => onChange({ ...route, [field]: value })
+
+  const handleFetchModels = async () => {
+    if (!route.key_id) return
+    setFetchingModels(true)
+    setModelsError(null)
+    try {
+      const data = await fetchProviderModels(platformKey, route.key_id)
+      setModels(data.models || [])
+    } catch (e) {
+      setModelsError(e?.response?.data?.detail || 'Failed to fetch models')
+    } finally { setFetchingModels(false) }
+  }
+
+  const handleTest = async () => {
+    if (!route.key_id || !route.model || !route.provider_id) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const data = await testLLMRoute(platformKey, { key_id: route.key_id, provider_id: route.provider_id, model: route.model, route: label.toLowerCase() })
+      setTestResult(data)
+    } catch (e) {
+      setTestResult({ ok: false, error: e?.response?.data?.detail || 'Test failed' })
+    } finally { setTesting(false) }
+  }
+
+  const addFallback = () => set('fallbacks', [...(route.fallbacks || []), { key_id: '', provider_id: '', model: '' }])
+  const removeFallback = (i) => set('fallbacks', route.fallbacks.filter((_, idx) => idx !== i))
+  const updateFallback = (i, field, value) => {
+    const fbs = [...(route.fallbacks || [])]
+    fbs[i] = { ...fbs[i], [field]: value }
+    set('fallbacks', fbs)
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
+        <h3 className="font-serif font-bold text-brand-ink">{label} Route</h3>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleTest}
+            disabled={testing || !route.key_id || !route.model}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
+          >
+            {testing ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
+            Test route
+          </button>
+        </div>
+      </div>
+
+      {testResult && (
+        <div className={`px-5 py-3 text-xs font-sans border-b border-brand-line ${testResult.ok ? 'bg-brand-accent/5 text-brand-accent' : 'bg-brand-rose/5 text-brand-rose'}`}>
+          {testResult.ok
+            ? `OK — ${testResult.latency_ms}ms — model: ${testResult.model_used} — "${testResult.response_preview}"`
+            : `Error — ${testResult.error}`}
+        </div>
+      )}
+
+      <div className="p-5 space-y-4">
+        {/* Primary provider + key + model */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+            <select
+              value={route.provider_id || ''}
+              onChange={(e) => { set('provider_id', e.target.value); set('key_id', ''); set('model', '') }}
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+            >
+              <option value="">Select provider…</option>
+              {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {selectedPreset && <p className="text-[11px] text-brand-muted mt-1">{selectedPreset.description}</p>}
+          </div>
+          <div>
+            <label className="block text-xs text-brand-muted font-sans mb-1">API Key</label>
+            <select
+              value={route.key_id || ''}
+              onChange={(e) => { set('key_id', e.target.value); set('model', '') }}
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+            >
+              <option value="">Select key…</option>
+              {keysForPreset.map((k) => <option key={k.id} value={k.id}>{k.name} (…{k.key_hint})</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs text-brand-muted font-sans">Model</label>
+              {selectedPreset?.models_url && (
+                <button onClick={handleFetchModels} disabled={!route.key_id || fetchingModels} className="text-[11px] text-brand-accent hover:underline font-sans disabled:opacity-40">
+                  {fetchingModels ? 'Fetching…' : 'Fetch models'}
+                </button>
+              )}
+            </div>
+            <input
+              list={`models-${label}`}
+              value={route.model || ''}
+              onChange={(e) => set('model', e.target.value)}
+              placeholder="Model ID or paste…"
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+            />
+            <datalist id={`models-${label}`}>
+              {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </datalist>
+            {modelsError && <p className="text-[11px] text-brand-rose mt-1">{modelsError}</p>}
+          </div>
+        </div>
+
+        {/* Fallback chain */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Fallback chain</p>
+            <button onClick={addFallback} className="flex items-center gap-1 text-xs text-brand-accent hover:underline font-sans">
+              <Plus size={12} /> Add fallback
+            </button>
+          </div>
+          {(route.fallbacks || []).length === 0 && (
+            <p className="text-xs text-brand-muted font-sans">No fallbacks configured. Add one to create a fallback chain.</p>
+          )}
+          {(route.fallbacks || []).map((fb, i) => {
+            const fbPreset = presets.find((p) => p.id === fb.provider_id)
+            const fbKeys = fb.provider_id ? allKeys.filter((k) => k.provider_id === fb.provider_id) : allKeys
+            return (
+              <div key={i} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end mb-2 p-3 bg-brand-bg rounded-lg border border-brand-line">
+                <div>
+                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Provider</label>
+                  <select
+                    value={fb.provider_id || ''}
+                    onChange={(e) => { updateFallback(i, 'provider_id', e.target.value); updateFallback(i, 'key_id', ''); updateFallback(i, 'model', '') }}
+                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-sans focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                  >
+                    <option value="">Provider…</option>
+                    {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Key</label>
+                  <select
+                    value={fb.key_id || ''}
+                    onChange={(e) => updateFallback(i, 'key_id', e.target.value)}
+                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-sans focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                  >
+                    <option value="">Key…</option>
+                    {fbKeys.map((k) => <option key={k.id} value={k.id}>{k.name} (…{k.key_hint})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Model</label>
+                  <input
+                    value={fb.model || ''}
+                    onChange={(e) => updateFallback(i, 'model', e.target.value)}
+                    placeholder="Model ID…"
+                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
+                  />
+                </div>
+                <button onClick={() => removeFallback(i)} className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KeyVaultPanel({ platformKey, keys, onKeysChange }) {
+  const [presets, setPresets] = useState([])
+  const [showAdd, setShowAdd] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newProvider, setNewProvider] = useState('')
+  const [newKey, setNewKey] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [addError, setAddError] = useState(null)
+  const [syncResult, setSyncResult] = useState(null)
+
+  useEffect(() => {
+    getLLMProviderPresets(platformKey).then((d) => setPresets(d.providers || [])).catch(() => {})
+  }, [platformKey])
+
+  const handleAdd = async (e) => {
+    e.preventDefault()
+    setAdding(true)
+    setAddError(null)
+    try {
+      await addLLMProviderKey(platformKey, { name: newName, provider_id: newProvider, api_key: newKey })
+      const updated = await getLLMProviderKeys(platformKey)
+      onKeysChange(updated.keys || [])
+      setShowAdd(false)
+      setNewName(''); setNewProvider(''); setNewKey('')
+    } catch (e) {
+      setAddError(e?.response?.data?.detail || 'Failed to add key')
+    } finally { setAdding(false) }
+  }
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this API key from the vault?')) return
+    try {
+      await deleteLLMProviderKey(platformKey, id)
+      onKeysChange(keys.filter((k) => k.id !== id))
+    } catch { /* silent */ }
+  }
+
+  const handleSyncEnv = async () => {
+    setSyncing(true)
+    setSyncResult(null)
+    try {
+      const data = await syncEnvKeys(platformKey)
+      setSyncResult(data)
+      const updated = await getLLMProviderKeys(platformKey)
+      onKeysChange(updated.keys || [])
+    } catch (e) {
+      setSyncResult({ synced: [], errors: [e?.response?.data?.detail || 'Sync failed'] })
+    } finally { setSyncing(false) }
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Key size={16} className="text-brand-muted" />
+          <h2 className="font-serif font-bold text-brand-ink">API Key Vault</h2>
+          <span className="text-xs text-brand-muted font-sans">(keys stored encrypted)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncEnv}
+            disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink-2 hover:bg-brand-bg disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            Sync from env
+          </button>
+          <button
+            onClick={() => setShowAdd((v) => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2 transition-colors"
+          >
+            <Plus size={12} /> Add key
+          </button>
+        </div>
+      </div>
+
+      {syncResult && (
+        <div className="px-5 py-3 border-b border-brand-line text-xs font-sans">
+          {syncResult.synced?.length > 0 && (
+            <p className="text-brand-accent">Synced: {syncResult.synced.map((s) => s.env_var).join(', ')}</p>
+          )}
+          {syncResult.errors?.length > 0 && (
+            <p className="text-brand-muted">{syncResult.errors.join(' · ')}</p>
+          )}
+        </div>
+      )}
+
+      {showAdd && (
+        <form onSubmit={handleAdd} className="px-5 py-4 border-b border-brand-line bg-brand-bg space-y-3">
+          {addError && <p className="text-xs text-brand-rose font-sans">{addError}</p>}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-brand-muted font-sans mb-1">Display name</label>
+              <input required value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. OpenCode Production" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
+            </div>
+            <div>
+              <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+              <select required value={newProvider} onChange={(e) => setNewProvider(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface">
+                <option value="">Select…</option>
+                {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-brand-muted font-sans mb-1">API key</label>
+              <input required type="password" value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="sk-…" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="submit" disabled={adding} className="px-4 py-2 text-xs font-medium font-sans bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors">
+              {adding ? 'Saving…' : 'Save key'}
+            </button>
+            <button type="button" onClick={() => { setShowAdd(false); setAddError(null) }} className="px-4 py-2 text-xs font-medium font-sans text-brand-muted hover:text-brand-ink transition-colors">
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="divide-y divide-brand-line">
+        {keys.length === 0 && (
+          <p className="px-5 py-6 text-sm text-brand-muted font-sans text-center">No keys stored. Add one or sync from environment variables.</p>
+        )}
+        {keys.map((k) => {
+          const preset = presets.find((p) => p.id === k.provider_id)
+          return (
+            <div key={k.id} className="px-5 py-3 flex items-center justify-between hover:bg-brand-bg transition-colors">
+              <div>
+                <p className="text-sm font-medium text-brand-ink font-sans">{k.name}</p>
+                <p className="text-xs text-brand-muted font-sans">{preset?.name || k.provider_id} · …{k.key_hint}</p>
+              </div>
+              <button onClick={() => handleDelete(k.id)} className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function AIRoutingTab({ platformKey }) {
+  const [keys, setKeys] = useState([])
+  const [presets, setPresets] = useState([])
+  const [standard, setStandard] = useState({ key_id: '', provider_id: '', model: '', fallbacks: [] })
+  const [premium, setPremium] = useState({ key_id: '', provider_id: '', model: '', fallbacks: [] })
+  const [saving, setSaving] = useState(false)
+  const [saveResult, setSaveResult] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [keysData, presetsData, routesData] = await Promise.all([
+        getLLMProviderKeys(platformKey),
+        getLLMProviderPresets(platformKey),
+        getLLMRoutes(platformKey),
+      ])
+      setKeys(keysData.keys || [])
+      setPresets(presetsData.providers || [])
+      const std = routesData.standard || {}
+      const prem = routesData.premium || {}
+      setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', fallbacks: std.fallbacks || [] })
+      setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', fallbacks: prem.fallbacks || [] })
+    } catch { /* silent */ }
+    finally { setLoading(false) }
+  }, [platformKey])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveResult(null)
+    try {
+      const data = await saveLLMRoutes(platformKey, { standard, premium })
+      setSaveResult({ ok: true, litellm_updated: data.litellm_updated, models_registered: data.models_registered })
+    } catch (e) {
+      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
+    } finally { setSaving(false) }
+  }
+
+  if (loading) {
+    return <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-serif font-bold text-brand-ink">AI Provider Routing</h2>
+          <p className="text-sm text-brand-muted font-sans mt-1">Configure LLM providers, API keys, and model routes. Changes are pushed to LiteLLM automatically.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {saveResult && (
+            <span className={`text-xs font-sans ${saveResult.ok ? 'text-brand-accent' : 'text-brand-rose'}`}>
+              {saveResult.ok
+                ? `Saved — ${saveResult.litellm_updated ? `${saveResult.models_registered} model(s) registered` : 'saved to DB'}`
+                : saveResult.error}
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
+          >
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+            {saving ? 'Saving…' : 'Save Routes'}
+          </button>
+        </div>
+      </div>
+
+      <KeyVaultPanel platformKey={platformKey} keys={keys} onKeysChange={setKeys} />
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <RouteCard
+          label="Standard"
+          route={standard}
+          allKeys={keys}
+          presets={presets}
+          platformKey={platformKey}
+          onChange={setStandard}
+        />
+        <RouteCard
+          label="Premium"
+          route={premium}
+          allKeys={keys}
+          presets={presets}
+          platformKey={platformKey}
+          onChange={setPremium}
+        />
+      </div>
+    </div>
+  )
+}
+
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(() => sessionStorage.getItem('platform_key') || null)
   const [tab, setTab] = useState('dashboard')
@@ -722,6 +1137,7 @@ export default function PlatformPage() {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'tenants', label: 'Tenants', icon: Users },
+    { id: 'ai-routing', label: 'AI Routing', icon: Cpu },
     { id: 'logs', label: 'Logs', icon: FileText },
     { id: 'health', label: 'System', icon: Database },
   ]
@@ -964,6 +1380,9 @@ export default function PlatformPage() {
 
         {/* ── Logs Tab ── */}
         {tab === 'logs' && <LogsTab platformKey={platformKey} tenants={tenants} />}
+
+        {/* ── AI Routing Tab ── */}
+        {tab === 'ai-routing' && <AIRoutingTab platformKey={platformKey} />}
 
         {/* ── Health Tab ── */}
         {tab === 'health' && (

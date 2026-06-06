@@ -53,6 +53,7 @@ from app.routers.cloud_admin import router as cloud_admin_router
 from app.routers.smb import router as smb_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
+from app.routers.platform_llm import router as platform_llm_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -217,6 +218,7 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
+app.include_router(platform_llm_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
 # plugins_router, whose greedy ``POST /{plugin}/{skill}`` skill-execution route
 # would otherwise shadow specific paths like ``/api/plugins/mediation/cases``.
