@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.8] — 2026-06-06
+
+### Fixed
+- **BK10:** LiteLLM 401 on chat — `LITELLM_API_KEY` was missing from `.env.hypervisor` template. LiteLLM container defaulted to master key `sk-local-litellm` (from docker-compose default) while backend sent `"not-needed"` as auth. Fixed: added full LiteLLM section to `.env.hypervisor`; changed fallback in `LLMService` and `EmbeddingService` from `"not-needed"` to `"sk-local-litellm"` to match docker-compose default.
+- **BK11:** OAuth 429 on back-to-back SSO logins — nginx `auth` zone (10r/m, burst=5) was applied to all `/api/auth/` paths. A complete OAuth flow uses 3+ requests, so 2 logins = 6 requests → burst exhausted. Fixed: added dedicated `oauth` zone (30r/m, burst=15) applied to `/api/auth/(google|microsoft)/` paths before the catch-all `auth` block.
+
 ## [0.13.7] — 2026-06-05
 
 ### Fixed

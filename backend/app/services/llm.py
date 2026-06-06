@@ -73,7 +73,7 @@ class LLMService:
 
     def __init__(self):
         self.client = AsyncOpenAI(
-            api_key=settings.LITELLM_API_KEY or "not-needed",
+            api_key=settings.LITELLM_API_KEY or "sk-local-litellm",
             base_url=settings.LITELLM_BASE_URL,
         )
 

@@ -15,7 +15,7 @@ class EmbeddingService:
         if settings.LITELLM_ENABLED:
             # Route embeddings through LiteLLM for unified cost tracking and fallback
             self.client = AsyncOpenAI(
-                api_key=settings.LITELLM_API_KEY or "not-needed",
+                api_key=settings.LITELLM_API_KEY or "sk-local-litellm",
                 base_url=settings.LITELLM_BASE_URL,
             )
             self.model = "clarity-embeddings"
