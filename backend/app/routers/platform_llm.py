@@ -184,7 +184,7 @@ def _capacity(value: Any) -> int:
 
 def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     mid = (model_id or "").lower()
-    if ":free" in mid or mid.endswith("-free") or "free" in mid:
+    if ":free" in mid or mid.endswith("-free"):
         return True
     pricing = item.get("pricing") if isinstance(item, dict) else None
     if isinstance(pricing, dict):
@@ -215,7 +215,9 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         "context_length": item.get("context_length")
         or item.get("context_window")
         or item.get("max_context_length"),
-        "pricing": item.get("pricing") if isinstance(item.get("pricing"), dict) else None,
+        "pricing": item.get("pricing")
+        if isinstance(item.get("pricing"), dict)
+        else None,
         "is_free": _is_free_model(mid, item),
     }
 
@@ -849,7 +851,9 @@ async def save_routes(
                 "model": _clean_optional(fallback.get("model")) or None,
                 "capacity": _capacity(fallback.get("capacity")),
             }
-            if any(normalized.values()):
+            if any(
+                normalized.get(field) for field in ("key_id", "provider_id", "model")
+            ):
                 route["fallbacks"].append(normalized)
         return route
 
@@ -927,7 +931,9 @@ async def save_routes(
         "saved": True,
         "litellm_updated": litellm_updated,
         "models_registered": len(new_models),
-        "fallbacks_registered": sum(len(item[next(iter(item))]) for item in fallback_settings),
+        "fallbacks_registered": sum(
+            len(item[next(iter(item))]) for item in fallback_settings
+        ),
         "app_aliases": {
             "standard": settings.LITELLM_STANDARD_MODEL,
             "premium": settings.LITELLM_PREMIUM_MODEL,

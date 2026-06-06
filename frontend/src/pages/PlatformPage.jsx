@@ -634,7 +634,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
           type="number"
           min="1"
           max="1000"
-          value={value.capacity || 100}
+          value={value.capacity ?? 100}
           onChange={(e) => setField('capacity', Number(e.target.value))}
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
         />
@@ -870,7 +870,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
               <p className="text-[11px] text-brand-muted font-sans">{fallbackCount} configured fallback{fallbackCount === 1 ? '' : 's'}</p>
             </div>
             <button
-              onClick={() => setFallbacks([...(route.fallbacks || []), { key_id: '', provider_id: '', model: '' }])}
+              onClick={() => setFallbacks([...(route.fallbacks || []), { key_id: '', provider_id: '', model: '', capacity: 100 }])}
               className="flex items-center gap-1.5 text-xs text-brand-accent hover:underline font-sans"
             >
               <Plus size={12} /> Add fallback
