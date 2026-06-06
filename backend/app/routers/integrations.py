@@ -1,5 +1,6 @@
 import base64
 import json as _json
+import logging
 import secrets
 import time as _time
 import uuid
@@ -21,6 +22,7 @@ from app.services.token_vault import encrypt_token
 
 settings = get_settings()
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+logger = logging.getLogger(__name__)
 
 _STATE_TTL = 600
 _fallback_states: dict[str, float] = {}

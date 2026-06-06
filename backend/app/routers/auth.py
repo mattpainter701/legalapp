@@ -992,7 +992,6 @@ async def get_calendar_providers(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    from app.models.user_oauth_token import UserOAuthToken
     from app.services.token_vault import get_fresh_user_token
 
     providers = []
