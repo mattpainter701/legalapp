@@ -119,6 +119,13 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Time tracking: add `Rate` column (inline-edit) to admin Users tab for `default_billing_rate`
 - [x] Reports: make `budget_currency` Optional in schema with "USD" default (fix potential 500)
 
+### 808. Skills Expansion — Legal Prompt Recovery (P1, LARGE) — COMPLETED
+- [x] Confirmed recovered prompt constants exist in `backend/app/services/plugins/prompts.py`
+- [x] Added detailed workflow-based prompt templates with output formats for new skills
+- [x] Expanded `ALL_DEFAULT_PROMPTS` across practice-area plugins for executor auto-build
+- [x] Added Family/Domestic Law, Criminal Defense, and Real Estate practice areas
+- [x] Left stale stash copy of `frontend/src/api.js` out because it predates current provider/admin API helpers
+
 ---
 
 ## Future
@@ -129,6 +136,12 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 ---
 
 ## Backlog — Integration Health & Module Restoration
+
+### Mediation Platform Module Follow-Ups
+- [ ] Portal document delete endpoint (backend has no DELETE for portal docs)
+- [ ] Proposal accept/reject UI in portal case page
+- [ ] End-to-end smoke test: invite → accept → asset submission → attorney approve → send → opposing decision → proposal exchange
+- [ ] Wire delete for portal documents after backend DELETE exists
 
 ### BK01. Google Workspace — Scope Audit & Directory Sync Fix (P0, MEDIUM)
 - [x] Fixed scope audit mismatch: `SCOPES_REQUIRED_GOOGLE` in `admin.py` changed `drive.readonly` → `drive` to match OAuth request
