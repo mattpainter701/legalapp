@@ -480,7 +480,8 @@ async def sync_env_keys(request: Request, db: AsyncSession = Depends(get_db)):
     errors = []
 
     env_map = [
-        ("DEEPSEEK_API_KEY", "opencode-zen", "OpenCode API Key (from env)"),
+        ("DEEPSEEK_API_KEY", "opencode-go", "OpenCode Go API Key (from env)"),
+        ("OPENCODE_API_KEY", "opencode-zen", "OpenCode Zen API Key (from env)"),
         ("OPENROUTER_API_KEY", "openrouter", "OpenRouter API Key (from env)"),
     ]
 

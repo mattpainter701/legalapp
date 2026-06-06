@@ -312,7 +312,25 @@ async def list_matters(
         .limit(page_size)
     )
     result = await db.execute(q)
-    matters = result.unique().scalars().all()
+    # Preload billed totals in one query (avoid N+1)
+    matter_ids = [m.id for m in matters]
+    billed_map = {}
+    if matter_ids:
+        billed_rows = (
+            await db.execute(
+                select(
+                    TimeEntry.matter_id,
+                    func.coalesce(func.sum(TimeEntry.amount), 0),
+                )
+                .where(
+                    TimeEntry.matter_id.in_(matter_ids),
+                    TimeEntry.tenant_id == tenant_id,
+                    TimeEntry.is_billable.is_(True),
+                )
+                .group_by(TimeEntry.matter_id)
+            )
+        ).all()
+        billed_map = {row[0]: Decimal(str(row[1])) for row in billed_rows}
 
     items = []
     for m in matters:
@@ -326,15 +344,7 @@ async def list_matters(
             a.user.full_name for a in m.assignments if a.user and a.user.full_name
         ]
 
-        # Quick billed total (not full utilization — use /budget endpoint for that)
-        billed_q = await db.execute(
-            select(func.coalesce(func.sum(TimeEntry.amount), 0)).where(
-                TimeEntry.matter_id == m.id,
-                TimeEntry.tenant_id == tenant_id,
-                TimeEntry.is_billable.is_(True),
-            )
-        )
-        total_billed = Decimal(str(billed_q.scalar() or 0))
+        total_billed = billed_map.get(m.id, Decimal("0"))
 
         util_pct = None
         if m.budget_amount and m.budget_amount > 0:
@@ -552,6 +562,8 @@ async def create_matter(
     matter = result.unique().scalar_one()
 
     budget = await _compute_budget_utilization(db, matter.id, tenant_id)
+    budget.budget_amount = matter.budget_amount
+    budget.budget_currency = matter.budget_currency or "USD"
     return _matter_to_response(matter, budget)
 
 

@@ -31,12 +31,14 @@ export default function TimeTrackingPage() {
     try {
       setLoading(true)
       const params = filter !== 'all' ? { status: filter } : {}
-      getTimeEntries(params)
-        .then(data => setEntries(data.items || data))
-        .catch(() => {})
-      getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
-        .then(data => setMatters(data.items || []))
-        .catch(() => {})
+      await Promise.all([
+        getTimeEntries(params)
+          .then(data => setEntries(data.items || data))
+          .catch(() => {}),
+        getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
+          .then(data => setMatters(data.items || []))
+          .catch(() => {}),
+      ])
     } finally {
       setLoading(false)
     }
@@ -165,7 +167,7 @@ export default function TimeTrackingPage() {
 
       {/* Filter */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {['all', 'draft', 'billed'].map((f) => (
+        {['all', 'draft', 'invoiced'].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}

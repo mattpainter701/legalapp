@@ -168,6 +168,9 @@ class InvoiceResponse(BaseModel):
     qbo_invoice_id: Optional[str] = None
     qbo_sync_status: str
     ledes_exported_at: Optional[datetime] = None
+    retainer_id: Optional[str] = None
+    billing_period_start: Optional[date] = None
+    billing_period_end: Optional[date] = None
     created_by: str
     line_items: list[InvoiceLineItemResponse] = []
     payments: list["PaymentResponse"] = []

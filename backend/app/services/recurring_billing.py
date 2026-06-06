@@ -200,7 +200,7 @@ async def generate_recurring_invoices() -> dict:
                 # Link time entries and expenses to invoice
                 for entry in time_entries:
                     entry.invoice_id = invoice.id
-                    entry.status = "billed"
+                    entry.status = "invoiced"
                 for exp in expenses:
                     exp.invoice_id = invoice.id
 
