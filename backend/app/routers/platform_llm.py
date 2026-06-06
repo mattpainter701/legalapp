@@ -802,10 +802,14 @@ async def save_routes(
                     )
                 target_key_id = target_fields["key_id"]
                 if target_key_id not in keys_by_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"{label} {kind}[{i}]: key_id {target_key_id!r} not found",
+                    logger.warning(
+                        "%s %s[%d]: key_id %r not found — pruning stale reference",
+                        label,
+                        kind,
+                        i,
+                        target_key_id,
                     )
+                    continue  # drop stale target rather than rejecting the save
                 if (
                     keys_by_id[target_key_id].provider_id
                     != target_fields["provider_id"]

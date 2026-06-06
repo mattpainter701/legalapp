@@ -312,6 +312,8 @@ async def list_matters(
         .limit(page_size)
     )
     result = await db.execute(q)
+    matters = result.unique().scalars().all()
+
     # Preload billed totals in one query (avoid N+1)
     matter_ids = [m.id for m in matters]
     billed_map = {}
