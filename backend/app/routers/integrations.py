@@ -1,5 +1,6 @@
 import base64
 import json as _json
+import logging
 import secrets
 import time as _time
 import uuid
@@ -20,6 +21,7 @@ from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.token_vault import encrypt_token
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 _STATE_TTL = 600

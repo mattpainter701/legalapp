@@ -1,22 +1,23 @@
 """Row Level Security tenant-isolation seed test.
 
 This is the SEED of the full cross-tenant isolation matrix (epic task 1304).
-It proves the core RLS mechanism works: the `app.current_tenant_id` GUC drives
-per-tenant visibility, an unset context is fail-closed (zero rows), and the
-auth `app.rls_bypass` GUC re-opens visibility for the cross-tenant auth path.
+It proves the core RLS mechanism works: the ``app.current_tenant_id`` GUC drives
+per-tenant visibility, an unset context is fail-closed (zero rows), and the auth
+``app.rls_bypass`` GUC re-opens visibility for the cross-tenant auth path.
 
-The exhaustive matrix -- asserting isolation over EVERY tenant-scoped endpoint
-and table -- is future work tracked under task 1304.
+Critical environment fact this test encodes:
+  Postgres SUPERUSERS (and the table OWNER, and roles with BYPASSRLS) bypass RLS
+  *even when a table is FORCE ROW LEVEL SECURITY*. The CI/test database connects
+  as a superuser, so asserting RLS through that connection would always see every
+  row. To observe RLS we therefore run the assertions through a dedicated
+  ``NOSUPERUSER NOBYPASSRLS`` login role that does NOT own the probe table —
+  exactly the posture production relies on (see scripts/provision_app_role.sql).
 
-Notes on the environment:
-* conftest's test schema is built via ``Base.metadata.create_all``, which does
-  NOT create RLS policies (those live only in Alembic migrations). So this test
-  is self-contained: it creates its own throwaway table, ENABLEs + FORCEs RLS,
-  and installs a policy mirroring the production
-  ``USING (tenant_id::text = current_setting('app.current_tenant_id', true))``
-  pattern.
-* Postgres is not guaranteed to be reachable in the dev container. The module
-  skips cleanly (never errors at collection) when no DB is available.
+conftest's test schema is built via ``Base.metadata.create_all``, which does NOT
+create RLS policies (those live only in Alembic migrations). So this test is
+self-contained: it creates its own throwaway table + role, ENABLEs/FORCEs RLS,
+and installs policies mirroring production. It skips cleanly (never errors at
+collection) when Postgres is unavailable.
 """
 
 import uuid
@@ -35,11 +36,16 @@ from app.database import (
 
 pytestmark = pytest.mark.asyncio
 
-# Reuse the same test DB URL convention as conftest.py.
+# Superuser URL (same convention as conftest.py) — used for DDL/seeding.
 TEST_DB_URL = "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
+# Non-superuser role the assertions run as, so RLS is actually enforced.
+_RLS_ROLE = "rls_probe_role"
+_RLS_PW = "rls_probe_pw"
+RLS_ROLE_URL = (
+    f"postgresql+asyncpg://{_RLS_ROLE}:{_RLS_PW}@localhost:5432/legalapp_test"
+)
 
-# A dedicated throwaway table so we never depend on the real schema / FKs and
-# can install/own a policy without touching application tables.
+# A dedicated throwaway table so we never depend on the real schema / FKs.
 _TABLE = "rls_seed_probe"
 
 TENANT_A = str(uuid.uuid4())
@@ -48,17 +54,14 @@ TENANT_B = str(uuid.uuid4())
 
 @pytest_asyncio.fixture
 async def rls_session():
-    """Yield a session against a table with prod-style RLS, or skip if no DB.
+    """Yield a session, connected as a non-superuser role, against a table with
+    production-style RLS — or skip cleanly if Postgres is unavailable."""
+    admin_engine = create_async_engine(TEST_DB_URL, echo=False)
 
-    We connect as a non-owner-irrelevant role here only to assert policy
-    behaviour; FORCE RLS guarantees the policy applies regardless of ownership,
-    which is precisely what production relies on for the connecting app role.
-    """
-    engine = create_async_engine(TEST_DB_URL, echo=False)
-
-    # Try to connect; skip the whole module gracefully if Postgres is absent.
+    # Setup as superuser: probe table, RLS policies, the non-superuser role, and
+    # seed data. Skip the whole module if Postgres is not reachable.
     try:
-        async with engine.begin() as conn:
+        async with admin_engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
             await conn.execute(text(f"DROP TABLE IF EXISTS {_TABLE}"))
             await conn.execute(
@@ -72,14 +75,11 @@ async def rls_session():
                     """
                 )
             )
-            # Mirror the production RLS setup exactly: ENABLE + FORCE + a policy
-            # keyed on the app.current_tenant_id GUC (missing_ok => fail-closed).
-            await conn.execute(
-                text(f"ALTER TABLE {_TABLE} ENABLE ROW LEVEL SECURITY")
-            )
-            await conn.execute(
-                text(f"ALTER TABLE {_TABLE} FORCE ROW LEVEL SECURITY")
-            )
+            # Mirror production RLS: ENABLE + FORCE + a policy keyed on the
+            # app.current_tenant_id GUC (missing_ok => fail-closed) and the
+            # rls_bypass escape hatch from migration 044.
+            await conn.execute(text(f"ALTER TABLE {_TABLE} ENABLE ROW LEVEL SECURITY"))
+            await conn.execute(text(f"ALTER TABLE {_TABLE} FORCE ROW LEVEL SECURITY"))
             await conn.execute(
                 text(
                     f"""
@@ -92,7 +92,6 @@ async def rls_session():
                     """
                 )
             )
-            # Mirror the rls_bypass_users escape hatch from migration 044.
             await conn.execute(
                 text(
                     f"""
@@ -102,37 +101,66 @@ async def rls_session():
                     """
                 )
             )
+            # The non-superuser, NOBYPASSRLS login role the test asserts through.
+            await conn.execute(
+                text(
+                    f"""
+                    DO $$ BEGIN
+                      IF NOT EXISTS (
+                        SELECT FROM pg_roles WHERE rolname = '{_RLS_ROLE}'
+                      ) THEN
+                        CREATE ROLE {_RLS_ROLE} LOGIN PASSWORD '{_RLS_PW}'
+                          NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+                      END IF;
+                    END $$;
+                    """
+                )
+            )
+            await conn.execute(
+                text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}")
+            )
+            await conn.execute(
+                text(f"GRANT SELECT, INSERT ON {_TABLE} TO {_RLS_ROLE}")
+            )
+            # Seed rows as superuser (RLS does not block the superuser).
+            for tenant, label in (
+                (TENANT_A, "a1"),
+                (TENANT_A, "a2"),
+                (TENANT_B, "b1"),
+            ):
+                await conn.execute(
+                    text(
+                        f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, :l)"
+                    ),
+                    {"t": tenant, "l": label},
+                )
     except (OperationalError, InterfaceError, ConnectionError, OSError) as exc:
-        await engine.dispose()
+        await admin_engine.dispose()
         pytest.skip(f"Postgres not reachable for RLS test: {exc}")
 
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    # Seed rows for two tenants. Seeding happens with the bypass on so RLS does
-    # not block our own inserts during setup.
-    async with factory() as session:
-        await enable_rls_bypass(session)
-        await session.execute(
-            text(f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, 'a1')"),
-            {"t": TENANT_A},
-        )
-        await session.execute(
-            text(f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, 'a2')"),
-            {"t": TENANT_A},
-        )
-        await session.execute(
-            text(f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, 'b1')"),
-            {"t": TENANT_B},
-        )
-        await session.commit()
-
-    async with factory() as session:
-        yield session
-
-    # Teardown.
-    async with engine.begin() as conn:
-        await conn.execute(text(f"DROP TABLE IF EXISTS {_TABLE}"))
-    await engine.dispose()
+    # Assertion session connects AS the non-superuser role so RLS is enforced.
+    rls_engine = create_async_engine(RLS_ROLE_URL, echo=False)
+    try:
+        factory = async_sessionmaker(rls_engine, expire_on_commit=False)
+        async with factory() as session:
+            # Sanity: confirm we are NOT a superuser, else the test is meaningless.
+            is_super = (
+                await session.execute(
+                    text(
+                        "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+                    )
+                )
+            ).scalar_one()
+            assert is_super is False, "RLS assertions must run as a non-superuser"
+            yield session
+    finally:
+        await rls_engine.dispose()
+        # Teardown as superuser: drop table + role.
+        async with admin_engine.begin() as conn:
+            await conn.execute(text(f"DROP TABLE IF EXISTS {_TABLE}"))
+            await conn.execute(text(f"DROP OWNED BY {_RLS_ROLE}"))
+            await conn.execute(text(f"DROP ROLE IF EXISTS {_RLS_ROLE}"))
+        await admin_engine.dispose()
 
 
 async def _count(session, label_prefix=None):
@@ -162,8 +190,8 @@ async def test_no_context_is_fail_closed(rls_session):
 
 
 async def test_rls_bypass_reveals_all_rows(rls_session):
-    """enable_rls_bypass opens visibility for the cross-tenant auth path."""
-    # First confirm a scoped context only sees its own rows.
+    """A scoped context sees only its rows; enable_rls_bypass re-opens all."""
+    # Scoped context: tenant B sees only its single row.
     await set_tenant_context(rls_session, TENANT_B)
     assert await _count(rls_session) == 1  # b1 only
 
