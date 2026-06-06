@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +60,8 @@ PROVIDER_PRESETS = [
         "models_url": "https://opencode.ai/zen/v1/models",
         "description": "Enterprise & free models (DeepSeek, Nemotron, Kimi, …)",
         "auth_scheme": "bearer",
+        "litellm_mode": "openai_compatible",
+        "model_placeholder": "deepseek-v4-flash-free",
     },
     {
         "id": "opencode-go",
@@ -68,6 +70,8 @@ PROVIDER_PRESETS = [
         "models_url": "https://opencode.ai/zen/go/v1/models",
         "description": "Premium DeepSeek V4 Pro / Flash",
         "auth_scheme": "bearer",
+        "litellm_mode": "openai_compatible",
+        "model_placeholder": "deepseek-v4-pro",
     },
     {
         "id": "openrouter",
@@ -76,6 +80,8 @@ PROVIDER_PRESETS = [
         "models_url": "https://openrouter.ai/api/v1/models",
         "description": "200+ models from every major provider",
         "auth_scheme": "bearer",
+        "litellm_mode": "openrouter",
+        "model_placeholder": "qwen/qwen3-235b-a22b:free",
     },
     {
         "id": "deepseek",
@@ -84,6 +90,8 @@ PROVIDER_PRESETS = [
         "models_url": "https://api.deepseek.com/v1/models",
         "description": "DeepSeek native API",
         "auth_scheme": "bearer",
+        "litellm_mode": "openai_compatible",
+        "model_placeholder": "deepseek-chat",
     },
     {
         "id": "anthropic",
@@ -92,6 +100,12 @@ PROVIDER_PRESETS = [
         "models_url": None,
         "description": "Claude models via LiteLLM native integration",
         "auth_scheme": "x-api-key",
+        "litellm_mode": "anthropic",
+        "model_placeholder": "claude-3-5-sonnet-latest",
+        "default_models": [
+            {"id": "claude-3-5-sonnet-latest", "name": "Claude 3.5 Sonnet"},
+            {"id": "claude-3-5-haiku-latest", "name": "Claude 3.5 Haiku"},
+        ],
     },
 ]
 
@@ -106,12 +120,20 @@ class ProviderKeyCreate(BaseModel):
     provider_id: str
     api_key: str
 
+    @field_validator("name", "provider_id", "api_key")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
 
 class RouteEntry(BaseModel):
     key_id: Optional[str] = None
     provider_id: Optional[str] = None
     model: Optional[str] = None
-    fallbacks: list[dict[str, Any]] = []
+    fallbacks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RoutesUpdate(BaseModel):
@@ -135,6 +157,29 @@ def _mask_key(key: str) -> str:
     if len(key) <= 8:
         return "****"
     return key[:4] + "…" + key[-4:]
+
+
+def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}: {value!r}")
+
+
+def _clean_optional(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _litellm_model_name(provider_id: str, model: str) -> str:
+    model = _clean_optional(model)
+    mode = _PRESET_BY_ID.get(provider_id, {}).get("litellm_mode", "openai_compatible")
+    if not model:
+        return model
+    if mode == "anthropic":
+        return model if model.startswith("anthropic/") else f"anthropic/{model}"
+    if mode == "openrouter":
+        return model if model.startswith("openrouter/") else f"openrouter/{model}"
+    return model if model.startswith("openai/") else f"openai/{model}"
 
 
 async def _get_route_config(db: AsyncSession) -> dict:
@@ -165,29 +210,34 @@ def _build_litellm_model_entry(
     alias: str, provider_id: str, model: str, plaintext_key: str
 ) -> dict:
     preset = _PRESET_BY_ID.get(provider_id, {})
-    base_url = preset.get("base_url")
+    mode = preset.get("litellm_mode", "openai_compatible")
     entry: dict[str, Any] = {
         "model_name": alias,
         "litellm_params": {
-            "model": f"openai/{model}" if base_url else model,
+            "model": _litellm_model_name(provider_id, model),
             "api_key": plaintext_key,
         },
     }
-    if base_url:
-        entry["litellm_params"]["api_base"] = base_url
+    if mode == "openai_compatible" and preset.get("base_url"):
+        entry["litellm_params"]["api_base"] = preset["base_url"]
     return entry
 
 
-async def _call_litellm_config_update(new_model_list: list[dict]) -> bool:
+async def _call_litellm_config_update(
+    new_model_list: list[dict], fallbacks: list[dict]
+) -> bool:
     """Hot-reload LiteLLM router via /config/update with the updated model list."""
     if not settings.LITELLM_BASE_URL or not settings.LITELLM_API_KEY:
         return False
+    payload: dict[str, Any] = {"model_list": new_model_list}
+    if fallbacks:
+        payload["router_settings"] = {"fallbacks": fallbacks}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{settings.LITELLM_BASE_URL}/config/update",
                 headers={"Authorization": f"Bearer {settings.LITELLM_API_KEY}"},
-                json={"model_list": new_model_list},
+                json=payload,
             )
             if resp.status_code in (200, 204):
                 return True
@@ -231,6 +281,18 @@ async def _fetch_models_from_provider(
     except Exception as exc:
         logger.warning("Model fetch failed from %s: %s", models_url, exc)
         raise
+
+
+def _route_aliases(route_name: str, route_dict: dict) -> tuple[str, list[str]]:
+    primary = f"clarity-{route_name}"
+    fallback_aliases = [
+        f"{primary}-fb-{idx}"
+        for idx, fallback in enumerate(route_dict.get("fallbacks", []))
+        if _clean_optional(fallback.get("key_id"))
+        and _clean_optional(fallback.get("provider_id"))
+        and _clean_optional(fallback.get("model"))
+    ]
+    return primary, fallback_aliases
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -312,7 +374,7 @@ async def delete_provider_key(
 ):
     _require_platform_key(request)
     result = await db.execute(
-        select(LLMProviderKey).where(LLMProviderKey.id == uuid.UUID(key_id))
+        select(LLMProviderKey).where(LLMProviderKey.id == _parse_uuid(key_id, "key_id"))
     )
     key = result.scalar_one_or_none()
     if not key:
@@ -382,7 +444,7 @@ async def fetch_provider_models(
 ):
     _require_platform_key(request)
     result = await db.execute(
-        select(LLMProviderKey).where(LLMProviderKey.id == uuid.UUID(key_id))
+        select(LLMProviderKey).where(LLMProviderKey.id == _parse_uuid(key_id, "key_id"))
     )
     key = result.scalar_one_or_none()
     if not key:
@@ -390,9 +452,11 @@ async def fetch_provider_models(
 
     preset = _PRESET_BY_ID.get(key.provider_id)
     if not preset or not preset.get("models_url"):
-        raise HTTPException(
-            status_code=400, detail="This provider does not support model listing"
-        )
+        return {
+            "models": (preset or {}).get("default_models", []),
+            "provider_id": key.provider_id,
+            "source": "preset",
+        }
 
     try:
         plaintext = decrypt_token(key.encrypted_key)
@@ -408,7 +472,7 @@ async def fetch_provider_models(
             status_code=502, detail=f"Provider model fetch failed: {exc}"
         )
 
-    return {"models": models, "provider_id": key.provider_id}
+    return {"models": models, "provider_id": key.provider_id, "source": "provider"}
 
 
 @router.get("/routes")
@@ -460,29 +524,107 @@ async def save_routes(
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
 
     def _validate_route_entry(entry: RouteEntry, label: str) -> None:
-        if entry.key_id and entry.key_id not in keys_by_id:
+        fields = {
+            "provider_id": _clean_optional(entry.provider_id),
+            "key_id": _clean_optional(entry.key_id),
+            "model": _clean_optional(entry.model),
+        }
+        populated = [name for name, value in fields.items() if value]
+        if populated and len(populated) != len(fields):
+            missing = ", ".join(name for name, value in fields.items() if not value)
             raise HTTPException(
-                status_code=400, detail=f"{label}: key_id {entry.key_id!r} not found"
+                status_code=400,
+                detail=f"{label}: complete provider, key, and model or clear the route. Missing {missing}.",
             )
+        if fields["provider_id"] and fields["provider_id"] not in _PRESET_BY_ID:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label}: unknown provider_id {fields['provider_id']!r}",
+            )
+        if fields["key_id"] and fields["key_id"] not in keys_by_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label}: key_id {fields['key_id']!r} not found",
+            )
+        if fields["key_id"]:
+            key = keys_by_id[fields["key_id"]]
+            if key.provider_id != fields["provider_id"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{label}: selected key belongs to {key.provider_id}, "
+                        f"not {fields['provider_id']}"
+                    ),
+                )
         for i, fb in enumerate(entry.fallbacks):
-            fkid = fb.get("key_id")
-            if fkid and fkid not in keys_by_id:
+            fb_fields = {
+                "provider_id": _clean_optional(fb.get("provider_id")),
+                "key_id": _clean_optional(fb.get("key_id")),
+                "model": _clean_optional(fb.get("model")),
+            }
+            fb_populated = [name for name, value in fb_fields.items() if value]
+            if fb_populated and len(fb_populated) != len(fb_fields):
+                missing = ", ".join(
+                    name for name, value in fb_fields.items() if not value
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{label} fallback[{i}]: missing {missing}",
+                )
+            if not fb_populated:
+                continue
+            if fb_fields["provider_id"] not in _PRESET_BY_ID:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{label} fallback[{i}]: unknown provider_id "
+                        f"{fb_fields['provider_id']!r}"
+                    ),
+                )
+            fkid = fb_fields["key_id"]
+            if fkid not in keys_by_id:
                 raise HTTPException(
                     status_code=400,
                     detail=f"{label} fallback[{i}]: key_id {fkid!r} not found",
+                )
+            if keys_by_id[fkid].provider_id != fb_fields["provider_id"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{label} fallback[{i}]: selected key belongs to "
+                        f"{keys_by_id[fkid].provider_id}, not {fb_fields['provider_id']}"
+                    ),
                 )
 
     _validate_route_entry(body.standard, "standard")
     _validate_route_entry(body.premium, "premium")
 
+    def _normalize_route_entry(entry: RouteEntry) -> dict:
+        route = {
+            "key_id": _clean_optional(entry.key_id) or None,
+            "provider_id": _clean_optional(entry.provider_id) or None,
+            "model": _clean_optional(entry.model) or None,
+            "fallbacks": [],
+        }
+        for fallback in entry.fallbacks:
+            normalized = {
+                "key_id": _clean_optional(fallback.get("key_id")) or None,
+                "provider_id": _clean_optional(fallback.get("provider_id")) or None,
+                "model": _clean_optional(fallback.get("model")) or None,
+            }
+            if any(normalized.values()):
+                route["fallbacks"].append(normalized)
+        return route
+
     config = {
-        "standard": body.standard.model_dump(),
-        "premium": body.premium.model_dump(),
+        "standard": _normalize_route_entry(body.standard),
+        "premium": _normalize_route_entry(body.premium),
     }
     await _save_route_config(db, config)
 
     # Build new LiteLLM model list and hot-reload
     new_models: list[dict] = []
+    fallback_settings: list[dict] = []
     litellm_updated = False
 
     def _add_model(alias: str, route_dict: dict) -> None:
@@ -501,22 +643,33 @@ async def save_routes(
             return
         new_models.append(_build_litellm_model_entry(alias, pid, model, plaintext))
 
-    _add_model("clarity-standard", config["standard"])
-    for i, fb in enumerate(config["standard"].get("fallbacks", [])):
-        _add_model(f"clarity-standard-fb-{i}", fb)
+    standard_alias, standard_fallbacks = _route_aliases("standard", config["standard"])
+    premium_alias, premium_fallbacks = _route_aliases("premium", config["premium"])
 
-    _add_model("clarity-premium", config["premium"])
+    _add_model(standard_alias, config["standard"])
+    for i, fb in enumerate(config["standard"].get("fallbacks", [])):
+        _add_model(f"{standard_alias}-fb-{i}", fb)
+
+    _add_model(premium_alias, config["premium"])
     for i, fb in enumerate(config["premium"].get("fallbacks", [])):
-        _add_model(f"clarity-premium-fb-{i}", fb)
+        _add_model(f"{premium_alias}-fb-{i}", fb)
+
+    if standard_fallbacks:
+        fallback_settings.append({standard_alias: standard_fallbacks})
+    if premium_fallbacks:
+        fallback_settings.append({premium_alias: premium_fallbacks})
 
     if new_models:
-        litellm_updated = await _call_litellm_config_update(new_models)
+        litellm_updated = await _call_litellm_config_update(
+            new_models, fallback_settings
+        )
 
     await db.commit()
     return {
         "saved": True,
         "litellm_updated": litellm_updated,
         "models_registered": len(new_models),
+        "fallbacks_registered": sum(len(item[next(iter(item))]) for item in fallback_settings),
     }
 
 
@@ -529,7 +682,9 @@ async def test_route(
     _require_platform_key(request)
 
     result = await db.execute(
-        select(LLMProviderKey).where(LLMProviderKey.id == uuid.UUID(body.key_id))
+        select(LLMProviderKey).where(
+            LLMProviderKey.id == _parse_uuid(body.key_id, "key_id")
+        )
     )
     key = result.scalar_one_or_none()
     if not key:
@@ -540,23 +695,62 @@ async def test_route(
         raise HTTPException(
             status_code=400, detail=f"Unknown provider: {body.provider_id}"
         )
+    if key.provider_id != body.provider_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Selected key belongs to {key.provider_id}, not {body.provider_id}"
+            ),
+        )
 
     try:
         plaintext = decrypt_token(key.encrypted_key)
     except Exception:
         raise HTTPException(status_code=500, detail="Key decryption failed")
 
-    base_url = preset["base_url"]
-    model_id = f"openai/{body.model}" if base_url else body.model
-
-    # Test via our own LiteLLM proxy if the model is registered, otherwise direct
+    # Test the selected provider directly; route saves separately register LiteLLM aliases.
     import time
 
     start = time.monotonic()
     try:
+        mode = preset.get("litellm_mode", "openai_compatible")
+        if mode == "anthropic":
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    f"{preset['base_url']}/v1/messages",
+                    headers={
+                        "x-api-key": plaintext,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": body.model,
+                        "max_tokens": 10,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "user", "content": "Reply with exactly: OK"}
+                        ],
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            parts = payload.get("content") or []
+            text = " ".join(
+                part.get("text", "")
+                for part in parts
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+            return {
+                "ok": True,
+                "latency_ms": elapsed_ms,
+                "model_used": payload.get("model") or body.model,
+                "response_preview": text[:120],
+            }
+
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=plaintext, base_url=base_url)
+        client = AsyncOpenAI(api_key=plaintext, base_url=preset["base_url"])
         resp = await client.chat.completions.create(
             model=body.model,
             messages=[{"role": "user", "content": "Reply with exactly: OK"}],

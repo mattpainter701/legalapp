@@ -16,6 +16,12 @@
   - **AI Routing tab** in PlatformPage: KeyVaultPanel (key list, add form, sync-env button) + RouteCard (provider/key/model selection, fallback chain builder, route test)
 
 ### Fixed
+- **Task 1206 follow-up — AI Routing Console hardening:** Route saves now validate
+  provider/key pairings, prune blank fallback rows, return 400s for malformed key
+  IDs, register LiteLLM fallback mappings alongside model aliases, and handle
+  LiteLLM-native Anthropic model prefixes/testing correctly. The Platform AI
+  Routing tab now shows alias readiness, primary/fallback ordering, model-fetch
+  state, validation feedback, and safer key deletion behavior.
 - `admin.py`: add `from_attributes=True` to `TenantSettingsResponse.model_validate()` calls
 - `platform.py`: guard `PLATFORM_SECRET_KEY` length < 32, fix `pg_total_relation_size(relid)` column reference
 - `.env.hypervisor`: clear leftover placeholder instruction from `PLATFORM_SECRET_KEY`

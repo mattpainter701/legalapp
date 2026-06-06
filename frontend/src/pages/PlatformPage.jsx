@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLLMConfig, updatePlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
-import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu } from 'lucide-react'
+import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -638,6 +638,82 @@ function LogsTab({ platformKey, tenants }) {
 
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
+const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', fallbacks: [] })
+const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
+
+function routeIssues(route, allKeys) {
+  const issues = []
+  const hasAny = Boolean(route.provider_id || route.key_id || route.model)
+  if (hasAny && !isCompleteTarget(route)) issues.push('Primary route needs provider, key, and model.')
+  const key = allKeys.find((k) => k.id === route.key_id)
+  if (key && route.provider_id && key.provider_id !== route.provider_id) {
+    issues.push('Primary key does not belong to the selected provider.')
+  }
+  ;(route.fallbacks || []).forEach((fb, i) => {
+    const hasFallback = Boolean(fb.provider_id || fb.key_id || fb.model)
+    if (hasFallback && !isCompleteTarget(fb)) issues.push(`Fallback ${i + 1} is incomplete.`)
+    const fbKey = allKeys.find((k) => k.id === fb.key_id)
+    if (fbKey && fb.provider_id && fbKey.provider_id !== fb.provider_id) {
+      issues.push(`Fallback ${i + 1} key does not match its provider.`)
+    }
+  })
+  return issues
+}
+
+function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, compact = false }) {
+  const selectedPreset = presets.find((p) => p.id === value.provider_id)
+  const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
+  const placeholder = selectedPreset?.model_placeholder || 'model-id'
+
+  const setField = (field, next) => {
+    if (field === 'provider_id') onChange({ ...value, provider_id: next, key_id: '', model: '' })
+    else if (field === 'key_id') onChange({ ...value, key_id: next, model: '' })
+    else onChange({ ...value, [field]: next })
+  }
+
+  return (
+    <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-3' : 'lg:grid-cols-3'} gap-3`}>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+        <select
+          value={value.provider_id || ''}
+          onChange={(e) => setField('provider_id', e.target.value)}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        >
+          <option value="">Choose provider</option>
+          {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        {!compact && selectedPreset && <p className="text-[11px] text-brand-muted mt-1 font-sans">{selectedPreset.description}</p>}
+      </div>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Key</label>
+        <select
+          value={value.key_id || ''}
+          onChange={(e) => setField('key_id', e.target.value)}
+          disabled={!value.provider_id}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface disabled:opacity-50"
+        >
+          <option value="">{value.provider_id ? 'Choose key' : 'Pick provider first'}</option>
+          {keysForPreset.map((k) => <option key={k.id} value={k.id}>{k.name} (...{k.key_hint})</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
+        <input
+          list={modelListId}
+          value={value.model || ''}
+          onChange={(e) => setField('model', e.target.value)}
+          placeholder={placeholder}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        />
+        <datalist id={modelListId}>
+          {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </datalist>
+      </div>
+    </div>
+  )
+}
+
 function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [models, setModels] = useState([])
@@ -645,11 +721,32 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
 
-  const selectedKey = allKeys.find((k) => k.id === route.key_id)
+  const routeKey = label.toLowerCase()
+  const alias = `clarity-${routeKey}`
   const selectedPreset = presets.find((p) => p.id === route.provider_id)
-  const keysForPreset = route.provider_id ? allKeys.filter((k) => k.provider_id === route.provider_id) : allKeys
+  const selectedKey = allKeys.find((k) => k.id === route.key_id)
+  const issues = routeIssues(route, allKeys)
+  const ready = isCompleteTarget(route) && issues.length === 0
+  const fallbackCount = (route.fallbacks || []).filter(isCompleteTarget).length
 
-  const set = (field, value) => onChange({ ...route, [field]: value })
+  const updateRoute = (next) => {
+    onChange({ ...next, fallbacks: next.fallbacks || [] })
+    setTestResult(null)
+  }
+  const setFallbacks = (fallbacks) => updateRoute({ ...route, fallbacks })
+  const updateFallback = (i, next) => {
+    const fallbacks = [...(route.fallbacks || [])]
+    fallbacks[i] = next
+    setFallbacks(fallbacks)
+  }
+  const moveFallback = (i, direction) => {
+    const fallbacks = [...(route.fallbacks || [])]
+    const target = i + direction
+    if (target < 0 || target >= fallbacks.length) return
+    ;[fallbacks[i], fallbacks[target]] = [fallbacks[target], fallbacks[i]]
+    setFallbacks(fallbacks)
+  }
+  const removeFallback = (i) => setFallbacks((route.fallbacks || []).filter((_, idx) => idx !== i))
 
   const handleFetchModels = async () => {
     if (!route.key_id) return
@@ -658,165 +755,144 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
     try {
       const data = await fetchProviderModels(platformKey, route.key_id)
       setModels(data.models || [])
+      if (!data.models?.length) setModelsError('No models returned; paste the model ID manually.')
     } catch (e) {
       setModelsError(e?.response?.data?.detail || 'Failed to fetch models')
     } finally { setFetchingModels(false) }
   }
 
   const handleTest = async () => {
-    if (!route.key_id || !route.model || !route.provider_id) return
+    if (!ready) return
     setTesting(true)
     setTestResult(null)
     try {
-      const data = await testLLMRoute(platformKey, { key_id: route.key_id, provider_id: route.provider_id, model: route.model, route: label.toLowerCase() })
+      const data = await testLLMRoute(platformKey, { key_id: route.key_id, provider_id: route.provider_id, model: route.model, route: routeKey })
       setTestResult(data)
     } catch (e) {
       setTestResult({ ok: false, error: e?.response?.data?.detail || 'Test failed' })
     } finally { setTesting(false) }
   }
 
-  const addFallback = () => set('fallbacks', [...(route.fallbacks || []), { key_id: '', provider_id: '', model: '' }])
-  const removeFallback = (i) => set('fallbacks', route.fallbacks.filter((_, idx) => idx !== i))
-  const updateFallback = (i, field, value) => {
-    const fbs = [...(route.fallbacks || [])]
-    fbs[i] = { ...fbs[i], [field]: value }
-    set('fallbacks', fbs)
-  }
-
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
-        <h3 className="font-serif font-bold text-brand-ink">{label} Route</h3>
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="font-serif font-bold text-brand-ink">{label}</h3>
+            <span className={`text-[11px] font-sans px-2 py-0.5 rounded-full ${ready ? 'bg-brand-accent/10 text-brand-accent' : 'bg-brand-amber/10 text-brand-amber'}`}>
+              {ready ? 'Ready' : 'Needs setup'}
+            </span>
+          </div>
+          <p className="text-xs text-brand-muted font-mono mt-1">{alias}</p>
+        </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={handleFetchModels}
+            disabled={!route.key_id || fetchingModels}
+            title="Fetch models for the selected key"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={12} className={fetchingModels ? 'animate-spin' : ''} />
+            Models
+          </button>
+          <button
             onClick={handleTest}
-            disabled={testing || !route.key_id || !route.model}
+            disabled={testing || !ready}
+            title="Send a synthetic prompt to this provider and model"
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
           >
             {testing ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
-            Test route
+            Test
           </button>
         </div>
       </div>
 
-      {testResult && (
-        <div className={`px-5 py-3 text-xs font-sans border-b border-brand-line ${testResult.ok ? 'bg-brand-accent/5 text-brand-accent' : 'bg-brand-rose/5 text-brand-rose'}`}>
-          {testResult.ok
-            ? `OK — ${testResult.latency_ms}ms — model: ${testResult.model_used} — "${testResult.response_preview}"`
-            : `Error — ${testResult.error}`}
+      {(issues.length > 0 || modelsError || testResult) && (
+        <div className="px-5 py-3 border-b border-brand-line space-y-1 text-xs font-sans">
+          {issues.map((issue) => <p key={issue} className="text-brand-rose">{issue}</p>)}
+          {modelsError && <p className="text-brand-muted">{modelsError}</p>}
+          {testResult && (
+            <p className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
+              {testResult.ok
+                ? `Test OK in ${testResult.latency_ms}ms with ${testResult.model_used}: ${testResult.response_preview}`
+                : `Test failed: ${testResult.error}`}
+            </p>
+          )}
         </div>
       )}
 
-      <div className="p-5 space-y-4">
-        {/* Primary provider + key + model */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
-            <select
-              value={route.provider_id || ''}
-              onChange={(e) => { set('provider_id', e.target.value); set('key_id', ''); set('model', '') }}
-              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-            >
-              <option value="">Select provider…</option>
-              {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            {selectedPreset && <p className="text-[11px] text-brand-muted mt-1">{selectedPreset.description}</p>}
-          </div>
-          <div>
-            <label className="block text-xs text-brand-muted font-sans mb-1">API Key</label>
-            <select
-              value={route.key_id || ''}
-              onChange={(e) => { set('key_id', e.target.value); set('model', '') }}
-              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-            >
-              <option value="">Select key…</option>
-              {keysForPreset.map((k) => <option key={k.id} value={k.id}>{k.name} (…{k.key_hint})</option>)}
-            </select>
-          </div>
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-brand-muted font-sans">Model</label>
-              {selectedPreset?.models_url && (
-                <button onClick={handleFetchModels} disabled={!route.key_id || fetchingModels} className="text-[11px] text-brand-accent hover:underline font-sans disabled:opacity-40">
-                  {fetchingModels ? 'Fetching…' : 'Fetch models'}
-                </button>
-              )}
-            </div>
-            <input
-              list={`models-${label}`}
-              value={route.model || ''}
-              onChange={(e) => set('model', e.target.value)}
-              placeholder="Model ID or paste…"
-              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-            />
-            <datalist id={`models-${label}`}>
-              {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </datalist>
-            {modelsError && <p className="text-[11px] text-brand-rose mt-1">{modelsError}</p>}
-          </div>
-        </div>
-
-        {/* Fallback chain */}
+      <div className="p-5 space-y-5">
         <div>
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Fallback chain</p>
-            <button onClick={addFallback} className="flex items-center gap-1 text-xs text-brand-accent hover:underline font-sans">
+            <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Primary target</p>
+            <p className="text-[11px] text-brand-muted font-sans">
+              {selectedPreset?.name || 'No provider'}{selectedKey ? ` / ${selectedKey.name}` : ''}
+            </p>
+          </div>
+          <TargetEditor
+            value={route}
+            allKeys={allKeys}
+            presets={presets}
+            models={models}
+            modelListId={`models-${routeKey}-primary`}
+            onChange={(next) => updateRoute({ ...next, fallbacks: route.fallbacks || [] })}
+          />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Fallback order</p>
+              <p className="text-[11px] text-brand-muted font-sans">{fallbackCount} configured fallback{fallbackCount === 1 ? '' : 's'}</p>
+            </div>
+            <button
+              onClick={() => setFallbacks([...(route.fallbacks || []), { key_id: '', provider_id: '', model: '' }])}
+              className="flex items-center gap-1.5 text-xs text-brand-accent hover:underline font-sans"
+            >
               <Plus size={12} /> Add fallback
             </button>
           </div>
           {(route.fallbacks || []).length === 0 && (
-            <p className="text-xs text-brand-muted font-sans">No fallbacks configured. Add one to create a fallback chain.</p>
+            <div className="border border-dashed border-brand-line rounded-lg px-4 py-5 text-sm text-brand-muted font-sans text-center">
+              No fallback targets. LiteLLM will only try the primary alias.
+            </div>
           )}
-          {(route.fallbacks || []).map((fb, i) => {
-            const fbPreset = presets.find((p) => p.id === fb.provider_id)
-            const fbKeys = fb.provider_id ? allKeys.filter((k) => k.provider_id === fb.provider_id) : allKeys
-            return (
-              <div key={i} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end mb-2 p-3 bg-brand-bg rounded-lg border border-brand-line">
-                <div>
-                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Provider</label>
-                  <select
-                    value={fb.provider_id || ''}
-                    onChange={(e) => { updateFallback(i, 'provider_id', e.target.value); updateFallback(i, 'key_id', ''); updateFallback(i, 'model', '') }}
-                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-sans focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
-                  >
-                    <option value="">Provider…</option>
-                    {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+          <div className="space-y-3">
+            {(route.fallbacks || []).map((fb, i) => (
+              <div key={i} className="border border-brand-line rounded-lg p-3 bg-brand-bg">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <p className="text-xs font-mono text-brand-ink">{alias}-fb-{i}</p>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => moveFallback(i, -1)} disabled={i === 0} title="Move fallback up" className="p-1.5 text-brand-muted hover:text-brand-ink disabled:opacity-30">
+                      <ArrowUp size={14} />
+                    </button>
+                    <button onClick={() => moveFallback(i, 1)} disabled={i === (route.fallbacks || []).length - 1} title="Move fallback down" className="p-1.5 text-brand-muted hover:text-brand-ink disabled:opacity-30">
+                      <ArrowDown size={14} />
+                    </button>
+                    <button onClick={() => removeFallback(i)} title="Remove fallback" className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Key</label>
-                  <select
-                    value={fb.key_id || ''}
-                    onChange={(e) => updateFallback(i, 'key_id', e.target.value)}
-                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-sans focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
-                  >
-                    <option value="">Key…</option>
-                    {fbKeys.map((k) => <option key={k.id} value={k.id}>{k.name} (…{k.key_hint})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] text-brand-muted font-sans mb-1">Model</label>
-                  <input
-                    value={fb.model || ''}
-                    onChange={(e) => updateFallback(i, 'model', e.target.value)}
-                    placeholder="Model ID…"
-                    className="w-full border border-brand-line rounded-lg px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-brand-accent bg-brand-surface"
-                  />
-                </div>
-                <button onClick={() => removeFallback(i)} className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
-                  <Trash2 size={14} />
-                </button>
+                <TargetEditor
+                  value={fb}
+                  allKeys={allKeys}
+                  presets={presets}
+                  models={models}
+                  modelListId={`models-${routeKey}-fallback-${i}`}
+                  compact
+                  onChange={(next) => updateFallback(i, next)}
+                />
               </div>
-            )
-          })}
+            ))}
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-function KeyVaultPanel({ platformKey, keys, onKeysChange }) {
-  const [presets, setPresets] = useState([])
+function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState('')
   const [newProvider, setNewProvider] = useState('')
@@ -825,10 +901,6 @@ function KeyVaultPanel({ platformKey, keys, onKeysChange }) {
   const [syncing, setSyncing] = useState(false)
   const [addError, setAddError] = useState(null)
   const [syncResult, setSyncResult] = useState(null)
-
-  useEffect(() => {
-    getLLMProviderPresets(platformKey).then((d) => setPresets(d.providers || [])).catch(() => {})
-  }, [platformKey])
 
   const handleAdd = async (e) => {
     e.preventDefault()
@@ -868,7 +940,7 @@ function KeyVaultPanel({ platformKey, keys, onKeysChange }) {
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
-      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-2">
           <Key size={16} className="text-brand-muted" />
           <h2 className="font-serif font-bold text-brand-ink">API Key Vault</h2>
@@ -960,8 +1032,8 @@ function KeyVaultPanel({ platformKey, keys, onKeysChange }) {
 function AIRoutingTab({ platformKey }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
-  const [standard, setStandard] = useState({ key_id: '', provider_id: '', model: '', fallbacks: [] })
-  const [premium, setPremium] = useState({ key_id: '', provider_id: '', model: '', fallbacks: [] })
+  const [standard, setStandard] = useState(emptyRoute)
+  const [premium, setPremium] = useState(emptyRoute)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -986,12 +1058,38 @@ function AIRoutingTab({ platformKey }) {
 
   useEffect(() => { load() }, [load])
 
+  const validationIssues = [...routeIssues(standard, keys), ...routeIssues(premium, keys)]
+  const configuredCount = [standard, premium].filter(isCompleteTarget).length
+
+  const replaceKeys = (nextKeys) => {
+    setKeys(nextKeys)
+    const validIds = new Set(nextKeys.map((k) => k.id))
+    const clearMissingKeys = (route) => ({
+      ...route,
+      ...(route.key_id && !validIds.has(route.key_id) ? { key_id: '', model: '' } : {}),
+      fallbacks: (route.fallbacks || []).map((fb) => (
+        fb.key_id && !validIds.has(fb.key_id) ? { ...fb, key_id: '', model: '' } : fb
+      )),
+    })
+    setStandard((prev) => clearMissingKeys(prev))
+    setPremium((prev) => clearMissingKeys(prev))
+  }
+
   const handleSave = async () => {
+    if (validationIssues.length > 0) {
+      setSaveResult({ ok: false, error: validationIssues[0] })
+      return
+    }
     setSaving(true)
     setSaveResult(null)
     try {
       const data = await saveLLMRoutes(platformKey, { standard, premium })
-      setSaveResult({ ok: true, litellm_updated: data.litellm_updated, models_registered: data.models_registered })
+      setSaveResult({
+        ok: true,
+        litellm_updated: data.litellm_updated,
+        models_registered: data.models_registered,
+        fallbacks_registered: data.fallbacks_registered || 0,
+      })
     } catch (e) {
       setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
     } finally { setSaving(false) }
@@ -1003,31 +1101,38 @@ function AIRoutingTab({ platformKey }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 mb-6">
         <div>
           <h2 className="text-xl font-serif font-bold text-brand-ink">AI Provider Routing</h2>
-          <p className="text-sm text-brand-muted font-sans mt-1">Configure LLM providers, API keys, and model routes. Changes are pushed to LiteLLM automatically.</p>
+          <p className="text-sm text-brand-muted font-sans mt-1">Register standard and premium aliases in LiteLLM, then order fallback targets for each route.</p>
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">clarity-standard</span>
+            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">clarity-premium</span>
+            <span className={`text-[11px] font-sans px-2 py-1 rounded-full ${validationIssues.length ? 'bg-brand-amber/10 text-brand-amber' : 'bg-brand-accent/10 text-brand-accent'}`}>
+              {validationIssues.length ? `${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'}` : `${configuredCount}/2 primary routes configured`}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? 'text-brand-accent' : 'text-brand-rose'}`}>
               {saveResult.ok
-                ? `Saved — ${saveResult.litellm_updated ? `${saveResult.models_registered} model(s) registered` : 'saved to DB'}`
+                ? `Saved - ${saveResult.litellm_updated ? `${saveResult.models_registered} model(s), ${saveResult.fallbacks_registered} fallback(s)` : 'DB only; LiteLLM not reloaded'}`
                 : saveResult.error}
             </span>
           )}
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || validationIssues.length > 0}
             className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
           >
-            {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
             {saving ? 'Saving…' : 'Save Routes'}
           </button>
         </div>
       </div>
 
-      <KeyVaultPanel platformKey={platformKey} keys={keys} onKeysChange={setKeys} />
+      <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <RouteCard
