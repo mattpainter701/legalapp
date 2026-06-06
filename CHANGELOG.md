@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.9] — 2026-06-06
+
+### Fixed
+- **BK13:** Chat refused to answer general legal questions without context — system prompt lacked explicit instruction to answer from general knowledge when FIRM CONTEXT is empty. Added rule: answer directly, tag all claims [model knowledge], never gate on context availability.
+- **BK14:** Premium model 404 — all three route legs broken: (1) primary `openai/deepseek-chat` at `opencode.ai/go/v1` returns HTML 404 (wrong path); correct endpoint is `opencode.ai/zen/go/v1` with model `deepseek-v4-pro`. (2) standard `opencode.ai/go/v1` similarly broken; fixed to `opencode.ai/zen/v1` with `deepseek-v4-flash-free`. (3) `llama-4-maverick:free` removed from OpenRouter; replaced with `gemma-4-31b-it:free` (confirmed working) as premium OpenRouter fallback.
+
 ## [0.13.8] — 2026-06-06
 
 ### Fixed
