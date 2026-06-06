@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMProviders, getPlatformLLMConfig, updatePlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -70,58 +70,46 @@ function LoginScreen({ onLogin }) {
   )
 }
 
-function ModelRouteFields({ label, provider, model, providers, modelListId, onProviderChange, onModelChange, defaultLabel = 'Platform default' }) {
-  const selectedProviderObj = providers.find((p) => p.key === provider)
-  const models = selectedProviderObj?.models || []
+function AliasPill({ label, alias, sub }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_1fr] gap-3 items-end">
-      <div>
-        <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans mb-1">{label}</p>
-        <p className="text-[11px] text-brand-muted font-sans">{provider || defaultLabel}</p>
-      </div>
-      <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
-        <select
-          value={provider}
-          onChange={(e) => onProviderChange(e.target.value)}
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-        >
-          <option value="">{defaultLabel}</option>
-          {providers.map((p) => (
-            <option key={p.key} value={p.key} disabled={!p.configured}>
-              {p.label} {p.free_tier ? '(free)' : ''} {!p.configured ? '- not configured' : ''}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
-        <input
-          list={modelListId}
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-          placeholder="Default, fetched model, or pasted id"
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-        />
-        <datalist id={modelListId}>
-          {models.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-      </div>
-      {provider && !selectedProviderObj?.configured && (
-        <p className="md:col-start-2 md:col-span-2 text-xs text-brand-rose font-sans">This provider is not configured at the platform level.</p>
-      )}
+    <div className="border border-brand-line rounded-lg px-4 py-3 bg-brand-bg-soft">
+      <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">{label}</p>
+      <p className="text-sm text-brand-ink font-mono mt-1">{alias || 'platform default'}</p>
+      {sub && <p className="text-[11px] text-brand-muted font-sans mt-1">{sub}</p>}
     </div>
   )
 }
 
-function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpdate, saving, setSaving }) {
+function RoutingOverviewPanel({ config, onOpenRouting }) {
+  const standardAlias = config?.standard_model || 'clarity-standard'
+  const premiumAlias = config?.premium_model || 'clarity-premium'
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-8">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="font-serif font-bold text-brand-ink">AI Gateway Routing</h2>
+          <p className="text-xs text-brand-muted font-sans mt-1">LegalApp sends standard and premium work to LiteLLM aliases; the AI Routing tab controls the upstream provider, model, key, and fallback chain.</p>
+        </div>
+        <button
+          onClick={onOpenRouting}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-brand-ink text-white text-xs font-medium font-sans rounded-lg hover:bg-brand-ink-2 transition-colors"
+        >
+          <Cpu size={14} />
+          AI Routing
+        </button>
+      </div>
+      <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <AliasPill label="Standard route" alias={standardAlias} sub="Resolved for normal chat, skills, summaries, and drafting." />
+        <AliasPill label="Premium route" alias={premiumAlias} sub="Resolved when premium routing is requested." />
+      </div>
+    </div>
+  )
+}
+
+function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, saving, setSaving }) {
   const config = tenantDetail?.llm_config || {}
   const current = {
-    standardProvider: config.standard_provider || config.provider || '',
     standardModel: config.standard_model || config.model || '',
-    premiumProvider: config.premium_provider || '',
     premiumModel: config.premium_model || '',
   }
   const [values, setValues] = useState(current)
@@ -130,7 +118,7 @@ function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpd
   useEffect(() => {
     setValues(current)
     setSaved(false)
-  }, [config.standard_provider, config.standard_model, config.premium_provider, config.premium_model, config.provider, config.model])
+  }, [config.standard_model, config.premium_model, config.model])
 
   const changed = JSON.stringify(values) !== JSON.stringify(current)
 
@@ -144,9 +132,9 @@ function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpd
     setSaved(false)
     try {
       const payload = {
-        standard_llm_provider: values.standardProvider || null,
+        standard_llm_provider: values.standardModel ? 'litellm' : null,
         standard_llm_model: values.standardModel || null,
-        premium_llm_provider: values.premiumProvider || null,
+        premium_llm_provider: values.premiumModel ? 'litellm' : null,
         premium_llm_model: values.premiumModel || null,
       }
       await updatePlatformTenant(platformKey, tenant.id, payload)
@@ -158,24 +146,28 @@ function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpd
 
   return (
     <div className="space-y-4">
-      <ModelRouteFields
-        label="Standard"
-        provider={values.standardProvider}
-        model={values.standardModel}
-        providers={providers}
-        modelListId={`tenant-standard-models-${tenant.id}`}
-        onProviderChange={(value) => { setValue('standardProvider', value); setValue('standardModel', '') }}
-        onModelChange={(value) => setValue('standardModel', value)}
-      />
-      <ModelRouteFields
-        label="Premium"
-        provider={values.premiumProvider}
-        model={values.premiumModel}
-        providers={providers}
-        modelListId={`tenant-premium-models-${tenant.id}`}
-        onProviderChange={(value) => { setValue('premiumProvider', value); setValue('premiumModel', '') }}
-        onModelChange={(value) => setValue('premiumModel', value)}
-      />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {[
+          ['standardModel', 'Standard alias', defaultAliases.standard],
+          ['premiumModel', 'Premium alias', defaultAliases.premium],
+        ].map(([key, label, fallback]) => (
+          <div key={key}>
+            <label className="block text-xs text-brand-muted font-sans mb-1">{label}</label>
+            <input
+              list={`tenant-aliases-${tenant.id}`}
+              value={values[key] || ''}
+              onChange={(e) => setValue(key, e.target.value)}
+              placeholder={`Inherit ${fallback}`}
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+            />
+          </div>
+        ))}
+        <datalist id={`tenant-aliases-${tenant.id}`}>
+          {[defaultAliases.standard, defaultAliases.premium, 'clarity-standard', 'clarity-premium'].filter(Boolean).map((alias) => (
+            <option key={alias} value={alias} />
+          ))}
+        </datalist>
+      </div>
       <div className="flex items-center gap-3">
         <button
           onClick={handleSave}
@@ -188,90 +180,7 @@ function LLMProviderSelect({ tenant, tenantDetail, platformKey, providers, onUpd
         >
           {saved ? 'Saved' : saving ? 'Saving...' : 'Apply Routes'}
         </button>
-        <p className="text-xs text-brand-muted font-sans">Blank fields inherit platform defaults.</p>
-      </div>
-    </div>
-  )
-}
-
-function PlatformLLMConfigPanel({ platformKey, providers, config, onSaved }) {
-  const current = {
-    standardProvider: config?.standard_provider || '',
-    standardModel: config?.standard_model || '',
-    premiumProvider: config?.premium_provider || '',
-    premiumModel: config?.premium_model || '',
-  }
-  const [values, setValues] = useState(current)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    setValues(current)
-    setSaved(false)
-  }, [config?.standard_provider, config?.standard_model, config?.premium_provider, config?.premium_model])
-
-  const changed = JSON.stringify(values) !== JSON.stringify(current)
-  const setValue = (key, value) => {
-    setValues((prev) => ({ ...prev, [key]: value }))
-    setSaved(false)
-  }
-
-  const save = async () => {
-    setSaving(true)
-    setSaved(false)
-    try {
-      const resp = await updatePlatformLLMConfig(platformKey, {
-        standard_provider: values.standardProvider || null,
-        standard_model: values.standardModel || null,
-        premium_provider: values.premiumProvider || null,
-        premium_model: values.premiumModel || null,
-      })
-      onSaved(resp.config)
-      setSaved(true)
-    } catch { /* silent */ }
-    finally { setSaving(false) }
-  }
-
-  return (
-    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-8">
-      <div className="px-5 py-4 border-b border-brand-line flex items-center justify-between">
-        <div>
-          <h2 className="font-serif font-bold text-brand-ink">Global AI Routing</h2>
-          <p className="text-xs text-brand-muted font-sans mt-1">Used for every tenant unless a tenant override is set.</p>
-        </div>
-        <button
-          onClick={save}
-          disabled={saving || !changed}
-          className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
-            saved
-              ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
-              : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
-          }`}
-        >
-          {saved ? 'Saved' : saving ? 'Saving...' : 'Save Routes'}
-        </button>
-      </div>
-      <div className="p-5 space-y-4">
-        <ModelRouteFields
-          label="Standard"
-          provider={values.standardProvider}
-          model={values.standardModel}
-          providers={providers}
-          modelListId="global-standard-models"
-          defaultLabel="Env fallback"
-          onProviderChange={(value) => { setValue('standardProvider', value); setValue('standardModel', '') }}
-          onModelChange={(value) => setValue('standardModel', value)}
-        />
-        <ModelRouteFields
-          label="Premium"
-          provider={values.premiumProvider}
-          model={values.premiumModel}
-          providers={providers}
-          modelListId="global-premium-models"
-          defaultLabel="Env fallback"
-          onProviderChange={(value) => { setValue('premiumProvider', value); setValue('premiumModel', '') }}
-          onModelChange={(value) => setValue('premiumModel', value)}
-        />
+        <p className="text-xs text-brand-muted font-sans">Blank fields inherit the platform aliases.</p>
       </div>
     </div>
   )
@@ -674,7 +583,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   return (
     <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-3' : 'lg:grid-cols-3'} gap-3`}>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
         <select
           value={value.provider_id || ''}
           onChange={(e) => setField('provider_id', e.target.value)}
@@ -686,7 +595,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && selectedPreset && <p className="text-[11px] text-brand-muted mt-1 font-sans">{selectedPreset.description}</p>}
       </div>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Key</label>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
         <select
           value={value.key_id || ''}
           onChange={(e) => setField('key_id', e.target.value)}
@@ -698,7 +607,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         </select>
       </div>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Model</label>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Upstream model ID</label>
         <input
           list={modelListId}
           value={value.model || ''}
@@ -709,6 +618,34 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         <datalist id={modelListId}>
           {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </datalist>
+      </div>
+    </div>
+  )
+}
+
+function RouteFlow({ label, alias, route, presets, keys, fallbackCount }) {
+  const preset = presets.find((p) => p.id === route.provider_id)
+  const key = keys.find((k) => k.id === route.key_id)
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr_auto_1fr] gap-3 items-stretch">
+      <div className="border border-brand-line rounded-lg px-3 py-2 bg-brand-bg-soft">
+        <p className="text-[11px] uppercase tracking-wider text-brand-muted font-sans">App route</p>
+        <p className="text-sm text-brand-ink font-sans mt-1">{label}</p>
+      </div>
+      <div className="hidden md:flex items-center text-brand-muted"><ArrowDown size={14} className="-rotate-90" /></div>
+      <div className="border border-brand-line rounded-lg px-3 py-2 bg-brand-bg-soft">
+        <p className="text-[11px] uppercase tracking-wider text-brand-muted font-sans">LiteLLM alias</p>
+        <p className="text-sm text-brand-ink font-mono mt-1">{alias}</p>
+      </div>
+      <div className="hidden md:flex items-center text-brand-muted"><ArrowDown size={14} className="-rotate-90" /></div>
+      <div className="border border-brand-line rounded-lg px-3 py-2 bg-brand-bg-soft">
+        <p className="text-[11px] uppercase tracking-wider text-brand-muted font-sans">Primary target</p>
+        <p className="text-sm text-brand-ink font-sans mt-1 truncate" title={route.model || ''}>
+          {preset?.name || 'Not selected'}{route.model ? ` / ${route.model}` : ''}
+        </p>
+        <p className="text-[11px] text-brand-muted font-sans mt-1">
+          {key ? `${key.name} key` : 'No key'}{fallbackCount ? `, ${fallbackCount} fallback${fallbackCount === 1 ? '' : 's'}` : ''}
+        </p>
       </div>
     </div>
   )
@@ -757,9 +694,19 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
       setModels(data.models || [])
       if (!data.models?.length) setModelsError('No models returned; paste the model ID manually.')
     } catch (e) {
-      setModelsError(e?.response?.data?.detail || 'Failed to fetch models')
+      const status = e?.response?.status
+      if (status === 403) setModelsError('Platform access was denied. Sign in again with the current platform key.')
+      else if (status === 502) setModelsError(`${e?.response?.data?.detail || 'Provider rejected the model list request.'} Paste a known model ID or check the selected key.`)
+      else setModelsError(e?.response?.data?.detail || 'Failed to fetch models')
     } finally { setFetchingModels(false) }
   }
+
+  useEffect(() => {
+    setModels([])
+    setModelsError(null)
+    if (route.key_id) handleFetchModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.key_id])
 
   const handleTest = async () => {
     if (!ready) return
@@ -822,6 +769,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
       )}
 
       <div className="p-5 space-y-5">
+        <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} fallbackCount={fallbackCount} />
         <div>
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Primary target</p>
@@ -1029,7 +977,7 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   )
 }
 
-function AIRoutingTab({ platformKey }) {
+function AIRoutingTab({ platformKey, onAuthError }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
   const [standard, setStandard] = useState(emptyRoute)
@@ -1037,9 +985,11 @@ function AIRoutingTab({ platformKey }) {
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const [keysData, presetsData, routesData] = await Promise.all([
         getLLMProviderKeys(platformKey),
@@ -1052,9 +1002,16 @@ function AIRoutingTab({ platformKey }) {
       const prem = routesData.premium || {}
       setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', fallbacks: std.fallbacks || [] })
       setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', fallbacks: prem.fallbacks || [] })
-    } catch { /* silent */ }
+    } catch (e) {
+      if (e?.response?.status === 403) {
+        setLoadError('Platform access was denied. Sign in again with the current platform key.')
+        onAuthError?.()
+      } else {
+        setLoadError(e?.response?.data?.detail || 'Failed to load AI routing configuration.')
+      }
+    }
     finally { setLoading(false) }
-  }, [platformKey])
+  }, [platformKey, onAuthError])
 
   useEffect(() => { load() }, [load])
 
@@ -1089,6 +1046,7 @@ function AIRoutingTab({ platformKey }) {
         litellm_updated: data.litellm_updated,
         models_registered: data.models_registered,
         fallbacks_registered: data.fallbacks_registered || 0,
+        app_aliases: data.app_aliases || null,
       })
     } catch (e) {
       setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
@@ -1097,6 +1055,14 @@ function AIRoutingTab({ platformKey }) {
 
   if (loading) {
     return <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>
+  }
+
+  if (loadError) {
+    return (
+      <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
+        {loadError}
+      </div>
+    )
   }
 
   return (
@@ -1117,7 +1083,7 @@ function AIRoutingTab({ platformKey }) {
           {saveResult && (
             <span className={`text-xs font-sans ${saveResult.ok ? 'text-brand-accent' : 'text-brand-rose'}`}>
               {saveResult.ok
-                ? `Saved - ${saveResult.litellm_updated ? `${saveResult.models_registered} model(s), ${saveResult.fallbacks_registered} fallback(s)` : 'DB only; LiteLLM not reloaded'}`
+                ? `Saved - ${saveResult.app_aliases?.standard || 'clarity-standard'} / ${saveResult.app_aliases?.premium || 'clarity-premium'}${saveResult.litellm_updated ? `, ${saveResult.models_registered} model(s), ${saveResult.fallbacks_registered} fallback(s)` : ', DB only; LiteLLM not reloaded'}`
                 : saveResult.error}
             </span>
           )}
@@ -1162,7 +1128,6 @@ export default function PlatformPage() {
   const [tenants, setTenants] = useState([])
   const [usage, setUsage] = useState(null)
   const [health, setHealth] = useState(null)
-  const [providers, setProviders] = useState([])
   const [llmConfig, setLlmConfig] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -1185,16 +1150,15 @@ export default function PlatformPage() {
     setLoading(true)
     setError(null)
     try {
-      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey), getPlatformLLMProviders(platformKey), getPlatformLLMConfig(platformKey)]
+      const promises = [getPlatformTenants(platformKey, page), getPlatformUsage(platformKey), getPlatformLLMConfig(platformKey)]
       if (tab === 'health') promises.push(getPlatformHealth(platformKey))
       const results = await Promise.all(promises)
       setTenants(results[0].tenants)
       setTotal(results[0].total)
       setLimit(results[0].limit || 50)
       setUsage(results[1])
-      setProviders(results[2].providers)
-      setLlmConfig(results[3].config)
-      if (results[4]) setHealth(results[4])
+      setLlmConfig(results[2].config)
+      if (results[3]) setHealth(results[3])
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load')
       if (e?.response?.status === 403) { sessionStorage.removeItem('platform_key'); setPlatformKey(null) }
@@ -1290,7 +1254,7 @@ export default function PlatformPage() {
               <StatCard label="Revenue (30d)" value={`$${(usage.cost_usd_30d ?? 0).toFixed(2)}`} sub="billed model cost" icon={Zap} />
             </div>
 
-            <PlatformLLMConfigPanel platformKey={platformKey} providers={providers} config={llmConfig} onSaved={setLlmConfig} />
+            <RoutingOverviewPanel config={llmConfig} onOpenRouting={() => setTab('ai-routing')} />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Top tenants by usage */}
@@ -1455,8 +1419,19 @@ export default function PlatformPage() {
                                   </div>
                                   {/* LLM Provider override — full-width row */}
                                   <div className="mt-4 pt-4 border-t border-brand-line">
-                                    <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">LLM Provider</h4>
-                                    <LLMProviderSelect tenant={t} tenantDetail={tenantDetail} platformKey={platformKey} providers={providers} onUpdate={handleUpdate} saving={savingProvider} setSaving={setSavingProvider} />
+                                    <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">AI Alias Override</h4>
+                                    <TenantAliasOverride
+                                      tenant={t}
+                                      tenantDetail={tenantDetail}
+                                      platformKey={platformKey}
+                                      defaultAliases={{
+                                        standard: llmConfig?.standard_model || 'clarity-standard',
+                                        premium: llmConfig?.premium_model || 'clarity-premium',
+                                      }}
+                                      onUpdate={handleUpdate}
+                                      saving={savingProvider}
+                                      setSaving={setSavingProvider}
+                                    />
                                   </div>
                                   </>
                                 ) : (
@@ -1487,7 +1462,15 @@ export default function PlatformPage() {
         {tab === 'logs' && <LogsTab platformKey={platformKey} tenants={tenants} />}
 
         {/* ── AI Routing Tab ── */}
-        {tab === 'ai-routing' && <AIRoutingTab platformKey={platformKey} />}
+        {tab === 'ai-routing' && (
+          <AIRoutingTab
+            platformKey={platformKey}
+            onAuthError={() => {
+              sessionStorage.removeItem('platform_key')
+              setPlatformKey(null)
+            }}
+          />
+        )}
 
         {/* ── Health Tab ── */}
         {tab === 'health' && (
@@ -1533,15 +1516,7 @@ export default function PlatformPage() {
                   <h2 className="font-serif font-bold text-brand-ink flex items-center gap-2"><Server size={18} /> Service Status</h2>
                 </div>
                 <div className="p-5 space-y-4">
-                  {(health?.services || providers.length > 0 ? (
-                    health?.services || [
-                      { name: 'PostgreSQL', online: health?.tables?.length > 0 },
-                      { name: 'Redis', online: true },
-                      { name: 'API Server', online: true },
-                    ].concat(
-                      providers.map((p) => ({ name: p.label, online: p.configured }))
-                    )
-                  ) : [
+                  {(health?.services || [
                     { name: 'PostgreSQL', online: health?.tables?.length > 0 },
                     { name: 'Redis', online: true },
                     { name: 'API Server', online: true },

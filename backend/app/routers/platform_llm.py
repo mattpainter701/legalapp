@@ -31,6 +31,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
+from app.services.llm_routing import LITELLM_PROVIDER, upsert_platform_llm_config
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
@@ -621,6 +622,15 @@ async def save_routes(
         "premium": _normalize_route_entry(body.premium),
     }
     await _save_route_config(db, config)
+    await upsert_platform_llm_config(
+        db,
+        {
+            "standard_provider": LITELLM_PROVIDER,
+            "standard_model": settings.LITELLM_STANDARD_MODEL,
+            "premium_provider": LITELLM_PROVIDER,
+            "premium_model": settings.LITELLM_PREMIUM_MODEL,
+        },
+    )
 
     # Build new LiteLLM model list and hot-reload
     new_models: list[dict] = []
@@ -670,6 +680,10 @@ async def save_routes(
         "litellm_updated": litellm_updated,
         "models_registered": len(new_models),
         "fallbacks_registered": sum(len(item[next(iter(item))]) for item in fallback_settings),
+        "app_aliases": {
+            "standard": settings.LITELLM_STANDARD_MODEL,
+            "premium": settings.LITELLM_PREMIUM_MODEL,
+        },
     }
 
 
