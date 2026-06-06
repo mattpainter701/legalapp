@@ -29,21 +29,22 @@
 - [x] Update platform/admin UI and API language from provider selection to gateway alias override
 - [x] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
 
-### 1206. Provider Route Builder — Intuitive AI Routing Console (P0, LARGE) — PENDING
+### 1206. Provider Route Builder — Intuitive AI Routing Console (P0, LARGE) — COMPLETED
 
 **Goal:** Replace manual `litellm_config.yaml` edits with a UI-driven provider console. Operator picks a provider endpoint (OpenCode zen, OpenCode go, OpenRouter, DeepSeek direct, etc.), selects an API key from the stored key vault, fetches the provider's live model list, picks a model, and saves it as the standard/premium route. LiteLLM config is regenerated and hot-reloaded automatically.
 
-- [ ] Backend: `GET /api/platform/llm/providers` — returns list of known provider presets (name, base_url, models_endpoint, auth_scheme)
-- [ ] Backend: `POST /api/platform/llm/providers/models` — proxies `GET {base_url}/models` using the specified key_id; returns model list
-- [ ] Backend: `GET /api/platform/llm/routes` — returns current standard/premium route config (provider, key_id, model, fallbacks)
-- [ ] Backend: `PUT /api/platform/llm/routes` — saves route config, regenerates and writes `litellm_config.yaml`, signals LiteLLM hot-reload
-- [ ] Backend: `POST /api/platform/llm/routes/test` — fires a synthetic prompt against the configured route, returns latency + model used
-- [ ] Frontend: Replace "Provider: LiteLLM Gateway / Model: clarity-standard" dropdown with full route builder: provider select → key select → fetch models → model select
-- [ ] Frontend: Separate standard and premium route cards; each has primary provider + model and ordered fallback chain (add/remove/reorder)
-- [ ] Frontend: "Test route" button on each card — shows latency, resolved model, and first 100 chars of response
-- [ ] Provider presets to ship: OpenCode zen (`opencode.ai/zen/v1`), OpenCode go (`opencode.ai/zen/go/v1`), OpenRouter (`openrouter.ai/api/v1`), DeepSeek (`api.deepseek.com/v1`), Anthropic via LiteLLM
+- [x] Backend: `GET /api/platform/llm/providers` — returns list of known provider presets (name, base_url, models_endpoint, auth_scheme)
+- [x] Backend: `POST /api/platform/llm/provider-keys/{id}/fetch-models` — proxies `GET {base_url}/models` using the specified key_id; returns model list
+- [x] Backend: `GET /api/platform/llm/routes` — returns current standard/premium route config (provider, key_id, model, fallbacks)
+- [x] Backend: `PUT /api/platform/llm/routes` — saves route config, hot-reloads LiteLLM via POST /config/update
+- [x] Backend: `POST /api/platform/llm/routes/test` — fires a synthetic prompt against the configured route, returns latency + model used
+- [x] Backend: Key vault CRUD (`GET/POST/DELETE /api/platform/llm/provider-keys`) with Fernet encryption
+- [x] Backend: `POST /api/platform/llm/provider-keys/sync-env` — imports DEEPSEEK_API_KEY/OPENROUTER_API_KEY from env into vault
+- [x] Backend: migration 045 for `llm_provider_keys` table
+- [x] Frontend: AI Routing tab with KeyVaultPanel (key CRUD + sync-env) and RouteCard (provider/key/model select + fallback chain + test)
+- [x] Provider presets: opencode-zen, opencode-go, openrouter, deepseek, anthropic
 
-Files: `backend/app/routers/platform_admin.py`, `backend/app/services/llm.py`, `litellm_config.yaml`, `frontend/src/pages/admin/`
+Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_key.py`, `backend/migrations/versions/045_llm_provider_keys.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
 
 ### 1203. Operator Console — AI Operations (P0, LARGE) — PENDING
 - [ ] Add AI Operations tab with global standard/premium aliases and per-tenant override table

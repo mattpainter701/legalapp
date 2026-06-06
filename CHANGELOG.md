@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.14.0] — 2026-06-06
+
+### Sprint 12 — LiteLLM Gateway & AI Operations Control Plane
+
+### Added
+- **Task 1206 — Provider Route Builder:** Full UI-driven AI routing console in the Platform admin. Operators can now manage provider API keys, fetch live model lists, and configure standard/premium routes with fallback chains — all without touching config files.
+  - `llm_provider_keys` table (migration 045): Fernet-encrypted key vault with provider association and masked key hints
+  - `GET/POST/DELETE /api/platform/llm/provider-keys`: key vault CRUD
+  - `POST /api/platform/llm/provider-keys/sync-env`: imports `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` from environment into the vault
+  - `POST /api/platform/llm/provider-keys/{id}/fetch-models`: proxies provider `/models` endpoint via stored key
+  - `GET/PUT /api/platform/llm/routes`: reads/writes route config and hot-reloads LiteLLM via `POST /config/update`
+  - `POST /api/platform/llm/routes/test`: validates a route with a synthetic prompt, returns latency + first response tokens
+  - Provider presets: OpenCode Zen, OpenCode Go, OpenRouter, DeepSeek, Anthropic
+  - **AI Routing tab** in PlatformPage: KeyVaultPanel (key list, add form, sync-env button) + RouteCard (provider/key/model selection, fallback chain builder, route test)
+
+### Fixed
+- `admin.py`: add `from_attributes=True` to `TenantSettingsResponse.model_validate()` calls
+- `platform.py`: guard `PLATFORM_SECRET_KEY` length < 32, fix `pg_total_relation_size(relid)` column reference
+- `.env.hypervisor`: clear leftover placeholder instruction from `PLATFORM_SECRET_KEY`
+- `.env.prod.example`: add `openssl rand -hex 32` generation comment for `PLATFORM_SECRET_KEY`
+
 ## [0.13.9] — 2026-06-06
 
 ### Fixed
