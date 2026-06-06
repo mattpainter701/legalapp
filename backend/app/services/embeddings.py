@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self):
-        if settings.LITELLM_ENABLED:
-            # Route embeddings through LiteLLM for unified cost tracking and fallback
+        if settings.LITELLM_ENABLED and settings.LITELLM_EMBEDDING_MODEL:
+            # Route embeddings through LiteLLM when a model alias is configured
             self.client = AsyncOpenAI(
                 api_key=settings.LITELLM_API_KEY or "sk-local-litellm",
                 base_url=settings.LITELLM_BASE_URL,
             )
-            self.model = "clarity-embeddings"
+            self.model = settings.LITELLM_EMBEDDING_MODEL
         else:
             # Direct provider fallback when LiteLLM is disabled
             api_key = (

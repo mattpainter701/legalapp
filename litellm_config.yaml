@@ -1,10 +1,10 @@
 model_list:
   # Standard profile: low-cost/high-availability query routing.
-  # Primary: OpenCode Zen/OpenAI-compatible endpoint.
+  # Primary: OpenCode.ai via DEEPSEEK_BASE_URL (same key, faster endpoint than zen).
   - model_name: clarity-standard
     litellm_params:
       model: openai/deepseek-chat
-      api_base: os.environ/OPENCODE_ZEN_BASE_URL
+      api_base: os.environ/DEEPSEEK_BASE_URL
       api_key: os.environ/DEEPSEEK_API_KEY
 
   - model_name: clarity-standard-openrouter-free
@@ -12,44 +12,40 @@ model_list:
       model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: clarity-standard-openrouter-deepseek
+  - model_name: clarity-standard-openrouter-qwen
     litellm_params:
-      model: openrouter/deepseek/deepseek-r1:free
+      model: openrouter/qwen/qwen3-235b-a22b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: clarity-standard-openrouter-llama
+    litellm_params:
+      model: openrouter/meta-llama/llama-4-maverick:free
       api_key: os.environ/OPENROUTER_API_KEY
 
   # Premium profile: higher-quality drafting/reasoning route.
-  # Primary: DeepSeek via DEEPSEEK_BASE_URL (deepseek-chat is the current stable alias).
   - model_name: clarity-premium
     litellm_params:
       model: openai/deepseek-chat
       api_base: os.environ/DEEPSEEK_BASE_URL
       api_key: os.environ/DEEPSEEK_API_KEY
 
-  - model_name: clarity-premium-openrouter
-    litellm_params:
-      model: openrouter/deepseek/deepseek-r1:free
-      api_key: os.environ/OPENROUTER_API_KEY
-
   - model_name: clarity-premium-openrouter-qwen
     litellm_params:
       model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
-  # Embeddings: routed through gateway for unified cost tracking
-  - model_name: clarity-embeddings
+  - model_name: clarity-premium-openrouter-llama
     litellm_params:
-      model: openai/text-embedding-3-small
-      api_key: os.environ/OPENAI_API_KEY
+      model: openrouter/meta-llama/llama-4-maverick:free
+      api_key: os.environ/OPENROUTER_API_KEY
 
 litellm_settings:
   drop_params: true
   turn_off_message_logging: true
-  request_timeout: 120
-  num_retries: 2
-  allowed_fails: 3
-  cooldown_time: 60
-  # Langfuse callbacks — only activate when LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY are set.
-  # Silently skipped otherwise. Tracks latency, cost, and errors without logging message content.
+  request_timeout: 60
+  num_retries: 1
+  allowed_fails: 2
+  cooldown_time: 30
   success_callback: ["langfuse"]
   failure_callback: ["langfuse"]
 
@@ -58,10 +54,11 @@ router_settings:
   fallbacks:
     - clarity-standard:
         - clarity-standard-openrouter-free
-        - clarity-standard-openrouter-deepseek
+        - clarity-standard-openrouter-qwen
+        - clarity-standard-openrouter-llama
     - clarity-premium:
-        - clarity-premium-openrouter
         - clarity-premium-openrouter-qwen
+        - clarity-premium-openrouter-llama
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY

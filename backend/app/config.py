@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str = ""
     LITELLM_STANDARD_MODEL: str = "clarity-standard"
     LITELLM_PREMIUM_MODEL: str = "clarity-premium"
+    LITELLM_EMBEDDING_MODEL: str = ""
     LITELLM_DB_PASSWORD: str = ""
     LITELLM_DATABASE_URL: str = ""
 
