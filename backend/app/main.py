@@ -57,10 +57,16 @@ from app.routers.users import router as users_router
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+# Module-level flag tracking LiteLLM gateway reachability.
+# Set during lifespan startup; read by /health/llm endpoint.
+_litellm_healthy: bool = False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle events."""
+    global _litellm_healthy
+
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info(f"Upload directory ensured: {settings.UPLOAD_DIR}")
 
@@ -84,8 +90,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
 
-    # LiteLLM gateway reachability check (warn-only)
-    if settings.LITELLM_ENABLED:
+    # LiteLLM gateway reachability check
+    if not settings.LITELLM_ENABLED:
+        logger.warning(
+            "LITELLM_ENABLED is False — AI features are disabled. "
+            "Set LITELLM_ENABLED=true in production."
+        )
+        _litellm_healthy = False
+        app.state.litellm_healthy = False
+    else:
         try:
             import httpx as _httpx
 
@@ -93,8 +106,15 @@ async def lifespan(app: FastAPI):
                 _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
                 _r.raise_for_status()
             logger.info("LiteLLM gateway reachable")
+            _litellm_healthy = True
+            app.state.litellm_healthy = True
         except Exception as exc:
-            logger.warning(f"LiteLLM gateway unreachable at startup: {exc}")
+            logger.error(
+                "LiteLLM gateway unreachable at startup — AI features will fail "
+                f"until gateway is available: {exc}"
+            )
+            _litellm_healthy = False
+            app.state.litellm_healthy = False
 
     # Start APScheduler
     try:
@@ -221,7 +241,7 @@ app.include_router(users_router)
 
 
 # ─────────────────────────────────────────────────────
-# Health endpoint
+# Health endpoints
 # ─────────────────────────────────────────────────────
 @app.get("/health", tags=["health"])
 async def health_check():
@@ -239,6 +259,30 @@ async def health_check():
         "database": "connected" if db_ok else "unavailable",
         "version": "1.0.0",
     }
+
+
+@app.get("/health/llm", tags=["health"])
+async def health_check_llm():
+    """LiteLLM gateway liveness endpoint.
+
+    Always returns HTTP 200 so load balancers do not flip on gateway hiccups.
+    Consumers should inspect the ``status`` field:
+    - ``"disabled"``  — LITELLM_ENABLED is False
+    - ``"ok"``        — gateway is reachable
+    - ``"degraded"``  — gateway ping failed; ``detail`` contains the error
+    """
+    if not settings.LITELLM_ENABLED:
+        return {"status": "disabled"}
+
+    try:
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient(timeout=5.0) as _c:
+            _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
+            _r.raise_for_status()
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "degraded", "detail": str(exc)}
 
 
 # ─────────────────────────────────────────────────────

@@ -35,6 +35,12 @@ model_list:
       model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
+  # Embeddings: routed through gateway for unified cost tracking
+  - model_name: clarity-embeddings
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
 litellm_settings:
   drop_params: true
   turn_off_message_logging: true
@@ -42,9 +48,13 @@ litellm_settings:
   num_retries: 2
   allowed_fails: 3
   cooldown_time: 60
+  # Langfuse callbacks — only activate when LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY are set.
+  # Silently skipped otherwise. Tracks latency, cost, and errors without logging message content.
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
 
 router_settings:
-  routing_strategy: simple-shuffle
+  routing_strategy: cost-based-routing
   fallbacks:
     - clarity-standard:
         - clarity-standard-openrouter-free

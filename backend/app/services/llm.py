@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import AsyncGenerator, List, Tuple
 
 from openai import APIConnectionError, APIError, AsyncOpenAI
@@ -49,6 +50,20 @@ FIRM CONTEXT (firm documents and relevant authority - may be empty):
 """
 
 
+def _build_system_message(system_prompt: str) -> dict:
+    """Build the system message dict, adding cache-control hints for long prompts.
+
+    For providers that support prompt caching (Anthropic, Gemini via LiteLLM),
+    the cache_control hint signals that this content should be cached. LiteLLM
+    drops the key for providers that don't support it (drop_params: true in
+    litellm_config.yaml), so this is a no-op for unsupported providers.
+    """
+    msg: dict = {"role": "system", "content": system_prompt}
+    if len(system_prompt) > 500:
+        msg["cache_control"] = {"type": "ephemeral"}
+    return msg
+
+
 class LLMService:
     """LiteLLM gateway client.
 
@@ -94,11 +109,15 @@ class LLMService:
         provider: str = "litellm",
         model: str | None = None,
         user_name: str = "",
+        response_format: dict | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
         ``provider`` is retained only for old call-site compatibility and is
         ignored; ``model`` must be a LiteLLM model alias.
+        ``response_format`` accepts e.g. ``{"type": "json_object"}`` for
+        structured output — LiteLLM drops it silently for models that don't
+        support it (drop_params: true in gateway config).
         """
         system_prompt = self._build_system_prompt(
             tenant_name=tenant_name,
@@ -107,15 +126,22 @@ class LLMService:
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)
-        all_messages = [{"role": "system", "content": system_prompt}] + messages
+        request_id = str(uuid.uuid4())
+        logger.debug("LLM complete request_id=%s model=%s", request_id, gateway_model)
+        all_messages = [_build_system_message(system_prompt)] + messages
+
+        create_kwargs: dict = dict(
+            model=gateway_model,
+            messages=all_messages,
+            temperature=0.1,
+            max_tokens=4096,
+            extra_headers={"x-request-id": request_id},
+        )
+        if response_format:
+            create_kwargs["response_format"] = response_format
 
         try:
-            response = await self.client.chat.completions.create(
-                model=gateway_model,
-                messages=all_messages,
-                temperature=0.1,
-                max_tokens=4096,
-            )
+            response = await self.client.chat.completions.create(**create_kwargs)
             response_text = response.choices[0].message.content or ""
             tokens_in = response.usage.prompt_tokens if response.usage else 0
             tokens_out = response.usage.completion_tokens if response.usage else 0
@@ -143,7 +169,11 @@ class LLMService:
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)
-        all_messages = [{"role": "system", "content": system_prompt}] + messages
+        request_id = str(uuid.uuid4())
+        logger.debug(
+            "LLM stream_complete request_id=%s model=%s", request_id, gateway_model
+        )
+        all_messages = [_build_system_message(system_prompt)] + messages
 
         try:
             stream = await self.client.chat.completions.create(
@@ -152,6 +182,7 @@ class LLMService:
                 temperature=0.1,
                 max_tokens=4096,
                 stream=True,
+                extra_headers={"x-request-id": request_id},
             )
             async for chunk in stream:
                 if chunk.choices[0].delta.content:

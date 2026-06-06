@@ -130,6 +130,7 @@ class RetrievalPlanner:
             context=system_prompt,
             provider=route.provider if route else "litellm",
             model=route.model if route else None,
+            response_format={"type": "json_object"},
         )
 
         plan = self._parse_response(response_text)
