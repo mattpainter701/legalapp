@@ -43,7 +43,10 @@ async def _send_via_microsoft(
             resp = await client.post(
                 f"{GRAPH_BASE}/users/{from_email}/sendMail",
                 json=payload,
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
             )
             return resp.status_code == 202
     except Exception as exc:
@@ -107,7 +110,9 @@ async def send_admin_notification(
                 token, ms_cred.service_account_email, to_emails, subject, html_body
             )
             if sent:
-                logger.info("Admin notification sent via Microsoft Graph to %s", to_emails)
+                logger.info(
+                    "Admin notification sent via Microsoft Graph to %s", to_emails
+                )
                 return
 
     # Try Google
@@ -128,7 +133,9 @@ async def send_admin_notification(
 
     # SMTP fallback
     try:
-        await email_service.send_email(to=to_emails, subject=subject, html_body=html_body)
+        await email_service.send_email(
+            to=to_emails, subject=subject, html_body=html_body
+        )
         logger.info("Admin notification sent via SMTP to %s", to_emails)
     except Exception as exc:
         logger.error("Failed to send admin notification: %s", exc)

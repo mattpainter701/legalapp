@@ -116,15 +116,24 @@ async def lifespan(app: FastAPI):
             _litellm_healthy = False
             app.state.litellm_healthy = False
 
-    # Start APScheduler
-    try:
-        scheduler = LegalScheduler()
-        scheduler.start()
-        app.state.scheduler = scheduler
-        logger.info("Scheduler started")
-    except Exception as exc:
-        logger.error(f"Scheduler failed to start: {exc}")
+    # Start APScheduler — ONLY in the single process designated by RUN_SCHEDULER.
+    # Under `uvicorn --workers N` the lifespan runs in every worker, so starting
+    # the scheduler unconditionally would fire each cron job N times (duplicate
+    # invoices / emails). In prod the API workers set RUN_SCHEDULER=false and a
+    # dedicated single-process `scheduler` service sets it to true. Jobs also take
+    # a Postgres advisory lock as a backstop against any stray second runner.
+    if settings.RUN_SCHEDULER:
+        try:
+            scheduler = LegalScheduler()
+            scheduler.start()
+            app.state.scheduler = scheduler
+            logger.info("Scheduler started (RUN_SCHEDULER=true)")
+        except Exception as exc:
+            logger.error(f"Scheduler failed to start: {exc}")
+            app.state.scheduler = None
+    else:
         app.state.scheduler = None
+        logger.info("Scheduler disabled in this process (RUN_SCHEDULER=false)")
 
     # Initialize cache managers
     try:
@@ -178,12 +187,15 @@ if settings.EXTRA_CORS_ORIGINS:
     ]
     origins.extend(extra_origins)
 
+# Origins are an explicit allow-list (never "*") because credentials are enabled —
+# a wildcard origin with credentials is both invalid and unsafe. Methods/headers
+# are pinned to what the SPA + platform key actually use rather than "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Platform-Key"],
 )
 
 # ─────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 Test fixtures for Clarity Legal backend.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -101,10 +103,22 @@ async def db_session(test_engine):
     )
     async with factory() as session:
         if table_list:
-            await session.execute(
-                _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
-            )
-            await session.commit()
+            stmt = _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
+            # The ApiAccessLogMiddleware writes access logs in a detached
+            # asyncio task on its own session; one of those writes can still be
+            # holding locks on api_access_logs/tenants when this TRUNCATE runs,
+            # producing a transient deadlock. Retry a few times before failing.
+            for attempt in range(5):
+                try:
+                    await session.execute(stmt)
+                    await session.commit()
+                    break
+                except DBAPIError as exc:
+                    await session.rollback()
+                    if "deadlock" in str(exc).lower() and attempt < 4:
+                        await asyncio.sleep(0.2 * (attempt + 1))
+                        continue
+                    raise
         yield session
         await session.rollback()
 

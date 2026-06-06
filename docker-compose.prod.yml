@@ -23,6 +23,11 @@ services:
     depends_on:
       migrator:
         condition: service_completed_successfully
+    environment:
+      # API workers must NOT run the scheduler — the dedicated `scheduler`
+      # service below owns it. Otherwise each of the 4 workers fires every cron
+      # job, causing duplicate invoices/emails.
+      RUN_SCHEDULER: "false"
     volumes:
       - /data/legalapp/uploads:/app/uploads   # host-mounted encrypted volume
     command: >
@@ -33,6 +38,34 @@ services:
         limits:
           memory: 4G
           cpus: '2.0'
+
+  # Dedicated single-process scheduler — the ONLY process with RUN_SCHEDULER=true,
+  # so every cron job fires exactly once. Runs the same image/app with one worker
+  # and is not placed behind nginx (it serves no user traffic). Job-level Postgres
+  # advisory locks remain as a backstop against any accidental second runner.
+  scheduler:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      RUN_SCHEDULER: "true"
+    volumes:
+      - /data/legalapp/uploads:/app/uploads
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      --workers 1 --log-level info
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
 
   litellm:
     restart: unless-stopped

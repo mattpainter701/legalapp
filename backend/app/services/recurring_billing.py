@@ -95,14 +95,42 @@ async def generate_recurring_invoices() -> dict:
                     skipped += 1
                     continue
 
+                # Calculate billing period
+                period_start = last_date or (today - timedelta(days=cycle_days))
+                period_end = today
+
+                # idempotency: a (matter, billing_period_end) pair uniquely
+                # identifies a recurring run for this cycle — period_end is
+                # always `today` here, so two runs on the same day (or two
+                # concurrent runners) would otherwise each create an invoice.
+                # Guard by checking for an existing invoice for this matter whose
+                # billing_period_end == period_end and skip if one exists.
+                # NOTE: the DB has no unique constraint on
+                # (matter_id, billing_period_end); the advisory lock in the
+                # scheduler (job_lock) is the cross-process serializer, and this
+                # check covers same-day re-runs. Follow-up: a partial unique index
+                # on (tenant_id, matter_id, billing_period_end) would make this
+                # race-proof at the DB level (migrations owned elsewhere).
+                existing_inv = await db.execute(
+                    select(Invoice.id).where(
+                        Invoice.tenant_id == matter.tenant_id,
+                        Invoice.matter_id == matter.id,
+                        Invoice.billing_period_end == period_end,
+                    )
+                )
+                if existing_inv.first() is not None:
+                    logger.info(
+                        "Skipping matter %s — invoice already exists for period ending %s",
+                        matter.id,
+                        period_end,
+                    )
+                    skipped += 1
+                    continue
+
                 # Generate invoice number
                 invoice_number = _make_invoice_number(
                     matter.tenant_id, today, generated + 1
                 )
-
-                # Calculate billing period
-                period_start = last_date or (today - timedelta(days=cycle_days))
-                period_end = today
 
                 # Build line items
                 line_items = []
