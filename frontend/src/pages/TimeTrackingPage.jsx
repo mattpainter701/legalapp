@@ -96,7 +96,7 @@ export default function TimeTrackingPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Time Tracking</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
-            {totalHours.toFixed(1)}h logged · ${totalAmount.toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
+            {totalHours.toFixed(1)}h logged · ${Number(totalAmount).toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
           </p>
         </div>
         <button
@@ -223,7 +223,7 @@ export default function TimeTrackingPage() {
                   </span>
                 </td>
                 <td style={{ padding: 8 }}>{e.hours}h</td>
-                <td style={{ padding: 8, fontWeight: 600 }}>${e.amount.toFixed(2)}</td>
+                <td style={{ padding: 8, fontWeight: 600 }}>${Number(e.amount).toFixed(2)}</td>
                 <td style={{ padding: 8 }}>
                   <span style={{
                     fontSize: 11, padding: '2px 8px', borderRadius: 10,

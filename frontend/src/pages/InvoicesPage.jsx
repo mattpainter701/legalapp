@@ -65,7 +65,7 @@ export default function InvoicesPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Invoices</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
-            {invoices.length} invoices · ${totalOutstanding.toFixed(2)} outstanding
+            {invoices.length} invoices · ${Number(totalOutstanding).toFixed(2)} outstanding
           </p>
         </div>
         <button
@@ -146,8 +146,8 @@ export default function InvoicesPage() {
                   <td style={{ padding: 8, color: '#2563eb', fontWeight: 500 }}>{inv.invoice_number}</td>
                   <td style={{ padding: 8 }}>{inv.issue_date}</td>
                   <td style={{ padding: 8 }}>{inv.due_date}</td>
-                  <td style={{ padding: 8 }}>${inv.subtotal.toFixed(2)}</td>
-                  <td style={{ padding: 8, fontWeight: 600 }}>${inv.total.toFixed(2)}</td>
+                  <td style={{ padding: 8 }}>${Number(inv.subtotal).toFixed(2)}</td>
+                  <td style={{ padding: 8, fontWeight: 600 }}>${Number(inv.total).toFixed(2)}</td>
                   <td style={{ padding: 8 }}>
                     <span style={{
                       fontSize: 11, padding: '2px 8px', borderRadius: 10,
