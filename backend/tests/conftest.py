@@ -2,6 +2,7 @@
 Test fixtures for Clarity Legal backend.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -101,10 +103,23 @@ async def db_session(test_engine):
     )
     async with factory() as session:
         if table_list:
-            await session.execute(
-                _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
-            )
-            await session.commit()
+            # The ApiAccessLogMiddleware writes api_access_logs on its own
+            # session and commits asynchronously, so its INSERT can still hold a
+            # RowShareLock when this TRUNCATE asks for AccessExclusiveLock —
+            # Postgres then reports a deadlock and kills one side. Retry the
+            # TRUNCATE a few times so the reset wins once the stray write clears.
+            stmt = _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
+            for attempt in range(10):
+                try:
+                    await session.execute(stmt)
+                    await session.commit()
+                    break
+                except DBAPIError as exc:
+                    await session.rollback()
+                    is_deadlock = getattr(exc.orig, "sqlstate", None) == "40P01"
+                    if not is_deadlock or attempt == 9:
+                        raise
+                    await asyncio.sleep(0.2)
         yield session
         await session.rollback()
 
