@@ -8,7 +8,28 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    # Short-lived access token; pair with rotating refresh tokens (see auth router).
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Refresh-token lifetime. Refresh tokens are rotating + single-use and are
+    # tracked server-side (Redis) so they can be revoked across all workers.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+
+    # ── Auth cookies ─────────────────────────────────────────────────────────
+    # When unset (None), Secure/SameSite are derived from BACKEND_URL scheme.
+    COOKIE_SECURE: bool | None = None
+    COOKIE_SAMESITE: str = "lax"  # lax | strict | none
+
+    # ── Background scheduler ─────────────────────────────────────────────────
+    # APScheduler must run in EXACTLY ONE process. In prod, API workers set this
+    # to False and a single dedicated scheduler container sets it to True. Jobs
+    # also take a Postgres advisory lock so a stray second runner cannot double-fire.
+    RUN_SCHEDULER: bool = True
+
+    # ── Reverse proxy / rate limiting ────────────────────────────────────────
+    # Number of trusted proxy hops in front of the app (e.g. nginx = 1). The
+    # client IP is taken as the Nth-from-rightmost X-Forwarded-For entry so a
+    # client cannot spoof its rate-limit identity by sending its own XFF header.
+    TRUSTED_PROXY_HOPS: int = 1
 
     MICROSOFT_CLIENT_ID: str = ""
     MICROSOFT_CLIENT_SECRET: str = ""

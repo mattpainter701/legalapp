@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db
+from app.database import enable_rls_bypass, get_db
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -161,6 +161,115 @@ def _create_access_token(user: User, tenant: Tenant) -> str:
         "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+# ── Cookie + refresh-token helpers ─────────────────────────────────────────────
+
+
+def _cookie_flags() -> dict:
+    """Return consistent cookie security flags for all auth cookies.
+
+    ``secure`` is taken from ``COOKIE_SECURE`` if explicitly set, otherwise
+    derived from whether ``BACKEND_URL`` is https. ``samesite`` is normalised to
+    the capitalised form Starlette expects ("Lax"/"Strict"/"None"). Per the spec,
+    ``SameSite=None`` requires ``Secure``, so we force ``secure=True`` in that case.
+    """
+    if settings.COOKIE_SECURE is not None:
+        secure = settings.COOKIE_SECURE
+    else:
+        secure = settings.BACKEND_URL.startswith("https://")
+    samesite = settings.COOKIE_SAMESITE.capitalize()
+    if samesite == "None":
+        # SameSite=None is only valid alongside Secure.
+        secure = True
+    return {"secure": secure, "samesite": samesite}
+
+
+def _refresh_key(token: str) -> str:
+    return f"refresh:{token}"
+
+
+def _refresh_family_key(family: str) -> str:
+    return f"refresh_family:{family}"
+
+
+_REFRESH_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+
+
+async def _create_refresh_token(
+    request: Request, user: User, family: str | None = None
+) -> str:
+    """Mint a new opaque refresh token, persisted in Redis and tracked by family.
+
+    The ``family`` identifies a rotation chain; when omitted a fresh uuid family
+    is created (issued at login / register / oauth). On rotation the caller
+    passes the existing family so the new token joins the same chain — which lets
+    us revoke the whole chain on token-reuse detection.
+
+    Redis layout:
+      ``refresh:{token}``        -> JSON {"user_id", "family"}, TTL = REFRESH_TTL
+      ``refresh_family:{family}``-> SET of live tokens in the chain, TTL = REFRESH_TTL
+
+    If Redis is unavailable we still return a token, but it is NOT persisted, so
+    ``/auth/refresh`` will reject it. Refresh is therefore effectively disabled
+    in dev without Redis — logged loudly so it is not mistaken for a prod config.
+    """
+    token = secrets.token_urlsafe(48)
+    if family is None:
+        family = str(uuid.uuid4())
+
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        logger.warning(
+            "Redis unavailable: refresh token NOT persisted; /auth/refresh will "
+            "reject it. Refresh-token rotation is disabled (dev-only)."
+        )
+        return token
+
+    payload = _json.dumps({"user_id": str(user.id), "family": family})
+    await redis.setex(_refresh_key(token), _REFRESH_TTL, payload)
+    await redis.sadd(_refresh_family_key(family), token)
+    # Bump the family-set TTL so it expires with its tokens (sadd doesn't set one).
+    await redis.expire(_refresh_family_key(family), _REFRESH_TTL)
+    return token
+
+
+async def _revoke_refresh_family(request: Request, family: str) -> None:
+    """Delete every token in a rotation chain plus the chain set itself.
+
+    Used both on logout and on reuse-detection (a presented token that is no
+    longer live but whose family set still exists -> someone replayed an old,
+    already-rotated token; nuke the whole chain).
+    """
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return
+    members = await redis.smembers(_refresh_family_key(family))
+    for member in members or []:
+        tok = member.decode("utf-8") if isinstance(member, bytes) else member
+        await redis.delete(_refresh_key(tok))
+    await redis.delete(_refresh_family_key(family))
+
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    """Set both the access and refresh cookies with consistent, hardened flags."""
+    flags = _cookie_flags()
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+        **flags,
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=_REFRESH_TTL,
+        path="/",
+        **flags,
+    )
 
 
 # ── Tenant / user upsert helpers ───────────────────────────────────────────────
@@ -411,6 +520,10 @@ async def microsoft_callback(
         staff_size = None
 
     async with db.begin():
+        # Cross-tenant lookups (tenant-by-domain and the user-by-email/subject
+        # search inside _get_or_create_user) run without a tenant context here,
+        # so allow the RLS bypass for this auth transaction.
+        await enable_rls_bypass(db)
         tenant_exists = False
         if signup_data and signup_data.get("company_name"):
             result = await db.execute(select(Tenant).where(Tenant.domain == domain))
@@ -632,6 +745,10 @@ async def google_callback(
         staff_size = None
 
     async with db.begin():
+        # Cross-tenant lookups (tenant-by-domain and the user-by-email/subject
+        # search inside _get_or_create_user) run without a tenant context here,
+        # so allow the RLS bypass for this auth transaction.
+        await enable_rls_bypass(db)
         tenant_exists = False
         if signup_data and signup_data.get("company_name"):
             result = await db.execute(select(Tenant).where(Tenant.domain == domain))
@@ -704,22 +821,16 @@ async def exchange_oauth_callback(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid OAuth callback token")
 
+    # Cross-tenant user-by-id lookup with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
     result = await db.execute(select(User).where(User.id == payload.get("sub")))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
-    # Set httpOnly cookie with secure flags
-    # Only set Secure in production (https://...) — dev uses http://localhost
-    is_production = settings.BACKEND_URL.startswith("https://")
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=is_production,
-        samesite="Lax",
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    # Set hardened httpOnly access + refresh cookies.
+    refresh_token = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, token, refresh_token)
 
     return TokenResponse(
         access_token=token,
@@ -738,10 +849,13 @@ async def exchange_oauth_callback(
 async def register(
     body: RegisterRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     body.email = body.email.lower().strip()
 
+    # Cross-tenant email-exists check with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
     result = await db.execute(select(User).where(User.email == body.email))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -791,6 +905,8 @@ async def register(
     await db.refresh(tenant)
 
     jwt_token = _create_access_token(user, tenant)
+    refresh_token = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, jwt_token, refresh_token)
     return TokenResponse(
         access_token=jwt_token,
         user_id=str(user.id),
@@ -804,11 +920,14 @@ async def register(
 @router.post("/login")
 async def login(
     body: LoginRequest,
+    request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     body.email = body.email.lower().strip()
 
+    # Cross-tenant login-by-email lookup with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
     result = await db.execute(
         select(User)
         .where(User.email == body.email)
@@ -825,18 +944,10 @@ async def login(
 
     tenant = user.tenant
     jwt_token = _create_access_token(user, tenant)
+    refresh_token = await _create_refresh_token(request, user)
 
-    # Set httpOnly cookie with secure flags
-    # Only set Secure in production (https://...) — dev uses http://localhost
-    is_production = settings.BACKEND_URL.startswith("https://")
-    response.set_cookie(
-        key="access_token",
-        value=jwt_token,
-        httponly=True,
-        secure=is_production,
-        samesite="Lax",
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    # Set hardened httpOnly access + refresh cookies.
+    _set_auth_cookies(response, jwt_token, refresh_token)
 
     # For backward compatibility, still return token in body (but frontend will prefer cookie)
     return TokenResponse(
@@ -866,6 +977,8 @@ async def forgot_password(
 ):
     body.email = body.email.lower().strip()
 
+    # Cross-tenant lookup-by-email with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
@@ -918,6 +1031,8 @@ async def reset_password(
     if not email:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
+    # Cross-tenant lookup-by-email with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
@@ -945,6 +1060,16 @@ async def logout(request: Request, response: Response):
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ", 1)[1]
 
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        # Revocation is only reliable with Redis (shared across all workers). The
+        # per-worker in-memory blacklist below is a dev-only best-effort and must
+        # NOT be relied on as a security control in multi-worker production.
+        logger.warning(
+            "Redis unavailable on logout: access-token revocation is per-worker "
+            "(dev-only) and refresh-token revocation is skipped."
+        )
+
     if token:
         try:
             payload = jwt.decode(
@@ -954,7 +1079,6 @@ async def logout(request: Request, response: Response):
             exp = payload.get("exp", 0)
             if jti and exp:
                 ttl = max(0, exp - int(_time.time()))
-                redis = getattr(request.app.state, "redis", None)
                 if redis:
                     await redis.setex(f"jti:{jti}", ttl, "1")
                 else:
@@ -962,10 +1086,101 @@ async def logout(request: Request, response: Response):
         except Exception:
             pass
 
-    # Clear the httpOnly cookie
-    response.delete_cookie("access_token", httponly=True, samesite="Lax")
+    # Revoke the refresh-token rotation chain so it can't be replayed.
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token and redis:
+        try:
+            raw = await redis.get(_refresh_key(refresh_token))
+            if raw:
+                data = _json.loads(
+                    raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                )
+                family = data.get("family")
+                if family:
+                    await _revoke_refresh_family(request, family)
+                else:
+                    await redis.delete(_refresh_key(refresh_token))
+        except Exception:
+            pass
+
+    # Clear both auth cookies.
+    response.delete_cookie("access_token", httponly=True, samesite="Lax", path="/")
+    response.delete_cookie("refresh_token", httponly=True, samesite="Lax", path="/")
 
     return {"message": "Logged out successfully"}
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """Rotate a refresh token: issue a fresh access + refresh token, single-use.
+
+    Reads the refresh token from the ``refresh_token`` cookie (falling back to a
+    JSON body ``{"refresh_token": ...}``). On success the presented token is
+    consumed (deleted) and a new token in the SAME rotation family is issued.
+
+    Reuse detection: if a presented token is not live in Redis but its family
+    set still exists, an already-rotated token was replayed — we revoke the
+    entire family and reject. Redis is required; without it refresh is disabled.
+    """
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        raise HTTPException(
+            status_code=401, detail="Refresh unavailable (no session store)"
+        )
+
+    token = request.cookies.get("refresh_token")
+    if not token:
+        try:
+            body = await request.json()
+            token = (body or {}).get("refresh_token")
+        except Exception:
+            token = None
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing refresh token")
+
+    raw = await redis.get(_refresh_key(token))
+    if not raw:
+        # Token not live. If we can recover its family from a parallel index it
+        # would mean replay; we don't store a reverse index for an expired token,
+        # so simply reject. (Live-token reuse is caught below by consuming it.)
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    data = _json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    family = data.get("family")
+    user_id = data.get("user_id")
+
+    # Consume the presented token (single-use). If it's somehow already gone
+    # between GET and DELETE, treat as reuse and revoke the family.
+    removed = await redis.delete(_refresh_key(token))
+    if not removed:
+        if family:
+            await _revoke_refresh_family(request, family)
+        raise HTTPException(status_code=401, detail="Refresh token reuse detected")
+    if family:
+        await redis.srem(_refresh_family_key(family), token)
+
+    # Auth-path cross-tenant lookup by id (no tenant context yet).
+    await enable_rls_bypass(db)
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        if family:
+            await _revoke_refresh_family(request, family)
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    tenant = user.tenant
+    access_token = _create_access_token(user, tenant)
+    new_refresh = await _create_refresh_token(request, user, family=family)
+    _set_auth_cookies(response, access_token, new_refresh)
+
+    return TokenResponse(
+        access_token=access_token,
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
 
 
 @router.get("/me", response_model=UserInfo)
@@ -992,7 +1207,6 @@ async def get_calendar_providers(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    from app.models.user_oauth_token import UserOAuthToken
     from app.services.token_vault import get_fresh_user_token
 
     providers = []

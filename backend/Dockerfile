@@ -1,3 +1,6 @@
+# pin by digest in prod: replace the line below with a digest-pinned ref, e.g.
+#   FROM python:3.11-slim@sha256:<TODO-REAL-DIGEST> AS base
+# Obtain the current digest with:  docker buildx imagetools inspect python:3.11-slim
 FROM python:3.11-slim AS base
 
 WORKDIR /app
@@ -19,12 +22,28 @@ RUN pip install --upgrade pip && \
 
 FROM base AS final
 
+# Dependencies installed to /usr/local are world-readable, so the non-root
+# user below can still import them.
 COPY --from=builder /install /usr/local
 
 COPY . .
 
-RUN mkdir -p /app/uploads
+# ── Non-root runtime user ─────────────────────────────────────────────────────
+# Fixed UID/GID 10001 so host-mounted volumes can be chowned to a known owner.
+# IMPORTANT (prod): the host dir bind-mounted at /app/uploads
+# (e.g. /data/legalapp/uploads) must be writable by UID 10001 — run on the host:
+#   sudo chown -R 10001:10001 /data/legalapp/uploads
+RUN groupadd --system --gid 10001 appuser \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home appuser \
+    && mkdir -p /app/uploads \
+    && chown -R 10001:10001 /app
 
 EXPOSE 8000
+
+# Lightweight healthcheck — image has no curl, so use the stdlib via python.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+
+USER appuser
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

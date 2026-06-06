@@ -19,18 +19,51 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Response interceptor: handle 401 by clearing state and redirecting
+// Response interceptor: on 401, attempt a single rotating-refresh, then retry the
+// original request once. Concurrent 401s share one in-flight refresh (single-flight)
+// so we never fire multiple /auth/refresh calls. If refresh fails, clear state and
+// redirect to login.
+let refreshPromise = null
+
+// Paths for which a 401 must NOT trigger a refresh attempt (would loop / is terminal).
+const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']
+
+const redirectToLogin = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  window.location.href = '/login'
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      // Clear localStorage fallback (for backward compat during transition)
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      // Cookie will be cleared by the logout endpoint
-      window.location.href = '/login'
+  async (error) => {
+    const { response, config } = error
+    if (!response || response.status !== 401 || !config) {
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+    const url = config.url || ''
+    if (config._retried || NO_REFRESH_PATHS.some((p) => url.includes(p))) {
+      // Already retried once, or this IS an auth endpoint — give up.
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
+    try {
+      // Single-flight: the first 401 starts the refresh; others await it.
+      if (!refreshPromise) {
+        refreshPromise = api.post('/auth/refresh').finally(() => {
+          refreshPromise = null
+        })
+      }
+      await refreshPromise
+    } catch (refreshError) {
+      redirectToLogin()
+      return Promise.reject(refreshError)
+    }
+
+    // Refresh succeeded (new cookies set) — retry the original request once.
+    config._retried = true
+    return api(config)
   }
 )
 

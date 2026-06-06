@@ -76,10 +76,35 @@ def _extract_jwt_claims(request: Request) -> tuple[Optional[str], Optional[str],
 
 
 def _client_ip(request: Request) -> str:
+    """Resolve the real client IP, resistant to X-Forwarded-For spoofing.
+
+    X-Forwarded-For is a left-to-right chain: each proxy *appends* the address
+    it received the request from. The LEFTMOST entries are therefore fully
+    client-controlled (a caller can send `X-Forwarded-For: 1.2.3.4` and it will
+    sit at the head of the list), so trusting the first entry lets an attacker
+    forge any IP and bypass per-IP rate limits.
+
+    Only the rightmost entries — those appended by OUR own infrastructure — are
+    trustworthy. With ``N = settings.TRUSTED_PROXY_HOPS`` trusted proxies in
+    front of the app, the genuine client IP is the entry ``N`` positions from
+    the RIGHT of the list (``xff[-N]``). TRUSTED_PROXY_HOPS MUST match the
+    actual number of reverse proxies between the public internet and this app
+    (e.g. 1 for a single nginx hop); too small and a spoofed value leaks
+    through, too large and a real proxy IP is used instead of the client.
+
+    Falls back to ``request.client.host`` (the immediate peer) when the header
+    is absent, empty, malformed, or shorter than the trusted hop count.
+    """
+    peer = request.client.host if request.client else "unknown"
     forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip()
-    return request.client.host if request.client else "unknown"
+    if not forwarded_for:
+        return peer
+
+    hops = settings.TRUSTED_PROXY_HOPS
+    parts = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
+    if hops >= 1 and len(parts) >= hops:
+        return parts[-hops]
+    return peer
 
 
 def _fallback_auth_increment(key: str, window_seconds: int) -> int:
