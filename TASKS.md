@@ -45,6 +45,7 @@
 - [x] Provider presets: opencode-zen, opencode-go, openrouter, deepseek, anthropic
 - [x] Follow-up hardening: route readiness/validation UI, provider/key mismatch rejection, malformed key ID 400s, blank fallback pruning, LiteLLM fallback mapping update payload, and Anthropic native prefix/test support
 - [x] Follow-up UX cleanup: remove legacy global provider picker, show app alias → LiteLLM alias → upstream provider/model/key flow, simplify tenant overrides to aliases, surface 403/model-fetch errors, and sync app aliases on route save
+- [x] Model catalog/load balancing: live provider model refresh across stored keys, free/new model tags, direct model-to-route actions, and additional balanced primary deployments under the same LiteLLM alias
 
 Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_key.py`, `backend/migrations/versions/045_llm_provider_keys.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
 
@@ -53,6 +54,7 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [ ] Add model/provider disable switch with immediate route validation
 - [ ] Add model test action using synthetic prompt and no tenant data
 - [ ] Show recent LLM failures by tenant, route, provider, model, status code, and latency
+- [ ] Instrument LiteLLM response metadata/headers so `UsageRecord.gateway_fallback_count`, `final_model`, and gateway request id reflect actual fallback/load-balanced deployment used
 - [ ] Show fallback activity and provider health summary from LiteLLM telemetry
 - [ ] Add short-retention debug mode toggle per tenant/conversation with explicit audit entry
 - [ ] Add CI-safe DB-backed regression for platform LLM route saves covering `llm_route_config_v2`, app alias sync, and LiteLLM hot-reload payload shape

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -547,8 +547,9 @@ function LogsTab({ platformKey, tenants }) {
 
 // ── AI Routing Tab (Task 1206) ─────────────────────────────────────────────
 
-const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', fallbacks: [] })
+const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 100, alternates: [], fallbacks: [] })
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
+const modelTarget = (model) => ({ key_id: model.key_id, provider_id: model.provider_id, model: model.id, capacity: 100 })
 
 function routeIssues(route, allKeys) {
   const issues = []
@@ -558,6 +559,14 @@ function routeIssues(route, allKeys) {
   if (key && route.provider_id && key.provider_id !== route.provider_id) {
     issues.push('Primary key does not belong to the selected provider.')
   }
+  ;(route.alternates || []).forEach((alt, i) => {
+    const hasAlternate = Boolean(alt.provider_id || alt.key_id || alt.model)
+    if (hasAlternate && !isCompleteTarget(alt)) issues.push(`Balanced target ${i + 1} is incomplete.`)
+    const altKey = allKeys.find((k) => k.id === alt.key_id)
+    if (altKey && alt.provider_id && altKey.provider_id !== alt.provider_id) {
+      issues.push(`Balanced target ${i + 1} key does not match its provider.`)
+    }
+  })
   ;(route.fallbacks || []).forEach((fb, i) => {
     const hasFallback = Boolean(fb.provider_id || fb.key_id || fb.model)
     if (hasFallback && !isCompleteTarget(fb)) issues.push(`Fallback ${i + 1} is incomplete.`)
@@ -581,7 +590,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   }
 
   return (
-    <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-3' : 'lg:grid-cols-3'} gap-3`}>
+    <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-[1fr_1fr_1.3fr_100px]' : 'lg:grid-cols-[1fr_1fr_1.3fr_110px]'} gap-3`}>
       <div>
         <label className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
         <select
@@ -619,11 +628,22 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
           {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </datalist>
       </div>
+      <div>
+        <label className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
+        <input
+          type="number"
+          min="1"
+          max="1000"
+          value={value.capacity || 100}
+          onChange={(e) => setField('capacity', Number(e.target.value))}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        />
+      </div>
     </div>
   )
 }
 
-function RouteFlow({ label, alias, route, presets, keys, fallbackCount }) {
+function RouteFlow({ label, alias, route, presets, keys, balanceCount, fallbackCount }) {
   const preset = presets.find((p) => p.id === route.provider_id)
   const key = keys.find((k) => k.id === route.key_id)
   return (
@@ -644,14 +664,14 @@ function RouteFlow({ label, alias, route, presets, keys, fallbackCount }) {
           {preset?.name || 'Not selected'}{route.model ? ` / ${route.model}` : ''}
         </p>
         <p className="text-[11px] text-brand-muted font-sans mt-1">
-          {key ? `${key.name} key` : 'No key'}{fallbackCount ? `, ${fallbackCount} fallback${fallbackCount === 1 ? '' : 's'}` : ''}
+          {key ? `${key.name} key` : 'No key'}{balanceCount ? `, ${balanceCount} balanced` : ''}{fallbackCount ? `, ${fallbackCount} fallback${fallbackCount === 1 ? '' : 's'}` : ''}
         </p>
       </div>
     </div>
   )
 }
 
-function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
+function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels, onChange }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [models, setModels] = useState([])
   const [modelsError, setModelsError] = useState(null)
@@ -664,12 +684,20 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
   const selectedKey = allKeys.find((k) => k.id === route.key_id)
   const issues = routeIssues(route, allKeys)
   const ready = isCompleteTarget(route) && issues.length === 0
+  const balanceCount = (route.alternates || []).filter(isCompleteTarget).length
   const fallbackCount = (route.fallbacks || []).filter(isCompleteTarget).length
 
   const updateRoute = (next) => {
-    onChange({ ...next, fallbacks: next.fallbacks || [] })
+    onChange({ ...next, alternates: next.alternates || [], fallbacks: next.fallbacks || [] })
     setTestResult(null)
   }
+  const setAlternates = (alternates) => updateRoute({ ...route, alternates })
+  const updateAlternate = (i, next) => {
+    const alternates = [...(route.alternates || [])]
+    alternates[i] = next
+    setAlternates(alternates)
+  }
+  const removeAlternate = (i) => setAlternates((route.alternates || []).filter((_, idx) => idx !== i))
   const setFallbacks = (fallbacks) => updateRoute({ ...route, fallbacks })
   const updateFallback = (i, next) => {
     const fallbacks = [...(route.fallbacks || [])]
@@ -684,6 +712,13 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
     setFallbacks(fallbacks)
   }
   const removeFallback = (i) => setFallbacks((route.fallbacks || []).filter((_, idx) => idx !== i))
+  const modelsFor = (target) => {
+    const catalog = (catalogModels || []).filter((m) => (
+      target.key_id ? m.key_id === target.key_id : !target.provider_id || m.provider_id === target.provider_id
+    ))
+    if (target.key_id && target.key_id === route.key_id && models.length) return models
+    return catalog.length ? catalog : models
+  }
 
   const handleFetchModels = async () => {
     if (!route.key_id) return
@@ -769,7 +804,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
       )}
 
       <div className="p-5 space-y-5">
-        <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} fallbackCount={fallbackCount} />
+        <RouteFlow label={label} alias={alias} route={route} presets={presets} keys={allKeys} balanceCount={balanceCount} fallbackCount={fallbackCount} />
         <div>
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Primary target</p>
@@ -781,10 +816,51 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
             value={route}
             allKeys={allKeys}
             presets={presets}
-            models={models}
+            models={modelsFor(route)}
             modelListId={`models-${routeKey}-primary`}
-            onChange={(next) => updateRoute({ ...next, fallbacks: route.fallbacks || [] })}
+            onChange={(next) => updateRoute({ ...next, alternates: route.alternates || [], fallbacks: route.fallbacks || [] })}
           />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-xs font-bold text-brand-ink uppercase tracking-wider font-sans">Load-balanced primaries</p>
+              <p className="text-[11px] text-brand-muted font-sans">{balanceCount} additional deployment{balanceCount === 1 ? '' : 's'} under {alias}</p>
+            </div>
+            <button
+              onClick={() => setAlternates([...(route.alternates || []), { key_id: '', provider_id: '', model: '', capacity: 100 }])}
+              className="flex items-center gap-1.5 text-xs text-brand-accent hover:underline font-sans"
+            >
+              <Plus size={12} /> Add balanced target
+            </button>
+          </div>
+          {(route.alternates || []).length === 0 && (
+            <div className="border border-dashed border-brand-line rounded-lg px-4 py-4 text-sm text-brand-muted font-sans text-center">
+              Add another target to let LiteLLM balance this alias across providers, keys, or models.
+            </div>
+          )}
+          <div className="space-y-3">
+            {(route.alternates || []).map((alt, i) => (
+              <div key={i} className="border border-brand-line rounded-lg p-3 bg-brand-bg">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <p className="text-xs font-mono text-brand-ink">{alias} balanced-{i + 1}</p>
+                  <button onClick={() => removeAlternate(i)} title="Remove balanced target" className="p-1.5 text-brand-muted hover:text-brand-rose transition-colors">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <TargetEditor
+                  value={alt}
+                  allKeys={allKeys}
+                  presets={presets}
+                  models={modelsFor(alt)}
+                  modelListId={`models-${routeKey}-alternate-${i}`}
+                  compact
+                  onChange={(next) => updateAlternate(i, next)}
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div>
@@ -826,7 +902,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, onChange }) {
                   value={fb}
                   allKeys={allKeys}
                   presets={presets}
-                  models={models}
+                  models={modelsFor(fb)}
                   modelListId={`models-${routeKey}-fallback-${i}`}
                   compact
                   onChange={(next) => updateFallback(i, next)}
@@ -977,9 +1053,120 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   )
 }
 
+function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+  const models = catalog?.models || []
+  const filtered = models.filter((model) => {
+    const q = query.trim().toLowerCase()
+    const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
+    const matchesFilter =
+      filter === 'all' ||
+      (filter === 'free' && model.is_free) ||
+      (filter === 'new' && model.is_new)
+    return matchesQuery && matchesFilter
+  }).slice(0, 60)
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Globe size={16} className="text-brand-muted" />
+            <h2 className="font-serif font-bold text-brand-ink">Live Model Catalog</h2>
+          </div>
+          <p className="text-xs text-brand-muted font-sans mt-1">
+            Fetched from stored provider keys. New/free tags are derived from provider model lists and saved catalog snapshots.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{catalog?.model_count || 0} models</span>
+          <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-accent/10 text-brand-accent">{catalog?.free_count || 0} free</span>
+          <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-amber/10 text-brand-amber">{catalog?.new_count || 0} new</span>
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+            Refresh providers
+          </button>
+        </div>
+      </div>
+
+      <div className="px-5 py-3 border-b border-brand-line flex flex-col md:flex-row gap-3">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search model, provider, or key"
+          className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+        />
+        <div className="flex rounded-lg border border-brand-line overflow-hidden">
+          {[
+            ['all', 'All'],
+            ['free', 'Free'],
+            ['new', 'New'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setFilter(id)}
+              className={`px-3 py-2 text-xs font-sans ${filter === id ? 'bg-brand-ink text-white' : 'bg-brand-surface text-brand-muted hover:text-brand-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {catalog?.errors?.length > 0 && (
+        <div className="px-5 py-3 border-b border-brand-line text-xs text-brand-rose font-sans">
+          {catalog.errors.slice(0, 3).map((err) => `${err.key_name || err.provider_id}: ${err.error}`).join(' · ')}
+        </div>
+      )}
+
+      <div className="max-h-[420px] overflow-y-auto divide-y divide-brand-line">
+        {filtered.length === 0 && (
+          <p className="px-5 py-8 text-sm text-brand-muted font-sans text-center">
+            {catalog?.last_refreshed_at ? 'No models match the current filter.' : 'Refresh providers to build the model catalog.'}
+          </p>
+        )}
+        {filtered.map((model) => (
+          <div key={`${model.key_id}-${model.id}`} className="px-5 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3 hover:bg-brand-bg transition-colors">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
+                {model.is_free && <span className="text-[10px] uppercase tracking-wider bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
+                {model.is_new && <span className="text-[10px] uppercase tracking-wider bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
+              </div>
+              <p className="text-xs text-brand-muted font-sans mt-1">
+                {model.provider_name || model.provider_id} · {model.key_name || 'key'}{model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => onApply('standard', 'primary', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std</button>
+              <button onClick={() => onApply('standard', 'alternate', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std LB</button>
+              <button onClick={() => onApply('standard', 'fallback', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Std FB</button>
+              <button onClick={() => onApply('premium', 'primary', model)} className="px-2.5 py-1.5 text-xs font-sans bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2">Premium</button>
+              <button onClick={() => onApply('premium', 'alternate', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Prem LB</button>
+              <button onClick={() => onApply('premium', 'fallback', model)} className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Prem FB</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {catalog?.last_refreshed_at && (
+        <p className="px-5 py-2 border-t border-brand-line text-[11px] text-brand-muted font-sans">
+          Last refresh: {new Date(catalog.last_refreshed_at).toLocaleString()}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function AIRoutingTab({ platformKey, onAuthError }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
+  const [catalog, setCatalog] = useState(null)
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false)
   const [standard, setStandard] = useState(emptyRoute)
   const [premium, setPremium] = useState(emptyRoute)
   const [saving, setSaving] = useState(false)
@@ -991,17 +1178,19 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setLoading(true)
     setLoadError(null)
     try {
-      const [keysData, presetsData, routesData] = await Promise.all([
+      const [keysData, presetsData, routesData, catalogData] = await Promise.all([
         getLLMProviderKeys(platformKey),
         getLLMProviderPresets(platformKey),
         getLLMRoutes(platformKey),
+        getLLMModelCatalog(platformKey),
       ])
       setKeys(keysData.keys || [])
       setPresets(presetsData.providers || [])
+      setCatalog(catalogData)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
-      setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', fallbacks: std.fallbacks || [] })
-      setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', fallbacks: prem.fallbacks || [] })
+      setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [] })
+      setPremium({ key_id: prem.key_id || '', provider_id: prem.provider_id || '', model: prem.model || '', capacity: prem.capacity || 100, alternates: prem.alternates || [], fallbacks: prem.fallbacks || [] })
     } catch (e) {
       if (e?.response?.status === 403) {
         setLoadError('Platform access was denied. Sign in again with the current platform key.')
@@ -1024,12 +1213,37 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     const clearMissingKeys = (route) => ({
       ...route,
       ...(route.key_id && !validIds.has(route.key_id) ? { key_id: '', model: '' } : {}),
+      alternates: (route.alternates || []).map((alt) => (
+        alt.key_id && !validIds.has(alt.key_id) ? { ...alt, key_id: '', model: '' } : alt
+      )),
       fallbacks: (route.fallbacks || []).map((fb) => (
         fb.key_id && !validIds.has(fb.key_id) ? { ...fb, key_id: '', model: '' } : fb
       )),
     })
     setStandard((prev) => clearMissingKeys(prev))
     setPremium((prev) => clearMissingKeys(prev))
+  }
+
+  const handleRefreshCatalog = async () => {
+    setRefreshingCatalog(true)
+    setSaveResult(null)
+    try {
+      const data = await refreshLLMModelCatalog(platformKey)
+      setCatalog(data)
+    } catch (e) {
+      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Model catalog refresh failed' })
+    } finally { setRefreshingCatalog(false) }
+  }
+
+  const applyModel = (routeName, placement, model) => {
+    const setter = routeName === 'standard' ? setStandard : setPremium
+    const target = modelTarget(model)
+    setter((prev) => {
+      if (placement === 'primary') return { ...prev, ...target }
+      if (placement === 'alternate') return { ...prev, alternates: [...(prev.alternates || []), target] }
+      return { ...prev, fallbacks: [...(prev.fallbacks || []), target] }
+    })
+    setSaveResult(null)
   }
 
   const handleSave = async () => {
@@ -1100,6 +1314,13 @@ function AIRoutingTab({ platformKey, onAuthError }) {
 
       <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
 
+      <ModelCatalogPanel
+        catalog={catalog}
+        refreshing={refreshingCatalog}
+        onRefresh={handleRefreshCatalog}
+        onApply={applyModel}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <RouteCard
           label="Standard"
@@ -1107,6 +1328,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
           allKeys={keys}
           presets={presets}
           platformKey={platformKey}
+          catalogModels={catalog?.models || []}
           onChange={setStandard}
         />
         <RouteCard
@@ -1115,6 +1337,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
           allKeys={keys}
           presets={presets}
           platformKey={platformKey}
+          catalogModels={catalog?.models || []}
           onChange={setPremium}
         />
       </div>
