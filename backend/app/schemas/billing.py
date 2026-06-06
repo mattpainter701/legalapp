@@ -1,10 +1,11 @@
 """Pydantic schemas for legal billing: time entries, expenses, invoices, payments."""
 
+import uuid as _uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 # ── Time Entries ────────────────────────────────────────────────────────────
@@ -51,6 +52,10 @@ class TimeEntryResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("id", "tenant_id", "matter_id", "user_id", "invoice_id")
+    def _str_uuid(self, value: str | _uuid.UUID | None, _info: object) -> str | None:
+        return str(value) if value is not None else None
 
 
 class TimeEntryListResponse(BaseModel):
@@ -168,6 +173,9 @@ class InvoiceResponse(BaseModel):
     qbo_invoice_id: Optional[str] = None
     qbo_sync_status: str
     ledes_exported_at: Optional[datetime] = None
+    retainer_id: Optional[str] = None
+    billing_period_start: Optional[date] = None
+    billing_period_end: Optional[date] = None
     created_by: str
     line_items: list[InvoiceLineItemResponse] = []
     payments: list["PaymentResponse"] = []

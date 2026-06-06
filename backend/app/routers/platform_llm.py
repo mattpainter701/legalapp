@@ -18,7 +18,7 @@ Endpoints:
 import hmac
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -31,6 +31,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
+from app.services.llm_routing import LITELLM_PROVIDER, upsert_platform_llm_config
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/platform/llm", tags=["platform-llm"])
 
 LLM_ROUTE_CONFIG_KEY = "llm_route_config_v2"
+LLM_MODEL_CATALOG_KEY = "llm_model_catalog_v1"
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -133,6 +135,8 @@ class RouteEntry(BaseModel):
     key_id: Optional[str] = None
     provider_id: Optional[str] = None
     model: Optional[str] = None
+    capacity: Optional[int] = 100
+    alternates: list[dict[str, Any]] = Field(default_factory=list)
     fallbacks: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -168,6 +172,54 @@ def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
 
 def _clean_optional(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _capacity(value: Any) -> int:
+    try:
+        parsed = int(value or 100)
+    except (TypeError, ValueError):
+        parsed = 100
+    return max(1, min(parsed, 1000))
+
+
+def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
+    mid = (model_id or "").lower()
+    if ":free" in mid or mid.endswith("-free"):
+        return True
+    pricing = item.get("pricing") if isinstance(item, dict) else None
+    if isinstance(pricing, dict):
+        prompt = str(pricing.get("prompt", "")).strip()
+        completion = str(pricing.get("completion", "")).strip()
+        return prompt in {"0", "0.0", "0.000000"} and completion in {
+            "0",
+            "0.0",
+            "0.000000",
+        }
+    return False
+
+
+def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
+    if isinstance(item, str):
+        item = {"id": item, "name": item}
+    if not isinstance(item, dict):
+        return None
+    mid = item.get("id") or item.get("model_id") or item.get("name") or ""
+    mid = str(mid).strip()
+    if not mid:
+        return None
+    return {
+        "id": mid,
+        "name": item.get("name") or mid,
+        "provider_id": provider_id,
+        "description": item.get("description"),
+        "context_length": item.get("context_length")
+        or item.get("context_window")
+        or item.get("max_context_length"),
+        "pricing": item.get("pricing")
+        if isinstance(item.get("pricing"), dict)
+        else None,
+        "is_free": _is_free_model(mid, item),
+    }
 
 
 def _litellm_model_name(provider_id: str, model: str) -> str:
@@ -207,7 +259,12 @@ async def _save_route_config(db: AsyncSession, config: dict) -> None:
 
 
 def _build_litellm_model_entry(
-    alias: str, provider_id: str, model: str, plaintext_key: str
+    alias: str,
+    provider_id: str,
+    model: str,
+    plaintext_key: str,
+    *,
+    capacity: int | None = None,
 ) -> dict:
     preset = _PRESET_BY_ID.get(provider_id, {})
     mode = preset.get("litellm_mode", "openai_compatible")
@@ -220,6 +277,8 @@ def _build_litellm_model_entry(
     }
     if mode == "openai_compatible" and preset.get("base_url"):
         entry["litellm_params"]["api_base"] = preset["base_url"]
+    if capacity:
+        entry["litellm_params"]["rpm"] = _capacity(capacity)
     return entry
 
 
@@ -269,14 +328,10 @@ async def _fetch_models_from_provider(
                 items = data
             models = []
             for item in items:
-                if isinstance(item, dict):
-                    mid = (
-                        item.get("id") or item.get("model_id") or item.get("name") or ""
-                    )
-                    if mid:
-                        models.append({"id": mid, "name": item.get("name", mid)})
-                elif isinstance(item, str):
-                    models.append({"id": item, "name": item})
+                model = _normalize_model_item(item, "")
+                if model:
+                    model["provider_id"] = ""
+                    models.append(model)
             return sorted(models, key=lambda m: m["id"])
     except Exception as exc:
         logger.warning("Model fetch failed from %s: %s", models_url, exc)
@@ -293,6 +348,38 @@ def _route_aliases(route_name: str, route_dict: dict) -> tuple[str, list[str]]:
         and _clean_optional(fallback.get("model"))
     ]
     return primary, fallback_aliases
+
+
+def _target_is_complete(target: dict[str, Any]) -> bool:
+    return bool(
+        _clean_optional(target.get("key_id"))
+        and _clean_optional(target.get("provider_id"))
+        and _clean_optional(target.get("model"))
+    )
+
+
+async def _get_model_catalog(db: AsyncSession) -> dict:
+    result = await db.execute(
+        select(PlatformSetting).where(PlatformSetting.key == LLM_MODEL_CATALOG_KEY)
+    )
+    row = result.scalar_one_or_none()
+    if row and row.value:
+        return row.value
+    return {"models": [], "last_refreshed_at": None}
+
+
+async def _save_model_catalog(db: AsyncSession, catalog: dict) -> None:
+    result = await db.execute(
+        select(PlatformSetting).where(PlatformSetting.key == LLM_MODEL_CATALOG_KEY)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = PlatformSetting(key=LLM_MODEL_CATALOG_KEY, value=catalog)
+        db.add(row)
+    else:
+        row.value = catalog
+        row.updated_at = datetime.now(timezone.utc)
+    await db.flush()
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -393,7 +480,8 @@ async def sync_env_keys(request: Request, db: AsyncSession = Depends(get_db)):
     errors = []
 
     env_map = [
-        ("DEEPSEEK_API_KEY", "opencode-zen", "OpenCode API Key (from env)"),
+        ("DEEPSEEK_API_KEY", "opencode-go", "OpenCode Go API Key (from env)"),
+        ("OPENCODE_API_KEY", "opencode-zen", "OpenCode Zen API Key (from env)"),
         ("OPENROUTER_API_KEY", "openrouter", "OpenRouter API Key (from env)"),
     ]
 
@@ -456,6 +544,7 @@ async def fetch_provider_models(
             "models": (preset or {}).get("default_models", []),
             "provider_id": key.provider_id,
             "source": "preset",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
 
     try:
@@ -472,7 +561,124 @@ async def fetch_provider_models(
             status_code=502, detail=f"Provider model fetch failed: {exc}"
         )
 
-    return {"models": models, "provider_id": key.provider_id, "source": "provider"}
+    for model in models:
+        model["provider_id"] = key.provider_id
+        model["key_id"] = str(key.id)
+        model["key_name"] = key.name
+    return {
+        "models": models,
+        "provider_id": key.provider_id,
+        "source": "provider",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "free_count": sum(1 for model in models if model.get("is_free")),
+    }
+
+
+@router.get("/model-catalog")
+async def get_model_catalog(request: Request, db: AsyncSession = Depends(get_db)):
+    _require_platform_key(request)
+    return await _get_model_catalog(db)
+
+
+@router.post("/model-catalog/refresh")
+async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get_db)):
+    _require_platform_key(request)
+    previous = await _get_model_catalog(db)
+    previous_by_key = {
+        (
+            item.get("provider_id"),
+            item.get("key_id"),
+            item.get("id"),
+        ): item
+        for item in previous.get("models", [])
+        if isinstance(item, dict)
+    }
+
+    keys_result = await db.execute(
+        select(LLMProviderKey).order_by(LLMProviderKey.provider_id, LLMProviderKey.name)
+    )
+    keys = keys_result.scalars().all()
+    refreshed_at = datetime.now(timezone.utc)
+    new_cutoff = refreshed_at - timedelta(days=7)
+    models: list[dict] = []
+    errors: list[dict] = []
+
+    for key in keys:
+        preset = _PRESET_BY_ID.get(key.provider_id)
+        try:
+            if not preset:
+                raise RuntimeError(f"Unknown provider {key.provider_id}")
+            if not preset.get("models_url"):
+                fetched = [
+                    _normalize_model_item(item, key.provider_id)
+                    for item in preset.get("default_models", [])
+                ]
+                fetched = [item for item in fetched if item]
+                source = "preset"
+            else:
+                plaintext = decrypt_token(key.encrypted_key)
+                fetched = await _fetch_models_from_provider(
+                    preset["base_url"], preset["models_url"], plaintext
+                )
+                for item in fetched:
+                    item["provider_id"] = key.provider_id
+                source = "provider"
+        except Exception as exc:
+            logger.warning("Model catalog refresh failed for key %s: %s", key.id, exc)
+            errors.append(
+                {
+                    "key_id": str(key.id),
+                    "key_name": key.name,
+                    "provider_id": key.provider_id,
+                    "error": str(exc)[:300],
+                }
+            )
+            continue
+
+        for item in fetched:
+            ident = (key.provider_id, str(key.id), item["id"])
+            previous_item = previous_by_key.get(ident) or {}
+            first_seen = previous_item.get("first_seen_at") or refreshed_at.isoformat()
+            try:
+                first_seen_dt = datetime.fromisoformat(first_seen)
+            except ValueError:
+                first_seen_dt = refreshed_at
+            item.update(
+                {
+                    "key_id": str(key.id),
+                    "key_name": key.name,
+                    "provider_name": preset.get("name", key.provider_id),
+                    "source": source,
+                    "first_seen_at": first_seen,
+                    "last_seen_at": refreshed_at.isoformat(),
+                    "is_new": ident not in previous_by_key
+                    or first_seen_dt >= new_cutoff,
+                }
+            )
+            models.append(item)
+
+    models = sorted(
+        models,
+        key=lambda item: (
+            not item.get("is_new"),
+            not item.get("is_free"),
+            item.get("provider_name", ""),
+            item.get("id", ""),
+        ),
+    )
+    catalog = {
+        "models": models,
+        "last_refreshed_at": refreshed_at.isoformat(),
+        "provider_count": len({model["provider_id"] for model in models}),
+        "key_count": len({model["key_id"] for model in models}),
+        "model_count": len(models),
+        "free_count": sum(1 for model in models if model.get("is_free")),
+        "new_count": sum(1 for model in models if model.get("is_new")),
+        "errors": errors,
+    }
+    await _save_model_catalog(db, catalog)
+    await db.commit()
+    return catalog
 
 
 @router.get("/routes")
@@ -494,6 +700,15 @@ async def get_routes(request: Request, db: AsyncSession = Depends(get_db)):
             out["provider_name"] = _PRESET_BY_ID.get(k.provider_id, {}).get(
                 "name", k.provider_id
             )
+        for alternate in out.get("alternates", []):
+            akid = alternate.get("key_id")
+            if akid and akid in keys_by_id:
+                ak = keys_by_id[akid]
+                alternate["key_name"] = ak.name
+                alternate["key_hint"] = ak.key_hint
+                alternate["provider_name"] = _PRESET_BY_ID.get(ak.provider_id, {}).get(
+                    "name", ak.provider_id
+                )
         for fb in out.get("fallbacks", []):
             fkid = fb.get("key_id")
             if fkid and fkid in keys_by_id:
@@ -556,45 +771,60 @@ async def save_routes(
                         f"not {fields['provider_id']}"
                     ),
                 )
-        for i, fb in enumerate(entry.fallbacks):
-            fb_fields = {
-                "provider_id": _clean_optional(fb.get("provider_id")),
-                "key_id": _clean_optional(fb.get("key_id")),
-                "model": _clean_optional(fb.get("model")),
-            }
-            fb_populated = [name for name, value in fb_fields.items() if value]
-            if fb_populated and len(fb_populated) != len(fb_fields):
-                missing = ", ".join(
-                    name for name, value in fb_fields.items() if not value
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label} fallback[{i}]: missing {missing}",
-                )
-            if not fb_populated:
-                continue
-            if fb_fields["provider_id"] not in _PRESET_BY_ID:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"{label} fallback[{i}]: unknown provider_id "
-                        f"{fb_fields['provider_id']!r}"
-                    ),
-                )
-            fkid = fb_fields["key_id"]
-            if fkid not in keys_by_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label} fallback[{i}]: key_id {fkid!r} not found",
-                )
-            if keys_by_id[fkid].provider_id != fb_fields["provider_id"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"{label} fallback[{i}]: selected key belongs to "
-                        f"{keys_by_id[fkid].provider_id}, not {fb_fields['provider_id']}"
-                    ),
-                )
+
+        def _validate_targets(targets: list[dict[str, Any]], kind: str) -> None:
+            for i, target in enumerate(targets):
+                target_fields = {
+                    "provider_id": _clean_optional(target.get("provider_id")),
+                    "key_id": _clean_optional(target.get("key_id")),
+                    "model": _clean_optional(target.get("model")),
+                }
+                target_populated = [
+                    name for name, value in target_fields.items() if value
+                ]
+                if target_populated and len(target_populated) != len(target_fields):
+                    missing = ", ".join(
+                        name for name, value in target_fields.items() if not value
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{label} {kind}[{i}]: missing {missing}",
+                    )
+                if not target_populated:
+                    continue
+                if target_fields["provider_id"] not in _PRESET_BY_ID:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"{label} {kind}[{i}]: unknown provider_id "
+                            f"{target_fields['provider_id']!r}"
+                        ),
+                    )
+                target_key_id = target_fields["key_id"]
+                if target_key_id not in keys_by_id:
+                    logger.warning(
+                        "%s %s[%d]: key_id %r not found — pruning stale reference",
+                        label,
+                        kind,
+                        i,
+                        target_key_id,
+                    )
+                    continue  # drop stale target rather than rejecting the save
+                if (
+                    keys_by_id[target_key_id].provider_id
+                    != target_fields["provider_id"]
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"{label} {kind}[{i}]: selected key belongs to "
+                            f"{keys_by_id[target_key_id].provider_id}, "
+                            f"not {target_fields['provider_id']}"
+                        ),
+                    )
+
+        _validate_targets(entry.alternates, "alternate")
+        _validate_targets(entry.fallbacks, "fallback")
 
     _validate_route_entry(body.standard, "standard")
     _validate_route_entry(body.premium, "premium")
@@ -604,15 +834,31 @@ async def save_routes(
             "key_id": _clean_optional(entry.key_id) or None,
             "provider_id": _clean_optional(entry.provider_id) or None,
             "model": _clean_optional(entry.model) or None,
+            "capacity": _capacity(entry.capacity),
+            "alternates": [],
             "fallbacks": [],
         }
+        for alternate in entry.alternates:
+            normalized = {
+                "key_id": _clean_optional(alternate.get("key_id")) or None,
+                "provider_id": _clean_optional(alternate.get("provider_id")) or None,
+                "model": _clean_optional(alternate.get("model")) or None,
+                "capacity": _capacity(alternate.get("capacity")),
+            }
+            if any(
+                normalized.get(field) for field in ("key_id", "provider_id", "model")
+            ):
+                route["alternates"].append(normalized)
         for fallback in entry.fallbacks:
             normalized = {
                 "key_id": _clean_optional(fallback.get("key_id")) or None,
                 "provider_id": _clean_optional(fallback.get("provider_id")) or None,
                 "model": _clean_optional(fallback.get("model")) or None,
+                "capacity": _capacity(fallback.get("capacity")),
             }
-            if any(normalized.values()):
+            if any(
+                normalized.get(field) for field in ("key_id", "provider_id", "model")
+            ):
                 route["fallbacks"].append(normalized)
         return route
 
@@ -621,6 +867,15 @@ async def save_routes(
         "premium": _normalize_route_entry(body.premium),
     }
     await _save_route_config(db, config)
+    await upsert_platform_llm_config(
+        db,
+        {
+            "standard_provider": LITELLM_PROVIDER,
+            "standard_model": settings.LITELLM_STANDARD_MODEL,
+            "premium_provider": LITELLM_PROVIDER,
+            "premium_model": settings.LITELLM_PREMIUM_MODEL,
+        },
+    )
 
     # Build new LiteLLM model list and hot-reload
     new_models: list[dict] = []
@@ -641,16 +896,28 @@ async def save_routes(
         except Exception:
             logger.warning("Failed to decrypt key %s for LiteLLM update", kid)
             return
-        new_models.append(_build_litellm_model_entry(alias, pid, model, plaintext))
+        new_models.append(
+            _build_litellm_model_entry(
+                alias,
+                pid,
+                model,
+                plaintext,
+                capacity=route_dict.get("capacity"),
+            )
+        )
 
     standard_alias, standard_fallbacks = _route_aliases("standard", config["standard"])
     premium_alias, premium_fallbacks = _route_aliases("premium", config["premium"])
 
     _add_model(standard_alias, config["standard"])
+    for alternate in config["standard"].get("alternates", []):
+        _add_model(standard_alias, alternate)
     for i, fb in enumerate(config["standard"].get("fallbacks", [])):
         _add_model(f"{standard_alias}-fb-{i}", fb)
 
     _add_model(premium_alias, config["premium"])
+    for alternate in config["premium"].get("alternates", []):
+        _add_model(premium_alias, alternate)
     for i, fb in enumerate(config["premium"].get("fallbacks", [])):
         _add_model(f"{premium_alias}-fb-{i}", fb)
 
@@ -669,7 +936,13 @@ async def save_routes(
         "saved": True,
         "litellm_updated": litellm_updated,
         "models_registered": len(new_models),
-        "fallbacks_registered": sum(len(item[next(iter(item))]) for item in fallback_settings),
+        "fallbacks_registered": sum(
+            len(item[next(iter(item))]) for item in fallback_settings
+        ),
+        "app_aliases": {
+            "standard": settings.LITELLM_STANDARD_MODEL,
+            "premium": settings.LITELLM_PREMIUM_MODEL,
+        },
     }
 
 

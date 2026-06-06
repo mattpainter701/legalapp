@@ -532,6 +532,12 @@ export const syncEnvKeys = (key) =>
 export const fetchProviderModels = (key, keyId) =>
   platformApi(key).post(`/platform/llm/provider-keys/${keyId}/fetch-models`).then((r) => r.data)
 
+export const getLLMModelCatalog = (key) =>
+  platformApi(key).get('/platform/llm/model-catalog').then((r) => r.data)
+
+export const refreshLLMModelCatalog = (key) =>
+  platformApi(key).post('/platform/llm/model-catalog/refresh').then((r) => r.data)
+
 export const getLLMRoutes = (key) =>
   platformApi(key).get('/platform/llm/routes').then((r) => r.data)
 

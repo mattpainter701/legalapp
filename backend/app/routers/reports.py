@@ -68,13 +68,15 @@ async def _matter_status_report(
     # by risk_level — risk_level is nullable, bucket nulls as "unset"
     risk_rows = await db.execute(
         select(
-            func.coalesce(Matter.risk_level, "unset"),
+            Matter.risk_level,
             func.count(Matter.id),
         )
         .where(Matter.tenant_id == tenant_id)
-        .group_by(func.coalesce(Matter.risk_level, "unset"))
+        .group_by(Matter.risk_level)
     )
-    by_risk_level: dict[str, int] = {row[0]: row[1] for row in risk_rows.all()}
+    by_risk_level: dict[str, int] = {
+        row[0] or "unset": row[1] for row in risk_rows.all()
+    }
 
     return MatterStatusReport(
         total_matters=total_matters,
