@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
@@ -114,8 +114,10 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   }
   const [values, setValues] = useState(current)
   const [saved, setSaved] = useState(false)
+  const isDirty = useRef(false)
 
   useEffect(() => {
+    if (isDirty.current) return
     setValues(current)
     setSaved(false)
   }, [config.standard_model, config.premium_model, config.model])
@@ -123,6 +125,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   const changed = JSON.stringify(values) !== JSON.stringify(current)
 
   const setValue = (key, value) => {
+    isDirty.current = true
     setValues((prev) => ({ ...prev, [key]: value }))
     setSaved(false)
   }
@@ -139,6 +142,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
       }
       await updatePlatformTenant(platformKey, tenant.id, payload)
       onUpdate(tenant.id, { llm_config: payload })
+      isDirty.current = false
       setSaved(true)
     } catch { /* save error silently */ }
     finally { setSaving(false) }

@@ -278,7 +278,7 @@ def _build_litellm_model_entry(
     if mode == "openai_compatible" and preset.get("base_url"):
         entry["litellm_params"]["api_base"] = preset["base_url"]
     if capacity:
-        entry["litellm_params"]["rpm"] = _capacity(capacity)
+        entry["litellm_params"]["weight"] = _capacity(capacity)
     return entry
 
 
@@ -479,6 +479,18 @@ async def sync_env_keys(request: Request, db: AsyncSession = Depends(get_db)):
     synced = []
     errors = []
 
+    # Remove the old DEEPSEEK_API_KEY entry that was imported under the deprecated
+    # provider_id "opencode-zen" before the remap to "opencode-go".
+    old_deepseek = await db.execute(
+        select(LLMProviderKey).where(
+            LLMProviderKey.provider_id == "opencode-zen",
+            LLMProviderKey.name == "OpenCode API Key (from env)",
+        )
+    )
+    for stale in old_deepseek.scalars().all():
+        await db.delete(stale)
+        logger.info("sync_env_keys: removed stale opencode-zen env key %s", stale.id)
+
     env_map = [
         ("DEEPSEEK_API_KEY", "opencode-go", "OpenCode Go API Key (from env)"),
         ("OPENCODE_API_KEY", "opencode-zen", "OpenCode Zen API Key (from env)"),
@@ -603,38 +615,44 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
     models: list[dict] = []
     errors: list[dict] = []
 
-    for key in keys:
+    async def _fetch_one_key(key: LLMProviderKey) -> tuple[list[dict], str] | None:
         preset = _PRESET_BY_ID.get(key.provider_id)
-        try:
-            if not preset:
-                raise RuntimeError(f"Unknown provider {key.provider_id}")
-            if not preset.get("models_url"):
-                fetched = [
-                    _normalize_model_item(item, key.provider_id)
-                    for item in preset.get("default_models", [])
-                ]
-                fetched = [item for item in fetched if item]
-                source = "preset"
-            else:
-                plaintext = decrypt_token(key.encrypted_key)
-                fetched = await _fetch_models_from_provider(
-                    preset["base_url"], preset["models_url"], plaintext
-                )
-                for item in fetched:
-                    item["provider_id"] = key.provider_id
-                source = "provider"
-        except Exception as exc:
-            logger.warning("Model catalog refresh failed for key %s: %s", key.id, exc)
+        if not preset:
+            raise RuntimeError(f"Unknown provider {key.provider_id}")
+        if not preset.get("models_url"):
+            fetched = [
+                _normalize_model_item(item, key.provider_id)
+                for item in preset.get("default_models", [])
+            ]
+            return [item for item in fetched if item], "preset"
+        plaintext = decrypt_token(key.encrypted_key)
+        fetched = await _fetch_models_from_provider(
+            preset["base_url"], preset["models_url"], plaintext
+        )
+        for item in fetched:
+            item["provider_id"] = key.provider_id
+        return fetched, "provider"
+
+    results = await asyncio.gather(
+        *[_fetch_one_key(k) for k in keys], return_exceptions=True
+    )
+
+    for key, result in zip(keys, results):
+        preset = _PRESET_BY_ID.get(key.provider_id, {})
+        if isinstance(result, BaseException):
+            logger.warning(
+                "Model catalog refresh failed for key %s: %s", key.id, result
+            )
             errors.append(
                 {
                     "key_id": str(key.id),
                     "key_name": key.name,
                     "provider_id": key.provider_id,
-                    "error": str(exc)[:300],
+                    "error": str(result)[:300],
                 }
             )
             continue
-
+        fetched, source = result
         for item in fetched:
             ident = (key.provider_id, str(key.id), item["id"])
             previous_item = previous_by_key.get(ident) or {}
@@ -845,10 +863,17 @@ async def save_routes(
                 "model": _clean_optional(alternate.get("model")) or None,
                 "capacity": _capacity(alternate.get("capacity")),
             }
-            if any(
+            if not any(
                 normalized.get(field) for field in ("key_id", "provider_id", "model")
             ):
-                route["alternates"].append(normalized)
+                continue
+            kid = normalized.get("key_id")
+            if kid and kid not in keys_by_id:
+                logger.warning(
+                    "_normalize_route_entry: pruning stale alternate key_id %r", kid
+                )
+                continue
+            route["alternates"].append(normalized)
         for fallback in entry.fallbacks:
             normalized = {
                 "key_id": _clean_optional(fallback.get("key_id")) or None,
@@ -856,10 +881,17 @@ async def save_routes(
                 "model": _clean_optional(fallback.get("model")) or None,
                 "capacity": _capacity(fallback.get("capacity")),
             }
-            if any(
+            if not any(
                 normalized.get(field) for field in ("key_id", "provider_id", "model")
             ):
-                route["fallbacks"].append(normalized)
+                continue
+            kid = normalized.get("key_id")
+            if kid and kid not in keys_by_id:
+                logger.warning(
+                    "_normalize_route_entry: pruning stale fallback key_id %r", kid
+                )
+                continue
+            route["fallbacks"].append(normalized)
         return route
 
     config = {
