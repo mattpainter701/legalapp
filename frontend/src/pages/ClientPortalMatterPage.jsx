@@ -7,16 +7,19 @@ import {
   uploadClientPortalDocument,
   downloadClientPortalDocumentUrl,
   listClientPortalInvoices,
+  listClientPortalSignatures,
+  signClientPortalSignature,
 } from '../api'
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
-  Upload, Download, AlertTriangle, Scale,
+  Upload, Download, AlertTriangle, Scale, PenLine,
 } from 'lucide-react'
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: Scale },
   { key: 'messages', label: 'Messages', icon: MessageSquare },
   { key: 'documents', label: 'Documents', icon: FileText },
+  { key: 'signatures', label: 'Signatures', icon: PenLine },
   { key: 'invoices', label: 'Invoices', icon: Receipt },
 ]
 
@@ -97,6 +100,7 @@ export default function ClientPortalMatterPage() {
           {tab === 'overview' && <OverviewTab matter={matter} />}
           {tab === 'messages' && <MessagesTab />}
           {tab === 'documents' && <DocumentsTab />}
+          {tab === 'signatures' && <SignaturesTab />}
           {tab === 'invoices' && <InvoicesTab />}
         </div>
       </div>
@@ -293,6 +297,80 @@ function DocumentsTab() {
           </ul>
         )}
       </Card>
+    </div>
+  )
+}
+
+function SignaturesTab() {
+  const [requests, setRequests] = useState([])
+  const [signing, setSigning] = useState(null) // request id being signed
+  const [typed, setTyped] = useState('')
+  const [err, setErr] = useState('')
+
+  const load = useCallback(() => {
+    listClientPortalSignatures().then(setRequests).catch(() => {})
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const sign = async (req) => {
+    setErr('')
+    if (!typed.trim()) { setErr('Type your full name to sign.'); return }
+    setSigning(req.id)
+    try {
+      await signClientPortalSignature(req.id, { typed_signature: typed })
+      setTyped('')
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to sign. Please try again.')
+    } finally {
+      setSigning(null)
+    }
+  }
+
+  if (requests.length === 0) {
+    return (
+      <Card>
+        <p className="text-sm text-brand-ink-2">No documents are awaiting your signature.</p>
+      </Card>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {err && <p className="text-sm text-brand-rose">{err}</p>}
+      {requests.map((req) => (
+        <Card key={req.id}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-sm font-medium text-brand-ink">{req.document_name || 'Document'}</p>
+              <p className="text-xs text-brand-ink-2 capitalize">Status: {req.status.replace('_', ' ')}</p>
+            </div>
+            <PenLine size={18} className="text-brand-accent" />
+          </div>
+          <ul className="text-xs text-brand-ink-2 mb-3 space-y-0.5">
+            {req.signers?.map((s) => (
+              <li key={s.id}>
+                {s.name} — <span className={s.status === 'signed' ? 'text-brand-green' : ''}>{s.status}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <input
+              value={signing === req.id ? typed : typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder="Type your full name to sign"
+              className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+            <button
+              onClick={() => sign(req)}
+              disabled={signing === req.id}
+              className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+            >
+              {signing === req.id ? 'Signing…' : 'Sign'}
+            </button>
+          </div>
+        </Card>
+      ))}
     </div>
   )
 }

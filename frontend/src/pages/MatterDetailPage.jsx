@@ -10,6 +10,8 @@ import {
   setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
+  getMatterDocuments, createSignatureRequest, listSignatureRequests,
+  sendSignatureRequest, voidSignatureRequest,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -1600,6 +1602,7 @@ function ClientPortalTab({ matterId, matter }) {
   }
 
   return (
+    <div className="space-y-8">
     <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
       <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
         <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
@@ -1671,6 +1674,140 @@ function ClientPortalTab({ matterId, matter }) {
         <p className="text-xs text-brand-muted">
           Tip: mark documents as portal-visible in the Documents tab to share them with the client. Documents the client uploads appear there automatically.
         </p>
+      </div>
+    </div>
+
+    <SignatureRequestsPanel matterId={matterId} />
+    </div>
+  )
+}
+
+// ── E-signature requests (firm side) ────────────────────────────────────────
+function SignatureRequestsPanel({ matterId }) {
+  const [requests, setRequests] = useState([])
+  const [docs, setDocs] = useState([])
+  const [docId, setDocId] = useState('')
+  const [signerName, setSignerName] = useState('')
+  const [signerEmail, setSignerEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const load = useCallback(() => {
+    listSignatureRequests(matterId).then(setRequests).catch(() => {})
+    getMatterDocuments(matterId)
+      .then((data) => setDocs(Array.isArray(data) ? data : data.items || []))
+      .catch(() => {})
+  }, [matterId])
+  useEffect(() => { load() }, [load])
+
+  const create = async (e) => {
+    e.preventDefault()
+    setErr('')
+    if (!docId) { setErr('Choose a document to send for signature.'); return }
+    if (!signerName.trim() || !signerEmail.trim()) { setErr('Signer name and email are required.'); return }
+    setBusy(true)
+    try {
+      const req = await createSignatureRequest(matterId, {
+        document_id: docId,
+        signers: [{ name: signerName, email: signerEmail }],
+      })
+      await sendSignatureRequest(matterId, req.id)
+      setSignerName(''); setSignerEmail(''); setDocId('')
+      load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const voidReq = async (id) => {
+    await voidSignatureRequest(matterId, id).catch(() => {})
+    load()
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+      <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+        <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+          <Icon d={Icons.edit} size={18} className="text-brand-accent" /> E-Signature
+        </h2>
+        <p className="text-[13px] text-brand-muted font-sans mt-0.5">
+          Send a matter document for signature; the client signs in the portal and the executed copy is saved back to the matter.
+        </p>
+      </div>
+
+      <div className="p-6 space-y-6">
+        <form onSubmit={create} className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <select
+              value={docId}
+              onChange={(e) => setDocId(e.target.value)}
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            >
+              <option value="">Select document…</option>
+              {docs.map((d) => (
+                <option key={d.id} value={d.id}>{d.filename}</option>
+              ))}
+            </select>
+            <input
+              value={signerName}
+              onChange={(e) => setSignerName(e.target.value)}
+              placeholder="Signer name"
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+            <input
+              type="email"
+              value={signerEmail}
+              onChange={(e) => setSignerEmail(e.target.value)}
+              placeholder="Signer email"
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={busy}
+            className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+          >
+            {busy ? 'Sending…' : 'Send for signature'}
+          </button>
+        </form>
+
+        {err && <p className="text-sm text-brand-rose">{err}</p>}
+
+        <div>
+          <h3 className="text-sm font-sans font-semibold text-brand-ink mb-2">Requests</h3>
+          {requests.length === 0 ? (
+            <p className="text-sm text-brand-muted">No signature requests yet.</p>
+          ) : (
+            <ul className="divide-y divide-brand-line border border-brand-line rounded-lg">
+              {requests.map((r) => (
+                <li key={r.id} className="px-4 py-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-brand-ink">{r.document_name || 'Document'}</p>
+                      <p className="text-xs text-brand-muted capitalize">
+                        {r.status.replace('_', ' ')} · {r.signers?.length || 0} signer(s)
+                      </p>
+                    </div>
+                    {!['completed', 'voided'].includes(r.status) && (
+                      <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">
+                        Void
+                      </button>
+                    )}
+                  </div>
+                  <ul className="mt-1 text-xs text-brand-muted">
+                    {r.signers?.map((s) => (
+                      <li key={s.id}>
+                        {s.name} — <span className={s.status === 'signed' ? 'text-brand-green' : ''}>{s.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )

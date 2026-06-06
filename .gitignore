@@ -43,3 +43,6 @@ nginx/webroot/
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Agent worktrees
+.claude/worktrees/

@@ -490,6 +490,29 @@ export const listMatterPortalInvites = (matterId) =>
 export const revokeMatterPortalInvite = (matterId, inviteId) =>
   api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
 
+// ── E-signature (firm side) ─────────────────────────────────────────────────
+export const createSignatureRequest = (matterId, data) =>
+  api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)
+
+export const listSignatureRequests = (matterId) =>
+  api.get(`/matters/${matterId}/signatures`).then((r) => r.data)
+
+export const getSignatureRequest = (matterId, requestId) =>
+  api.get(`/matters/${matterId}/signatures/${requestId}`).then((r) => r.data)
+
+export const sendSignatureRequest = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/send`).then((r) => r.data)
+
+export const voidSignatureRequest = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/void`).then((r) => r.data)
+
+// E-signature (client portal side)
+export const listClientPortalSignatures = () =>
+  clientPortalApi.get('/portal/client/signatures').then((r) => r.data)
+
+export const signClientPortalSignature = (requestId, data) =>
+  clientPortalApi.post(`/portal/client/signatures/${requestId}/sign`, data).then((r) => r.data)
+
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
 export const createCheckoutSession = () => api.post('/billing/checkout-session').then((r) => r.data)

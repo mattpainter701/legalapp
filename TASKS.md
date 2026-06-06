@@ -12,17 +12,20 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [x] `routers/client_portal.py`: `/accept`, `/matter`, `/messages` (get/post), `/documents` (list/upload/download via `matter_file_store`), `/invoices` (surfaces Stripe pay link)
 - [x] Firm-side invite create/list/revoke (`firm_router` on `/api/matters/{id}/portal/...`); document portal-visibility toggle via `matter_documents` PATCH
 - [x] Frontend: `ClientPortalAcceptPage`, `ClientPortalMatterPage` (Overview/Messages/Documents/Invoices) + routes; Client Portal tab on `MatterDetailPage`; `api.js` group
-- [ ] Firm UI: portal-visibility toggle control in `MatterDocumentsTab` (backend ready)
+- [x] Firm UI: portal-visibility toggle control in `MatterDocumentsTab` (Shared/Private badge toggle)
 - [ ] Dedicated `/invoices/{id}/pay` portal endpoint (currently links out to existing Stripe payment link)
 - [ ] Firm-client login path (role="client") in addition to magic-link (spike is magic-link only)
 - [ ] Integration tests: tenant + matter isolation, expired/revoked invite, cross-matter access
 
-#### 1302. Native E-Signature (P0, MEDIUM) — PENDING (depends on 1301)
-- [ ] Migration `045_esignature`: `signature_requests` + `signature_signers`
-- [ ] `services/esign/` provider interface + `internal` adapter (portal capture → stamped PDF + audit) and `dropbox_sign`/`docusign` adapter
-- [ ] `routers/esignature.py`: create from `MatterDocument`, add signers, send, status, webhook, download
-- [ ] On complete → signed PDF as new `MatterDocument` + matter timeline event
-- [ ] Frontend: request-signature in Documents tab; sign action in client portal
+#### 1302. Native E-Signature (P0, MEDIUM) — IN PROGRESS (spike landed)
+- [x] Migration `045_esignature`: `signature_requests` + `signature_signers` (RLS)
+- [x] `services/esign/`: `ESignProvider` interface + `get_provider` factory; `internal` adapter; `dropbox_sign` stub; reportlab certificate generator (HTML fallback)
+- [x] `routers/esignature.py`: firm create/list/get/send/void from a `MatterDocument`; client-portal `GET /signatures` + `POST /signatures/{id}/sign`
+- [x] On complete → executed-copy/audit PDF stored as portal-visible `MatterDocument` + matter timeline event; request status partially_signed→completed
+- [x] Frontend: firm "Request signature" panel in MatterDetail Client Portal tab; Signatures tab + sign action in client portal
+- [ ] Real provider wiring (Dropbox Sign/DocuSign) + webhook reconciliation (stub raises NotImplementedError)
+- [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
+- [ ] Decline flow + per-signer email dispatch on send
 
 #### 1303. Trust Accounting Frontend + Reconciliation (P0, MEDIUM) — PENDING
 Three-way reconciliation logic already exists in `trust_accounting.py` but is headless (TASKS BK05).
