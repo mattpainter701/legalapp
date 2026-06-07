@@ -28,6 +28,7 @@ from app.schemas.matter import (
     BudgetUtilization,
     MatterAssignmentCreate,
     MatterAssignmentResponse,
+    MatterCloudFolderStatus,
     MatterCreate,
     MatterListResponse,
     MatterMemoryResponse,
