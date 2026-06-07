@@ -14,8 +14,13 @@
   - `POST /api/platform/llm/routes/test`: validates a route with a synthetic prompt, returns latency + first response tokens
   - Provider presets: OpenCode Zen, OpenCode Go, OpenRouter, DeepSeek, Anthropic
   - **AI Routing tab** in PlatformPage: KeyVaultPanel (key list, add form, sync-env button) + RouteCard (provider/key/model selection, fallback chain builder, route test)
+  - **Live Model Catalog v2:** Derived capability tags (vision, tool_use, reasoning, research, rag, legal, large_context, structured_output) from provider model metadata; legal-specific heuristics flag models mentioning law/litigation/contract/compliance in descriptions; capability filter pills, colored badges, pricing/modality display per row; compact ApplyRouteDropdown replaces six inline routing buttons; show-all toggle removes 60-model cap
 
 ### Fixed
+- **Chat-system follow-up:** Cached resolved LLM routes with invalidation on
+  tenant/platform LLM settings writes, fixed the missing `asyncio` import for
+  parallel RAG, removed stray blank context separators, centralized nginx API
+  streaming proxy directives, and added no-context regression coverage.
 - **Task 1206 follow-up — AI Routing Console hardening:** Route saves now validate
   provider/key pairings, prune blank fallback rows, return 400s for malformed key
   IDs, register LiteLLM fallback mappings alongside model aliases, and handle

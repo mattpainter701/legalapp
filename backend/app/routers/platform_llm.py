@@ -199,6 +199,139 @@ def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     return False
 
 
+def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
+    """Derive capability tags from model metadata for legal-ops filtering.
+
+    Tags: vision, tool_use, reasoning, research, rag, legal,
+          large_context, ultra_context, structured_output.
+    """
+    caps: set[str] = set()
+    model_id = (item.get("id") or "").lower()
+    description = (item.get("description") or "").lower()
+
+    # 1. Architecture modality (OpenRouter)
+    architecture = item.get("architecture") or {}
+    if isinstance(architecture, dict):
+        modality = (architecture.get("modality") or "").lower()
+        if "image" in modality:
+            caps.add("vision")
+
+    # 2. Model ID patterns (works for all providers)
+    if any(kw in model_id for kw in ("vision", "/vl", "-vl", "multimodal", "vl-")):
+        caps.add("vision")
+    if "instruct" in model_id:
+        caps.add("instruction")
+    if any(kw in model_id for kw in ("deepseek-reasoner", "reasoner", "reasoning")):
+        caps.add("reasoning")
+    if any(
+        kw in model_id
+        for kw in (
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "claude-3-5-sonnet",
+            "claude-3-opus",
+            "claude-sonnet-4",
+            "claude-haiku-4",
+        )
+    ):
+        caps.add("tool_use")
+
+    # 3. Description keywords (OpenRouter provides rich descriptions)
+    if any(
+        kw in description
+        for kw in (
+            "function calling",
+            "tool use",
+            "tool_use",
+            "function call",
+            "tools",
+            "structured output",
+            "json mode",
+        )
+    ):
+        caps.add("tool_use")
+    if any(
+        kw in description
+        for kw in ("rag", "retrieval-augmented", "retrieval", "grounding")
+    ):
+        caps.add("rag")
+    if any(
+        kw in description
+        for kw in ("reasoning", "chain-of-thought", "cot", "deep reasoning")
+    ):
+        caps.add("reasoning")
+    if any(
+        kw in description
+        for kw in (
+            "search",
+            "web search",
+            "browsing",
+            "web browsing",
+            "online",
+            "internet",
+        )
+    ):
+        caps.add("research")
+    if any(
+        kw in description
+        for kw in (
+            "vision",
+            "multimodal",
+            "document understanding",
+            "pdf",
+            "ocr",
+            "image recognition",
+        )
+    ):
+        caps.add("vision")
+    if any(
+        kw in description
+        for kw in (
+            "legal",
+            "law ",
+            "litigation",
+            "contract",
+            "compliance",
+            "regulation",
+            "statute",
+            "court",
+            "attorney",
+            "counsel",
+            "legislation",
+            "jurisdiction",
+            "case law",
+            "legal document",
+            "regulatory",
+        )
+    ):
+        caps.add("legal")
+    if any(
+        kw in description
+        for kw in (
+            "structured output",
+            "json schema",
+            "structured generation",
+            "json mode",
+        )
+    ):
+        caps.add("structured_output")
+
+    # 4. Context length tiers
+    ctx = (
+        item.get("context_length")
+        or item.get("context_window")
+        or item.get("max_context_length")
+        or 0
+    )
+    if isinstance(ctx, (int, float)) and ctx >= 1_000_000:
+        caps.add("ultra_context")
+        caps.add("large_context")
+    elif isinstance(ctx, (int, float)) and ctx >= 100_000:
+        caps.add("large_context")
+
+    return sorted(caps)
+
+
 def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
     if isinstance(item, str):
         item = {"id": item, "name": item}
@@ -208,18 +341,30 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
     mid = str(mid).strip()
     if not mid:
         return None
+    architecture = item.get("architecture") if isinstance(item, dict) else None
+    top_provider = item.get("top_provider") if isinstance(item, dict) else None
+    ctx = (
+        item.get("context_length")
+        or item.get("context_window")
+        or item.get("max_context_length")
+    )
     return {
         "id": mid,
         "name": item.get("name") or mid,
         "provider_id": provider_id,
         "description": item.get("description"),
-        "context_length": item.get("context_length")
-        or item.get("context_window")
-        or item.get("max_context_length"),
+        "context_length": ctx,
         "pricing": item.get("pricing")
         if isinstance(item.get("pricing"), dict)
         else None,
         "is_free": _is_free_model(mid, item),
+        "modality": architecture.get("modality")
+        if isinstance(architecture, dict)
+        else None,
+        "max_completion_tokens": top_provider.get("max_completion_tokens")
+        if isinstance(top_provider, dict)
+        else None,
+        "capabilities": _derive_capabilities(item, provider_id),
     }
 
 
