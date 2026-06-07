@@ -24,6 +24,14 @@ def _llm_error_msg(exc: Exception) -> str:
     return f"LiteLLM Gateway API error: {_clean_llm_error(exc)}"
 
 
+# Public OpenAI-compatible endpoints for tenant BYOK providers that don't
+# require a tenant-supplied endpoint. Copilot (Azure OpenAI) always requires
+# a tenant-supplied endpoint — Azure deployments are per-resource.
+_CUSTOMER_PROVIDER_BASE_URLS: dict[str, str] = {
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+}
+
+
 SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working for {tenant_name}. You support attorneys with research, drafting, and analysis. You are precise, discreet, and bound by professional ethics.
 
 CAPABILITIES:
@@ -100,13 +108,30 @@ class LLMService:
             user_name=user_name or "the attorney",
         )
 
-    def _client_for(self, customer_api_key: str | None) -> AsyncOpenAI:
-        if customer_api_key:
-            return AsyncOpenAI(
-                api_key=customer_api_key,
-                base_url=settings.LITELLM_BASE_URL,
+    def _client_for(
+        self,
+        customer_api_key: str | None,
+        customer_provider: str | None = None,
+        customer_endpoint: str | None = None,
+    ) -> AsyncOpenAI:
+        """Build a client for tenant BYOK requests.
+
+        BYOK requests bypass the LiteLLM gateway entirely — the tenant's own
+        API key is only valid against their own provider account, not the
+        gateway's virtual key namespace. We point the client directly at the
+        provider's OpenAI-compatible endpoint instead.
+        """
+        if not customer_api_key:
+            return self.client
+        base_url = customer_endpoint or _CUSTOMER_PROVIDER_BASE_URLS.get(
+            customer_provider or ""
+        )
+        if not base_url:
+            raise RuntimeError(
+                f"No endpoint configured for customer LLM provider "
+                f"'{customer_provider}' — set an endpoint in tenant LLM settings"
             )
-        return self.client
+        return AsyncOpenAI(api_key=customer_api_key, base_url=base_url)
 
     async def complete(
         self,
@@ -120,6 +145,8 @@ class LLMService:
         user_name: str = "",
         response_format: dict | None = None,
         customer_api_key: str | None = None,
+        customer_provider: str | None = None,
+        customer_endpoint: str | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
@@ -128,7 +155,9 @@ class LLMService:
         ``response_format`` accepts e.g. ``{"type": "json_object"}`` for
         structured output — LiteLLM drops it silently for models that don't
         support it (drop_params: true in gateway config).
-        ``customer_api_key`` overrides the operator API key for tenant BYOK routing.
+        ``customer_api_key``/``customer_provider``/``customer_endpoint`` route
+        tenant BYOK requests directly to the tenant's own provider account,
+        bypassing the LiteLLM gateway (the tenant's key is not valid there).
         """
         system_prompt = self._build_system_prompt(
             tenant_name=tenant_name,
@@ -151,7 +180,9 @@ class LLMService:
         if response_format:
             create_kwargs["response_format"] = response_format
 
-        client = self._client_for(customer_api_key)
+        client = self._client_for(
+            customer_api_key, customer_provider, customer_endpoint
+        )
         try:
             response = await client.chat.completions.create(**create_kwargs)
             response_text = response.choices[0].message.content or ""
@@ -173,6 +204,8 @@ class LLMService:
         model: str | None = None,
         user_name: str = "",
         customer_api_key: str | None = None,
+        customer_provider: str | None = None,
+        customer_endpoint: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream a completion through LiteLLM."""
         system_prompt = self._build_system_prompt(
@@ -188,7 +221,9 @@ class LLMService:
         )
         all_messages = [_build_system_message(system_prompt)] + messages
 
-        client = self._client_for(customer_api_key)
+        client = self._client_for(
+            customer_api_key, customer_provider, customer_endpoint
+        )
         try:
             stream = await client.chat.completions.create(
                 model=gateway_model,

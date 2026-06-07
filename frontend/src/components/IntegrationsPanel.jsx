@@ -75,6 +75,7 @@ export default function IntegrationsPanel() {
   }
 
   const handlePrimaryCloudChange = async (value) => {
+    const previous = primaryCloud
     const next = value === '' ? null : value
     setPrimaryCloud(next)
     setCloudSaving(true)
@@ -83,7 +84,8 @@ export default function IntegrationsPanel() {
       await updateAdminSettings({ primary_cloud_provider: next })
       setCloudSaved(true)
     } catch {
-      // revert on failure
+      setPrimaryCloud(previous)
+      setError('Failed to save primary cloud provider.')
     } finally {
       setCloudSaving(false)
     }

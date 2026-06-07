@@ -13,6 +13,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
+from app.models.tenant import TenantSettings
 from app.schemas.matter_document import (
     MatterDocumentListResponse,
     MatterDocumentResponse,

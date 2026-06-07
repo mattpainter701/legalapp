@@ -15,6 +15,7 @@ Endpoints:
   POST /api/platform/llm/routes/test                  — test a route with synthetic prompt
 """
 
+import asyncio
 import hmac
 import logging
 import uuid
