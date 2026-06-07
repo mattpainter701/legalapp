@@ -157,6 +157,9 @@ class MatterContextService:
             for c in comms
         ]
 
+        # Cloud file storage locations
+        matter_data["cloud_folder"] = matter.cloud_folder
+
         # PII detection
         pii_findings = []
         has_pii = False
@@ -322,6 +325,20 @@ class MatterContextService:
         client = matter_data.get("client")
         if client and client.get("name"):
             lines.append(f"  Client: {client['name']}")
+
+        # Cloud file storage locations
+        cloud_folder = matter_data.get("cloud_folder")
+        if cloud_folder:
+            storage_lines = []
+            od = cloud_folder.get("onedrive")
+            if od and od.get("url"):
+                storage_lines.append(f"    OneDrive: {od['url']}")
+            gd = cloud_folder.get("google_drive")
+            if gd and gd.get("url"):
+                storage_lines.append(f"    Google Drive: {gd['url']}")
+            if storage_lines:
+                lines.append("  Cloud File Storage:")
+                lines.extend(storage_lines)
 
         # Recent notes (summarized)
         notes = matter_data.get("recent_notes", [])

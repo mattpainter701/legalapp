@@ -178,9 +178,7 @@ async def _check_token_budget(db: AsyncSession, user) -> None:
     )
     token_result = await db.execute(
         select(
-            func.coalesce(
-                func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0
-            )
+            func.coalesce(func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0)
         ).where(
             UsageRecord.tenant_id == user.tenant_id,
             UsageRecord.created_at >= today_start,
@@ -420,8 +418,20 @@ async def send_message(
     # 3a. Load matter context if provided (with caching)
     matter_context_str = ""
     matter_pii_findings = []
+    matter_cloud_folder: dict | None = None
     cache_hit_matter = False
     if hasattr(body, "matter_id") and body.matter_id:
+        # Fetch matter.cloud_folder for RAG scoping (lightweight, no relationships)
+        _matter_result = await db.execute(
+            select(MatterModel.cloud_folder).where(
+                MatterModel.id == body.matter_id,
+                MatterModel.tenant_id == user.tenant_id,
+            )
+        )
+        _matter_row = _matter_result.first()
+        if _matter_row:
+            matter_cloud_folder = _matter_row[0]
+
         # Try cache first
         cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
@@ -524,6 +534,7 @@ async def send_message(
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
                 matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_cloud_folder=matter_cloud_folder,
             )
             # Cache RAG results
             await cache_manager.set_cached_rag_results(
@@ -601,6 +612,7 @@ async def send_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
+                customer_api_key=route.customer_api_key,
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -652,6 +664,7 @@ async def send_message(
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
+            customer_api_key=route.customer_api_key,
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -867,8 +880,20 @@ async def stream_message(
     # 3a. Load matter context if provided (with caching)
     matter_context_str = ""
     matter_pii_findings = []
+    matter_cloud_folder: dict | None = None
     cache_hit_matter = False
     if hasattr(body, "matter_id") and body.matter_id:
+        # Fetch matter.cloud_folder for RAG scoping
+        _matter_result = await db.execute(
+            select(MatterModel.cloud_folder).where(
+                MatterModel.id == body.matter_id,
+                MatterModel.tenant_id == user.tenant_id,
+            )
+        )
+        _matter_row = _matter_result.first()
+        if _matter_row:
+            matter_cloud_folder = _matter_row[0]
+
         cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
             tenant_id=str(user.tenant_id),
@@ -968,6 +993,7 @@ async def stream_message(
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
                 matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_cloud_folder=matter_cloud_folder,
             )
         except Exception:
             logger.exception(
@@ -1022,6 +1048,7 @@ async def stream_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
+                customer_api_key=route.customer_api_key,
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -1049,6 +1076,7 @@ async def stream_message(
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
+                    customer_api_key=route.customer_api_key,
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"

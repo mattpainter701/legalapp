@@ -473,7 +473,7 @@ async def create_matter(
     tenant = tenant_result.scalar_one_or_none()
     if tenant and tenant.cloud_root_folder:
         try:
-            matter.cloud_folder = await initialize_matter_folders(
+            cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=str(tenant_id),
                 matter_slug=slug,
@@ -485,6 +485,16 @@ async def create_matter(
                 matter.id,
                 exc_info=True,
             )
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud folder provisioning failed — check cloud credentials",
+            )
+        if not cloud_folder:
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud folder provisioning failed — check cloud credentials",
+            )
+        matter.cloud_folder = cloud_folder
 
     # Create initial event
     event = MatterEvent(
@@ -1972,6 +1982,121 @@ async def get_matter_cloud_files(
             for h in hits
         ],
     }
+
+
+# ── Cloud folder endpoints ───────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/cloud-folder", response_model=MatterCloudFolderStatus)
+async def get_matter_cloud_folder(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current cloud folder provisioning status for a matter."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    if matter.cloud_folder:
+        return MatterCloudFolderStatus(
+            status="provisioned",
+            providers=matter.cloud_folder,
+        )
+    return MatterCloudFolderStatus(status="not_provisioned", providers={})
+
+
+@router.post(
+    "/{matter_id}/cloud-folder/provision", response_model=MatterCloudFolderStatus
+)
+async def provision_matter_cloud_folder(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """(Re-)provision cloud folders for a matter and return updated status."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    matter_result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = matter_result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if not tenant or not tenant.cloud_root_folder:
+        raise HTTPException(
+            status_code=422,
+            detail="No cloud credentials configured for this tenant",
+        )
+
+    try:
+        cloud_folder = await initialize_matter_folders(
+            db=db,
+            tenant_id=str(tenant_id),
+            matter_slug=matter.slug,
+            cloud_root=tenant.cloud_root_folder,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Cloud folder provision failed for matter %s: %s", matter_id, exc
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud folder provisioning failed — check cloud credentials",
+        )
+
+    if not cloud_folder:
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud folder provisioning returned empty result",
+        )
+
+    matter.cloud_folder = cloud_folder
+
+    # Share with current assignees
+    user_rows = await db.execute(
+        select(User.email).where(
+            User.tenant_id == tenant_id,
+            User.id.in_(
+                select(MatterAssignment.user_id).where(
+                    MatterAssignment.matter_id == matter.id
+                )
+            ),
+        )
+    )
+    assigned_emails = [email for (email,) in user_rows.all() if email]
+    await share_matter_folders(
+        db=db,
+        tenant_id=str(tenant_id),
+        cloud_folder=cloud_folder,
+        user_emails=assigned_emails,
+    )
+
+    await db.commit()
+    await db.refresh(matter)
+
+    return MatterCloudFolderStatus(
+        status="provisioned",
+        providers=matter.cloud_folder,
+    )
 
 
 # ── Slug generation ───────────────────────────────────────────────────────────

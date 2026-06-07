@@ -31,6 +31,7 @@ class LLMRoute:
     resolved_route: str
     gateway_alias: str
     gateway_provider: str = LITELLM_PROVIDER
+    customer_api_key: str | None = None
 
     @property
     def provider(self) -> str:
@@ -188,13 +189,32 @@ async def resolve_llm_route(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
     ts = ts_result.scalar_one_or_none()
-    # TODO(customer_llm): TenantSettings has use_customer_llm / customer_llm_provider /
-    # customer_llm_config fields (Sprint 8) that are not wired into routing. To support
-    # a tenant supplying their own API key/model, a migration is needed to store the
-    # encrypted key and a LiteLLM virtual-key or pass-through mechanism must be
-    # established before these fields can be honoured here. Until that work is done the
-    # fields are intentionally ignored so there is no silent fallthrough or partial
-    # behaviour. See: app/models/tenant.py TenantSettings.use_customer_llm.
+
+    # Customer-supplied LLM: tenant opts in with their own API key for Gemini/Copilot.
+    # The encrypted key is stored in customer_llm_config["encrypted_api_key"] and
+    # forwarded to the LiteLLM gateway as a per-request api_key override.
+    if (
+        ts
+        and ts.use_customer_llm
+        and ts.customer_llm_provider
+        and ts.customer_llm_config
+    ):
+        from app.services.token_vault import decrypt_token
+
+        raw_key = ""
+        try:
+            raw_key = decrypt_token(ts.customer_llm_config.get("encrypted_api_key", ""))
+        except Exception:
+            pass
+        if raw_key:
+            gateway_alias = _clean(ts.default_llm_model) or ts.customer_llm_provider
+            return LLMRoute(
+                requested_route=requested_route,
+                resolved_route="customer",
+                gateway_alias=gateway_alias,
+                customer_api_key=raw_key,
+            )
+
     if ts:
         if requested_route in {"premium", "tenant-premium"}:
             alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)

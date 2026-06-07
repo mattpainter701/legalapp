@@ -115,6 +115,13 @@ async def upload_matter_document(
             detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
         )
 
+    # Load tenant cloud preference
+    ts_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+    )
+    ts = ts_result.scalar_one_or_none()
+    preferred_provider = ts.primary_cloud_provider if ts else None
+
     doc_id = uuid.uuid4()
     safe_filename = os.path.basename(file.filename)
     storage_path = await matter_file_store.store_matter_file(
@@ -125,6 +132,8 @@ async def upload_matter_document(
         filename=safe_filename,
         content=file_bytes,
         content_type=file.content_type or "application/octet-stream",
+        matter_cloud_folder=matter.cloud_folder,
+        preferred_provider=preferred_provider,
     )
 
     doc = MatterDocument(

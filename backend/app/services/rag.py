@@ -260,6 +260,7 @@ async def hybrid_rag_query(
     tenant_name: str = "Legal",
     matter_context_str: str | None = None,
     matter_id: str | None = None,
+    matter_cloud_folder: dict | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Hybrid RAG pipeline: pgvector search + cloud search + SMB file search.
@@ -334,6 +335,7 @@ async def hybrid_rag_query(
                             plan=cloud_plan,
                             tenant_id=tenant_id,
                             user_id=user_id,
+                            matter_cloud_folder=matter_cloud_folder,
                         )
                         if cloud_hits:
                             hits_with_content = (

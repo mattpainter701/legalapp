@@ -684,6 +684,12 @@ export const deleteMatterDocument = (matterId, docId) =>
 export const getMatterDocumentDownloadUrl = (matterId, docId) =>
   `/api/matters/${matterId}/documents/${docId}/download`
 
+export const getMatterCloudFolder = (matterId) =>
+  api.get(`/matters/${matterId}/cloud-folder`).then(r => r.data)
+
+export const provisionMatterCloudFolder = (matterId) =>
+  api.post(`/matters/${matterId}/cloud-folder/provision`).then(r => r.data)
+
 // ── Reports ─────────────────────────────────────────────────────────────────
 
 export const getMatterStatusReport = () =>

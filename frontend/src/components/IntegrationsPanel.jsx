@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getAdminPermissions, triggerUserSync, retryCloudInit } from '../api'
+import { getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings } from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
@@ -32,6 +32,9 @@ export default function IntegrationsPanel() {
   const [syncing, setSyncing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [retryResult, setRetryResult] = useState(null)
+  const [primaryCloud, setPrimaryCloud] = useState(null)
+  const [cloudSaving, setCloudSaving] = useState(false)
+  const [cloudSaved, setCloudSaved] = useState(false)
 
   const relTime = (iso) => {
     if (!iso) return 'never'
@@ -71,9 +74,30 @@ export default function IntegrationsPanel() {
     }
   }
 
+  const handlePrimaryCloudChange = async (value) => {
+    const next = value === '' ? null : value
+    setPrimaryCloud(next)
+    setCloudSaving(true)
+    setCloudSaved(false)
+    try {
+      await updateAdminSettings({ primary_cloud_provider: next })
+      setCloudSaved(true)
+    } catch {
+      // revert on failure
+    } finally {
+      setCloudSaving(false)
+    }
+  }
+
   useEffect(() => {
-    getAdminPermissions()
-      .then(setData)
+    Promise.all([
+      getAdminPermissions(),
+      getAdminSettings(),
+    ])
+      .then(([perms, settings]) => {
+        setData(perms)
+        setPrimaryCloud(settings.primary_cloud_provider ?? null)
+      })
       .catch(() => setError('Failed to load permissions.'))
       .finally(() => setLoading(false))
   }, [])
@@ -153,6 +177,32 @@ export default function IntegrationsPanel() {
               </>
             )}
           </button>
+        </div>
+      </div>
+
+      {/* Primary cloud storage selector */}
+      <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
+        <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Cloud Document Storage</h3>
+        <p className="text-brand-ink-2 font-sans text-xs mb-4">
+          Choose which connected cloud provider stores matter documents and folders. "Auto" uses the first available provider.
+        </p>
+        <div className="flex items-center gap-3">
+          <select
+            value={primaryCloud ?? ''}
+            onChange={(e) => handlePrimaryCloudChange(e.target.value)}
+            disabled={cloudSaving}
+            className="flex-1 max-w-xs px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+          >
+            <option value="">Auto (first available)</option>
+            <option value="onedrive">Microsoft OneDrive</option>
+            <option value="google_drive">Google Drive</option>
+          </select>
+          {cloudSaving && (
+            <span className="w-4 h-4 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+          )}
+          {!cloudSaving && cloudSaved && (
+            <span className="text-xs text-green-700 font-medium">Saved</span>
+          )}
         </div>
       </div>
 

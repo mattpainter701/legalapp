@@ -4,8 +4,12 @@ Files are stored in the customer's own cloud storage, not ours:
   - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
   - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
   - Fallback → local disk (UPLOAD_DIR)
+
+When matter.cloud_folder is provided (pre-provisioned subfolder IDs), uploads skip
+the multi-hop folder traversal and go directly to the pre-created folder.
 """
 
+import json
 import logging
 from pathlib import Path
 
@@ -34,30 +38,62 @@ class MatterFileStore:
         filename: str,
         content: bytes,
         content_type: str,
+        matter_cloud_folder: dict | None = None,
+        preferred_provider: str | None = None,
     ) -> str:
-        """Upload a file. Returns the storage path/URL."""
+        """Upload a file. Returns the storage path/URL.
+
+        When matter_cloud_folder is provided, uploads directly to the pre-provisioned
+        subfolder ID instead of traversing the folder tree.
+        preferred_provider controls which cloud is tried first ("onedrive" | "google_drive").
+        """
         logger.info(
-            "Storing %s/%s/%s (%d bytes) for tenant %s",
+            "Storing %s/%s/%s (%d bytes) for tenant %s via preferred=%s",
             matter_slug,
             category,
             filename,
             len(content),
             tenant_id,
+            preferred_provider,
         )
 
-        # Try Microsoft OneDrive first
-        ms_path = await self._try_store_onedrive(
-            db, tenant_id, matter_slug, category, filename, content, content_type
+        # Resolve per-provider folder IDs from matter_cloud_folder if available
+        onedrive_folder_id = _extract_subfolder_id(
+            matter_cloud_folder, "onedrive", category
         )
-        if ms_path:
-            return ms_path
+        gdrive_folder_id = _extract_subfolder_id(
+            matter_cloud_folder, "google_drive", category
+        )
 
-        # Try Google Drive
-        gd_path = await self._try_store_google_drive(
-            db, tenant_id, matter_slug, category, filename, content, content_type
-        )
-        if gd_path:
-            return gd_path
+        providers = _ordered_providers(preferred_provider)
+
+        for provider in providers:
+            if provider == "onedrive":
+                path = await self._try_store_onedrive(
+                    db,
+                    tenant_id,
+                    matter_slug,
+                    category,
+                    filename,
+                    content,
+                    content_type,
+                    folder_id=onedrive_folder_id,
+                )
+                if path:
+                    return path
+            elif provider == "google_drive":
+                path = await self._try_store_google_drive(
+                    db,
+                    tenant_id,
+                    matter_slug,
+                    category,
+                    filename,
+                    content,
+                    content_type,
+                    folder_id=gdrive_folder_id,
+                )
+                if path:
+                    return path
 
         # Fallback: local disk
         return await self._store_local(
@@ -73,17 +109,20 @@ class MatterFileStore:
         filename: str,
         content: bytes,
         content_type: str,
+        folder_id: str | None = None,
     ) -> str | None:
-        """Try to store in customer's OneDrive. Returns path or None."""
+        """Try to store in customer's OneDrive. Returns URL or None."""
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
                 return None
 
-            # Build folder path: /claritylegal-records/{slug}/{category}
-            parent_id = await _ensure_onedrive_path(
-                token, ["claritylegal-records", matter_slug, category]
-            )
+            if folder_id:
+                parent_id = folder_id
+            else:
+                parent_id = await _ensure_onedrive_path(
+                    token, ["claritylegal-records", matter_slug, category]
+                )
 
             upload_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
             async with httpx.AsyncClient(timeout=60) as client:
@@ -123,27 +162,27 @@ class MatterFileStore:
         filename: str,
         content: bytes,
         content_type: str,
+        folder_id: str | None = None,
     ) -> str | None:
-        """Try to store in customer's Google Drive. Returns path or None."""
+        """Try to store in customer's Google Drive. Returns URL or None."""
         try:
             token = await get_fresh_token(db, tenant_id, "google")
             if not token:
                 return None
 
-            parent_id = await _ensure_gdrive_path(
-                token, ["claritylegal-records", matter_slug, category]
-            )
+            if folder_id:
+                parent_id = folder_id
+            else:
+                parent_id = await _ensure_gdrive_path(
+                    token, ["claritylegal-records", matter_slug, category]
+                )
 
-            # Upload file
-            metadata = {
-                "name": filename,
-                "parents": [parent_id],
-            }
+            metadata = {"name": filename, "parents": [parent_id]}
             boundary = "legalapp_upload_boundary"
             body = (
                 f"--{boundary}\r\n"
                 f"Content-Type: application/json\r\n\r\n"
-                f"{__import__('json').dumps(metadata)}\r\n"
+                f"{json.dumps(metadata)}\r\n"
                 f"--{boundary}\r\n"
                 f"Content-Type: {content_type}\r\n\r\n"
             ).encode("utf-8")
@@ -185,13 +224,36 @@ class MatterFileStore:
         filename: str,
         content: bytes,
     ) -> str:
-        """Store file on local disk. Returns the relative storage path."""
+        """Store file on local disk. Returns the absolute storage path."""
         rel_path = f"matters/{matter_slug}/{category}/{filename}"
         full_path = Path(settings.UPLOAD_DIR) / tenant_id / rel_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_bytes(content)
         logger.info("Stored %s locally at %s", filename, full_path)
         return str(full_path)
+
+
+def _extract_subfolder_id(
+    cloud_folder: dict | None, provider: str, category: str
+) -> str | None:
+    """Return the pre-provisioned subfolder ID for a given provider + category, or None."""
+    if not cloud_folder:
+        return None
+    provider_data = cloud_folder.get(provider)
+    if not provider_data:
+        return None
+    subfolders = provider_data.get("subfolders")
+    if not subfolders:
+        return None
+    return subfolders.get(category)
+
+
+def _ordered_providers(preferred: str | None) -> list[str]:
+    """Return provider order list based on preference."""
+    all_providers = ["onedrive", "google_drive"]
+    if preferred in all_providers:
+        return [preferred] + [p for p in all_providers if p != preferred]
+    return all_providers
 
 
 async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
@@ -202,7 +264,6 @@ async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
         for folder_name in folders:
-            # Search for existing folder
             search_url = (
                 f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
                 f"?$filter=name eq '{folder_name}' and folder ne null"
@@ -210,13 +271,11 @@ async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
             )
             resp = await client.get(search_url, headers=headers)
             if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("value", [])
+                items = resp.json().get("value", [])
                 if items:
                     parent_id = items[0]["id"]
                     continue
 
-            # Create folder
             create_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
             resp = await client.post(
                 create_url,
@@ -245,7 +304,6 @@ async def _ensure_gdrive_path(token: str, folders: list[str]) -> str:
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
         for folder_name in folders:
-            # Search for existing folder
             query = (
                 f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' "
                 f"and '{parent_id}' in parents and trashed=false"
@@ -256,13 +314,11 @@ async def _ensure_gdrive_path(token: str, folders: list[str]) -> str:
                 headers=headers,
             )
             if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("files", [])
+                items = resp.json().get("files", [])
                 if items:
                     parent_id = items[0]["id"]
                     continue
 
-            # Create folder
             resp = await client.post(
                 "https://www.googleapis.com/drive/v3/files",
                 json={

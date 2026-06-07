@@ -130,6 +130,8 @@ class TenantSettingsResponse(BaseModel):
     default_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    # Cloud storage
+    primary_cloud_provider: Optional[str] = None
     # Custom config
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
@@ -157,6 +159,7 @@ class TenantSettingsUpdate(BaseModel):
     default_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    primary_cloud_provider: Optional[str] = None
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 
