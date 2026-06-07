@@ -559,7 +559,7 @@ async def send_message(
                 conversation_id=conv.id,
                 severity="error",
             )
-            context_str, chunks = "No relevant legal context available.", []
+            context_str, chunks = "", []
 
     # 4a. Combine matter context with RAG context
     if matter_context_str:
