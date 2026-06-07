@@ -91,6 +91,13 @@ def _get_retrieval_planner():
     return _retrieval_planner
 
 
+def _join_context_sections(*sections: str | None) -> str:
+    """Join non-empty prompt context sections without stray separators."""
+    return "\n\n".join(
+        section.strip() for section in sections if section and section.strip()
+    )
+
+
 def _conversation_to_response(
     conv: Conversation, message_count: int = None
 ) -> ConversationResponse:
@@ -561,12 +568,12 @@ async def send_message(
             )
             context_str, chunks = "", []
 
-    # 4a. Combine matter context with RAG context
-    if matter_context_str:
-        context_str = f"{matter_context_str}\n\n{context_str}"
-
-    if attachment_context:
-        context_str = f"{attachment_context}\n\n{context_str}"
+    # 4a. Combine attachment, matter, and RAG context
+    context_str = _join_context_sections(
+        attachment_context,
+        matter_context_str,
+        context_str,
+    )
 
     # 4b. Load user memory context for injection into system prompt
     memory_context = await memory_service.get_memory_context_for_injection(
@@ -1020,12 +1027,12 @@ async def stream_message(
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
         )
 
-    # 4a. Combine matter context with RAG context
-    if matter_context_str:
-        context_str = f"{matter_context_str}\n\n{context_str}"
-
-    if attachment_context:
-        context_str = f"{attachment_context}\n\n{context_str}"
+    # 4a. Combine attachment, matter, and RAG context
+    context_str = _join_context_sections(
+        attachment_context,
+        matter_context_str,
+        context_str,
+    )
 
     # 4b. Load user memory context for system prompt
     memory_context = await memory_service.get_memory_context_for_injection(

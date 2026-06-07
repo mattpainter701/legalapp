@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -23,6 +24,8 @@ LEGACY_DIRECT_PROVIDERS = {
     "azure",
     "gemini",
 }
+ROUTE_CACHE_TTL_SECONDS = 30.0
+_route_cache: dict[tuple[str, bool, str, str | None], tuple[float, "LLMRoute"]] = {}
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,55 @@ class LLMRoute:
 def _clean(value: str | None) -> str | None:
     value = (value or "").strip()
     return value or None
+
+
+def invalidate_llm_route_cache(tenant_id: Any | None = None) -> None:
+    """Clear cached route resolutions after route-affecting settings change."""
+    if tenant_id is None:
+        _route_cache.clear()
+        return
+
+    tenant_key = str(tenant_id)
+    stale_keys = [key for key in _route_cache if key[0] == tenant_key]
+    for key in stale_keys:
+        _route_cache.pop(key, None)
+
+
+def _route_cache_key(
+    tenant_id: Any,
+    *,
+    use_premium: bool,
+    requested_provider: str,
+    requested_model: str | None,
+) -> tuple[str, bool, str, str | None]:
+    return (
+        str(tenant_id),
+        use_premium,
+        (_clean(requested_provider) or "default").lower(),
+        _clean(requested_model),
+    )
+
+
+def _get_cached_route(
+    cache_key: tuple[str, bool, str, str | None],
+) -> LLMRoute | None:
+    cached = _route_cache.get(cache_key)
+    if not cached:
+        return None
+
+    expires_at, route = cached
+    if expires_at <= monotonic():
+        _route_cache.pop(cache_key, None)
+        return None
+    return route
+
+
+def _set_cached_route(
+    cache_key: tuple[str, bool, str, str | None],
+    route: LLMRoute,
+) -> LLMRoute:
+    _route_cache[cache_key] = (monotonic() + ROUTE_CACHE_TTL_SECONDS, route)
+    return route
 
 
 def provider_default_model(provider: str, use_premium: bool = False) -> str:
@@ -162,6 +214,7 @@ async def upsert_platform_llm_config(
     else:
         row.value = current
         row.updated_at = datetime.now(timezone.utc)
+    invalidate_llm_route_cache()
     return current
 
 
@@ -173,6 +226,16 @@ async def resolve_llm_route(
     requested_provider: str = "default",
     requested_model: str | None = None,
 ) -> LLMRoute:
+    cache_key = _route_cache_key(
+        tenant_id,
+        use_premium=use_premium,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+    )
+    cached_route = _get_cached_route(cache_key)
+    if cached_route:
+        return cached_route
+
     requested_route = _normalize_requested_route(
         requested_provider,
         use_premium=use_premium,
@@ -181,10 +244,13 @@ async def resolve_llm_route(
     explicit_alias = _clean(requested_model)
     requested_provider_clean = (_clean(requested_provider) or "default").lower()
     if explicit_alias and requested_provider_clean in {"default", LITELLM_PROVIDER}:
-        return LLMRoute(
-            requested_route=requested_route,
-            resolved_route=requested_route,
-            gateway_alias=explicit_alias,
+        return _set_cached_route(
+            cache_key,
+            LLMRoute(
+                requested_route=requested_route,
+                resolved_route=requested_route,
+                gateway_alias=explicit_alias,
+            ),
         )
 
     ts_result = await db.execute(
@@ -223,47 +289,70 @@ async def resolve_llm_route(
                     else customer_provider
                 )
             )
-            return LLMRoute(
-                requested_route=requested_route,
-                resolved_route="customer",
-                gateway_alias=gateway_alias,
-                gateway_provider=customer_provider,
-                customer_api_key=raw_key,
-                customer_provider=customer_provider,
-                customer_endpoint=endpoint,
+            return _set_cached_route(
+                cache_key,
+                LLMRoute(
+                    requested_route=requested_route,
+                    resolved_route="customer",
+                    gateway_alias=gateway_alias,
+                    gateway_provider=customer_provider,
+                    customer_api_key=raw_key,
+                    customer_provider=customer_provider,
+                    customer_endpoint=endpoint,
+                ),
             )
 
     if ts:
         if requested_route in {"premium", "tenant-premium"}:
             alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)
             if alias:
-                return LLMRoute(
-                    requested_route=requested_route,
-                    resolved_route="tenant-premium",
-                    gateway_alias=alias,
+                return _set_cached_route(
+                    cache_key,
+                    LLMRoute(
+                        requested_route=requested_route,
+                        resolved_route="tenant-premium",
+                        gateway_alias=alias,
+                    ),
                 )
         elif requested_route in {"standard", "tenant-standard"}:
             alias = _model_from_values(ts.default_llm_provider, ts.default_llm_model)
             if alias:
-                return LLMRoute(
-                    requested_route=requested_route,
-                    resolved_route="tenant-standard",
-                    gateway_alias=alias,
+                return _set_cached_route(
+                    cache_key,
+                    LLMRoute(
+                        requested_route=requested_route,
+                        resolved_route="tenant-standard",
+                        gateway_alias=alias,
+                    ),
                 )
 
     platform_config = await get_platform_llm_config(db)
     if requested_route in {"premium", "tenant-premium"}:
-        return LLMRoute(
-            requested_route=requested_route,
-            resolved_route="premium",
-            gateway_alias=(
-                platform_config.get("premium_model") or settings.LITELLM_PREMIUM_MODEL
+        return _set_cached_route(
+            cache_key,
+            LLMRoute(
+                requested_route=requested_route,
+                resolved_route="premium",
+                gateway_alias=(
+                    platform_config.get("premium_model")
+                    or settings.LITELLM_PREMIUM_MODEL
+                ),
             ),
         )
-    return LLMRoute(
-        requested_route=requested_route,
-        resolved_route="standard",
-        gateway_alias=(
-            platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
+    return _set_cached_route(
+        cache_key,
+        LLMRoute(
+            requested_route=requested_route,
+            resolved_route="standard",
+            gateway_alias=(
+                platform_config.get("standard_model") or settings.LITELLM_STANDARD_MODEL
+            ),
         ),
     )
+
+
+@event.listens_for(TenantSettings, "after_insert")
+@event.listens_for(TenantSettings, "after_update")
+@event.listens_for(TenantSettings, "after_delete")
+def _invalidate_route_cache_on_tenant_settings_write(mapper, connection, target):
+    invalidate_llm_route_cache(target.tenant_id)

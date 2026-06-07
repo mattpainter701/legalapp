@@ -2,8 +2,54 @@
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from app.routers.chat import _join_context_sections
 from app.models.tenant import TenantSettings
+from app.services.llm_routing import resolve_llm_route
+from app.services.rag import build_rag_context
+
+
+@pytest.mark.asyncio
+async def test_build_rag_context_empty_returns_empty_string():
+    assert await build_rag_context([]) == ""
+
+
+@pytest.mark.asyncio
+async def test_resolve_llm_route_cache_invalidates_on_tenant_settings_update(
+    db_session,
+    test_tenant,
+):
+    db_session.add(
+        TenantSettings(
+            tenant_id=test_tenant.id,
+            default_llm_provider="litellm",
+            default_llm_model="clarity-standard-a",
+        )
+    )
+    await db_session.commit()
+
+    route = await resolve_llm_route(db_session, test_tenant.id, use_premium=False)
+    assert route.model == "clarity-standard-a"
+
+    settings_record = (
+        await db_session.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == test_tenant.id)
+        )
+    ).scalar_one()
+    settings_record.default_llm_model = "clarity-standard-b"
+    await db_session.commit()
+
+    route = await resolve_llm_route(db_session, test_tenant.id, use_premium=False)
+    assert route.model == "clarity-standard-b"
+
+
+def test_join_context_sections_omits_empty_sections():
+    assert _join_context_sections("Matter context", "", None) == "Matter context"
+    assert (
+        _join_context_sections("Attachment context", "Matter context", "RAG context")
+        == "Attachment context\n\nMatter context\n\nRAG context"
+    )
 
 
 @pytest.mark.asyncio
