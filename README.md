@@ -15,8 +15,8 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **MCP (Model Context Protocol)** | Connect external AI tools (Claude, Cursor, custom agents) to your legal knowledge base |
 | **Platform / Operator Console** | Multi-tenant admin with usage dashboards, tenant CRUD, and platform-key auth |
 | **OAuth + Email Auth** | Microsoft 365, Google, or email/password sign-in; unified signup collects firm profile |
-| **Multi-Model AI** | DeepSeek V4 Flash (primary), DeepSeek V4 Pro (premium) via OpenCode.ai; Azure OpenAI + Gemini support |
-| **Audit & Usage Logging** | Every LLM call logged with tokens, cost, query text, RAG sources, IP, user agent; error logs with resolution tracking |
+| **Multi-Model AI** | LiteLLM gateway with standard/premium aliases, operator-managed provider keys, model catalog, and upstream fallbacks |
+| **Audit & Usage Logging** | App-side usage/error records capture route metadata, tokens, cost where available, bounded query text, RAG sources, IP, and user agent; LiteLLM raw message logging is disabled by default |
 | **User Expertise Tracking** | Per-user practice areas, expertise level, memory summary, privacy preferences |
 | **Context Usage Transparency** | Explicit source attribution in chat responses; relevance scores for each context source |
 | **PII Protection** | Automatic detection and scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
@@ -47,6 +47,44 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 
 ## Tech stack
 
+### App stack diagram
+
+```mermaid
+flowchart TB
+    user["Users<br/>Browser / mobile web"] --> edge["Nginx<br/>TLS, static assets, API proxy, SSE streaming"]
+    edge -->|"serves app shell"| spa["React + Vite SPA<br/>AppShell, pages, axios/fetch, httpOnly cookies"]
+    spa -->|/api requests + SSE| edge
+    edge -->|"proxy /api"| api["FastAPI backend<br/>routers, services, schedulers, legal guardrails"]
+
+    api --> auth["Auth + security<br/>JWT access cookies, rotating refresh tokens, OAuth state, platform key"]
+    auth --> redis["Redis 7<br/>rate limits, token revocation, OAuth state, caches, SMB task queue"]
+
+    api --> db["PostgreSQL 16 + pgvector<br/>tenant data, RLS, documents, chunks, usage, audit, platform settings"]
+    api --> uploads["Uploads volume<br/>session files and local fallback matter documents"]
+    api --> llm["LiteLLM gateway<br/>clarity-standard / clarity-premium aliases, fallbacks, provider telemetry"]
+    llm --> llmdb["LiteLLM Postgres<br/>gateway spend and request metadata"]
+    llm --> providers["LLM providers<br/>OpenCode, OpenRouter, DeepSeek, Anthropic"]
+
+    api --> rag["Retrieval services<br/>private pgvector RAG, CourtListener public chunks, live cloud search, SMB search"]
+    rag --> db
+    rag --> cloud["Cloud integrations<br/>Microsoft Graph: Entra, OneDrive, Outlook, Calendar<br/>Google APIs: OAuth, Drive, Gmail, Calendar, Directory"]
+    api --> billing["Business integrations<br/>Stripe billing/payments, QuickBooks Online sync, SMTP/Slack notifications"]
+    api --> security["Security controls<br/>Fernet token vault, PII scrubbing, tenant middleware, access/error logs"]
+    security --> db
+
+    classDef app fill:#eef6f2,stroke:#5a7d68,color:#13251a;
+    classDef data fill:#eef2ff,stroke:#5367b4,color:#141a33;
+    classDef ext fill:#fff7e8,stroke:#b7832f,color:#38240a;
+    classDef securityClass fill:#f8eeee,stroke:#a95555,color:#351313;
+
+    class spa,api,rag app;
+    class db,redis,uploads,llmdb data;
+    class llm,providers,cloud,billing ext;
+    class auth,security,edge securityClass;
+```
+
+**Request path:** browser -> nginx -> FastAPI -> Postgres/Redis/RAG/LiteLLM -> response stream back through nginx. FastAPI remains the legal control plane: it resolves tenants, applies RLS context, assembles matter/RAG/cloud context, scrubs sensitive data, and records usage. LiteLLM is the model execution gateway and owns upstream provider routing/fallbacks.
+
 ### Backend
 | Layer | Technology |
 |-|-|
@@ -54,13 +92,13 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | ORM | SQLAlchemy 2.0 async + asyncpg |
 | Database | PostgreSQL 16 + pgvector |
 | Cache / Rate limiting | Redis 7 |
-| Auth | JWT + Microsoft Entra OAuth2 + Google OAuth2 + email/password |
-| Primary LLM | DeepSeek V4 Flash via OpenCode.ai (OpenAI-compatible) |
-| Premium LLM | DeepSeek V4 Pro via OpenCode.ai |
-| Enterprise AI | Azure OpenAI GPT-4o + Google Gemini 2.0 Flash (optional) |
+| Auth | httpOnly JWT cookies + rotating refresh tokens + Microsoft Entra OAuth2 + Google OAuth2 + email/password |
+| LLM gateway | LiteLLM OpenAI-compatible proxy with `clarity-standard` and `clarity-premium` aliases |
+| LLM routing | Operator route builder + encrypted provider-key vault; upstream provider fallback handled by LiteLLM |
+| Upstream AI | OpenCode, OpenRouter, DeepSeek, Anthropic through LiteLLM provider presets |
 | Embeddings | OpenAI text-embedding-3-small for tenant docs; BGE-small 384-dim for CourtListener public chunks |
 | Task scheduler | APScheduler AsyncIOScheduler |
-| Migrations | Alembic (27 migrations) |
+| Migrations | Alembic (45+ migrations) |
 | Billing | Stripe Python SDK |
 | Multi-tenancy | PostgreSQL Row Level Security enforced at DB layer |
 | Services | PII detection (8 types), Memory service (auto-summarization), Matter context (with scrubbing), Expertise-aware cache manager (3-tier TTLs), Matter file store (OneDrive/Google Drive routing), Recurring billing (auto-invoice scheduler), Prompt resolver (per-tenant skill overrides) |
@@ -73,7 +111,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | Fonts | Inter (body) + Source Serif 4 (headings) |
 | Icons | Lucide React |
 | Routing | React Router v6 |
-| HTTP | Axios with Bearer token interceptor |
+| HTTP | Axios/fetch with credentials; auth flows through httpOnly cookies and rotating refresh |
 | Markdown | react-markdown with citation colour-coding and confidence tags |
 
 ### Infrastructure

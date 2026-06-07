@@ -922,36 +922,36 @@ export const getSmbActivity = (params) =>
   api.get('/admin/smb/activity', { params }).then(r => r.data)
 
 export const getSmbAgents = () =>
-  api.get('/api/v1/smb/agents').then(r => r.data)
+  api.get('/v1/smb/agents').then(r => r.data)
 
 export const generateSmbPairingCode = () =>
-  api.post('/api/v1/smb/pairing-code').then(r => r.data)
+  api.post('/v1/smb/pairing-code').then(r => r.data)
 
 export const updateSmbAgent = (agentId, data) =>
-  api.patch(`/api/v1/smb/agents/${agentId}`, data).then(r => r.data)
+  api.patch(`/v1/smb/agents/${agentId}`, data).then(r => r.data)
 
 export const deleteSmbAgent = (agentId) =>
-  api.delete(`/api/v1/smb/agents/${agentId}`).then(r => r.data)
+  api.delete(`/v1/smb/agents/${agentId}`).then(r => r.data)
 
 export const getSmbShares = () =>
-  api.get('/api/v1/smb/shares').then(r => r.data)
+  api.get('/v1/smb/shares').then(r => r.data)
 
 export const getMatterSmbShares = (matterId) =>
-  api.get(`/api/v1/smb/matters/${matterId}/smb-shares`).then(r => r.data)
+  api.get(`/v1/smb/matters/${matterId}/smb-shares`).then(r => r.data)
 
 export const addMatterSmbShare = (matterId, data) =>
-  api.post(`/api/v1/smb/matters/${matterId}/smb-shares`, data).then(r => r.data)
+  api.post(`/v1/smb/matters/${matterId}/smb-shares`, data).then(r => r.data)
 
 export const removeMatterSmbShare = (matterId, bindingId) =>
-  api.delete(`/api/v1/smb/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
+  api.delete(`/v1/smb/matters/${matterId}/smb-shares/${bindingId}`).then(r => r.data)
 
-export const createSmbShare = (data) =>
-  api.post('/api/v1/smb/shares', data).then(r => r.data)
+export const createSmbShare = ({ agent_id, ...data }) =>
+  api.post('/v1/smb/shares', data, { params: { agent_id } }).then(r => r.data)
 
 export const deleteSmbShare = (shareId) =>
-  api.delete(`/api/v1/smb/shares/${shareId}`).then(r => r.data)
+  api.delete(`/v1/smb/shares/${shareId}`).then(r => r.data)
 
 export const searchSmbFiles = (params) =>
-  api.get('/api/v1/smb/files/search', { params }).then(r => r.data)
+  api.get('/v1/smb/files/search', { params }).then(r => r.data)
 
 export default api

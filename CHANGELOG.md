@@ -17,6 +17,11 @@
   - **Live Model Catalog v2:** Derived capability tags (vision, tool_use, reasoning, research, rag, legal, large_context, structured_output) from provider model metadata; legal-specific heuristics flag models mentioning law/litigation/contract/compliance in descriptions; capability filter pills, colored badges, pricing/modality display per row; compact ApplyRouteDropdown replaces six inline routing buttons; show-all toggle removes 60-model cap
 
 ### Fixed
+- **Matter/admin/SMB stability sweep:** Fixed tenant settings UUID response
+  validation, hardened matter list/detail serialization for legacy null fields,
+  prevented cloud-folder share failures from aborting matter workflows, corrected
+  doubled SMB API paths, normalized SMB admin response handling, and restored
+  LiteLLM container healthchecks by including `curl`.
 - **Chat-system follow-up:** Cached resolved LLM routes with invalidation on
   tenant/platform LLM settings writes, fixed the missing `asyncio` import for
   parallel RAG, removed stray blank context separators, centralized nginx API

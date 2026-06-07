@@ -42,6 +42,14 @@ function StatCard({ label, value, sub }) {
   )
 }
 
+const asList = (data, ...keys) => {
+  if (Array.isArray(data)) return data
+  for (const key of keys) {
+    if (Array.isArray(data?.[key])) return data[key]
+  }
+  return []
+}
+
 // ── Status Panel ────────────────────────────────────────────────────────────
 
 function StatusPanel() {
@@ -77,9 +85,9 @@ function StatusPanel() {
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <StatCard label="Total Agents" value={status?.total_agents ?? 0} sub={`${status?.active_agents ?? 0} active`} />
-        <StatCard label="Total Shares" value={status?.total_shares ?? 0} />
-        <StatCard label="Total Files" value={status?.total_files?.toLocaleString() ?? 0} />
+        <StatCard label="Total Agents" value={status?.total_agents ?? status?.agent_count ?? 0} sub={`${status?.active_agents ?? 0} active`} />
+        <StatCard label="Total Shares" value={status?.total_shares ?? status?.share_count ?? 0} />
+        <StatCard label="Total Files" value={(status?.total_files ?? status?.file_count ?? 0).toLocaleString()} />
       </div>
 
       <div className="text-xs text-brand-muted font-sans space-y-1">
@@ -109,7 +117,7 @@ function AgentsPanel() {
     setError(null)
     try {
       const data = await getSmbAgents()
-      setAgents(data.agents || data || [])
+      setAgents(asList(data, 'agents', 'items'))
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load agents')
     } finally {
@@ -263,8 +271,8 @@ function SharesPanel() {
     setError(null)
     try {
       const [sharesData, agentsData] = await Promise.all([getSmbShares(), getSmbAgents()])
-      setShares(sharesData.shares || sharesData || [])
-      setAgents(agentsData.agents || agentsData || [])
+      setShares(asList(sharesData, 'shares', 'items'))
+      setAgents(asList(agentsData, 'agents', 'items'))
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load shares')
     } finally {
@@ -354,7 +362,7 @@ function SharesPanel() {
             >
               <option value="">Select agent...</option>
               {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name || a.hostname || a.id}</option>
+                <option key={a.id} value={a.id}>{a.agent_name || a.name || a.hostname || a.id}</option>
               ))}
             </select>
           </div>
@@ -400,7 +408,7 @@ function SharesPanel() {
                 <td className="px-4 py-3">
                   <Badge label={share.last_scan_status || 'pending'} variant={scanStatusVariant(share.last_scan_status)} />
                 </td>
-                <td className="px-4 py-3 text-brand-ink-2 font-sans font-mono">{(share.file_count ?? 0).toLocaleString()}</td>
+                <td className="px-4 py-3 text-brand-ink-2 font-sans font-mono">{(share.file_count ?? share.last_scan_file_count ?? 0).toLocaleString()}</td>
                 <td className="px-4 py-3 text-right">
                   <button
                     onClick={() => handleDelete(share.id)}
@@ -437,7 +445,7 @@ function ActivityPanel() {
     setError(null)
     try {
       const data = await getSmbActivity()
-      setEntries(data.entries || data || [])
+      setEntries(asList(data, 'entries', 'items'))
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load activity')
     } finally {
