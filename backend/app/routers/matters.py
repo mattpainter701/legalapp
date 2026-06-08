@@ -254,6 +254,7 @@ def _matter_to_response(
         budget_utilization=budget,
         memory_content=matter.memory_content,
         cloud_folder=matter.cloud_folder,
+        smb_folders=matter.smb_folders,
         primary_plugin=matter.primary_plugin,
         plugin_workflow_state=matter.plugin_workflow_state,
         created_at=matter.created_at or updated_at,

@@ -36,6 +36,8 @@ import ProfilePage from './pages/ProfilePage'
 import OnboardingWizard from './pages/OnboardingWizard'
 import PortalAcceptPage from './pages/PortalAcceptPage'
 import PortalCasePage from './pages/PortalCasePage'
+import ClientPortalAcceptPage from './pages/ClientPortalAcceptPage'
+import ClientPortalMatterPage from './pages/ClientPortalMatterPage'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -169,6 +171,8 @@ export default function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
+        <Route path="/portal/client/accept" element={<ClientPortalAcceptPage />} />
+        <Route path="/portal/client/matter" element={<ClientPortalMatterPage />} />
 
         {/* Authenticated pages wrapped in AppShell */}
         <Route
