@@ -202,6 +202,7 @@ class MatterResponse(BaseModel):
     # AI memory
     memory_content: str | None
     cloud_folder: dict | None
+    smb_folders: dict | None = None
 
     # Plugin workflow
     primary_plugin: str | None

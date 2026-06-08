@@ -36,6 +36,29 @@ def create_portal_token(
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def create_matter_portal_token(
+    *, tenant_id: str, matter_id: str, contact_id: str | None, email: str | None
+) -> str:
+    """Short-lived, matter-scoped JWT for a firm client accessing the portal.
+
+    Carries ``client_portal: true`` plus the matter/contact scope. Reuses the
+    same ``SECRET_KEY``/cookie as firm logins, so ``TenantMiddleware`` picks up
+    the tenant_id automatically; ``get_client_portal_context`` enforces scope.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "client_portal": True,
+        "tenant_id": str(tenant_id),
+        "matter_id": str(matter_id),
+        "contact_id": str(contact_id) if contact_id else None,
+        "email": email,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+        "exp": now + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 def create_user_token(*, user_id: str, tenant_id: str, role: str, email: str) -> str:
     """Standard login JWT for a firm client (role="client").
 

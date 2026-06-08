@@ -9,6 +9,9 @@ import {
   getPlugins, getCommunications, createCommunication,
   setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
+  createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
+  getMatterDocuments, createSignatureRequest, listSignatureRequests,
+  sendSignatureRequest, voidSignatureRequest,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -390,6 +393,7 @@ export default function MatterDetailPage() {
     { key: 'activity', label: 'Activity', icon: Icons.clock },
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'documents', label: 'Documents', icon: Icons.file },
+    { key: 'portal', label: 'Client Portal', icon: Icons.users },
     { key: 'billing', label: 'Billing', icon: Icons.dollar },
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
     { key: 'settings', label: 'Settings', icon: Icons.settings },
@@ -1051,6 +1055,11 @@ export default function MatterDetailPage() {
           </div>
         )}
 
+        {/* ── Client Portal Tab ────────────────────────────────────────────────── */}
+        {activeTab === 'portal' && (
+          <ClientPortalTab matterId={id} matter={matter} />
+        )}
+
         {/* ── Billing Tab ──────────────────────────────────────────────────────── */}
         {activeTab === 'billing' && (
           <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
@@ -1556,6 +1565,250 @@ export default function MatterDetailPage() {
           onClose={() => setShowCompose(false)}
         />
       )}
+    </div>
+  )
+}
+
+// ── Client Portal management (firm side) ────────────────────────────────────
+function ClientPortalTab({ matterId, matter }) {
+  const [invites, setInvites] = useState([])
+  const [email, setEmail] = useState(matter?.client?.email || '')
+  const [creating, setCreating] = useState(false)
+  const [lastUrl, setLastUrl] = useState('')
+  const [err, setErr] = useState('')
+
+  const load = useCallback(() => {
+    listMatterPortalInvites(matterId).then(setInvites).catch(() => {})
+  }, [matterId])
+  useEffect(() => { load() }, [load])
+
+  const invite = async (e) => {
+    e.preventDefault()
+    setErr(''); setLastUrl(''); setCreating(true)
+    try {
+      const res = await createMatterPortalInvite(matterId, email ? { email } : {})
+      setLastUrl(res.invite_url || '')
+      load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Failed to create invite')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const revoke = async (inviteId) => {
+    await revokeMatterPortalInvite(matterId, inviteId).catch(() => {})
+    load()
+  }
+
+  return (
+    <div className="space-y-8">
+    <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+      <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+        <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+          <Icon d={Icons.users} size={18} className="text-brand-accent" /> Client Portal
+        </h2>
+        <p className="text-[13px] text-brand-muted font-sans mt-0.5">
+          Invite the client to a secure, matter-scoped portal to view status, exchange messages, share documents, and pay invoices.
+        </p>
+      </div>
+
+      <div className="p-6 space-y-6">
+        <form onSubmit={invite} className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-sans font-semibold text-brand-muted mb-1">Client email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="client@example.com"
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={creating}
+            className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+          >
+            {creating ? 'Sending…' : 'Send portal invite'}
+          </button>
+        </form>
+
+        {err && <p className="text-sm text-brand-rose">{err}</p>}
+        {lastUrl && (
+          <div className="bg-brand-green/10 border border-brand-green/20 rounded-lg px-4 py-3 text-sm">
+            <p className="text-brand-ink font-medium mb-1">Invite sent. Shareable link:</p>
+            <code className="text-xs text-brand-ink-2 break-all">{lastUrl}</code>
+          </div>
+        )}
+
+        <div>
+          <h3 className="text-sm font-sans font-semibold text-brand-ink mb-2">Invitations</h3>
+          {invites.length === 0 ? (
+            <p className="text-sm text-brand-muted">No invitations yet.</p>
+          ) : (
+            <ul className="divide-y divide-brand-line border border-brand-line rounded-lg">
+              {invites.map((inv) => (
+                <li key={inv.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                  <div>
+                    <p className="text-brand-ink">{inv.email || '—'}</p>
+                    <p className="text-xs text-brand-muted">
+                      {inv.revoked ? 'Revoked' : inv.accepted_at ? `Accepted ${new Date(inv.accepted_at).toLocaleDateString()}` : 'Pending'}
+                      {' · expires '}{new Date(inv.expires_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  {!inv.revoked && (
+                    <button
+                      onClick={() => revoke(inv.id)}
+                      className="text-brand-rose hover:underline text-xs font-medium"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <p className="text-xs text-brand-muted">
+          Tip: mark documents as portal-visible in the Documents tab to share them with the client. Documents the client uploads appear there automatically.
+        </p>
+      </div>
+    </div>
+
+    <SignatureRequestsPanel matterId={matterId} />
+    </div>
+  )
+}
+
+// ── E-signature requests (firm side) ────────────────────────────────────────
+function SignatureRequestsPanel({ matterId }) {
+  const [requests, setRequests] = useState([])
+  const [docs, setDocs] = useState([])
+  const [docId, setDocId] = useState('')
+  const [signerName, setSignerName] = useState('')
+  const [signerEmail, setSignerEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const load = useCallback(() => {
+    listSignatureRequests(matterId).then(setRequests).catch(() => {})
+    getMatterDocuments(matterId)
+      .then((data) => setDocs(Array.isArray(data) ? data : data.items || []))
+      .catch(() => {})
+  }, [matterId])
+  useEffect(() => { load() }, [load])
+
+  const create = async (e) => {
+    e.preventDefault()
+    setErr('')
+    if (!docId) { setErr('Choose a document to send for signature.'); return }
+    if (!signerName.trim() || !signerEmail.trim()) { setErr('Signer name and email are required.'); return }
+    setBusy(true)
+    try {
+      const req = await createSignatureRequest(matterId, {
+        document_id: docId,
+        signers: [{ name: signerName, email: signerEmail }],
+      })
+      await sendSignatureRequest(matterId, req.id)
+      setSignerName(''); setSignerEmail(''); setDocId('')
+      load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const voidReq = async (id) => {
+    await voidSignatureRequest(matterId, id).catch(() => {})
+    load()
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
+      <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
+        <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+          <Icon d={Icons.edit} size={18} className="text-brand-accent" /> E-Signature
+        </h2>
+        <p className="text-[13px] text-brand-muted font-sans mt-0.5">
+          Send a matter document for signature; the client signs in the portal and the executed copy is saved back to the matter.
+        </p>
+      </div>
+
+      <div className="p-6 space-y-6">
+        <form onSubmit={create} className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <select
+              value={docId}
+              onChange={(e) => setDocId(e.target.value)}
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            >
+              <option value="">Select document…</option>
+              {docs.map((d) => (
+                <option key={d.id} value={d.id}>{d.filename}</option>
+              ))}
+            </select>
+            <input
+              value={signerName}
+              onChange={(e) => setSignerName(e.target.value)}
+              placeholder="Signer name"
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+            <input
+              type="email"
+              value={signerEmail}
+              onChange={(e) => setSignerEmail(e.target.value)}
+              placeholder="Signer email"
+              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={busy}
+            className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+          >
+            {busy ? 'Sending…' : 'Send for signature'}
+          </button>
+        </form>
+
+        {err && <p className="text-sm text-brand-rose">{err}</p>}
+
+        <div>
+          <h3 className="text-sm font-sans font-semibold text-brand-ink mb-2">Requests</h3>
+          {requests.length === 0 ? (
+            <p className="text-sm text-brand-muted">No signature requests yet.</p>
+          ) : (
+            <ul className="divide-y divide-brand-line border border-brand-line rounded-lg">
+              {requests.map((r) => (
+                <li key={r.id} className="px-4 py-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-brand-ink">{r.document_name || 'Document'}</p>
+                      <p className="text-xs text-brand-muted capitalize">
+                        {r.status.replace('_', ' ')} · {r.signers?.length || 0} signer(s)
+                      </p>
+                    </div>
+                    {!['completed', 'voided'].includes(r.status) && (
+                      <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">
+                        Void
+                      </button>
+                    )}
+                  </div>
+                  <ul className="mt-1 text-xs text-brand-muted">
+                    {r.signers?.map((s) => (
+                      <li key={s.id}>
+                        {s.name} — <span className={s.status === 'signed' ? 'text-brand-green' : ''}>{s.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

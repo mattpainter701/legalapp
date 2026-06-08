@@ -594,6 +594,9 @@ async def _load_invoice_response(
         qbo_invoice_id=invoice.qbo_invoice_id,
         qbo_sync_status=invoice.qbo_sync_status,
         ledes_exported_at=invoice.ledes_exported_at,
+        retainer_id=str(invoice.retainer_id) if invoice.retainer_id else None,
+        billing_period_start=invoice.billing_period_start,
+        billing_period_end=invoice.billing_period_end,
         created_by=str(invoice.created_by),
         line_items=[
             InvoiceLineItemResponse.model_validate(li, from_attributes=True)
@@ -651,6 +654,9 @@ async def list_invoices(
                 qbo_invoice_id=inv.qbo_invoice_id,
                 qbo_sync_status=inv.qbo_sync_status,
                 ledes_exported_at=inv.ledes_exported_at,
+                retainer_id=str(inv.retainer_id) if inv.retainer_id else None,
+                billing_period_start=inv.billing_period_start,
+                billing_period_end=inv.billing_period_end,
                 created_by=str(inv.created_by),
                 line_items=[],
                 payments=[],

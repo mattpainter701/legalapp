@@ -43,6 +43,10 @@ from app.routers.matters import router as matters_router
 from app.routers.estates import router as estates_router
 from app.routers.mediation import router as mediation_router
 from app.routers.mediation_portal import router as mediation_portal_router
+from app.routers.client_portal import router as client_portal_router
+from app.routers.client_portal import firm_router as client_portal_firm_router
+from app.routers.esignature import router as esignature_router
+from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.licensing import router as licensing_router
 from app.services.scheduler import LegalScheduler
@@ -246,6 +250,10 @@ app.include_router(matter_documents_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
 app.include_router(matters_router)
+app.include_router(client_portal_router)
+app.include_router(client_portal_firm_router)
+app.include_router(esignature_router)
+app.include_router(esignature_portal_router)
 app.include_router(document_templates_router)
 app.include_router(onboarding_router)
 app.include_router(licensing_router)
