@@ -127,3 +127,79 @@ def test_source_enabled_accepts_provider_aliases():
     assert cloud_search._source_enabled(["microsoft"], "outlook")
     assert cloud_search._source_enabled(["microsoft"], "sharepoint")
     assert not cloud_search._source_enabled(["google"], "outlook")
+
+
+@pytest.mark.asyncio
+async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
+    """A tenant can have Microsoft 365 and Google connected simultaneously."""
+    from app.services import cloud_init
+
+    async def fake_token(_db, _tenant_id, provider):
+        return {"microsoft": "ms-token", "google": "g-token"}.get(provider)
+
+    async def fake_onedrive_folder(_token, name, parent_id):
+        return f"od:{parent_id}:{name}"
+
+    async def fake_gdrive_folder(_token, name, parent_id):
+        return f"gd:{parent_id}:{name}"
+
+    async def fake_web_url(_token, folder_id):
+        return f"https://onedrive/{folder_id}"
+
+    monkeypatch.setattr(cloud_init, "get_fresh_token", fake_token)
+    monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
+    monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
+    monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
+
+    root = await cloud_init.initialize_cloud_root_folder(None, "tenant-1")
+
+    assert root["path"] == "claritylegal"
+    assert root["matters_path"] == "claritylegal/matters"
+    assert root["subfolders"] == ["emails", "uploads", "msgs", "chat history"]
+    assert "onedrive" in root
+    assert "google_drive" in root
+    assert root["onedrive"]["matters_folder_id"] == "od:od:root:claritylegal:matters"
+    assert root["google_drive"]["matters_folder_id"] == "gd:gd:root:claritylegal:matters"
+
+
+@pytest.mark.asyncio
+async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
+    """Matter metadata records the platform-created canonical storage paths."""
+    from app.services import cloud_init
+
+    async def fake_token(_db, _tenant_id, provider):
+        return {"microsoft": "ms-token", "google": "g-token"}.get(provider)
+
+    async def fake_onedrive_folder(_token, name, parent_id):
+        return f"od:{parent_id}:{name}"
+
+    async def fake_gdrive_folder(_token, name, parent_id):
+        return f"gd:{parent_id}:{name}"
+
+    async def fake_web_url(_token, folder_id):
+        return f"https://onedrive/{folder_id}"
+
+    monkeypatch.setattr(cloud_init, "get_fresh_token", fake_token)
+    monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
+    monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
+    monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
+
+    metadata = await cloud_init.initialize_matter_folders(
+        None,
+        "tenant-1",
+        "acme-v-smith",
+        {
+            "onedrive": {"matters_folder_id": "od-matters"},
+            "google_drive": {"matters_folder_id": "gd-matters"},
+        },
+    )
+
+    assert metadata["path"] == "claritylegal/matters/acme-v-smith"
+    assert metadata["subfolder_paths"] == {
+        "emails": "claritylegal/matters/acme-v-smith/emails",
+        "uploads": "claritylegal/matters/acme-v-smith/uploads",
+        "msgs": "claritylegal/matters/acme-v-smith/msgs",
+        "chat history": "claritylegal/matters/acme-v-smith/chat history",
+    }
+    assert set(metadata["onedrive"]["subfolders"]) == set(metadata["subfolder_paths"])
+    assert set(metadata["google_drive"]["subfolders"]) == set(metadata["subfolder_paths"])

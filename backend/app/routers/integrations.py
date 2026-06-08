@@ -694,15 +694,34 @@ async def _ensure_cloud_root(db: AsyncSession, tenant_id: str) -> None:
         tenant = result.scalar_one_or_none()
         if not tenant:
             return
-        if tenant.cloud_root_folder:
-            return  # already set — nothing to do
-
-        cloud_root = await initialize_cloud_root_folder(db, tenant_id)
+        cloud_root = await initialize_cloud_root_folder(
+            db, tenant_id, existing_root=tenant.cloud_root_folder
+        )
         if cloud_root:
             tenant.cloud_root_folder = cloud_root
+
+            from app.models.plugin import Matter
+            from app.services.cloud_init import initialize_matter_folders
+
+            matters = (
+                await db.execute(select(Matter).where(Matter.tenant_id == tenant_id))
+            ).scalars().all()
+            for matter in matters:
+                existing = matter.cloud_folder or {}
+                missing_provider = any(
+                    provider in cloud_root and provider not in existing
+                    for provider in ("onedrive", "google_drive")
+                )
+                if matter.cloud_folder is None or missing_provider:
+                    folder = await initialize_matter_folders(
+                        db, tenant_id, matter.slug, cloud_root
+                    )
+                    if folder:
+                        matter.cloud_folder = folder
+
             await db.commit()
             _logger.info(
-                "Auto-created cloud root folder for tenant %s on re-auth", tenant_id
+                "Auto-created cloud storage layout for tenant %s on re-auth", tenant_id
             )
     except Exception as exc:
         _logger.warning("_ensure_cloud_root failed for tenant %s: %s", tenant_id, exc)
@@ -715,8 +734,8 @@ async def cloud_init_retry(
 ):
     """Re-create missing cloud folders for this tenant.
 
-    Creates the root 'claritylegal-records' folder if absent, then backfills
-    matter subfolders for every matter that has cloud_folder=null.  Safe to
+    Creates the root 'claritylegal' folder if absent, then backfills
+    matter subfolders for every matter missing connected-provider metadata.  Safe to
     call multiple times — existing folders are detected and reused.
     """
     from app.models.plugin import Matter
@@ -744,7 +763,9 @@ async def cloud_init_retry(
 
     cloud_root = tenant.cloud_root_folder or {}
     try:
-        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
+        fresh = await initialize_cloud_root_folder(
+            db, str(tenant_id), existing_root=cloud_root
+        )
         if fresh:
             cloud_root = fresh
             tenant.cloud_root_folder = cloud_root
@@ -762,10 +783,7 @@ async def cloud_init_retry(
 
     # 2. Backfill matter folders
     matters_result = await db.execute(
-        select(Matter).where(
-            Matter.tenant_id == tenant_id,
-            Matter.cloud_folder.is_(None),
-        )
+        select(Matter).where(Matter.tenant_id == tenant_id)
     )
     matters = matters_result.scalars().all()
 
@@ -781,8 +799,14 @@ async def cloud_init_retry(
                 cloud_root=cloud_root,
             )
             if folder:
-                matter.cloud_folder = folder
-                initialized += 1
+                existing = matter.cloud_folder or {}
+                missing_provider = any(
+                    provider in cloud_root and provider not in existing
+                    for provider in ("onedrive", "google_drive")
+                )
+                if matter.cloud_folder is None or missing_provider:
+                    matter.cloud_folder = folder
+                    initialized += 1
         except Exception as exc:
             logger.warning(
                 "cloud_init_retry: matter %s folder init failed: %s", matter.id, exc
