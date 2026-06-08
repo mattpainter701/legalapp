@@ -1,6 +1,7 @@
 import time as _time
 
 from fastapi import Depends, Request, HTTPException
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -51,14 +52,22 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 redis = getattr(request.app.state, "redis", None)
                 blacklisted = False
                 if redis:
+                    # Redis is the authoritative, cross-worker revocation store.
                     blacklisted = await redis.exists(f"jti:{jti}")
                 else:
+                    # Per-worker in-memory fallback: dev-only, NOT a reliable
+                    # revocation guarantee in a multi-worker deployment.
                     blacklist = getattr(request.app.state, "jti_blacklist", {})
                     ts = blacklist.get(jti)
                     if ts and _time.time() < ts:
                         blacklisted = True
                 if blacklisted:
-                    return await call_next(request)
+                    # Reject revoked tokens outright instead of passing the
+                    # request through unauthenticated.
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Token has been revoked"},
+                    )
 
             tenant_id: str = payload.get("tenant_id")
             user_id: str = payload.get("sub")

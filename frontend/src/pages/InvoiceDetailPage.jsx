@@ -206,12 +206,12 @@ export default function InvoiceDetailPage() {
         </div>
         <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8 }}>
           <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Total</p>
-          <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0' }}>${invoice.total.toFixed(2)}</p>
+          <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0' }}>${Number(invoice.total).toFixed(2)}</p>
         </div>
         <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8 }}>
           <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Balance Due</p>
           <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0', color: balance > 0 ? '#dc2626' : '#059669' }}>
-            ${balance.toFixed(2)}
+            ${Number(balance).toFixed(2)}
           </p>
         </div>
       </div>
@@ -238,23 +238,23 @@ export default function InvoiceDetailPage() {
                 </span>
               </td>
               <td style={{ padding: 8 }}>{li.quantity}</td>
-              <td style={{ padding: 8 }}>${li.unit_price.toFixed(2)}</td>
-              <td style={{ padding: 8, textAlign: 'right', fontWeight: 500 }}>${li.amount.toFixed(2)}</td>
+              <td style={{ padding: 8 }}>${Number(li.unit_price).toFixed(2)}</td>
+              <td style={{ padding: 8, textAlign: 'right', fontWeight: 500 }}>${Number(li.amount).toFixed(2)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr>
             <td colSpan={4} style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>Subtotal</td>
-            <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>${invoice.subtotal.toFixed(2)}</td>
+            <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>${Number(invoice.subtotal).toFixed(2)}</td>
           </tr>
           <tr>
             <td colSpan={4} style={{ padding: 8, textAlign: 'right' }}>Tax</td>
-            <td style={{ padding: 8, textAlign: 'right' }}>${invoice.tax_amount.toFixed(2)}</td>
+            <td style={{ padding: 8, textAlign: 'right' }}>${Number(invoice.tax_amount).toFixed(2)}</td>
           </tr>
           <tr>
             <td colSpan={4} style={{ padding: 8, textAlign: 'right', fontWeight: 700, fontSize: 14 }}>Total</td>
-            <td style={{ padding: 8, textAlign: 'right', fontWeight: 700, fontSize: 14 }}>${invoice.total.toFixed(2)}</td>
+            <td style={{ padding: 8, textAlign: 'right', fontWeight: 700, fontSize: 14 }}>${Number(invoice.total).toFixed(2)}</td>
           </tr>
         </tfoot>
       </table>
@@ -349,7 +349,7 @@ export default function InvoiceDetailPage() {
                   <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#e5e7eb' }}>{p.method}</span>
                 </td>
                 <td style={{ padding: 6 }}>{p.reference_number || '—'}</td>
-                <td style={{ padding: 6, textAlign: 'right', fontWeight: 500 }}>${p.amount.toFixed(2)}</td>
+                <td style={{ padding: 6, textAlign: 'right', fontWeight: 500 }}>${Number(p.amount).toFixed(2)}</td>
               </tr>
             ))}
           </tbody>

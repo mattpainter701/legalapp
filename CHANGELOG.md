@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.14.0] — 2026-06-06
+
+### Sprint 12 — LiteLLM Gateway & AI Operations Control Plane
+
+### Added
+- **Task 1206 — Provider Route Builder:** Full UI-driven AI routing console in the Platform admin. Operators can now manage provider API keys, fetch live model lists, and configure standard/premium routes with fallback chains — all without touching config files.
+  - `llm_provider_keys` table (migration 045): Fernet-encrypted key vault with provider association and masked key hints
+  - `GET/POST/DELETE /api/platform/llm/provider-keys`: key vault CRUD
+  - `POST /api/platform/llm/provider-keys/sync-env`: imports `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` from environment into the vault
+  - `POST /api/platform/llm/provider-keys/{id}/fetch-models`: proxies provider `/models` endpoint via stored key
+  - `GET/PUT /api/platform/llm/routes`: reads/writes route config and hot-reloads LiteLLM via `POST /config/update`
+  - `POST /api/platform/llm/routes/test`: validates a route with a synthetic prompt, returns latency + first response tokens
+  - Provider presets: OpenCode Zen, OpenCode Go, OpenRouter, DeepSeek, Anthropic
+  - **AI Routing tab** in PlatformPage: KeyVaultPanel (key list, add form, sync-env button) + RouteCard (provider/key/model selection, fallback chain builder, route test)
+
+### Fixed
+- **Task 1206 follow-up — AI Routing Console hardening:** Route saves now validate
+  provider/key pairings, prune blank fallback rows, return 400s for malformed key
+  IDs, register LiteLLM fallback mappings alongside model aliases, and handle
+  LiteLLM-native Anthropic model prefixes/testing correctly. The Platform AI
+  Routing tab now shows alias readiness, primary/fallback ordering, model-fetch
+  state, validation feedback, and safer key deletion behavior.
+- `admin.py`: add `from_attributes=True` to `TenantSettingsResponse.model_validate()` calls
+- `platform.py`: guard `PLATFORM_SECRET_KEY` length < 32, fix `pg_total_relation_size(relid)` column reference
+- `.env.hypervisor`: clear leftover placeholder instruction from `PLATFORM_SECRET_KEY`
+- `.env.prod.example`: add `openssl rand -hex 32` generation comment for `PLATFORM_SECRET_KEY`
+
+## [0.13.9] — 2026-06-06
+
+### Fixed
+- **BK13:** Chat refused to answer general legal questions without context — system prompt lacked explicit instruction to answer from general knowledge when FIRM CONTEXT is empty. Added rule: answer directly, tag all claims [model knowledge], never gate on context availability.
+- **BK14:** Premium model 404 — all three route legs broken: (1) primary `openai/deepseek-chat` at `opencode.ai/go/v1` returns HTML 404 (wrong path); correct endpoint is `opencode.ai/zen/go/v1` with model `deepseek-v4-pro`. (2) standard `opencode.ai/go/v1` similarly broken; fixed to `opencode.ai/zen/v1` with `deepseek-v4-flash-free`. (3) `llama-4-maverick:free` removed from OpenRouter; replaced with `gemma-4-31b-it:free` (confirmed working) as premium OpenRouter fallback.
+
+## [0.13.8] — 2026-06-06
+
+### Fixed
+- **BK10:** LiteLLM 401 on chat — `LITELLM_API_KEY` was missing from `.env.hypervisor` template. LiteLLM container defaulted to master key `sk-local-litellm` (from docker-compose default) while backend sent `"not-needed"` as auth. Fixed: added full LiteLLM section to `.env.hypervisor`; changed fallback in `LLMService` and `EmbeddingService` from `"not-needed"` to `"sk-local-litellm"` to match docker-compose default.
+- **BK11:** OAuth 429 on back-to-back SSO logins — nginx `auth` zone (10r/m, burst=5) was applied to all `/api/auth/` paths. A complete OAuth flow uses 3+ requests, so 2 logins = 6 requests → burst exhausted. Fixed: added dedicated `oauth` zone (30r/m, burst=15) applied to `/api/auth/(google|microsoft)/` paths before the catch-all `auth` block.
+- **BK12:** LiteLLM slow/failed responses — three root causes: (1) `clarity-standard` primary route pointed to `zen.opencode.ai` which is unreachable; switched to `DEEPSEEK_BASE_URL` (working OpenCode endpoint). (2) `deepseek/deepseek-r1:free` removed from OpenRouter → 404 on fallback; replaced with `qwen/qwen3-235b-a22b:free` and `meta-llama/llama-4-maverick:free`. (3) `clarity-embeddings` model registered against `OPENAI_API_KEY` which is unset → LiteLLM rejected model → 400 on every embed call; removed `clarity-embeddings` from config. `EmbeddingService` now only routes through LiteLLM when `LITELLM_EMBEDDING_MODEL` is explicitly set; otherwise falls back to direct provider (or disables embeddings gracefully). Reduced `request_timeout` 120→60s, `num_retries` 2→1, `cooldown_time` 60→30s.
+
 ## [0.13.7] — 2026-06-05
 
 ### Fixed

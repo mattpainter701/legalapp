@@ -469,7 +469,7 @@ async def get_tenant_settings(
         await db.commit()
         await db.refresh(settings_record)
 
-    return TenantSettingsResponse.model_validate(settings_record)
+    return TenantSettingsResponse.model_validate(settings_record, from_attributes=True)
 
 
 @router.put("/settings", response_model=TenantSettingsResponse)
@@ -510,7 +510,7 @@ async def update_tenant_settings(
     await db.commit()
     await db.refresh(settings_record)
 
-    return TenantSettingsResponse.model_validate(settings_record)
+    return TenantSettingsResponse.model_validate(settings_record, from_attributes=True)
 
 
 # ─────────────────────────────────────────────────────

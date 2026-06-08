@@ -188,6 +188,13 @@ async def resolve_llm_route(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
     ts = ts_result.scalar_one_or_none()
+    # TODO(customer_llm): TenantSettings has use_customer_llm / customer_llm_provider /
+    # customer_llm_config fields (Sprint 8) that are not wired into routing. To support
+    # a tenant supplying their own API key/model, a migration is needed to store the
+    # encrypted key and a LiteLLM virtual-key or pass-through mechanism must be
+    # established before these fields can be honoured here. Until that work is done the
+    # fields are intentionally ignored so there is no silent fallthrough or partial
+    # behaviour. See: app/models/tenant.py TenantSettings.use_customer_llm.
     if ts:
         if requested_route in {"premium", "tenant-premium"}:
             alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)

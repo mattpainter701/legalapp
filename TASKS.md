@@ -99,13 +99,35 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [x] Update platform/admin UI and API language from provider selection to gateway alias override
 - [x] Remove direct-provider fallback from backend app; provider failover belongs inside LiteLLM config
 
+### 1206. Provider Route Builder — Intuitive AI Routing Console (P0, LARGE) — COMPLETED
+
+**Goal:** Replace manual `litellm_config.yaml` edits with a UI-driven provider console. Operator picks a provider endpoint (OpenCode zen, OpenCode go, OpenRouter, DeepSeek direct, etc.), selects an API key from the stored key vault, fetches the provider's live model list, picks a model, and saves it as the standard/premium route. LiteLLM config is regenerated and hot-reloaded automatically.
+
+- [x] Backend: `GET /api/platform/llm/providers` — returns list of known provider presets (name, base_url, models_endpoint, auth_scheme)
+- [x] Backend: `POST /api/platform/llm/provider-keys/{id}/fetch-models` — proxies `GET {base_url}/models` using the specified key_id; returns model list
+- [x] Backend: `GET /api/platform/llm/routes` — returns current standard/premium route config (provider, key_id, model, fallbacks)
+- [x] Backend: `PUT /api/platform/llm/routes` — saves route config, hot-reloads LiteLLM via POST /config/update
+- [x] Backend: `POST /api/platform/llm/routes/test` — fires a synthetic prompt against the configured route, returns latency + model used
+- [x] Backend: Key vault CRUD (`GET/POST/DELETE /api/platform/llm/provider-keys`) with Fernet encryption
+- [x] Backend: `POST /api/platform/llm/provider-keys/sync-env` — imports DEEPSEEK_API_KEY/OPENROUTER_API_KEY from env into vault
+- [x] Backend: migration 045 for `llm_provider_keys` table
+- [x] Frontend: AI Routing tab with KeyVaultPanel (key CRUD + sync-env) and RouteCard (provider/key/model select + fallback chain + test)
+- [x] Provider presets: opencode-zen, opencode-go, openrouter, deepseek, anthropic
+- [x] Follow-up hardening: route readiness/validation UI, provider/key mismatch rejection, malformed key ID 400s, blank fallback pruning, LiteLLM fallback mapping update payload, and Anthropic native prefix/test support
+- [x] Follow-up UX cleanup: remove legacy global provider picker, show app alias → LiteLLM alias → upstream provider/model/key flow, simplify tenant overrides to aliases, surface 403/model-fetch errors, and sync app aliases on route save
+- [x] Model catalog/load balancing: live provider model refresh across stored keys, free/new model tags, direct model-to-route actions, and additional balanced primary deployments under the same LiteLLM alias
+
+Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_key.py`, `backend/migrations/versions/045_llm_provider_keys.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
+
 ### 1203. Operator Console — AI Operations (P0, LARGE) — PENDING
 - [ ] Add AI Operations tab with global standard/premium aliases and per-tenant override table
 - [ ] Add model/provider disable switch with immediate route validation
 - [ ] Add model test action using synthetic prompt and no tenant data
 - [ ] Show recent LLM failures by tenant, route, provider, model, status code, and latency
+- [ ] Instrument LiteLLM response metadata/headers so `UsageRecord.gateway_fallback_count`, `final_model`, and gateway request id reflect actual fallback/load-balanced deployment used
 - [ ] Show fallback activity and provider health summary from LiteLLM telemetry
 - [ ] Add short-retention debug mode toggle per tenant/conversation with explicit audit entry
+- [ ] Add CI-safe DB-backed regression for platform LLM route saves covering `llm_route_config_v2`, app alias sync, and LiteLLM hot-reload payload shape
 
 ### 1204. Gateway Audit, Privacy, and Retention (P0, MEDIUM) — PENDING
 - [ ] Disable raw prompt/response logging in LiteLLM by default

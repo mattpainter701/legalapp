@@ -57,14 +57,21 @@ from app.routers.cloud_admin import router as cloud_admin_router
 from app.routers.smb import router as smb_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
+from app.routers.platform_llm import router as platform_llm_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Module-level flag tracking LiteLLM gateway reachability.
+# Set during lifespan startup; read by /health/llm endpoint.
+_litellm_healthy: bool = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle events."""
+    global _litellm_healthy
+
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info(f"Upload directory ensured: {settings.UPLOAD_DIR}")
 
@@ -88,8 +95,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
 
-    # LiteLLM gateway reachability check (warn-only)
-    if settings.LITELLM_ENABLED:
+    # LiteLLM gateway reachability check
+    if not settings.LITELLM_ENABLED:
+        logger.warning(
+            "LITELLM_ENABLED is False — AI features are disabled. "
+            "Set LITELLM_ENABLED=true in production."
+        )
+        _litellm_healthy = False
+        app.state.litellm_healthy = False
+    else:
         try:
             import httpx as _httpx
 
@@ -97,18 +111,34 @@ async def lifespan(app: FastAPI):
                 _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
                 _r.raise_for_status()
             logger.info("LiteLLM gateway reachable")
+            _litellm_healthy = True
+            app.state.litellm_healthy = True
         except Exception as exc:
-            logger.warning(f"LiteLLM gateway unreachable at startup: {exc}")
+            logger.error(
+                "LiteLLM gateway unreachable at startup — AI features will fail "
+                f"until gateway is available: {exc}"
+            )
+            _litellm_healthy = False
+            app.state.litellm_healthy = False
 
-    # Start APScheduler
-    try:
-        scheduler = LegalScheduler()
-        scheduler.start()
-        app.state.scheduler = scheduler
-        logger.info("Scheduler started")
-    except Exception as exc:
-        logger.error(f"Scheduler failed to start: {exc}")
+    # Start APScheduler — ONLY in the single process designated by RUN_SCHEDULER.
+    # Under `uvicorn --workers N` the lifespan runs in every worker, so starting
+    # the scheduler unconditionally would fire each cron job N times (duplicate
+    # invoices / emails). In prod the API workers set RUN_SCHEDULER=false and a
+    # dedicated single-process `scheduler` service sets it to true. Jobs also take
+    # a Postgres advisory lock as a backstop against any stray second runner.
+    if settings.RUN_SCHEDULER:
+        try:
+            scheduler = LegalScheduler()
+            scheduler.start()
+            app.state.scheduler = scheduler
+            logger.info("Scheduler started (RUN_SCHEDULER=true)")
+        except Exception as exc:
+            logger.error(f"Scheduler failed to start: {exc}")
+            app.state.scheduler = None
+    else:
         app.state.scheduler = None
+        logger.info("Scheduler disabled in this process (RUN_SCHEDULER=false)")
 
     # Initialize cache managers
     try:
@@ -162,12 +192,15 @@ if settings.EXTRA_CORS_ORIGINS:
     ]
     origins.extend(extra_origins)
 
+# Origins are an explicit allow-list (never "*") because credentials are enabled —
+# a wildcard origin with credentials is both invalid and unsafe. Methods/headers
+# are pinned to what the SPA + platform key actually use rather than "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Platform-Key"],
 )
 
 # ─────────────────────────────────────────────────────
@@ -189,6 +222,7 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(platform_router, prefix="/api")
+app.include_router(platform_llm_router, prefix="/api")
 # Dedicated plugin-subpath routers MUST be registered before the generic
 # plugins_router, whose greedy ``POST /{plugin}/{skill}`` skill-execution route
 # would otherwise shadow specific paths like ``/api/plugins/mediation/cases``.
@@ -229,7 +263,7 @@ app.include_router(users_router)
 
 
 # ─────────────────────────────────────────────────────
-# Health endpoint
+# Health endpoints
 # ─────────────────────────────────────────────────────
 @app.get("/health", tags=["health"])
 async def health_check():
@@ -247,6 +281,30 @@ async def health_check():
         "database": "connected" if db_ok else "unavailable",
         "version": "1.0.0",
     }
+
+
+@app.get("/health/llm", tags=["health"])
+async def health_check_llm():
+    """LiteLLM gateway liveness endpoint.
+
+    Always returns HTTP 200 so load balancers do not flip on gateway hiccups.
+    Consumers should inspect the ``status`` field:
+    - ``"disabled"``  — LITELLM_ENABLED is False
+    - ``"ok"``        — gateway is reachable
+    - ``"degraded"``  — gateway ping failed; ``detail`` contains the error
+    """
+    if not settings.LITELLM_ENABLED:
+        return {"status": "disabled"}
+
+    try:
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient(timeout=5.0) as _c:
+            _r = await _c.get(f"{settings.LITELLM_BASE_URL}/health/liveliness")
+            _r.raise_for_status()
+        return {"status": "ok"}
+    except Exception as exc:
+        return {"status": "degraded", "detail": str(exc)}
 
 
 # ─────────────────────────────────────────────────────

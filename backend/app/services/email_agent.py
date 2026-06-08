@@ -230,12 +230,8 @@ Draft a professional response email. The attorney will review before sending. Do
                 use_premium=False,
                 provider="litellm",
                 model=model,
+                response_format={"type": "json_object"},
             )
-            response_text = response_text.strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("\n", 1)[1]
-                if response_text.endswith("```"):
-                    response_text = response_text[:-3]
             return json.loads(response_text)
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Email classification failed: %s", exc)

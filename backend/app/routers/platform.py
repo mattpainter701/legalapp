@@ -46,9 +46,8 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 def _require_platform_key(request: Request) -> None:
     key = request.headers.get("X-Platform-Key", "")
-    if not settings.PLATFORM_SECRET_KEY or not hmac.compare_digest(
-        key, settings.PLATFORM_SECRET_KEY
-    ):
+    secret = settings.PLATFORM_SECRET_KEY
+    if not secret or len(secret) < 32 or not hmac.compare_digest(key, secret):
         raise HTTPException(status_code=403, detail="Invalid or missing platform key")
 
 
@@ -505,7 +504,7 @@ async def platform_health(
             SELECT
                 relname AS table_name,
                 n_live_tup AS row_count,
-                pg_size_pretty(pg_total_relation_size(oid)) AS total_size
+                pg_size_pretty(pg_total_relation_size(relid)) AS total_size
             FROM pg_stat_user_tables
             ORDER BY n_live_tup DESC
         """)

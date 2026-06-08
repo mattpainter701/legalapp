@@ -24,6 +24,7 @@ export default function TimeTrackingPage() {
     matter_id: preselectedMatterId,
     description: '',
     hours: '',
+    hourly_rate: user?.default_billing_rate || '',
     date: new Date().toISOString().slice(0, 10),
   })
 
@@ -31,12 +32,14 @@ export default function TimeTrackingPage() {
     try {
       setLoading(true)
       const params = filter !== 'all' ? { status: filter } : {}
-      getTimeEntries(params)
-        .then(data => setEntries(data.items || data))
-        .catch(() => {})
-      getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
-        .then(data => setMatters(data.items || []))
-        .catch(() => {})
+      await Promise.all([
+        getTimeEntries(params)
+          .then(data => setEntries(data.items || data))
+          .catch(() => {}),
+        getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
+          .then(data => setMatters(data.items || []))
+          .catch(() => {}),
+      ])
     } finally {
       setLoading(false)
     }
@@ -47,18 +50,21 @@ export default function TimeTrackingPage() {
   const handleSubmit = async (e) => {
     e.preventDefault()
     try {
-      await createTimeEntry({
+      const payload = {
         matter_id: form.matter_id,
         description: form.description,
         hours: parseFloat(form.hours),
         date: form.date,
         is_billable: true,
-      })
+      }
+      if (form.hourly_rate) payload.hourly_rate = parseFloat(form.hourly_rate)
+      await createTimeEntry(payload)
       setShowForm(false)
       setForm({
         matter_id: preselectedMatterId,
         description: '',
         hours: '',
+        hourly_rate: user?.default_billing_rate || '',
         date: new Date().toISOString().slice(0, 10),
       })
       loadData()
@@ -90,7 +96,7 @@ export default function TimeTrackingPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Time Tracking</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
-            {totalHours.toFixed(1)}h logged · ${totalAmount.toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
+            {totalHours.toFixed(1)}h logged · ${Number(totalAmount).toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
           </p>
         </div>
         <button
@@ -112,7 +118,7 @@ export default function TimeTrackingPage() {
           style={{
             background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
             padding: 16, marginBottom: 20, display: 'grid',
-            gridTemplateColumns: '2fr 1fr 1fr auto', gap: 12, alignItems: 'end',
+            gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end',
           }}
         >
           <div>
@@ -150,6 +156,16 @@ export default function TimeTrackingPage() {
             />
           </div>
           <div>
+            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Rate ($)</label>
+            <input
+              type="number" step="1" min="0"
+              value={form.hourly_rate}
+              onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
+              placeholder={user?.default_billing_rate ? String(user.default_billing_rate) : '0'}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+            />
+          </div>
+          <div>
             <button
               type="submit"
               style={{
@@ -165,7 +181,7 @@ export default function TimeTrackingPage() {
 
       {/* Filter */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {['all', 'draft', 'billed'].map((f) => (
+        {['all', 'draft', 'invoiced'].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -207,7 +223,7 @@ export default function TimeTrackingPage() {
                   </span>
                 </td>
                 <td style={{ padding: 8 }}>{e.hours}h</td>
-                <td style={{ padding: 8, fontWeight: 600 }}>${e.amount.toFixed(2)}</td>
+                <td style={{ padding: 8, fontWeight: 600 }}>${Number(e.amount).toFixed(2)}</td>
                 <td style={{ padding: 8 }}>
                   <span style={{
                     fontSize: 11, padding: '2px 8px', borderRadius: 10,

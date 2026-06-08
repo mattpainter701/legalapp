@@ -12,21 +12,25 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self):
-        # Use OpenAI key, or fall back to DeepSeek/OpenCode key for providers
-        # that expose OpenAI-compatible embeddings (e.g. opencode.ai)
-        api_key = (
-            settings.OPENAI_API_KEY
-            or settings.OPENCODE_KEY
-            or settings.DEEPSEEK_API_KEY
-        )
-        if not api_key:
-            self.client = None
-            self.model = None
+        if settings.LITELLM_ENABLED and settings.LITELLM_EMBEDDING_MODEL:
+            # Route embeddings through LiteLLM when a model alias is configured
+            self.client = AsyncOpenAI(
+                api_key=settings.LITELLM_API_KEY or "sk-local-litellm",
+                base_url=settings.LITELLM_BASE_URL,
+            )
+            self.model = settings.LITELLM_EMBEDDING_MODEL
         else:
-            # If using an OpenAI key, use OpenAI base; otherwise use the same
-            # base URL as chat (DeepSeek/openCode compatible endpoint)
-            if settings.OPENAI_API_KEY:
-                self.client = AsyncOpenAI(api_key=api_key)
+            # Direct provider fallback when LiteLLM is disabled
+            api_key = (
+                settings.OPENAI_API_KEY
+                or settings.OPENCODE_KEY
+                or settings.DEEPSEEK_API_KEY
+            )
+            if not api_key:
+                self.client = None
+                self.model = None
+            elif settings.OPENAI_API_KEY:
+                self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
                 self.model = settings.EMBEDDING_MODEL
             else:
                 self.client = AsyncOpenAI(

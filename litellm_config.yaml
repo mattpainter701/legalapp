@@ -1,57 +1,77 @@
 model_list:
-  # Standard profile: low-cost/high-availability query routing.
-  # Primary: OpenCode Zen/OpenAI-compatible endpoint.
+  # Standard profile: cost-effective query routing.
+  # Primary: OpenCode zen DeepSeek V4 Flash Free (opencode.ai/zen/v1)
   - model_name: clarity-standard
     litellm_params:
-      model: openai/deepseek-chat
-      api_base: os.environ/OPENCODE_ZEN_BASE_URL
+      model: openai/deepseek-v4-flash-free
+      api_base: https://opencode.ai/zen/v1
       api_key: os.environ/DEEPSEEK_API_KEY
 
-  - model_name: clarity-standard-openrouter-free
+  # Standard fallback: OpenCode zen Nemotron free
+  - model_name: clarity-standard-zen-nemotron
+    litellm_params:
+      model: openai/nemotron-3-ultra-free
+      api_base: https://opencode.ai/zen/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # Standard fallbacks: OpenRouter free models
+  - model_name: clarity-standard-openrouter-gemma
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: clarity-standard-openrouter-deepseek
+  - model_name: clarity-standard-openrouter-qwen
     litellm_params:
-      model: openrouter/deepseek/deepseek-r1:free
+      model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
-  # Premium profile: higher-quality drafting/reasoning route.
-  # Primary: DeepSeek via DEEPSEEK_BASE_URL (deepseek-chat is the current stable alias).
+  # Premium profile: highest-quality drafting/reasoning.
+  # Primary: OpenCode go DeepSeek V4 Pro (opencode.ai/zen/go/v1)
   - model_name: clarity-premium
     litellm_params:
-      model: openai/deepseek-chat
-      api_base: os.environ/DEEPSEEK_BASE_URL
+      model: openai/deepseek-v4-pro
+      api_base: https://opencode.ai/zen/go/v1
       api_key: os.environ/DEEPSEEK_API_KEY
 
-  - model_name: clarity-premium-openrouter
+  # Premium fallback: OpenCode zen DeepSeek V4 Flash (paid, fast)
+  - model_name: clarity-premium-zen-flash
     litellm_params:
-      model: openrouter/deepseek/deepseek-r1:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: openai/deepseek-v4-flash
+      api_base: https://opencode.ai/zen/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
 
+  # Premium OpenRouter fallbacks
   - model_name: clarity-premium-openrouter-qwen
     litellm_params:
       model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
+  - model_name: clarity-premium-openrouter-gemma
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
 litellm_settings:
   drop_params: true
   turn_off_message_logging: true
-  request_timeout: 120
-  num_retries: 2
-  allowed_fails: 3
-  cooldown_time: 60
+  request_timeout: 60
+  num_retries: 1
+  allowed_fails: 2
+  cooldown_time: 30
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
 
 router_settings:
-  routing_strategy: simple-shuffle
+  routing_strategy: cost-based-routing
   fallbacks:
     - clarity-standard:
-        - clarity-standard-openrouter-free
-        - clarity-standard-openrouter-deepseek
+        - clarity-standard-zen-nemotron
+        - clarity-standard-openrouter-gemma
+        - clarity-standard-openrouter-qwen
     - clarity-premium:
-        - clarity-premium-openrouter
+        - clarity-premium-zen-flash
         - clarity-premium-openrouter-qwen
+        - clarity-premium-openrouter-gemma
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY

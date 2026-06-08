@@ -12,12 +12,14 @@ Cross-tenant queries deliberately bypass RLS by setting a blank tenant context s
 all tenants' data is accessible globally for the scheduler.
 """
 
+import hashlib
 import logging
 import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -154,6 +156,65 @@ def _days_until(target_date) -> int:
     if isinstance(target_date, datetime):
         target_date = target_date.date()
     return (target_date - today).days
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cluster-wide job guard (Postgres advisory lock)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _lock_key(name: str) -> int:
+    """Derive a stable 63-bit signed-int advisory-lock key from a job name.
+
+    Postgres advisory locks take a bigint key. We hash the job name and take
+    the top 60 bits (15 hex chars) which always fits in a signed bigint and is
+    stable across processes/restarts so every runner maps a job to the same key.
+    """
+    h = hashlib.sha256(name.encode()).hexdigest()
+    return int(h[:15], 16)
+
+
+@asynccontextmanager
+async def job_lock(name: str):
+    """Yield ``True`` iff this process acquired the cluster-wide lock for ``name``.
+
+    Uses a dedicated session + ``pg_try_advisory_lock`` so a second concurrent
+    runner (e.g. an accidental extra scheduler process under ``uvicorn
+    --workers``) skips the run instead of double-firing. The lock is released on
+    exit only if we acquired it. ``pg_try_advisory_lock`` is non-blocking: it
+    returns immediately with false rather than waiting.
+    """
+    key = _lock_key(name)
+    async with async_session_maker() as session:
+        got = (
+            await session.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})
+        ).scalar()
+        try:
+            yield bool(got)
+        finally:
+            if got:
+                await session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                await session.commit()
+
+
+async def _run_guarded(name: str, coro_fn: Callable[[], Awaitable[Any]]) -> Any:
+    """Run ``coro_fn`` only if this process holds the cluster-wide lock for ``name``.
+
+    If the lock is held by another runner, the coroutine is NOT awaited and we
+    log a skip and return ``None``. Any exception raised by the job is logged via
+    ``logger.exception`` and swallowed so a single failing job can never crash
+    the APScheduler event loop. (Each job additionally manages its own
+    SchedulerLog row + the advisory lock here is the primary dedupe mechanism.)
+    """
+    async with job_lock(name) as acquired:
+        if not acquired:
+            logger.info("[%s] skipped — another runner holds the lock", name)
+            return None
+        try:
+            return await coro_fn()
+        except Exception:
+            logger.exception("[%s] guarded run failed", name)
+            return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,11 +368,29 @@ class LegalScheduler:
     def __init__(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone="America/New_York")
 
+    def _guarded(self, job_id: str, method: Callable[[], Awaitable[Any]]):
+        """Return a zero-arg coroutine fn that runs ``method`` under the
+        cluster-wide advisory lock for ``job_id``. APScheduler calls this; the
+        lock ensures a stray second scheduler process skips the run instead of
+        double-firing client emails / invoices.
+        """
+
+        async def _runner() -> Any:
+            return await _run_guarded(job_id, method)
+
+        return _runner
+
     def start(self) -> None:
-        """Register all agent jobs and start the scheduler."""
+        """Register all agent jobs and start the scheduler.
+
+        Every job entrypoint is wrapped in ``_run_guarded`` so it only fires in
+        the process that holds the Postgres advisory lock for that job id. This
+        is the primary defense against duplicate emails/invoices when more than
+        one scheduler process is running.
+        """
         # renewal-watcher: Mon 8:00 AM ET
         self.scheduler.add_job(
-            self.run_renewal_watcher,
+            self._guarded("renewal-watcher", self.run_renewal_watcher),
             CronTrigger(day_of_week="mon", hour=8, minute=0),
             id="renewal-watcher",
             name="Renewal Watcher",
@@ -320,7 +399,7 @@ class LegalScheduler:
 
         # reg-monitor: Mon 8:00 AM ET
         self.scheduler.add_job(
-            self.run_reg_monitor,
+            self._guarded("reg-monitor", self.run_reg_monitor),
             CronTrigger(day_of_week="mon", hour=8, minute=0),
             id="reg-monitor",
             name="Regulatory Monitor",
@@ -329,7 +408,7 @@ class LegalScheduler:
 
         # docket-watcher: Mon 8:00 AM ET
         self.scheduler.add_job(
-            self.run_docket_watcher,
+            self._guarded("docket-watcher", self.run_docket_watcher),
             CronTrigger(day_of_week="mon", hour=8, minute=0),
             id="docket-watcher",
             name="Docket Watcher",
@@ -338,7 +417,7 @@ class LegalScheduler:
 
         # oc-status: Mon 9:00 AM ET
         self.scheduler.add_job(
-            self.run_oc_status,
+            self._guarded("oc-status", self.run_oc_status),
             CronTrigger(day_of_week="mon", hour=9, minute=0),
             id="oc-status",
             name="Portfolio Status",
@@ -347,7 +426,7 @@ class LegalScheduler:
 
         # task-reminder: every hour
         self.scheduler.add_job(
-            self._check_task_reminders,
+            self._guarded("task-reminder", self._check_task_reminders),
             "interval",
             hours=1,
             id="task-reminder",
@@ -357,7 +436,7 @@ class LegalScheduler:
 
         # estate-deadline-watcher: daily 8:05 AM ET
         self.scheduler.add_job(
-            self.run_estate_deadline_watcher,
+            self._guarded("estate-deadline-watcher", self.run_estate_deadline_watcher),
             CronTrigger(hour=8, minute=5),
             id="estate-deadline-watcher",
             name="Estate Deadline Watcher",
@@ -366,7 +445,7 @@ class LegalScheduler:
 
         # user-sync: daily at 2:00 AM ET
         self.scheduler.add_job(
-            self.run_user_sync,
+            self._guarded("user-sync", self.run_user_sync),
             CronTrigger(hour=2, minute=0),
             id="user-sync",
             name="Directory User Sync",
@@ -378,7 +457,7 @@ class LegalScheduler:
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:
             self.scheduler.add_job(
-                self.run_cloud_sync,
+                self._guarded("cloud-sync", self.run_cloud_sync),
                 "interval",
                 minutes=settings.CLOUD_METADATA_SYNC_INTERVAL_MIN,
                 id="cloud-sync",
@@ -389,7 +468,7 @@ class LegalScheduler:
 
         # smb-heartbeat: every 15 minutes
         self.scheduler.add_job(
-            self._check_smb_agent_heartbeats,
+            self._guarded("smb-heartbeat", self._check_smb_agent_heartbeats),
             CronTrigger(minute="*/15"),
             id="smb-heartbeat",
             name="SMB Agent Heartbeat",
@@ -1305,7 +1384,21 @@ class LegalScheduler:
 
         logger.info("[manual-trigger] Running agent: %s", agent_name)
         try:
-            await fn()
+            # Run under the same cluster-wide advisory lock as the scheduled job
+            # so a manual trigger can't double-fire alongside a scheduled run.
+            async with job_lock(agent_name) as acquired:
+                if not acquired:
+                    logger.info(
+                        "[manual-trigger] %s skipped — another runner holds the lock",
+                        agent_name,
+                    )
+                    return {
+                        "success": False,
+                        "agent": agent_name,
+                        "skipped": True,
+                        "error": "Another runner holds the lock for this agent.",
+                    }
+                await fn()
             return {
                 "success": True,
                 "agent": agent_name,

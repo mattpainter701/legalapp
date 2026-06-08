@@ -21,6 +21,7 @@ package-lock.json
 
 # Claude Code session memory (local only)
 memory/
+.claude/worktrees/
 
 # OS
 .DS_Store
