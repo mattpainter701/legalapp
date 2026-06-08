@@ -7,7 +7,7 @@ import {
   deleteMatterDocument,
   getMatterDocumentDownloadUrl,
 } from '../api'
-import { FileText, Upload, Trash2, Download, X, Check } from 'lucide-react'
+import { FileText, Upload, Trash2, Download, X, Check, Eye, EyeOff } from 'lucide-react'
 
 const CATEGORIES = ['pleading', 'contract', 'evidence', 'correspondence', 'other']
 
@@ -127,6 +127,26 @@ export default function MatterDocumentsTab({ matterId }) {
       alert('Failed to save changes.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleTogglePortalVisible = async (doc) => {
+    const newValue = !doc.portal_visible
+    // Optimistic update
+    setDocs((prev) =>
+      prev.map((d) => (d.id === doc.id ? { ...d, portal_visible: newValue } : d))
+    )
+    try {
+      const updated = await updateMatterDocument(matterId, doc.id, {
+        portal_visible: newValue,
+      })
+      setDocs((prev) => prev.map((d) => (d.id === doc.id ? updated : d)))
+    } catch {
+      // Revert optimistic update on error
+      setDocs((prev) =>
+        prev.map((d) => (d.id === doc.id ? { ...d, portal_visible: doc.portal_visible } : d))
+      )
+      setError('Failed to update portal visibility. Please try again.')
     }
   }
 
@@ -277,6 +297,9 @@ export default function MatterDocumentsTab({ matterId }) {
                 <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
                   Uploaded
                 </th>
+                <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
+                  Client Portal
+                </th>
                 <th className="px-5 py-3.5" />
               </tr>
             </thead>
@@ -316,6 +339,17 @@ export default function MatterDocumentsTab({ matterId }) {
                           placeholder="Description"
                           className="w-full border border-brand-line rounded px-2 py-1 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent"
                         />
+                      </td>
+                      <td className="px-5 py-3">
+                        {doc.portal_visible ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-brand-green/10 text-brand-green border border-brand-green/30">
+                            <Eye size={11} /> Shared
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-brand-bg-soft text-brand-muted border border-brand-line">
+                            <EyeOff size={11} /> Private
+                          </span>
+                        )}
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">
@@ -373,6 +407,24 @@ export default function MatterDocumentsTab({ matterId }) {
                               }
                             })()
                           : '—'}
+                      </td>
+                      <td className="px-5 py-3">
+                        <button
+                          onClick={() => handleTogglePortalVisible(doc)}
+                          aria-label={doc.portal_visible ? 'Make private' : 'Share with client'}
+                          title={doc.portal_visible ? 'Make private' : 'Share with client'}
+                          className="flex items-center gap-1.5 group"
+                        >
+                          {doc.portal_visible ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-brand-green/10 text-brand-green border border-brand-green/30 group-hover:bg-brand-green/20 transition-colors">
+                              <Eye size={11} /> Shared with client
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-brand-bg-soft text-brand-muted border border-brand-line group-hover:border-brand-accent group-hover:text-brand-accent transition-colors">
+                              <EyeOff size={11} /> Private
+                            </span>
+                          )}
+                        </button>
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">

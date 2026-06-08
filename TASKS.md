@@ -1,5 +1,75 @@
 # TASKS.md
 
+## Sprint 13 — Core Standard Bolster (Practice-Management Parity)
+
+**Goal:** Reach table-stakes parity with Clio / MyCase / PracticePanther on the practice-management core so the AI moat wins deals instead of being disqualified on a feature checklist. All work lands in the **standard** (flat-seat) tier. Full design + data models in [`docs/core-bolster-implementation-plan.md`](docs/core-bolster-implementation-plan.md); rationale in [`docs/competitive-gap-analysis.md`](docs/competitive-gap-analysis.md). New migrations start at **044**. Cross-cutting: RLS on all new tables, audit logging, tier gating via `TenantSettings.features`, Pydantic v2 schemas + `models/__init__.py` registration.
+
+### M1 — Client-facing core (P0)
+
+#### 1301. Client Portal (P0, LARGE) — IN PROGRESS (spike landed)
+Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `PortalAcceptPage`/`PortalCasePage`) from `MediationCase` to `Matter`.
+- [x] Migration `044_client_portal`: `client_portal_invites` (tokenized, sha256 hash, RLS); `portal_visible` on `MatterDocument`, `portal_enabled` on `Matter`; messages reuse `communication_logs` with `channel='portal'`
+- [x] `routers/client_portal.py`: `/accept`, `/matter`, `/messages` (get/post), `/documents` (list/upload/download via `matter_file_store`), `/invoices` (surfaces Stripe pay link)
+- [x] Firm-side invite create/list/revoke (`firm_router` on `/api/matters/{id}/portal/...`); document portal-visibility toggle via `matter_documents` PATCH
+- [x] Frontend: `ClientPortalAcceptPage`, `ClientPortalMatterPage` (Overview/Messages/Documents/Invoices) + routes; Client Portal tab on `MatterDetailPage`; `api.js` group
+- [x] Firm UI: portal-visibility toggle control in `MatterDocumentsTab` (Shared/Private badge toggle)
+- [ ] Dedicated `/invoices/{id}/pay` portal endpoint (currently links out to existing Stripe payment link)
+- [ ] Firm-client login path (role="client") in addition to magic-link (spike is magic-link only)
+- [ ] Integration tests: tenant + matter isolation, expired/revoked invite, cross-matter access
+
+#### 1302. Native E-Signature (P0, MEDIUM) — IN PROGRESS (spike landed)
+- [x] Migration `045_esignature`: `signature_requests` + `signature_signers` (RLS)
+- [x] `services/esign/`: `ESignProvider` interface + `get_provider` factory; `internal` adapter; `dropbox_sign` stub; reportlab certificate generator (HTML fallback)
+- [x] `routers/esignature.py`: firm create/list/get/send/void from a `MatterDocument`; client-portal `GET /signatures` + `POST /signatures/{id}/sign`
+- [x] On complete → executed-copy/audit PDF stored as portal-visible `MatterDocument` + matter timeline event; request status partially_signed→completed
+- [x] Frontend: firm "Request signature" panel in MatterDetail Client Portal tab; Signatures tab + sign action in client portal
+- [ ] Real provider wiring (Dropbox Sign/DocuSign) + webhook reconciliation (stub raises NotImplementedError)
+- [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
+- [ ] Decline flow + per-signer email dispatch on send
+
+#### 1303. Trust Accounting Frontend + Reconciliation (P0, MEDIUM) — PENDING
+Three-way reconciliation logic already exists in `trust_accounting.py` but is headless (TASKS BK05).
+- [ ] Migration `046_trust_ledger`: `trust_bank_accounts` (pooled), `trust_accounts.bank_account_id` (→ client ledgers), `trust_reconciliations` (saved snapshots)
+- [ ] Backend: pooled-account CRUD; persist reconciliation snapshots; per-client ledger statement; overdraft guardrail (block negative client ledger); CSV/PDF export; extend reconcile to assert sum-of-client-ledgers == book == bank
+- [ ] Frontend: `TrustAccountingPage` + route + sidebar nav; ledger views; Reconcile screen; trust balance card on `MatterDetailPage`; `api.js` group
+
+### M2 — Intake & litigation (P1)
+
+#### 1304. Public Intake Forms + Online Scheduling (P1, LARGE) — PENDING
+- [ ] Migration `047_intake_forms`: `intake_forms` (public slug, schema JSON, conditional logic), `intake_form_submissions`
+- [ ] `routers/intake_forms.py`: firm CRUD + public `GET/POST /public/intake/{slug}` → create Contact+Lead, notify attorney, optional conflict pre-check; public scheduling from synced calendars; rate-limit/spam protection
+- [ ] Frontend: `IntakeFormsPage` builder; public form + booking render; surface submissions in `IntakePage`
+
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — PENDING
+- [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
+- [ ] Phase 1: `services/docketing.py` LawToolBox client (trigger + jurisdiction + date → deadline chain); `routers/deadlines.py` CRUD + calculate-from-trigger; hook task-reminder scheduler
+- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage`
+- [ ] Phase 2 (later): evaluate native engine seeded from CourtListener
+
+#### 1306. Two-Way SMS / Text (P1, SMALL–MEDIUM) — PENDING
+- [ ] Migration `049_sms`: SMS fields on `communication_log` (`external_id`, `direction`, `from_number`, `to_number`); tenant Twilio config
+- [ ] `services/sms.py` (Twilio) send + inbound webhook → `CommunicationLog` matched by phone; `routers/communications.py` send + webhook
+- [ ] Frontend: SMS thread + composer on `CommunicationsPage` + `MatterDetailPage`
+
+### M3 — Efficiency & depth (P1/P2)
+
+#### 1307. No-Code Workflow Automation (P1, LARGE) — PENDING
+- [ ] Migration `050_workflows`: `workflows`, `workflow_actions`, `workflow_runs`
+- [ ] `services/workflow_engine.py` (domain events → actions via APScheduler); `routers/workflows.py` CRUD + manual run + history
+- [ ] Frontend: `WorkflowsPage` trigger→action builder + run log
+
+#### 1308. Depth & polish (P2) — PENDING
+- [ ] Document automation overhaul: native DOCX/PDF assembly with field mapping (supersedes text-only templates)
+- [ ] Contact/matter custom fields + contact↔contact relationships
+- [ ] Email-to-matter auto-filing (+ include in conflict search)
+- [ ] Conflict-check hardening: indexed partial/phonetic search (rival Tabs3)
+- [ ] Reporting/BI: realization/collection, WIP, A/R aging, matter profitability
+- [ ] Native mobile apps (XL) — deferred
+
+**External dependencies to line up early:** e-sign provider (Dropbox Sign/DocuSign, 1302), LawToolBox commercial API (1305), Twilio account+number (1306).
+
+---
+
 ## Sprint 12 — LiteLLM Gateway & AI Operations Control Plane (v0.14.0)
 
 **Goal:** Make LiteLLM the primary LLM execution gateway for chat, plugin skills, retrieval planning, memory summaries, email drafting, and operator-managed model routing. The LegalApp backend remains the business control plane for tenant policy, RAG/context assembly, legal guardrails, usage records, and support workflows; LiteLLM owns provider abstraction, model aliases, fallback chains, provider health, and gateway telemetry.

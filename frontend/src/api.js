@@ -472,6 +472,80 @@ export const createPortalProposal = (data, caseId) =>
 export const downloadPortalDocumentUrl = (docId, caseId) =>
   `${BASE_URL}/portal/mediation/documents/${docId}/download${caseId ? `?case_id=${caseId}` : ''}`
 
+// ── Client Portal (firm client, matter-scoped) ──────────────────────────────
+// Separate axios instance so a portal 401 does not bounce through the firm-app
+// login redirect in the shared interceptor.
+const clientPortalApi = axios.create({
+  baseURL: BASE_URL,
+  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
+})
+
+export const acceptClientPortalInvite = (token) =>
+  clientPortalApi.post('/portal/client/accept', { token }).then((r) => r.data)
+
+export const getClientPortalMatter = () =>
+  clientPortalApi.get('/portal/client/matter').then((r) => r.data)
+
+export const listClientPortalMessages = () =>
+  clientPortalApi.get('/portal/client/messages').then((r) => r.data)
+
+export const sendClientPortalMessage = (data) =>
+  clientPortalApi.post('/portal/client/messages', data).then((r) => r.data)
+
+export const listClientPortalDocuments = () =>
+  clientPortalApi.get('/portal/client/documents').then((r) => r.data)
+
+export const uploadClientPortalDocument = (file, description) => {
+  const form = new FormData()
+  form.append('file', file)
+  if (description) form.append('description', description)
+  return clientPortalApi
+    .post('/portal/client/documents/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data)
+}
+
+export const downloadClientPortalDocumentUrl = (docId) =>
+  `${BASE_URL}/portal/client/documents/${docId}/download`
+
+export const listClientPortalInvoices = () =>
+  clientPortalApi.get('/portal/client/invoices').then((r) => r.data)
+
+// Firm-side client portal invite management (firm login)
+export const createMatterPortalInvite = (matterId, data) =>
+  api.post(`/matters/${matterId}/portal/invite`, data).then((r) => r.data)
+
+export const listMatterPortalInvites = (matterId) =>
+  api.get(`/matters/${matterId}/portal/invites`).then((r) => r.data)
+
+export const revokeMatterPortalInvite = (matterId, inviteId) =>
+  api.delete(`/matters/${matterId}/portal/invites/${inviteId}`).then((r) => r.data)
+
+// ── E-signature (firm side) ─────────────────────────────────────────────────
+export const createSignatureRequest = (matterId, data) =>
+  api.post(`/matters/${matterId}/signatures`, data).then((r) => r.data)
+
+export const listSignatureRequests = (matterId) =>
+  api.get(`/matters/${matterId}/signatures`).then((r) => r.data)
+
+export const getSignatureRequest = (matterId, requestId) =>
+  api.get(`/matters/${matterId}/signatures/${requestId}`).then((r) => r.data)
+
+export const sendSignatureRequest = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/send`).then((r) => r.data)
+
+export const voidSignatureRequest = (matterId, requestId) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/void`).then((r) => r.data)
+
+// E-signature (client portal side)
+export const listClientPortalSignatures = () =>
+  clientPortalApi.get('/portal/client/signatures').then((r) => r.data)
+
+export const signClientPortalSignature = (requestId, data) =>
+  clientPortalApi.post(`/portal/client/signatures/${requestId}/sign`, data).then((r) => r.data)
+
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
 export const createCheckoutSession = () => api.post('/billing/checkout-session').then((r) => r.data)

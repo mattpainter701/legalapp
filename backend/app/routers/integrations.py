@@ -23,6 +23,7 @@ from app.services.token_vault import encrypt_token
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
+logger = logging.getLogger(__name__)
 
 _STATE_TTL = 600
 _fallback_states: dict[str, float] = {}

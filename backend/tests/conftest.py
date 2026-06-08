@@ -39,9 +39,7 @@ def pytest_collection_modifyitems(items):
         if "asyncio" in item.keywords:
             # Replace (not stack) any existing asyncio marker so the session
             # loop_scope is the one pytest-asyncio actually reads.
-            item.own_markers = [
-                m for m in item.own_markers if m.name != "asyncio"
-            ]
+            item.own_markers = [m for m in item.own_markers if m.name != "asyncio"]
             item.add_marker(session_marker)
 
 
@@ -63,8 +61,10 @@ def _normalize_server_defaults() -> None:
         for column in table.columns:
             default = column.server_default
             arg = getattr(default, "arg", None)
-            if isinstance(arg, str) and arg.strip().endswith(")") and not isinstance(
-                arg, TextClause
+            if (
+                isinstance(arg, str)
+                and arg.strip().endswith(")")
+                and not isinstance(arg, TextClause)
             ):
                 default.arg = _text(arg)
 
@@ -98,27 +98,29 @@ async def db_session(test_engine):
     # Per-test isolation: fixtures (test_tenant/test_user) and handlers commit
     # data, and the engine is session-scoped, so wipe all tables before each
     # test to avoid cross-test contamination (e.g. duplicate tenant domains).
-    table_list = ", ".join(
-        f'"{t.name}"' for t in Base.metadata.sorted_tables
-    )
+    table_list = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
     async with factory() as session:
         if table_list:
+            # The ApiAccessLogMiddleware writes api_access_logs on its own
+            # session and commits asynchronously, so its INSERT can still hold a
+            # RowShareLock when this TRUNCATE asks for AccessExclusiveLock —
+            # Postgres then reports a deadlock and kills one side. Retry the
+            # TRUNCATE a few times so the reset wins once the stray write clears.
             stmt = _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
-            # The ApiAccessLogMiddleware writes access logs in a detached
-            # asyncio task on its own session; one of those writes can still be
-            # holding locks on api_access_logs/tenants when this TRUNCATE runs,
-            # producing a transient deadlock. Retry a few times before failing.
-            for attempt in range(5):
+            for attempt in range(10):
                 try:
                     await session.execute(stmt)
                     await session.commit()
                     break
                 except DBAPIError as exc:
                     await session.rollback()
-                    if "deadlock" in str(exc).lower() and attempt < 4:
-                        await asyncio.sleep(0.2 * (attempt + 1))
-                        continue
-                    raise
+                    is_deadlock = (
+                        getattr(exc.orig, "sqlstate", None) == "40P01"
+                        or "deadlock" in str(exc).lower()
+                    )
+                    if not is_deadlock or attempt == 9:
+                        raise
+                    await asyncio.sleep(0.2 * (attempt + 1))
         yield session
         await session.rollback()
 
