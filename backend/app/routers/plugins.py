@@ -629,7 +629,7 @@ async def create_matter(
         if tenant and tenant.cloud_root_folder:
             from app.services.cloud_init import initialize_matter_folders
 
-            await initialize_matter_folders(
+            matter.cloud_folder = await initialize_matter_folders(
                 db, str(user.tenant_id), matter.slug, tenant.cloud_root_folder
             )
     except Exception:

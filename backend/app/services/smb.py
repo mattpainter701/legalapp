@@ -16,10 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import set_tenant_context
 from app.models.matter_smb_share import MatterSmbShare
+from app.models.plugin import Matter
 from app.models.smb_access_log import SmbAccessLog
 from app.models.smb_agent import SmbAgent
 from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_share import SmbShare
+from app.services.cloud_init import MATTER_SUBFOLDERS, matter_relative_path
 from app.schemas.smb import (
     AgentRegisterRequest,
     AgentRegisterResponse,
@@ -434,11 +436,37 @@ class SmbService:
         )
 
         if matter_id:
-            share_ids_stmt = select(MatterSmbShare.share_id).where(
-                MatterSmbShare.matter_id == _uuid(matter_id),
-                MatterSmbShare.tenant_id == tenant_uuid,
-            )
-            stmt = stmt.where(SmbFileIndex.share_id.in_(share_ids_stmt))
+            bindings = (
+                await db.execute(
+                    select(MatterSmbShare).where(
+                        MatterSmbShare.matter_id == _uuid(matter_id),
+                        MatterSmbShare.tenant_id == tenant_uuid,
+                    )
+                )
+            ).scalars().all()
+            if not bindings:
+                return []
+
+            share_ids = [binding.share_id for binding in bindings]
+            stmt = stmt.where(SmbFileIndex.share_id.in_(share_ids))
+
+            folder_filters = []
+            for binding in bindings:
+                prefix = (binding.folder_path or "").strip().replace("\\", "/")
+                if prefix:
+                    normalized_prefix = prefix.rstrip("/")
+                    windows_prefix = normalized_prefix.replace("/", "\\")
+                    folder_filters.append(
+                        SmbFileIndex.path.ilike(f"%{normalized_prefix}%")
+                    )
+                    if windows_prefix != normalized_prefix:
+                        folder_filters.append(
+                            SmbFileIndex.path.ilike(f"%{windows_prefix}%")
+                        )
+            if folder_filters:
+                from sqlalchemy import or_
+
+                stmt = stmt.where(or_(*folder_filters))
 
         if file_extensions:
             stmt = stmt.where(SmbFileIndex.ext.in_(file_extensions))
@@ -571,18 +599,64 @@ class SmbService:
         tenant_id: str,
         data: MatterSmbShareCreate,
     ) -> MatterSmbShare:
-        """Bind an SMB share (with optional subfolder) to a matter."""
+        """Bind an SMB share/folder to a matter and persist path metadata."""
         await set_tenant_context(db, tenant_id)
 
+        tenant_uuid = _uuid(tenant_id)
+        matter_uuid = _uuid(matter_id)
+        share_uuid = _uuid(data.share_id)
+
+        matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == matter_uuid,
+                    Matter.tenant_id == tenant_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if matter is None:
+            raise ValueError("Matter not found")
+
+        share = (
+            await db.execute(
+                select(SmbShare).where(
+                    SmbShare.id == share_uuid,
+                    SmbShare.tenant_id == tenant_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if share is None:
+            raise ValueError("Share not found")
+
+        folder_path = data.folder_path or matter_relative_path(matter.slug)
+        display_label = data.display_label or matter.matter_name
+
         binding = MatterSmbShare(
-            tenant_id=_uuid(tenant_id),
-            matter_id=_uuid(matter_id),
-            share_id=_uuid(data.share_id),
-            folder_path=data.folder_path,
-            display_label=data.display_label,
+            tenant_id=tenant_uuid,
+            matter_id=matter_uuid,
+            share_id=share_uuid,
+            folder_path=folder_path,
+            display_label=display_label,
             auto_scan=data.auto_scan,
         )
         db.add(binding)
+        await db.flush()
+
+        smb_folders = dict(matter.smb_folders or {})
+        smb_folders[str(binding.id)] = {
+            "share_id": str(share.id),
+            "share_path": share.share_path,
+            "folder_path": folder_path,
+            "display_label": display_label,
+            "path": folder_path,
+            "subfolder_names": MATTER_SUBFOLDERS.copy(),
+            "subfolder_paths": {
+                sub: f"{folder_path.rstrip('/')}/{sub}"
+                for sub in MATTER_SUBFOLDERS
+            },
+            "auto_scan": data.auto_scan,
+        }
+        matter.smb_folders = smb_folders
         await db.flush()
         return binding
 
@@ -612,8 +686,34 @@ class SmbService:
         """Remove an SMB share binding from a matter."""
         await set_tenant_context(db, tenant_id)
 
+        binding_uuid = _uuid(binding_id)
+        binding = (
+            await db.execute(
+                select(MatterSmbShare).where(
+                    MatterSmbShare.id == binding_uuid,
+                    MatterSmbShare.tenant_id == _uuid(tenant_id),
+                )
+            )
+        ).scalar_one_or_none()
+        if binding:
+            matter = (
+                await db.execute(
+                    select(Matter).where(
+                        Matter.id == binding.matter_id,
+                        Matter.tenant_id == _uuid(tenant_id),
+                    )
+                )
+            ).scalar_one_or_none()
+            if matter and matter.smb_folders:
+                smb_folders = dict(matter.smb_folders)
+                smb_folders.pop(str(binding.id), None)
+                matter.smb_folders = smb_folders or None
+
         await db.execute(
-            delete(MatterSmbShare).where(MatterSmbShare.id == _uuid(binding_id))
+            delete(MatterSmbShare).where(
+                MatterSmbShare.id == binding_uuid,
+                MatterSmbShare.tenant_id == _uuid(tenant_id),
+            )
         )
         await db.flush()
 

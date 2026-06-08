@@ -1,8 +1,8 @@
 """Matter file store — routes document storage to customer's cloud (OneDrive/Google Drive).
 
 Files are stored in the customer's own cloud storage, not ours:
-  - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
-  - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
+  - MS365 customers → OneDrive: /claritylegal/matters/{matter_slug}/{category}/{filename}
+  - Google Workspace → Google Drive: claritylegal/matters/{matter_slug}/ folder
   - Fallback → local disk (UPLOAD_DIR)
 """
 
@@ -13,6 +13,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.cloud_init import CLARITY_ROOT_FOLDER, MATTERS_FOLDER
 from app.services.token_vault import get_fresh_token
 
 settings = get_settings()
@@ -80,9 +81,9 @@ class MatterFileStore:
             if not token:
                 return None
 
-            # Build folder path: /claritylegal-records/{slug}/{category}
+            # Build folder path: /claritylegal/matters/{slug}/{category}
             parent_id = await _ensure_onedrive_path(
-                token, ["claritylegal-records", matter_slug, category]
+                token, [CLARITY_ROOT_FOLDER, MATTERS_FOLDER, matter_slug, category]
             )
 
             upload_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
@@ -131,7 +132,7 @@ class MatterFileStore:
                 return None
 
             parent_id = await _ensure_gdrive_path(
-                token, ["claritylegal-records", matter_slug, category]
+                token, [CLARITY_ROOT_FOLDER, MATTERS_FOLDER, matter_slug, category]
             )
 
             # Upload file
@@ -186,7 +187,10 @@ class MatterFileStore:
         content: bytes,
     ) -> str:
         """Store file on local disk. Returns the relative storage path."""
-        rel_path = f"matters/{matter_slug}/{category}/{filename}"
+        rel_path = (
+            f"{CLARITY_ROOT_FOLDER}/{MATTERS_FOLDER}/"
+            f"{matter_slug}/{category}/{filename}"
+        )
         full_path = Path(settings.UPLOAD_DIR) / tenant_id / rel_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_bytes(content)
