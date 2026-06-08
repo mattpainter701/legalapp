@@ -28,6 +28,7 @@ from app.schemas.matter import (
     BudgetUtilization,
     MatterAssignmentCreate,
     MatterAssignmentResponse,
+    MatterCloudFolderStatus,
     MatterCreate,
     MatterListResponse,
     MatterMemoryResponse,
@@ -89,6 +90,23 @@ def _validate_primary_plugin(primary_plugin: str | None) -> str | None:
     if get_plugin_manifest(plugin) is None:
         raise HTTPException(status_code=400, detail="Unknown primary_plugin")
     return plugin
+
+
+def _matter_slug(matter: Matter) -> str:
+    return matter.slug or _generate_slug(matter.matter_name or str(matter.id))
+
+
+def _parse_date(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 async def _compute_budget_utilization(
@@ -163,6 +181,7 @@ def _matter_to_response(
         partner_attorney_name = getattr(matter.partner_attorney, "full_name", None)
 
     assignments = []
+    fallback_at = matter.created_at or datetime.now(timezone.utc)
     for a in matter.assignments:
         user_name = a.user.full_name if a.user else "Unknown"
         assignments.append(
@@ -170,37 +189,39 @@ def _matter_to_response(
                 id=str(a.id),
                 user_id=str(a.user_id),
                 user_name=user_name,
-                role=a.role,
-                is_primary=a.is_primary,
-                is_active_working=a.is_active_working,
-                assigned_at=a.assigned_at,
+                role=a.role or "associate",
+                is_primary=bool(a.is_primary),
+                is_active_working=bool(a.is_active_working),
+                assigned_at=a.assigned_at or fallback_at,
             )
         )
 
+    updated_at = matter.updated_at or matter.created_at or datetime.now(timezone.utc)
+
     return MatterResponse(
         id=str(matter.id),
-        slug=matter.slug,
-        matter_name=matter.matter_name,
+        slug=_matter_slug(matter),
+        matter_name=matter.matter_name or "Untitled matter",
         description=matter.description,
         matter_type=matter.matter_type,
         practice_area=matter.practice_area,
         role=matter.role,
         counterparty=matter.counterparty,
         jurisdiction=matter.jurisdiction,
-        status=matter.status,
+        status=matter.status or "open",
         stage=matter.stage,
         source=matter.source,
         risk_level=matter.risk_level,
         materiality=matter.materiality,
         exposure_range=matter.exposure_range,
-        conflicts_status=matter.conflicts_status,
+        conflicts_status=matter.conflicts_status or "not-run",
         conflicts_override_reason=matter.conflicts_override_reason,
-        legal_hold_issued=matter.legal_hold_issued,
+        legal_hold_issued=bool(matter.legal_hold_issued),
         legal_hold_details=matter.legal_hold_details,
         key_dates=matter.key_dates,
         initial_posture=matter.initial_posture,
         decision=matter.decision,
-        is_closed=matter.is_closed,
+        is_closed=bool(matter.is_closed),
         outcome=matter.outcome,
         final_cost=matter.final_cost,
         outside_counsel=matter.outside_counsel,
@@ -222,10 +243,10 @@ def _matter_to_response(
         retention_until=matter.retention_until,
         archived_at=matter.archived_at,
         budget_amount=matter.budget_amount,
-        budget_currency=matter.budget_currency,
+        budget_currency=matter.budget_currency or "USD",
         budget_notification_threshold=matter.budget_notification_threshold,
-        billing_cycle=matter.billing_cycle,
-        billing_method=matter.billing_method,
+        billing_cycle=matter.billing_cycle or "monthly",
+        billing_method=matter.billing_method or "hourly",
         hourly_rate=matter.hourly_rate,
         contingency_percentage=matter.contingency_percentage,
         tax_rate=matter.tax_rate,
@@ -236,8 +257,8 @@ def _matter_to_response(
         smb_folders=matter.smb_folders,
         primary_plugin=matter.primary_plugin,
         plugin_workflow_state=matter.plugin_workflow_state,
-        created_at=matter.created_at,
-        updated_at=matter.updated_at,
+        created_at=matter.created_at or updated_at,
+        updated_at=updated_at,
     )
 
 
@@ -375,12 +396,12 @@ async def list_matters(
         items.append(
             MatterSummary(
                 id=str(m.id),
-                slug=m.slug,
-                matter_name=m.matter_name,
+                slug=_matter_slug(m),
+                matter_name=m.matter_name or "Untitled matter",
                 description=m.description,
                 matter_type=m.matter_type,
                 practice_area=m.practice_area,
-                status=m.status,
+                status=m.status or "open",
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
                 primary_plugin=m.primary_plugin,
@@ -390,9 +411,9 @@ async def list_matters(
                 budget_amount=m.budget_amount,
                 total_billed=total_billed,
                 budget_utilization_pct=util_pct,
-                is_overdue=m.status in ("active",) and bool(next_deadline),
+                is_overdue=(m.status or "open") in ("active",) and bool(next_deadline),
                 next_deadline=next_deadline,
-                created_at=m.created_at,
+                created_at=m.created_at or datetime.now(timezone.utc),
             )
         )
 
@@ -428,7 +449,11 @@ async def create_matter(
     # Default retention: 7 years from today
     from datetime import date as date_type, timedelta
 
-    retention_until = body.key_dates and body.key_dates.get("retention_until")
+    retention_until = (
+        _parse_date(body.key_dates.get("retention_until"))
+        if body.key_dates
+        else None
+    )
     if not retention_until:
         retention_until = date_type.today() + timedelta(days=365 * 7)
 
@@ -474,7 +499,7 @@ async def create_matter(
     tenant = tenant_result.scalar_one_or_none()
     if tenant and tenant.cloud_root_folder:
         try:
-            matter.cloud_folder = await initialize_matter_folders(
+            cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=str(tenant_id),
                 matter_slug=slug,
@@ -486,6 +511,16 @@ async def create_matter(
                 matter.id,
                 exc_info=True,
             )
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud folder provisioning failed — check cloud credentials",
+            )
+        if not cloud_folder:
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud folder provisioning failed — check cloud credentials",
+            )
+        matter.cloud_folder = cloud_folder
 
     # Create initial event
     event = MatterEvent(
@@ -542,12 +577,19 @@ async def create_matter(
             )
         )
         assigned_emails = [email for (email,) in user_rows.all() if email]
-        await share_matter_folders(
-            db=db,
-            tenant_id=str(tenant_id),
-            cloud_folder=matter.cloud_folder,
-            user_emails=assigned_emails,
-        )
+        try:
+            await share_matter_folders(
+                db=db,
+                tenant_id=str(tenant_id),
+                cloud_folder=matter.cloud_folder,
+                user_emails=assigned_emails,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to share cloud folders for matter %s",
+                matter.id,
+                exc_info=True,
+            )
 
     await db.commit()
     await db.refresh(matter)
@@ -662,12 +704,12 @@ async def get_my_matters(
         items.append(
             MatterSummaryMyMatters(
                 id=str(m.id),
-                slug=m.slug,
-                matter_name=m.matter_name,
+                slug=_matter_slug(m),
+                matter_name=m.matter_name or "Untitled matter",
                 description=m.description,
                 matter_type=m.matter_type,
                 practice_area=m.practice_area,
-                status=m.status,
+                status=m.status or "open",
                 risk_level=m.risk_level,
                 counterparty=m.counterparty,
                 primary_plugin=m.primary_plugin,
@@ -679,10 +721,10 @@ async def get_my_matters(
                 budget_utilization_pct=None,
                 is_overdue=overdue_label is not None and "overdue" in overdue_label,
                 next_deadline=next_deadline,
-                created_at=m.created_at,
-                my_role=my_role,
+                created_at=m.created_at or datetime.now(timezone.utc),
+                my_role=my_role or "associate",
                 my_assignment_id=my_assignment_id,
-                is_active_working=is_active_working,
+                is_active_working=bool(is_active_working),
                 active_workers=active_workers,
                 overdue_deadline_label=overdue_label,
             )
@@ -1973,6 +2015,128 @@ async def get_matter_cloud_files(
             for h in hits
         ],
     }
+
+
+# ── Cloud folder endpoints ───────────────────────────────────────────────────
+
+
+@router.get("/{matter_id}/cloud-folder", response_model=MatterCloudFolderStatus)
+async def get_matter_cloud_folder(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current cloud folder provisioning status for a matter."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    if matter.cloud_folder:
+        return MatterCloudFolderStatus(
+            status="provisioned",
+            providers=matter.cloud_folder,
+        )
+    return MatterCloudFolderStatus(status="not_provisioned", providers={})
+
+
+@router.post(
+    "/{matter_id}/cloud-folder/provision", response_model=MatterCloudFolderStatus
+)
+async def provision_matter_cloud_folder(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """(Re-)provision cloud folders for a matter and return updated status."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    matter_result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = matter_result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if not tenant or not tenant.cloud_root_folder:
+        raise HTTPException(
+            status_code=422,
+            detail="No cloud credentials configured for this tenant",
+        )
+
+    try:
+        cloud_folder = await initialize_matter_folders(
+            db=db,
+            tenant_id=str(tenant_id),
+            matter_slug=matter.slug,
+            cloud_root=tenant.cloud_root_folder,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Cloud folder provision failed for matter %s: %s", matter_id, exc
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud folder provisioning failed — check cloud credentials",
+        )
+
+    if not cloud_folder:
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud folder provisioning returned empty result",
+        )
+
+    matter.cloud_folder = cloud_folder
+
+    # Share with current assignees
+    user_rows = await db.execute(
+        select(User.email).where(
+            User.tenant_id == tenant_id,
+            User.id.in_(
+                select(MatterAssignment.user_id).where(
+                    MatterAssignment.matter_id == matter.id
+                )
+            ),
+        )
+    )
+    assigned_emails = [email for (email,) in user_rows.all() if email]
+    try:
+        await share_matter_folders(
+            db=db,
+            tenant_id=str(tenant_id),
+            cloud_folder=cloud_folder,
+            user_emails=assigned_emails,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to share cloud folders for matter %s",
+            matter.id,
+            exc_info=True,
+        )
+
+    await db.commit()
+    await db.refresh(matter)
+
+    return MatterCloudFolderStatus(
+        status="provisioned",
+        providers=matter.cloud_folder,
+    )
 
 
 # ── Slug generation ───────────────────────────────────────────────────────────

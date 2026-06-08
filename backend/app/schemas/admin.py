@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import UUID
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 
 class UserDetailResponse(BaseModel):
@@ -108,8 +109,8 @@ class UserUsageBreakdown(BaseModel):
 class TenantSettingsResponse(BaseModel):
     """Tenant configuration settings."""
 
-    id: str
-    tenant_id: str
+    id: UUID | str
+    tenant_id: UUID | str
     # Cache settings
     cache_enabled: bool = True
     cache_ttl_multiplier: float = 1.0
@@ -130,6 +131,8 @@ class TenantSettingsResponse(BaseModel):
     default_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    # Cloud storage
+    primary_cloud_provider: Optional[str] = None
     # Custom config
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
@@ -137,6 +140,10 @@ class TenantSettingsResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("id", "tenant_id", when_used="json")
+    def _serialize_uuid(self, value):
+        return str(value) if value is not None else None
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -157,6 +164,7 @@ class TenantSettingsUpdate(BaseModel):
     default_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    primary_cloud_provider: Optional[str] = None
     custom_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 

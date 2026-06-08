@@ -403,6 +403,13 @@ class TimelineEntry(BaseModel):
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 
+class MatterCloudFolderStatus(BaseModel):
+    """Cloud folder provisioning status for a matter."""
+
+    status: str  # "provisioned" | "not_provisioned"
+    providers: dict = {}
+
+
 class MatterStats(BaseModel):
     """Aggregated matter statistics for the portfolio."""
 

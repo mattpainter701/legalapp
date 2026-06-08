@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   getMatterDocuments,
@@ -6,8 +6,10 @@ import {
   updateMatterDocument,
   deleteMatterDocument,
   getMatterDocumentDownloadUrl,
+  getMatterCloudFolder,
+  provisionMatterCloudFolder,
 } from '../api'
-import { FileText, Upload, Trash2, Download, X, Check, Eye, EyeOff } from 'lucide-react'
+import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff } from 'lucide-react'
 
 const CATEGORIES = ['pleading', 'contract', 'evidence', 'correspondence', 'other']
 
@@ -35,6 +37,88 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function CloudFolderCard({ matterId }) {
+  const [status, setStatus] = useState(null)
+  const [provisioning, setProvisioning] = useState(false)
+  const [toast, setToast] = useState(null)
+
+  useEffect(() => {
+    getMatterCloudFolder(matterId).then(setStatus).catch(() => {})
+  }, [matterId])
+
+  const handleProvision = useCallback(async () => {
+    setProvisioning(true)
+    setToast(null)
+    try {
+      const result = await provisionMatterCloudFolder(matterId)
+      setStatus(result)
+      setToast({ type: 'success', msg: 'Cloud folder set up successfully.' })
+    } catch (err) {
+      setToast({ type: 'error', msg: err?.response?.data?.detail || 'Provisioning failed.' })
+    } finally {
+      setProvisioning(false)
+    }
+  }, [matterId])
+
+  if (!status) return null
+
+  const od = status.providers?.onedrive
+  const gd = status.providers?.google_drive
+  const isProvisioned = status.status === 'provisioned' && (od || gd)
+
+  return (
+    <div className="bg-brand-bg border border-brand-line rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Cloud size={16} className="text-brand-accent" />
+        <span className="text-[13px] font-bold font-sans text-brand-ink uppercase tracking-wider">Cloud Storage</span>
+      </div>
+
+      {isProvisioned ? (
+        <div className="flex flex-wrap gap-3">
+          {od?.url && (
+            <a
+              href={od.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-[13px] font-sans text-brand-accent hover:underline"
+            >
+              <ExternalLink size={13} /> Open in OneDrive
+            </a>
+          )}
+          {gd?.url && (
+            <a
+              href={gd.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-[13px] font-sans text-brand-accent hover:underline"
+            >
+              <ExternalLink size={13} /> Open in Google Drive
+            </a>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <span className="text-[13px] font-sans text-brand-muted">Cloud folder not provisioned</span>
+          <button
+            onClick={handleProvision}
+            disabled={provisioning}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-accent text-white text-[12px] font-sans font-medium rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {provisioning ? <RefreshCw size={12} className="animate-spin" /> : <Cloud size={12} />}
+            {provisioning ? 'Setting up…' : 'Set Up Cloud Folder'}
+          </button>
+        </div>
+      )}
+
+      {toast && (
+        <p className={`text-[12px] font-sans ${toast.type === 'error' ? 'text-brand-rose' : 'text-green-600'}`}>
+          {toast.msg}
+        </p>
+      )}
+    </div>
+  )
 }
 
 export default function MatterDocumentsTab({ matterId }) {
@@ -168,6 +252,9 @@ export default function MatterDocumentsTab({ matterId }) {
 
   return (
     <div className="space-y-6">
+      {/* Cloud folder status */}
+      <CloudFolderCard matterId={matterId} />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -14,6 +15,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
+from app.models.plugin import Matter as MatterModel
 from app.schemas.chat import (
     ConversationCreate,
     ConversationResponse,
@@ -87,6 +89,13 @@ def _get_retrieval_planner():
 
         _retrieval_planner = RetrievalPlanner(llm_service)
     return _retrieval_planner
+
+
+def _join_context_sections(*sections: str | None) -> str:
+    """Join non-empty prompt context sections without stray separators."""
+    return "\n\n".join(
+        section.strip() for section in sections if section and section.strip()
+    )
 
 
 def _conversation_to_response(
@@ -178,9 +187,7 @@ async def _check_token_budget(db: AsyncSession, user) -> None:
     )
     token_result = await db.execute(
         select(
-            func.coalesce(
-                func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0
-            )
+            func.coalesce(func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0)
         ).where(
             UsageRecord.tenant_id == user.tenant_id,
             UsageRecord.created_at >= today_start,
@@ -248,8 +255,6 @@ async def create_conversation(
         try:
             matter_uuid = uuid.UUID(body.matter_id)
             # Load matter name for auto-title
-            from app.models.plugin import Matter as MatterModel
-
             m_result = await db.execute(
                 select(MatterModel.matter_name).where(
                     MatterModel.id == matter_uuid,
@@ -420,8 +425,20 @@ async def send_message(
     # 3a. Load matter context if provided (with caching)
     matter_context_str = ""
     matter_pii_findings = []
+    matter_cloud_folder: dict | None = None
     cache_hit_matter = False
     if hasattr(body, "matter_id") and body.matter_id:
+        # Fetch matter.cloud_folder for RAG scoping (lightweight, no relationships)
+        _matter_result = await db.execute(
+            select(MatterModel.cloud_folder).where(
+                MatterModel.id == body.matter_id,
+                MatterModel.tenant_id == user.tenant_id,
+            )
+        )
+        _matter_row = _matter_result.first()
+        if _matter_row:
+            matter_cloud_folder = _matter_row[0]
+
         # Try cache first
         cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
@@ -524,6 +541,7 @@ async def send_message(
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
                 matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_cloud_folder=matter_cloud_folder,
             )
             # Cache RAG results
             await cache_manager.set_cached_rag_results(
@@ -548,14 +566,14 @@ async def send_message(
                 conversation_id=conv.id,
                 severity="error",
             )
-            context_str, chunks = "No relevant legal context available.", []
+            context_str, chunks = "", []
 
-    # 4a. Combine matter context with RAG context
-    if matter_context_str:
-        context_str = f"{matter_context_str}\n\n{context_str}"
-
-    if attachment_context:
-        context_str = f"{attachment_context}\n\n{context_str}"
+    # 4a. Combine attachment, matter, and RAG context
+    context_str = _join_context_sections(
+        attachment_context,
+        matter_context_str,
+        context_str,
+    )
 
     # 4b. Load user memory context for injection into system prompt
     memory_context = await memory_service.get_memory_context_for_injection(
@@ -601,6 +619,9 @@ async def send_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
+                customer_api_key=route.customer_api_key,
+                customer_provider=route.customer_provider,
+                customer_endpoint=route.customer_endpoint,
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -652,6 +673,9 @@ async def send_message(
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
+            customer_api_key=route.customer_api_key,
+            customer_provider=route.customer_provider,
+            customer_endpoint=route.customer_endpoint,
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -741,11 +765,17 @@ async def send_message(
     conv.updated_at = datetime.now(timezone.utc)
 
     # 8. Record usage
-    cost = calculate_cost(
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-        model=model_used,
-        billing_tier=user.tenant.billing_tier if user.tenant else "payg",
+    # BYOK (customer) routes use the tenant's own provider subscription —
+    # the platform does not pay for those tokens, so don't bill for them.
+    cost = (
+        Decimal("0")
+        if route.resolved_route == "customer"
+        else calculate_cost(
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model_used,
+            billing_tier=user.tenant.billing_tier if user.tenant else "payg",
+        )
     )
     usage = UsageRecord(
         id=uuid.uuid4(),
@@ -867,8 +897,20 @@ async def stream_message(
     # 3a. Load matter context if provided (with caching)
     matter_context_str = ""
     matter_pii_findings = []
+    matter_cloud_folder: dict | None = None
     cache_hit_matter = False
     if hasattr(body, "matter_id") and body.matter_id:
+        # Fetch matter.cloud_folder for RAG scoping
+        _matter_result = await db.execute(
+            select(MatterModel.cloud_folder).where(
+                MatterModel.id == body.matter_id,
+                MatterModel.tenant_id == user.tenant_id,
+            )
+        )
+        _matter_row = _matter_result.first()
+        if _matter_row:
+            matter_cloud_folder = _matter_row[0]
+
         cached_matter = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
             tenant_id=str(user.tenant_id),
@@ -968,6 +1010,7 @@ async def stream_message(
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
                 matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_cloud_folder=matter_cloud_folder,
             )
         except Exception:
             logger.exception(
@@ -984,12 +1027,12 @@ async def stream_message(
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
         )
 
-    # 4a. Combine matter context with RAG context
-    if matter_context_str:
-        context_str = f"{matter_context_str}\n\n{context_str}"
-
-    if attachment_context:
-        context_str = f"{attachment_context}\n\n{context_str}"
+    # 4a. Combine attachment, matter, and RAG context
+    context_str = _join_context_sections(
+        attachment_context,
+        matter_context_str,
+        context_str,
+    )
 
     # 4b. Load user memory context for system prompt
     memory_context = await memory_service.get_memory_context_for_injection(
@@ -1022,6 +1065,9 @@ async def stream_message(
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
+                customer_api_key=route.customer_api_key,
+                customer_provider=route.customer_provider,
+                customer_endpoint=route.customer_endpoint,
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -1049,6 +1095,9 @@ async def stream_message(
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
+                    customer_api_key=route.customer_api_key,
+                    customer_provider=route.customer_provider,
+                    customer_endpoint=route.customer_endpoint,
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
@@ -1125,11 +1174,17 @@ async def stream_message(
             # Record usage (estimated tokens for streaming)
             tokens_in = len(body.content.split()) * 1.3  # Rough estimate
             tokens_out = len(accumulated_text.split()) * 1.3
-            cost = calculate_cost(
-                tokens_in=int(tokens_in),
-                tokens_out=int(tokens_out),
-                model=model_used,
-                billing_tier=user.tenant.billing_tier if user.tenant else "payg",
+            # BYOK (customer) routes use the tenant's own provider subscription —
+            # the platform does not pay for those tokens, so don't bill for them.
+            cost = (
+                Decimal("0")
+                if route.resolved_route == "customer"
+                else calculate_cost(
+                    tokens_in=int(tokens_in),
+                    tokens_out=int(tokens_out),
+                    model=model_used,
+                    billing_tier=user.tenant.billing_tier if user.tenant else "payg",
+                )
             )
             usage = UsageRecord(
                 id=uuid.uuid4(),

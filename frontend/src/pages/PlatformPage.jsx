@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
@@ -114,8 +114,10 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   }
   const [values, setValues] = useState(current)
   const [saved, setSaved] = useState(false)
+  const isDirty = useRef(false)
 
   useEffect(() => {
+    if (isDirty.current) return
     setValues(current)
     setSaved(false)
   }, [config.standard_model, config.premium_model, config.model])
@@ -123,6 +125,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   const changed = JSON.stringify(values) !== JSON.stringify(current)
 
   const setValue = (key, value) => {
+    isDirty.current = true
     setValues((prev) => ({ ...prev, [key]: value }))
     setSaved(false)
   }
@@ -139,6 +142,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
       }
       await updatePlatformTenant(platformKey, tenant.id, payload)
       onUpdate(tenant.id, { llm_config: payload })
+      isDirty.current = false
       setSaved(true)
     } catch { /* save error silently */ }
     finally { setSaving(false) }
@@ -1091,19 +1095,88 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   )
 }
 
+const CAPABILITY_LABELS = {
+  vision: { label: 'Vision', color: 'bg-purple-100 text-purple-700 border-purple-200/60' },
+  tool_use: { label: 'Tool Use', color: 'bg-blue-100 text-blue-700 border-blue-200/60' },
+  reasoning: { label: 'Reasoning', color: 'bg-orange-100 text-orange-700 border-orange-200/60' },
+  research: { label: 'Research', color: 'bg-indigo-100 text-indigo-700 border-indigo-200/60' },
+  rag: { label: 'RAG', color: 'bg-teal-100 text-teal-700 border-teal-200/60' },
+  legal: { label: 'Legal', color: 'bg-amber-100 text-amber-700 border-amber-200/60' },
+  large_context: { label: '100K+ ctx', color: 'bg-green-100 text-green-700 border-green-200/60' },
+  ultra_context: { label: '1M+ ctx', color: 'bg-emerald-100 text-emerald-700 border-emerald-200/60' },
+  instruction: { label: 'Instruct', color: 'bg-cyan-100 text-cyan-700 border-cyan-200/60' },
+  structured_output: { label: 'Structured', color: 'bg-pink-100 text-pink-700 border-pink-200/60' },
+}
+
+function ApplyRouteDropdown({ routeName, model, onApply }) {
+  const [open, setOpen] = useState(false)
+  const isStandard = routeName === 'standard'
+
+  const placements = [
+    { key: 'primary', label: 'Primary' },
+    { key: 'alternate', label: 'Balanced' },
+    { key: 'fallback', label: 'Fallback' },
+  ]
+
+  const handleSelect = (placement) => {
+    onApply(routeName, placement, model)
+    setOpen(false)
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1 px-3 py-1.5 text-xs font-sans font-medium border rounded-lg transition-colors ${
+          isStandard
+            ? 'border-brand-line text-brand-ink hover:bg-brand-bg'
+            : 'bg-brand-ink text-white hover:bg-brand-ink-2 border-transparent'
+        }`}
+      >
+        {isStandard ? 'Standard' : 'Premium'}
+        <ChevronDown size={11} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-20 bg-brand-surface border border-brand-line rounded-lg shadow-lg py-1 min-w-[120px]">
+            {placements.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => handleSelect(key)}
+                className="w-full text-left px-3 py-2 text-xs font-sans text-brand-ink hover:bg-brand-bg transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
+  const [capFilter, setCapFilter] = useState(null)
+  const [showAll, setShowAll] = useState(false)
   const models = catalog?.models || []
-  const filtered = models.filter((model) => {
+
+  const fullFiltered = models.filter((model) => {
     const q = query.trim().toLowerCase()
     const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
     const matchesFilter =
       filter === 'all' ||
       (filter === 'free' && model.is_free) ||
       (filter === 'new' && model.is_new)
-    return matchesQuery && matchesFilter
-  }).slice(0, 60)
+    const matchesCap = !capFilter || (model.capabilities || []).includes(capFilter)
+    return matchesQuery && matchesFilter && matchesCap
+  })
+
+  const filtered = showAll ? fullFiltered : fullFiltered.slice(0, 60)
+  const hiddenCount = fullFiltered.length - filtered.length
+  const displayedLabel = showAll ? `${fullFiltered.length} of ${models.length}` : `${Math.min(filtered.length, 60)} of ${fullFiltered.length}`
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
@@ -1135,11 +1208,11 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
       <div className="px-5 py-3 border-b border-brand-line flex flex-col md:flex-row gap-3">
         <input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => { setQuery(e.target.value); setShowAll(false) }}
           placeholder="Search model, provider, or key"
           className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
         />
-        <div className="flex rounded-lg border border-brand-line overflow-hidden">
+        <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0">
           {[
             ['all', 'All'],
             ['free', 'Free'],
@@ -1156,6 +1229,28 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         </div>
       </div>
 
+      <div className="px-5 py-2 border-b border-brand-line flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mr-1">Filter by capability:</span>
+        {Object.entries(CAPABILITY_LABELS).map(([key, { label }]) => (
+          <button
+            key={key}
+            onClick={() => setCapFilter(capFilter === key ? null : key)}
+            className={`text-[10px] font-sans px-2 py-0.5 rounded-full border transition-colors ${
+              capFilter === key
+                ? 'bg-brand-ink text-white border-brand-ink'
+                : 'text-brand-muted border-brand-line/60 hover:text-brand-ink hover:bg-brand-bg'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {capFilter && (
+          <button onClick={() => setCapFilter(null)} className="text-[10px] text-brand-muted hover:text-brand-rose font-sans ml-1">
+            ✕ clear
+          </button>
+        )}
+      </div>
+
       {catalog?.errors?.length > 0 && (
         <div className="px-5 py-3 border-b border-brand-line text-xs text-brand-rose font-sans">
           {catalog.errors.slice(0, 3).map((err) => `${err.key_name || err.provider_id}: ${err.error}`).join(' · ')}
@@ -1163,36 +1258,58 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
       )}
 
       <div className="max-h-[420px] overflow-y-auto divide-y divide-brand-line">
-        {filtered.length === 0 && (
+        {fullFiltered.length === 0 && (
           <p className="px-5 py-8 text-sm text-brand-muted font-sans text-center">
-            {catalog?.last_refreshed_at ? 'No models match the current filter.' : 'Refresh providers to build the model catalog.'}
+            {catalog?.last_refreshed_at ? 'No models match the current filters.' : 'Refresh providers to build the model catalog.'}
           </p>
         )}
-        {filtered.map((model) => (
-          <div key={`${model.key_id}-${model.id}`} className="px-5 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3 hover:bg-brand-bg transition-colors">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
-                {model.is_free && <span className="text-[10px] uppercase tracking-wider bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
-                {model.is_new && <span className="text-[10px] uppercase tracking-wider bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
+        {filtered.map((model) => {
+          const pricing = model.pricing
+          const hasPricing = pricing && (pricing.prompt !== '0' || pricing.completion !== '0' || (pricing.request && pricing.request !== '0'))
+          return (
+            <div key={`${model.key_id}-${model.id}`} className="px-5 py-3 flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3 hover:bg-brand-bg transition-colors">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
+                  {model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
+                  {model.is_new && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
+                  {(model.capabilities || []).map(cap => {
+                    const cfg = CAPABILITY_LABELS[cap]
+                    return cfg ? (
+                      <span key={cap} className={`text-[10px] font-medium px-1.5 py-0.5 rounded border font-sans ${cfg.color}`} title={cfg.label}>
+                        {cfg.label}
+                      </span>
+                    ) : null
+                  })}
+                </div>
+                <p className="text-xs text-brand-muted font-sans mt-1">
+                  {model.provider_name || model.provider_id} · {model.key_name || 'key'}
+                  {model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
+                  {hasPricing ? ` · $${pricing.prompt}/$${pricing.completion}` : ''}
+                  {model.modality ? ` · ${model.modality}` : ''}
+                </p>
               </div>
-              <p className="text-xs text-brand-muted font-sans mt-1">
-                {model.provider_name || model.provider_id} · {model.key_name || 'key'}{model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
-              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <ApplyRouteDropdown routeName="standard" model={model} onApply={onApply} />
+                <ApplyRouteDropdown routeName="premium" model={model} onApply={onApply} />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mr-1">Standard:</span>
-              <button onClick={() => onApply('standard', 'primary', model)} title="Set as standard primary — the default model for standard-tier requests" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Primary</button>
-              <button onClick={() => onApply('standard', 'alternate', model)} title="Add as standard load-balanced target — LiteLLM distributes requests across all balanced targets" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Balanced</button>
-              <button onClick={() => onApply('standard', 'fallback', model)} title="Add as standard fallback — tried only when primary and balanced targets fail" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Fallback</button>
-              <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mx-1 border-l border-brand-line pl-2">Premium:</span>
-              <button onClick={() => onApply('premium', 'primary', model)} title="Set as premium primary — the default model for premium-tier requests" className="px-2.5 py-1.5 text-xs font-sans bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2">Primary</button>
-              <button onClick={() => onApply('premium', 'alternate', model)} title="Add as premium load-balanced target" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Balanced</button>
-              <button onClick={() => onApply('premium', 'fallback', model)} title="Add as premium fallback" className="px-2.5 py-1.5 text-xs font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg">Fallback</button>
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
+
+      {(hiddenCount > 0 || showAll) && (
+        <div className="px-5 py-2 border-t border-brand-line flex items-center justify-between text-[11px] font-sans">
+          <span className="text-brand-muted">{displayedLabel} shown{capFilter ? ` · filtered by ${CAPABILITY_LABELS[capFilter]?.label || capFilter}` : ''}</span>
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="font-medium text-brand-accent hover:underline"
+          >
+            {showAll ? 'Show fewer' : `Show all ${fullFiltered.length}`}
+          </button>
+        </div>
+      )}
+
       {catalog?.last_refreshed_at && (
         <p className="px-5 py-2 border-t border-brand-line text-[11px] text-brand-muted font-sans">
           Last refresh: {new Date(catalog.last_refreshed_at).toLocaleString()}

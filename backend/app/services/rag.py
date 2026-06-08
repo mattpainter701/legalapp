@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import List, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,7 +148,7 @@ async def search_public_chunks(
 async def build_rag_context(chunks: List[dict]) -> str:
     """Format retrieved chunks into a context string with citation info."""
     if not chunks:
-        return "No relevant legal sources found in the database."
+        return ""
 
     parts = []
     for i, chunk in enumerate(chunks, start=1):
@@ -186,32 +187,45 @@ async def full_rag_query(
     """
     Full RAG pipeline: embed question, search chunks, build context.
     Returns (context_string, chunks_list).
-    """
-    query_embedding = await embedding_service.embed_text(question)
 
-    if query_embedding is None:
-        # Embeddings unavailable — return empty context (chat still works, no RAG)
-        chunks = []
+    Embedding calls (private + public) run concurrently, and the two vector
+    searches run concurrently once their respective embeddings are ready —
+    this halves the serial latency of the old await-chain.
+    """
+    if include_public:
+        query_embedding, public_embedding = await asyncio.gather(
+            embedding_service.embed_text(question),
+            embedding_service.embed_public_query(question),
+        )
     else:
-        chunks = await search_chunks(
+        query_embedding = await embedding_service.embed_text(question)
+        public_embedding = None
+
+    chunks, public_chunks = await asyncio.gather(
+        search_chunks(
             db=db,
             query_embedding=query_embedding,
             tenant_id=tenant_id,
             top_k=settings.RAG_TOP_K,
         )
-
-    if include_public:
-        public_embedding = await embedding_service.embed_public_query(question)
-        if public_embedding is not None:
-            public_chunks = await search_public_chunks(
-                db=db,
-                query_embedding=public_embedding,
-                top_k=settings.PUBLIC_RAG_TOP_K,
-            )
-            chunks.extend(public_chunks)
+        if query_embedding is not None
+        else _empty_chunks(),
+        search_public_chunks(
+            db=db,
+            query_embedding=public_embedding,
+            top_k=settings.PUBLIC_RAG_TOP_K,
+        )
+        if public_embedding is not None
+        else _empty_chunks(),
+    )
+    chunks = chunks + public_chunks
 
     context_str = await build_rag_context(chunks)
     return context_str, chunks
+
+
+async def _empty_chunks() -> List[dict]:
+    return []
 
 
 async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
@@ -260,6 +274,7 @@ async def hybrid_rag_query(
     tenant_name: str = "Legal",
     matter_context_str: str | None = None,
     matter_id: str | None = None,
+    matter_cloud_folder: dict | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Hybrid RAG pipeline: pgvector search + cloud search + SMB file search.
@@ -334,6 +349,7 @@ async def hybrid_rag_query(
                             plan=cloud_plan,
                             tenant_id=tenant_id,
                             user_id=user_id,
+                            matter_cloud_folder=matter_cloud_folder,
                         )
                         if cloud_hits:
                             hits_with_content = (
@@ -372,11 +388,11 @@ async def hybrid_rag_query(
                 pass
 
     # 3. Merge contexts — cloud and SMB results after pgvector
-    parts = [pgvector_context]
+    parts = [pgvector_context] if pgvector_context else []
     if cloud_context:
         parts.append(f"--- Cloud Search Results ---\n\n{cloud_context}")
     if smb_context:
         parts.append(f"--- On-Prem File Share Results ---\n\n{smb_context}")
-    context_str = "\n\n".join(parts) if len(parts) > 1 else pgvector_context
+    context_str = "\n\n".join(parts)
 
     return context_str, chunks, cloud_hits

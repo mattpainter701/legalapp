@@ -79,16 +79,31 @@ class CloudSearchService:
         plan: dict,
         tenant_id: str,
         user_id: str | None = None,
+        matter_cloud_folder: dict | None = None,
     ) -> list[CloudHit]:
         """Execute search plan across all connected providers.
 
         Returns merged, de-duplicated, relevance-ranked hits. Each provider
         is called independently; failures are logged and swallowed per source.
+
+        When matter_cloud_folder is provided, Drive/OneDrive searches are scoped
+        to the matter's pre-provisioned folder IDs instead of searching the full tenant.
         """
         max_hits = plan.get("max_hits", settings.CLOUD_SEARCH_MAX_HITS)
         keywords = plan.get("keywords", [])
         date_after = plan.get("date_after", "")
         sources = plan.get("sources", None)
+
+        # Extract matter folder IDs for provider-specific scoping
+        gd_folder_id: str | None = None
+        od_folder_id: str | None = None
+        if matter_cloud_folder:
+            gd = matter_cloud_folder.get("google_drive")
+            if gd:
+                gd_folder_id = gd.get("matter_folder_id") or gd.get("id")
+            od = matter_cloud_folder.get("onedrive")
+            if od:
+                od_folder_id = od.get("matter_folder_id") or od.get("id")
 
         results: list[CloudHit] = []
         tasks = []
@@ -104,7 +119,13 @@ class CloudSearchService:
             if _source_enabled(sources, "drive"):
                 tasks.append(
                     self._search_google_drive(
-                        db, keywords, date_after, max_hits, tenant_id, user_id
+                        db,
+                        keywords,
+                        date_after,
+                        max_hits,
+                        tenant_id,
+                        user_id,
+                        folder_id=gd_folder_id,
                     )
                 )
             if _source_enabled(sources, "gmail"):
@@ -121,7 +142,14 @@ class CloudSearchService:
         ):
             tasks.append(
                 self._search_graph(
-                    db, keywords, date_after, max_hits, tenant_id, user_id, sources
+                    db,
+                    keywords,
+                    date_after,
+                    max_hits,
+                    tenant_id,
+                    user_id,
+                    sources,
+                    folder_id=od_folder_id,
                 )
             )
 
@@ -320,6 +348,7 @@ class CloudSearchService:
         max_hits: int,
         tenant_id: str,
         user_id: str | None,
+        folder_id: str | None = None,
     ) -> list[CloudHit]:
         token = await self._get_google_token(db, tenant_id, user_id)
         if not token:
@@ -331,6 +360,8 @@ class CloudSearchService:
             clauses.append(f"fullText contains '{sanitised}'")
         if date_after:
             clauses.append(f"modifiedTime > '{date_after}'")
+        if folder_id:
+            clauses.append(f"'{folder_id}' in parents")
         clauses.append("trashed = false")
         query = " and ".join(clauses)
 
@@ -532,10 +563,18 @@ class CloudSearchService:
         tenant_id: str,
         user_id: str | None,
         sources: list[str] | None = None,
+        folder_id: str | None = None,
     ) -> list[CloudHit]:
         token = await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
             return []
+
+        # When a matter folder ID is provided, use folder-scoped drive search
+        # instead of the global search query to limit results to the matter folder.
+        if folder_id:
+            return await self._search_onedrive_folder(
+                token, keywords, max_hits, folder_id
+            )
 
         query_string = " ".join(keywords) if keywords else "*"
 
@@ -827,6 +866,56 @@ class CloudSearchService:
             "application/vnd.google-apps.script": "application/vnd.google-apps.script+json",
         }
         return export_map.get(mime_type)
+
+    async def _search_onedrive_folder(
+        self,
+        token: str,
+        keywords: list[str],
+        max_hits: int,
+        folder_id: str,
+    ) -> list[CloudHit]:
+        """Search within a specific OneDrive folder using the folder's drive endpoint."""
+        query_string = " ".join(keywords) if keywords else "*"
+        url = f"{GRAPH_BASE}/me/drive/items/{folder_id}/search(q='{query_string}')"
+        params = {
+            "$top": min(max_hits, 200),
+            "$select": "id,name,webUrl,lastModifiedDateTime,file",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "OneDrive folder search failed: %s %s",
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                    return []
+                data = resp.json()
+            except httpx.RequestError as exc:
+                logger.warning("OneDrive folder search request error: %s", exc)
+                return []
+
+        hits: list[CloudHit] = []
+        for item in data.get("value", []):
+            hits.append(
+                CloudHit(
+                    provider="microsoft",
+                    source="onedrive",
+                    object_id=item.get("id", ""),
+                    title=item.get("name", ""),
+                    snippet="",
+                    url=item.get("webUrl", ""),
+                    modified_time=item.get("lastModifiedDateTime", ""),
+                    mime_type=(item.get("file") or {}).get("mimeType", ""),
+                    relevance_score=1.0,
+                )
+            )
+        return hits
 
     @staticmethod
     async def _get_google_token(
