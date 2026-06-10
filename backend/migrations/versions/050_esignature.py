@@ -1,4 +1,4 @@
-"""045 — Native e-signature (Epic 2).
+"""050 — Native e-signature (Epic 2).
 
 Adds a swappable e-signature request model so a firm can send a matter document
 out for signature and have signers execute it in the client portal. Two tables:
@@ -17,8 +17,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "045"
-down_revision = "044"
+revision = "050"
+down_revision = "049"
 branch_labels = None
 depends_on = None
 
@@ -114,9 +114,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["request_id"], ["signature_requests.id"], ondelete="CASCADE"
         ),
-        sa.ForeignKeyConstraint(
-            ["contact_id"], ["contacts.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["contact_id"], ["contacts.id"], ondelete="SET NULL"),
     )
     op.create_index(
         "ix_signature_signers_request_id",
@@ -143,9 +141,7 @@ def downgrade() -> None:
         "ON signature_signers"
     )
     op.execute("ALTER TABLE signature_signers DISABLE ROW LEVEL SECURITY")
-    op.drop_index(
-        "ix_signature_signers_request_id", table_name="signature_signers"
-    )
+    op.drop_index("ix_signature_signers_request_id", table_name="signature_signers")
     op.drop_table("signature_signers")
 
     op.execute(
@@ -153,7 +149,5 @@ def downgrade() -> None:
         "ON signature_requests"
     )
     op.execute("ALTER TABLE signature_requests DISABLE ROW LEVEL SECURITY")
-    op.drop_index(
-        "ix_signature_requests_matter_id", table_name="signature_requests"
-    )
+    op.drop_index("ix_signature_requests_matter_id", table_name="signature_requests")
     op.drop_table("signature_requests")

@@ -21,6 +21,11 @@ GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 MATTER_SUBFOLDERS = ["emails", "documents", "pleadings", "correspondence", "billing"]
 
 
+def matter_relative_path(matter_slug: str) -> str:
+    """Return the canonical tenant-relative matter path."""
+    return f"claritylegal-records/{matter_slug}"
+
+
 async def initialize_cloud_root_folder(
     db: AsyncSession,
     tenant_id: str,
