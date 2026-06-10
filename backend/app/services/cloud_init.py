@@ -1,7 +1,7 @@
 """Cloud folder initialization for tenant onboarding and matter creation.
 
-Creates the tenant-owned ``claritylegal`` root folder in each connected cloud
-provider (Microsoft 365 / Google Drive) and per-matter subfolder structures.
+Creates the 'claritylegal-records' root folder in the customer's cloud storage
+(OneDrive / Google Drive) and per-matter subfolder structures.
 """
 
 import logging
@@ -18,93 +18,58 @@ logger = logging.getLogger(__name__)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_DRIVE_BASE = "https://www.googleapis.com/drive/v3"
 
-CLARITY_ROOT_FOLDER = "claritylegal"
-MATTERS_FOLDER = "matters"
-MATTER_SUBFOLDERS = ["emails", "uploads", "msgs", "chat history"]
-
-
-def matter_relative_path(matter_slug: str) -> str:
-    """Return the canonical tenant-relative matter file path."""
-    return f"{CLARITY_ROOT_FOLDER}/{MATTERS_FOLDER}/{matter_slug}"
+MATTER_SUBFOLDERS = ["emails", "documents", "pleadings", "correspondence", "billing"]
 
 
 async def initialize_cloud_root_folder(
     db: AsyncSession,
     tenant_id: str,
-    existing_root: dict | None = None,
 ) -> dict:
-    """Create the root storage hierarchy in every connected cloud drive.
+    """Create 'claritylegal-records' root folder in all connected cloud drives.
 
-    The tenant can have both Microsoft 365 and Google connected at the same
-    time. This function never treats providers as mutually exclusive: it merges
-    any newly provisioned provider metadata with existing metadata and returns a
-    shape like::
-
-        {
-          "onedrive": {"id": "...", "matters_folder_id": "...", "path": "claritylegal", ...},
-          "google_drive": {...},
-          "path": "claritylegal",
-          "matters_path": "claritylegal/matters",
-          "subfolders": ["emails", "uploads", "msgs", "chat history"]
-        }
+    Returns {provider: {id: str, url: str}} for each provider where creation succeeded.
     """
-    result: dict = dict(existing_root or {})
+    result = {}
 
+    # Microsoft OneDrive
     ms_token = await get_fresh_token(db, tenant_id, "microsoft")
     if ms_token:
         try:
-            root_id = await _ensure_onedrive_folder(
-                ms_token, CLARITY_ROOT_FOLDER, "root"
+            folder_id = await _ensure_onedrive_folder(
+                ms_token, "claritylegal-records", "root"
             )
-            matters_id = await _ensure_onedrive_folder(
-                ms_token, MATTERS_FOLDER, root_id
-            )
-            web_url = await _get_onedrive_web_url(ms_token, root_id)
-            result["onedrive"] = {
-                "id": root_id,
-                "root_folder_id": root_id,
-                "matters_folder_id": matters_id,
-                "url": web_url,
-                "path": CLARITY_ROOT_FOLDER,
-                "matters_path": f"{CLARITY_ROOT_FOLDER}/{MATTERS_FOLDER}",
-            }
+            web_url = await _get_onedrive_web_url(ms_token, folder_id)
+            result["onedrive"] = {"id": folder_id, "url": web_url}
             logger.info(
-                "Provisioned claritylegal root in OneDrive for tenant %s", tenant_id
+                "Created claritylegal-records in OneDrive for tenant %s", tenant_id
             )
         except Exception as exc:
             logger.warning(
-                "Failed to provision OneDrive root folder for tenant %s: %s",
+                "Failed to create OneDrive root folder for tenant %s: %s",
                 tenant_id,
                 exc,
             )
 
+    # Google Drive
     g_token = await get_fresh_token(db, tenant_id, "google")
     if g_token:
         try:
-            root_id = await _ensure_gdrive_folder(g_token, CLARITY_ROOT_FOLDER, "root")
-            matters_id = await _ensure_gdrive_folder(g_token, MATTERS_FOLDER, root_id)
+            folder_id = await _ensure_gdrive_folder(
+                g_token, "claritylegal-records", "root"
+            )
             result["google_drive"] = {
-                "id": root_id,
-                "root_folder_id": root_id,
-                "matters_folder_id": matters_id,
-                "url": f"https://drive.google.com/drive/folders/{root_id}",
-                "path": CLARITY_ROOT_FOLDER,
-                "matters_path": f"{CLARITY_ROOT_FOLDER}/{MATTERS_FOLDER}",
+                "id": folder_id,
+                "url": f"https://drive.google.com/drive/folders/{folder_id}",
             }
             logger.info(
-                "Provisioned claritylegal root in Google Drive for tenant %s", tenant_id
+                "Created claritylegal-records in Google Drive for tenant %s", tenant_id
             )
         except Exception as exc:
             logger.warning(
-                "Failed to provision Google Drive root folder for tenant %s: %s",
+                "Failed to create Google Drive root folder for tenant %s: %s",
                 tenant_id,
                 exc,
             )
-
-    if result.get("onedrive") or result.get("google_drive"):
-        result.setdefault("path", CLARITY_ROOT_FOLDER)
-        result.setdefault("matters_path", f"{CLARITY_ROOT_FOLDER}/{MATTERS_FOLDER}")
-        result.setdefault("subfolders", MATTER_SUBFOLDERS.copy())
 
     return result
 
@@ -115,50 +80,29 @@ async def initialize_matter_folders(
     matter_slug: str,
     cloud_root: dict,
 ) -> dict:
-    """Create per-matter folders under ``claritylegal/matters/{matter_slug}``.
+    """Create per-matter subfolder structure under claritylegal-records/{matter_slug}/.
 
-    Returns provider-specific folder IDs/URLs plus canonical path metadata. The
-    metadata is intended to be stored on ``Matter.cloud_folder`` so uploads,
-    search, UI links, and downstream agents can address the matter consistently
-    regardless of whether the tenant has Microsoft 365, Google Drive, or both.
+    Returns {provider: {matter_folder_id: str, subfolders: {name: id}}}
     """
-    result: dict = {
-        "path": matter_relative_path(matter_slug),
-        "matter_slug": matter_slug,
-        "subfolder_names": MATTER_SUBFOLDERS.copy(),
-        "subfolder_paths": {
-            sub: f"{matter_relative_path(matter_slug)}/{sub}"
-            for sub in MATTER_SUBFOLDERS
-        },
-    }
+    result = {}
 
+    # OneDrive
     if cloud_root.get("onedrive"):
         ms_token = await get_fresh_token(db, tenant_id, "microsoft")
         if ms_token:
             try:
-                root_meta = cloud_root["onedrive"]
-                matters_root_id = root_meta.get("matters_folder_id")
-                if not matters_root_id:
-                    root_id = root_meta.get("root_folder_id") or root_meta.get("id")
-                    matters_root_id = await _ensure_onedrive_folder(
-                        ms_token, MATTERS_FOLDER, root_id
-                    )
-                    root_meta["matters_folder_id"] = matters_root_id
+                root_id = cloud_root["onedrive"]["id"]
                 matter_folder = await _ensure_onedrive_folder(
-                    ms_token, matter_slug, matters_root_id
+                    ms_token, matter_slug, root_id
                 )
                 subfolders = {}
                 for sub in MATTER_SUBFOLDERS:
                     sub_id = await _ensure_onedrive_folder(ms_token, sub, matter_folder)
-                    subfolders[sub] = {
-                        "id": sub_id,
-                        "path": f"{matter_relative_path(matter_slug)}/{sub}",
-                    }
+                    subfolders[sub] = sub_id
                 web_url = await _get_onedrive_web_url(ms_token, matter_folder)
                 result["onedrive"] = {
                     "matter_folder_id": matter_folder,
                     "url": web_url,
-                    "path": matter_relative_path(matter_slug),
                     "subfolders": subfolders,
                 }
                 logger.info("Created matter folders in OneDrive: %s", matter_slug)
@@ -169,32 +113,22 @@ async def initialize_matter_folders(
                     exc,
                 )
 
+    # Google Drive
     if cloud_root.get("google_drive"):
         g_token = await get_fresh_token(db, tenant_id, "google")
         if g_token:
             try:
-                root_meta = cloud_root["google_drive"]
-                matters_root_id = root_meta.get("matters_folder_id")
-                if not matters_root_id:
-                    root_id = root_meta.get("root_folder_id") or root_meta.get("id")
-                    matters_root_id = await _ensure_gdrive_folder(
-                        g_token, MATTERS_FOLDER, root_id
-                    )
-                    root_meta["matters_folder_id"] = matters_root_id
+                root_id = cloud_root["google_drive"]["id"]
                 matter_folder = await _ensure_gdrive_folder(
-                    g_token, matter_slug, matters_root_id
+                    g_token, matter_slug, root_id
                 )
                 subfolders = {}
                 for sub in MATTER_SUBFOLDERS:
                     sub_id = await _ensure_gdrive_folder(g_token, sub, matter_folder)
-                    subfolders[sub] = {
-                        "id": sub_id,
-                        "path": f"{matter_relative_path(matter_slug)}/{sub}",
-                    }
+                    subfolders[sub] = sub_id
                 result["google_drive"] = {
                     "matter_folder_id": matter_folder,
                     "url": f"https://drive.google.com/drive/folders/{matter_folder}",
-                    "path": matter_relative_path(matter_slug),
                     "subfolders": subfolders,
                 }
                 logger.info("Created matter folders in Google Drive: %s", matter_slug)
@@ -284,22 +218,19 @@ async def _share_gdrive_folder(token: str, folder_id: str, emails: list[str]) ->
 # ── helpers ────────────────────────────────────────────────────────────
 
 
-def _escape_graph_filter_value(value: str) -> str:
-    return value.replace("'", "''")
-
-
-def _escape_gdrive_query_value(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("'", "\\'")
-
-
 async def _ensure_onedrive_folder(token: str, folder_name: str, parent_id: str) -> str:
     """Ensure a folder exists in OneDrive. Returns the folder ID."""
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
-        escaped = _escape_graph_filter_value(folder_name)
+        children_url = (
+            f"{GRAPH_BASE}/me/drive/root/children"
+            if parent_id == "root"
+            else f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
+        )
+        # Search for existing
         search_url = (
-            f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
-            f"?$filter=name eq '{escaped}' and folder ne null"
+            f"{children_url}"
+            f"?$filter=name eq '{folder_name}' and folder ne null"
             f"&$select=id,name"
         )
         resp = await client.get(search_url, headers=headers)
@@ -308,26 +239,20 @@ async def _ensure_onedrive_folder(token: str, folder_name: str, parent_id: str) 
             if items:
                 return items[0]["id"]
 
-        create_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
+        # Create
         resp = await client.post(
-            create_url,
+            children_url,
             json={
                 "name": folder_name,
                 "folder": {},
-                "@microsoft.graph.conflictBehavior": "fail",
+                "@microsoft.graph.conflictBehavior": "rename",
             },
             headers=headers,
         )
         if resp.status_code in (200, 201):
             return resp.json()["id"]
-        if resp.status_code == 409:
-            # Race or prior unfiltered name collision: retry lookup once.
-            resp = await client.get(search_url, headers=headers)
-            if resp.status_code == 200 and resp.json().get("value"):
-                return resp.json()["value"][0]["id"]
         raise RuntimeError(
-            f"Failed to create OneDrive folder '{folder_name}': "
-            f"{resp.status_code} {resp.text[:200]}"
+            f"Failed to create OneDrive folder '{folder_name}': {resp.status_code}"
         )
 
 
@@ -348,9 +273,9 @@ async def _ensure_gdrive_folder(token: str, folder_name: str, parent_id: str) ->
     """Ensure a folder exists in Google Drive. Returns the folder ID."""
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
-        escaped = _escape_gdrive_query_value(folder_name)
+        # Search for existing
         query = (
-            f"name='{escaped}' and mimeType='application/vnd.google-apps.folder' "
+            f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' "
             f"and '{parent_id}' in parents and trashed=false"
         )
         resp = await client.get(
@@ -363,6 +288,7 @@ async def _ensure_gdrive_folder(token: str, folder_name: str, parent_id: str) ->
             if items:
                 return items[0]["id"]
 
+        # Create
         resp = await client.post(
             f"{GOOGLE_DRIVE_BASE}/files",
             json={
@@ -375,6 +301,5 @@ async def _ensure_gdrive_folder(token: str, folder_name: str, parent_id: str) ->
         if resp.status_code in (200, 201):
             return resp.json()["id"]
         raise RuntimeError(
-            f"Failed to create Google Drive folder '{folder_name}': "
-            f"{resp.status_code} {resp.text[:200]}"
+            f"Failed to create Google Drive folder '{folder_name}': {resp.status_code}"
         )

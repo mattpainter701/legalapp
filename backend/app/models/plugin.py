@@ -182,7 +182,9 @@ class Matter(Base):
     slug: Mapped[str] = mapped_column(String(200), nullable=False)
     matter_name: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    matter_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    matter_type: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="general", server_default="general"
+    )
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     counterparty: Mapped[str | None] = mapped_column(String(500), nullable=True)
     jurisdiction: Mapped[str | None] = mapped_column(String(300), nullable=True)

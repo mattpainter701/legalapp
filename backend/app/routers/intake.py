@@ -46,6 +46,11 @@ def _make_slug(matter_name: str, tenant_id: str) -> str:
     return f"{base}-{suffix}"
 
 
+def _matter_type(value: str | None) -> str:
+    matter_type = (value or "").strip()
+    return matter_type or "general"
+
+
 async def _load_lead(db: AsyncSession, lead_id: uuid.UUID, tenant_id: str) -> Lead:
     result = await db.execute(
         select(Lead).where(
@@ -221,7 +226,7 @@ async def convert_lead_to_matter(
         user_id=user_id,
         slug=_make_slug(payload.matter_name, tenant_id),
         matter_name=payload.matter_name,
-        matter_type=payload.matter_type,
+        matter_type=_matter_type(payload.matter_type),
         role=payload.role,
         jurisdiction=payload.jurisdiction,
         counterparty=payload.counterparty,

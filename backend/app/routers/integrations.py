@@ -23,7 +23,6 @@ from app.services.token_vault import encrypt_token
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
-logger = logging.getLogger(__name__)
 
 _STATE_TTL = 600
 _fallback_states: dict[str, float] = {}
@@ -679,7 +678,7 @@ async def google_disconnect(
 
 
 async def _ensure_cloud_root(db: AsyncSession, tenant_id: str) -> None:
-    """If the tenant has no cloud root folder yet, try to create it now.
+    """Create or repair tenant cloud root folder records.
 
     Called after every admin OAuth connect so that re-authorizing with the
     correct scopes automatically repairs a previously broken cloud setup.
@@ -695,34 +694,14 @@ async def _ensure_cloud_root(db: AsyncSession, tenant_id: str) -> None:
         tenant = result.scalar_one_or_none()
         if not tenant:
             return
-        cloud_root = await initialize_cloud_root_folder(
-            db, tenant_id, existing_root=tenant.cloud_root_folder
-        )
-        if cloud_root:
-            tenant.cloud_root_folder = cloud_root
 
-            from app.models.plugin import Matter
-            from app.services.cloud_init import initialize_matter_folders
-
-            matters = (
-                await db.execute(select(Matter).where(Matter.tenant_id == tenant_id))
-            ).scalars().all()
-            for matter in matters:
-                existing = matter.cloud_folder or {}
-                missing_provider = any(
-                    provider in cloud_root and provider not in existing
-                    for provider in ("onedrive", "google_drive")
-                )
-                if matter.cloud_folder is None or missing_provider:
-                    folder = await initialize_matter_folders(
-                        db, tenant_id, matter.slug, cloud_root
-                    )
-                    if folder:
-                        matter.cloud_folder = folder
-
+        existing = tenant.cloud_root_folder or {}
+        fresh = await initialize_cloud_root_folder(db, tenant_id)
+        if fresh:
+            tenant.cloud_root_folder = {**existing, **fresh}
             await db.commit()
             _logger.info(
-                "Auto-created cloud storage layout for tenant %s on re-auth", tenant_id
+                "Auto-repaired cloud root folder for tenant %s on re-auth", tenant_id
             )
     except Exception as exc:
         _logger.warning("_ensure_cloud_root failed for tenant %s: %s", tenant_id, exc)
@@ -735,9 +714,9 @@ async def cloud_init_retry(
 ):
     """Re-create missing cloud folders for this tenant.
 
-    Creates the root 'claritylegal' folder if absent, then backfills
-    matter subfolders for every matter missing connected-provider metadata.  Safe to
-    call multiple times — existing folders are detected and reused.
+    Creates the root 'claritylegal-records' folder if absent, then backfills
+    missing matter subfolders for every matter. Safe to call multiple times:
+    existing folders are detected and reused.
     """
     from app.models.plugin import Matter
     from app.models.tenant import Tenant
@@ -764,11 +743,9 @@ async def cloud_init_retry(
 
     cloud_root = tenant.cloud_root_folder or {}
     try:
-        fresh = await initialize_cloud_root_folder(
-            db, str(tenant_id), existing_root=cloud_root
-        )
+        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
         if fresh:
-            cloud_root = fresh
+            cloud_root = {**cloud_root, **fresh}
             tenant.cloud_root_folder = cloud_root
             await db.commit()
     except Exception as exc:
@@ -784,7 +761,9 @@ async def cloud_init_retry(
 
     # 2. Backfill matter folders
     matters_result = await db.execute(
-        select(Matter).where(Matter.tenant_id == tenant_id)
+        select(Matter).where(
+            Matter.tenant_id == tenant_id,
+        )
     )
     matters = matters_result.scalars().all()
 
@@ -800,14 +779,10 @@ async def cloud_init_retry(
                 cloud_root=cloud_root,
             )
             if folder:
-                existing = matter.cloud_folder or {}
-                missing_provider = any(
-                    provider in cloud_root and provider not in existing
-                    for provider in ("onedrive", "google_drive")
-                )
-                if matter.cloud_folder is None or missing_provider:
-                    matter.cloud_folder = folder
-                    initialized += 1
+                matter.cloud_folder = {**(matter.cloud_folder or {}), **folder}
+                initialized += 1
+            elif not matter.cloud_folder:
+                failed += 1
         except Exception as exc:
             logger.warning(
                 "cloud_init_retry: matter %s folder init failed: %s", matter.id, exc
@@ -818,6 +793,8 @@ async def cloud_init_retry(
 
     return {
         "root": cloud_root,
+        "root_providers": sorted(cloud_root.keys()),
+        "matters_checked": len(matters),
         "matters_initialized": initialized,
         "matters_failed": failed,
     }

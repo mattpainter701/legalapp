@@ -111,6 +111,11 @@ def _slugify(text: str) -> str:
     return text[:180]  # keep well under the 200-char limit
 
 
+def _matter_type(value: str | None) -> str:
+    matter_type = (value or "").strip()
+    return matter_type or "general"
+
+
 def _renewal_urgency(days: int) -> str:
     if days <= 13:
         return "critical"
@@ -570,7 +575,7 @@ async def create_matter(
         user_id=user.id,
         slug=slug,
         matter_name=body.matter_name,
-        matter_type=body.matter_type,
+        matter_type=_matter_type(body.matter_type),
         role=body.role,
         counterparty=body.counterparty,
         jurisdiction=body.jurisdiction,
@@ -629,11 +634,19 @@ async def create_matter(
         if tenant and tenant.cloud_root_folder:
             from app.services.cloud_init import initialize_matter_folders
 
-            matter.cloud_folder = await initialize_matter_folders(
+            cloud_folder = await initialize_matter_folders(
                 db, str(user.tenant_id), matter.slug, tenant.cloud_root_folder
             )
+            if cloud_folder:
+                matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}
+                await db.commit()
+                await db.refresh(matter)
     except Exception:
-        pass
+        logger.warning(
+            "Failed to initialize cloud folders for plugin matter %s",
+            matter.id,
+            exc_info=True,
+        )
 
     return _matter_to_response(matter)
 

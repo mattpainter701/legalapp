@@ -264,8 +264,13 @@ async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
         for folder_name in folders:
+            children_url = (
+                f"{GRAPH_BASE}/me/drive/root/children"
+                if parent_id == "root"
+                else f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
+            )
             search_url = (
-                f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
+                f"{children_url}"
                 f"?$filter=name eq '{folder_name}' and folder ne null"
                 f"&$select=id,name"
             )
@@ -276,13 +281,12 @@ async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
                     parent_id = items[0]["id"]
                     continue
 
-            create_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
             resp = await client.post(
-                create_url,
+                children_url,
                 json={
                     "name": folder_name,
                     "folder": {},
-                    "@microsoft.graph.conflictBehavior": "replace",
+                    "@microsoft.graph.conflictBehavior": "rename",
                 },
                 headers=headers,
             )

@@ -109,6 +109,11 @@ def _parse_date(value) -> date | None:
         return None
 
 
+def _matter_type(value: str | None) -> str:
+    matter_type = (value or "").strip()
+    return matter_type or "general"
+
+
 async def _compute_budget_utilization(
     db: AsyncSession, matter_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> BudgetUtilization:
@@ -463,7 +468,7 @@ async def create_matter(
         slug=slug,
         matter_name=body.matter_name,
         description=body.description,
-        matter_type=body.matter_type,
+        matter_type=_matter_type(body.matter_type),
         role=body.role,
         counterparty=body.counterparty,
         jurisdiction=body.jurisdiction,
@@ -507,20 +512,18 @@ async def create_matter(
             )
         except Exception:
             logger.warning(
-                "Failed to initialize cloud folders for matter %s",
+                "Failed to initialize cloud folders for matter %s; creating matter without cloud folders",
                 matter.id,
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=422,
-                detail="Cloud folder provisioning failed — check cloud credentials",
-            )
+            cloud_folder = None
         if not cloud_folder:
-            raise HTTPException(
-                status_code=422,
-                detail="Cloud folder provisioning failed — check cloud credentials",
+            logger.warning(
+                "Cloud folder provisioning returned empty result for matter %s; creating matter without cloud folders",
+                matter.id,
             )
-        matter.cloud_folder = cloud_folder
+        else:
+            matter.cloud_folder = cloud_folder
 
     # Create initial event
     event = MatterEvent(
@@ -2102,7 +2105,7 @@ async def provision_matter_cloud_folder(
             detail="Cloud folder provisioning returned empty result",
         )
 
-    matter.cloud_folder = cloud_folder
+    matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}
 
     # Share with current assignees
     user_rows = await db.execute(
@@ -2120,7 +2123,7 @@ async def provision_matter_cloud_folder(
         await share_matter_folders(
             db=db,
             tenant_id=str(tenant_id),
-            cloud_folder=cloud_folder,
+            cloud_folder=matter.cloud_folder,
             user_emails=assigned_emails,
         )
     except Exception:

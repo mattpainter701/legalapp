@@ -18,6 +18,7 @@ Key patterns:
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -554,6 +555,8 @@ class CloudSyncService:
         ``last_synced`` is always refreshed to the current time.
         """
         identity_keys = {"tenant_id", "provider", "object_type", "object_id"}
+
+        data["tenant_id"] = uuid.UUID(str(tenant_id))
 
         # Always stamp last_synced so repeated syncs refresh the timestamp.
         data.setdefault("last_synced", datetime.now(timezone.utc))

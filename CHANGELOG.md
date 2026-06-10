@@ -22,6 +22,14 @@
   prevented cloud-folder share failures from aborting matter workflows, corrected
   doubled SMB API paths, normalized SMB admin response handling, and restored
   LiteLLM container healthchecks by including `curl`.
+- **Matter create fallback:** Blank matter types now persist as `general` across
+  matter create paths, with a database default to prevent `matter_type` NOT NULL
+  crashes when the UI leaves the optional field empty.
+- **Cloud folder provisioning repair:** Cloud integration retry now merges root
+  and matter folder records across providers, backfills missing provider folders
+  for existing matters, saves plugin-created matter folder IDs, avoids blocking
+  matter creation when provider folder setup fails, and fixes cloud metadata
+  sync upserts missing `tenant_id`.
 - **Chat-system follow-up:** Cached resolved LLM routes with invalidation on
   tenant/platform LLM settings writes, fixed the missing `asyncio` import for
   parallel RAG, removed stray blank context separators, centralized nginx API

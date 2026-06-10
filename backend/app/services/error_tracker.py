@@ -69,6 +69,10 @@ async def capture_error(
         request_id: Correlation/request ID
     """
     try:
+        if tenant_id is None:
+            logger.debug("Skipping error log without tenant context: %s", message)
+            return None
+
         endpoint = None
         method = None
         ip_address = None
@@ -92,7 +96,7 @@ async def capture_error(
                 stack_trace = None
 
         error_log = ErrorLog(
-            tenant_id=tenant_id or uuid.UUID("00000000-0000-0000-0000-000000000000"),
+            tenant_id=tenant_id,
             user_id=user_id,
             error_type=error_type,
             severity=severity,
