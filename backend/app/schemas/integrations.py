@@ -7,8 +7,14 @@ class IntegrationStatus(BaseModel):
     provider: str
     connected: bool
     scopes: Optional[str] = None
+    required_scopes: Optional[str] = None
+    missing_scopes: list[str] = []
     expires_at: Optional[datetime] = None
     service_account_email: Optional[str] = None
+    last_user_sync_at: Optional[datetime] = None
+    last_user_sync_status: Optional[str] = None
+    last_user_sync_error: Optional[str] = None
+    last_user_sync_total: int = 0
 
 
 class OAuthRedirectResponse(BaseModel):

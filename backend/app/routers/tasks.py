@@ -176,6 +176,23 @@ async def create_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    # Fire-and-forget: push to Google Calendar if due_date is set
+    if task.due_date:
+        import asyncio as _asyncio
+        from app.services.google_calendar import upsert_task_event
+
+        _asyncio.create_task(
+            upsert_task_event(
+                tenant_id=tenant_id,
+                task_id=str(task.id),
+                title=task.task_type or task.title or "",
+                due_date=task.due_date.isoformat(),
+                description=task.description or "",
+                is_completed=False,
+            )
+        )
+
     return TaskResponse.model_validate(task)
 
 

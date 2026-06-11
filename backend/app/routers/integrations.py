@@ -588,17 +588,45 @@ async def integration_status(
     )
     users_list = user_count.scalars().all()
 
+    def _missing_scopes(provider: str, granted: str | None, required: str) -> list[str]:
+        if not granted:
+            return required.split()
+        granted_set = set(granted.split())
+        required_set = set(required.split())
+        return sorted(required_set - granted_set)
+
+    ms_required = MICROSOFT_ADMIN_SCOPES
+    google_required = GOOGLE_ADMIN_SCOPES
+
     ms_status = IntegrationStatus(
         provider="microsoft",
         connected=ms_row is not None and ms_row.is_active,
         scopes=ms_row.scopes if ms_row else None,
+        required_scopes=ms_required,
+        missing_scopes=_missing_scopes(
+            "microsoft", ms_row.scopes if ms_row else None, ms_required
+        ),
         expires_at=ms_row.token_expires_at if ms_row else None,
+        service_account_email=ms_row.service_account_email if ms_row else None,
+        last_user_sync_at=ms_row.last_user_sync_at if ms_row else None,
+        last_user_sync_status=ms_row.last_user_sync_status if ms_row else None,
+        last_user_sync_error=ms_row.last_user_sync_error if ms_row else None,
+        last_user_sync_total=ms_row.last_user_sync_total if ms_row else 0,
     )
     google_status = IntegrationStatus(
         provider="google",
         connected=google_row is not None and google_row.is_active,
         scopes=google_row.scopes if google_row else None,
+        required_scopes=google_required,
+        missing_scopes=_missing_scopes(
+            "google", google_row.scopes if google_row else None, google_required
+        ),
         expires_at=google_row.token_expires_at if google_row else None,
+        service_account_email=google_row.service_account_email if google_row else None,
+        last_user_sync_at=google_row.last_user_sync_at if google_row else None,
+        last_user_sync_status=google_row.last_user_sync_status if google_row else None,
+        last_user_sync_error=google_row.last_user_sync_error if google_row else None,
+        last_user_sync_total=google_row.last_user_sync_total if google_row else 0,
     )
 
     return IntegrationsListResponse(

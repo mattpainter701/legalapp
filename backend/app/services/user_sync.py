@@ -193,8 +193,25 @@ class UserSyncService:
                     params=params,
                 )
                 if resp.status_code != 200:
+                    detail = resp.text[:500] if resp.text else ""
+                    if resp.status_code == 403:
+                        if (
+                            "insufficient" in detail.lower()
+                            or "scope" in detail.lower()
+                        ):
+                            raise RuntimeError(
+                                "Google Directory access denied: missing admin.directory.user.readonly scope. "
+                                "Re-authorize Google Workspace in Admin → Integrations to grant the required scopes. "
+                                f"(HTTP 403: {detail[:200]})"
+                            )
+                        raise RuntimeError(
+                            "Google Directory access denied (HTTP 403). "
+                            "Ensure the Admin SDK API is enabled in your Google Cloud Console "
+                            "and the OAuth consent includes admin.directory.user.readonly scope. "
+                            "Re-authorize in Admin → Integrations."
+                        )
                     raise RuntimeError(
-                        f"Google Directory sync failed: {resp.status_code}"
+                        f"Google Directory sync failed: {resp.status_code} — {detail[:200]}"
                     )
 
                 data = resp.json()
