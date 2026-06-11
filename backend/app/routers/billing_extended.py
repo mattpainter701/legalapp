@@ -421,8 +421,8 @@ async def generate_invoice(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
-    """Generate an invoice from unbilled time entries and expenses for a matter."""
-    user = await get_current_user(request, db)
+    """Generate an invoice from unbilled time entries and expenses for a matter. Admin only."""
+    user = await require_admin(request, db)
     tenant_id = str(user.tenant_id)
 
     # Verify matter
@@ -727,8 +727,8 @@ async def update_invoice(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
-    """Update invoice fields or transition status."""
-    user = await get_current_user(request, db)
+    """Update invoice fields or transition status. Admin only."""
+    user = await require_admin(request, db)
 
     result = await db.execute(
         select(Invoice).where(
@@ -783,8 +783,8 @@ async def create_payment(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> PaymentResponse:
-    """Record a payment against an invoice."""
-    user = await get_current_user(request, db)
+    """Record a payment against an invoice. Admin only."""
+    user = await require_admin(request, db)
 
     # Verify invoice exists and belongs to tenant
     inv_result = await db.execute(
@@ -951,8 +951,8 @@ async def export_invoice(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Export an invoice in the requested format (csv, ledes1998b)."""
-    user = await get_current_user(request, db)
+    """Export an invoice in the requested format (csv, ledes1998b). Admin only."""
+    user = await require_admin(request, db)
     inv = await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
     if body.format == "csv":
