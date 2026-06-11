@@ -62,9 +62,16 @@ async def create_time_entry(
 
     # Verify matter belongs to tenant
     await set_tenant_context(db, str(user.tenant_id))
+
+    # Validate matter_id is a valid UUID
+    try:
+        matter_uuid = uuid.UUID(body.matter_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid matter ID format")
+
     matter = await db.execute(
         select(Matter).where(
-            Matter.id == body.matter_id,
+            Matter.id == matter_uuid,
             Matter.tenant_id == user.tenant_id,
         )
     )
@@ -78,23 +85,31 @@ async def create_time_entry(
             detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
         )
 
-    amount = body.hours * hourly_rate
-    entry = TimeEntry(
-        tenant_id=user.tenant_id,
-        matter_id=uuid.UUID(body.matter_id),
-        user_id=user.id,
-        description=body.description,
-        hours=body.hours,
-        hourly_rate=hourly_rate,
-        amount=amount,
-        date=body.date,
-        is_billable=body.is_billable,
-        utbms_task_code=body.utbms_task_code,
-        utbms_activity_code=body.utbms_activity_code,
-    )
-    db.add(entry)
-    await db.commit()
-    await db.refresh(entry)
+    try:
+        amount = body.hours * hourly_rate
+        entry = TimeEntry(
+            tenant_id=user.tenant_id,
+            matter_id=matter_uuid,
+            user_id=user.id,
+            description=body.description,
+            hours=body.hours,
+            hourly_rate=hourly_rate,
+            amount=amount,
+            date=body.date,
+            is_billable=body.is_billable,
+            utbms_task_code=body.utbms_task_code,
+            utbms_activity_code=body.utbms_activity_code,
+        )
+        db.add(entry)
+        await db.commit()
+        await db.refresh(entry)
+    except Exception:
+        await db.rollback()
+        logger.exception("Failed to create time entry")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create time entry due to a server error. Please try again.",
+        )
 
     return TimeEntryResponse.model_validate(entry, from_attributes=True)
 

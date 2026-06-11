@@ -130,6 +130,8 @@ export default function ChatPage() {
         setActiveConvId(conv.id)
         setActiveConvTitle(conv.title || 'New Conversation')
         convId = conv.id
+        // Brief pause to let DB commit settle before the streaming read
+        await new Promise(r => setTimeout(r, 150))
       } catch (err) {
         console.error('Failed to create conversation', err)
         return

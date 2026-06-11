@@ -27,6 +27,8 @@ export default function TimeTrackingPage() {
     hourly_rate: user?.default_billing_rate || '',
     date: new Date().toISOString().slice(0, 10),
   })
+  const [formError, setFormError] = useState(null)
+  const [saving, setSaving] = useState(false)
 
   const loadData = useCallback(async () => {
     try {
@@ -49,15 +51,36 @@ export default function TimeTrackingPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setFormError(null)
+
+    // Client-side validation
+    if (!form.matter_id) {
+      setFormError('Please select a matter.')
+      return
+    }
+    const hoursNum = parseFloat(form.hours)
+    if (!form.hours || isNaN(hoursNum) || hoursNum <= 0) {
+      setFormError('Please enter a valid number of hours (minimum 0.25).')
+      return
+    }
+    if (!form.description.trim()) {
+      setFormError('Please enter a description.')
+      return
+    }
+
+    setSaving(true)
     try {
       const payload = {
         matter_id: form.matter_id,
-        description: form.description,
-        hours: parseFloat(form.hours),
+        description: form.description.trim(),
+        hours: hoursNum,
         date: form.date,
         is_billable: true,
       }
-      if (form.hourly_rate) payload.hourly_rate = parseFloat(form.hourly_rate)
+      if (form.hourly_rate) {
+        const rateNum = parseFloat(form.hourly_rate)
+        if (!isNaN(rateNum) && rateNum > 0) payload.hourly_rate = rateNum
+      }
       await createTimeEntry(payload)
       setShowForm(false)
       setForm({
@@ -69,7 +92,10 @@ export default function TimeTrackingPage() {
       })
       loadData()
     } catch (err) {
-      console.error('Failed to create time entry', err)
+      const detail = err?.response?.data?.detail
+      setFormError(typeof detail === 'string' ? detail : 'Failed to create time entry. Please check your inputs and try again.')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -117,10 +143,18 @@ export default function TimeTrackingPage() {
           onSubmit={handleSubmit}
           style={{
             background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
-            padding: 16, marginBottom: 20, display: 'grid',
-            gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end',
+            padding: 16, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12,
           }}
         >
+          {formError && (
+            <div style={{
+              padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca',
+              borderRadius: 6, color: '#b91c1c', fontSize: 13,
+            }}>
+              {formError}
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
           <div>
             <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Matter</label>
             <select
@@ -168,13 +202,15 @@ export default function TimeTrackingPage() {
           <div>
             <button
               type="submit"
+              disabled={saving}
               style={{
-                padding: '6px 16px', background: '#059669', color: '#fff',
-                border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13,
+                padding: '6px 16px', background: saving ? '#9ca3af' : '#059669', color: '#fff',
+                border: 'none', borderRadius: 4, cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13,
               }}
             >
-              Save
+              {saving ? 'Saving...' : 'Save'}
             </button>
+          </div>
           </div>
         </form>
       )}

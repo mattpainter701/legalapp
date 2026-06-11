@@ -1,5 +1,16 @@
 # TASKS.md
 
+## Bug Fixes — 2026-06-11
+
+### Fixed
+- **Time tracking save fails (500/400):** Added client-side validation (hours>0, matter required), error banner display, and save-disable during submit in `TimeTrackingPage.jsx`. Hardened backend `create_time_entry` with UUID validation and rollback-on-error in `billing_extended.py`.
+- **Matter creation slow:** Cloud folder provisioning moved to fire-and-forget background task (`_provision_cloud_folders`) using `async_session_maker` — create-matter response no longer blocks on folder creation.
+- **Calendar not marking completed tasks:** `CalendarEvent` now includes `is_completed` flag. Completed tasks remain visible on calendar with done styling instead of vanishing. `calendar.py` + `schemas/calendar.py`.
+- **Needs Action empty when items due today/tomorrow:** Expanded `needsAction()` to flag due-today items. Added `dueTomorrow()` classifier and "Upcoming" board column in `MatterPortfolioPage.jsx`. Due-tomorrow count shown in My Matters header.
+- **Clarity Legal first query not recognized:** Added 150ms settle delay after conversation creation before streaming call in `ChatPage.jsx`. Backend streaming endpoint retries conversation lookup once (200ms). Global `unhandledrejection` handler suppresses orphaned "Cannot respond" errors in `api.js`.
+
+---
+
 ## Sprint 13 — Core Standard Bolster (Practice-Management Parity)
 
 **Goal:** Reach table-stakes parity with Clio / MyCase / PracticePanther on the practice-management core so the AI moat wins deals instead of being disqualified on a feature checklist. All work lands in the **standard** (flat-seat) tier. Full design + data models in [`docs/core-bolster-implementation-plan.md`](docs/core-bolster-implementation-plan.md); rationale in [`docs/competitive-gap-analysis.md`](docs/competitive-gap-analysis.md). New migrations start at **044**. Cross-cutting: RLS on all new tables, audit logging, tier gating via `TenantSettings.features`, Pydantic v2 schemas + `models/__init__.py` registration.

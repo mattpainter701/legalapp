@@ -85,12 +85,19 @@ function needsAction(m) {
   if (m.risk_level === 'critical' || m.risk_level === 'high') return true
   if (m.status === 'threatened') return true
   if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('overdue')) return true
+  if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('due today')) return true
   if (m.updated_at) {
     try {
       const daysStale = differenceInDays(new Date(), parseISO(m.updated_at))
       if (daysStale > 14 && (m.status === 'open' || m.status === 'active')) return true
     } catch { /* ignore */ }
   }
+  return false
+}
+
+// Matters due tomorrow (shown as "Upcoming")
+function dueTomorrow(m) {
+  if (m.overdue_deadline_label && m.overdue_deadline_label.toLowerCase().includes('due tomorrow')) return true
   return false
 }
 
@@ -295,11 +302,12 @@ export default function MatterPortfolioPage() {
   const boardColumns = useMemo(() => {
     const active = myMatters.filter(m => !['closed', 'settled', 'dismissed'].includes(m.status))
     const needsActionList = active.filter(m => needsAction(m))
-    const needsActionIds = new Set(needsActionList.map(m => m.id))
-    const activeList = active.filter(m => !needsActionIds.has(m.id) && (m.status === 'active' || m.is_active_working))
+    const upcomingList = active.filter(m => !needsAction(m) && dueTomorrow(m))
+    const skipIds = new Set([...needsActionList, ...upcomingList].map(m => m.id))
+    const activeList = active.filter(m => !skipIds.has(m.id) && (m.status === 'active' || m.is_active_working))
     const activeIds = new Set(activeList.map(m => m.id))
-    const watchingList = active.filter(m => !needsActionIds.has(m.id) && !activeIds.has(m.id))
-    return { needsAction: needsActionList, active: activeList, watching: watchingList }
+    const watchingList = active.filter(m => !skipIds.has(m.id) && !activeIds.has(m.id))
+    return { needsAction: needsActionList, upcoming: upcomingList, active: activeList, watching: watchingList }
   }, [myMatters])
 
   return (
@@ -329,6 +337,16 @@ export default function MatterPortfolioPage() {
               {boardColumns.needsAction.length > 0 && (
                 <p className="text-[13px] text-brand-rose font-sans mt-0.5 font-medium">
                   {boardColumns.needsAction.length} matter{boardColumns.needsAction.length !== 1 ? 's' : ''} need attention
+                  {boardColumns.upcoming.length > 0 && (
+                    <span className="text-brand-amber ml-2">
+                      · {boardColumns.upcoming.length} due tomorrow
+                    </span>
+                  )}
+                </p>
+              )}
+              {boardColumns.needsAction.length === 0 && boardColumns.upcoming.length > 0 && (
+                <p className="text-[13px] text-brand-amber font-sans mt-0.5 font-medium">
+                  {boardColumns.upcoming.length} matter{boardColumns.upcoming.length !== 1 ? 's' : ''} due tomorrow
                 </p>
               )}
             </div>
@@ -375,7 +393,7 @@ export default function MatterPortfolioPage() {
             </div>
           ) : viewMode === 'board' ? (
             /* Board view */
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
                 {
                   title: 'Needs Action',
@@ -384,6 +402,14 @@ export default function MatterPortfolioPage() {
                   headerColor: 'text-brand-rose',
                   showAlert: true,
                   empty: 'No matters need attention.',
+                },
+                {
+                  title: 'Upcoming',
+                  items: boardColumns.upcoming,
+                  color: 'border-brand-amber/30',
+                  headerColor: 'text-brand-amber',
+                  showAlert: false,
+                  empty: 'No upcoming deadlines.',
                 },
                 {
                   title: 'Active',

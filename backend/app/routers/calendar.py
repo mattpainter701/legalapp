@@ -42,16 +42,18 @@ async def get_calendar_events(
     events: list[CalendarEvent] = []
 
     # ── Query 1: Tasks with due_date in range ─────────────────────────────────
+    # Include completed tasks so they show as done on the calendar (not vanish).
     task_stmt = select(Task).where(
         Task.tenant_id == tid,
         Task.due_date >= start,
         Task.due_date <= end,
-        Task.status.notin_(["completed", "done", "cancelled"]),
+        Task.status.notin_(["cancelled"]),
     )
     task_result = await db.execute(task_stmt)
     tasks = task_result.scalars().all()
 
     for task in tasks:
+        is_done = task.status in ("completed", "done")
         events.append(
             CalendarEvent(
                 id=f"task-{task.id}",
@@ -61,6 +63,7 @@ async def get_calendar_events(
                 matter_id=task.matter_id,
                 task_id=task.id,
                 url="/tasks",
+                is_completed=is_done,
             )
         )
 

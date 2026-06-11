@@ -135,6 +135,10 @@ export const streamMessage = async function* (conversationId, content, includePu
       localStorage.removeItem('user')
       window.location.href = '/login'
     }
+    // 504 Gateway Timeout is common on cold starts — surface a clear message
+    if (response.status === 504) {
+      throw new Error('The AI service is warming up. Please try your query again in a moment.')
+    }
     throw new Error(`HTTP error! status: ${response.status}`)
   }
 
@@ -163,6 +167,18 @@ export const streamMessage = async function* (conversationId, content, includePu
   } finally {
     reader.releaseLock()
   }
+}
+
+// Global handler for orphaned postMessage responses (e.g. browser extensions, Vite HMR)
+// that throw "Cannot respond. No request with id" — suppress them so they don't
+// appear as uncaught promise rejections in the console.
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const msg = event?.reason?.message || ''
+    if (msg.includes('Cannot respond') && msg.includes('No request with id')) {
+      event.preventDefault()
+    }
+  })
 }
 
 export const deleteConversation = (id) =>

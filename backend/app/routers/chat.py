@@ -835,17 +835,27 @@ async def stream_message(
     await set_tenant_context(db, str(user.tenant_id))
 
     # 1. Validate conversation belongs to user's tenant
-    result = await db.execute(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.tenant_id == user.tenant_id,
+    # Retry once on miss — the conversation may have been created moments ago
+    # and the prior transaction's commit may not be visible yet on busy DBs.
+    conv = None
+    for attempt in range(2):
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.tenant_id == user.tenant_id,
+            )
         )
-    )
-    conv = result.scalar_one_or_none()
+        conv = result.scalar_one_or_none()
+        if conv is not None:
+            break
+        if attempt == 0:
+            await asyncio.sleep(0.2)
 
     if conv is None:
         return StreamingResponse(
-            _error_stream("Conversation not found"),
+            _error_stream(
+                "Conversation not found — please try sending your message again."
+            ),
             media_type="text/event-stream",
         )
 

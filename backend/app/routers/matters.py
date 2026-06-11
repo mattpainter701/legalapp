@@ -114,6 +114,37 @@ def _matter_type(value: str | None) -> str:
     return matter_type or "general"
 
 
+async def _provision_cloud_folders(
+    matter_id: str, tenant_id: str, slug: str, cloud_root: str
+) -> None:
+    """Fire-and-forget: provision cloud folders for a newly created matter.
+
+    Runs in a separate DB session so it does not block the create-matter response.
+    Failures are logged but do not affect the matter — the folder can be
+    provisioned later via the admin panel.
+    """
+    try:
+        async with async_session_maker() as db:
+            cloud_folder = await initialize_matter_folders(
+                db=db,
+                tenant_id=tenant_id,
+                matter_slug=slug,
+                cloud_root=cloud_root,
+            )
+            if cloud_folder:
+                result = await db.execute(select(Matter).where(Matter.id == matter_id))
+                matter = result.scalar_one_or_none()
+                if matter:
+                    matter.cloud_folder = cloud_folder
+                    await db.commit()
+    except Exception:
+        logger.warning(
+            "Background cloud folder provisioning failed for matter %s",
+            matter_id,
+            exc_info=True,
+        )
+
+
 async def _compute_budget_utilization(
     db: AsyncSession, matter_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> BudgetUtilization:
@@ -455,9 +486,7 @@ async def create_matter(
     from datetime import date as date_type, timedelta
 
     retention_until = (
-        _parse_date(body.key_dates.get("retention_until"))
-        if body.key_dates
-        else None
+        _parse_date(body.key_dates.get("retention_until")) if body.key_dates else None
     )
     if not retention_until:
         retention_until = date_type.today() + timedelta(days=365 * 7)
@@ -500,30 +529,19 @@ async def create_matter(
     db.add(matter)
     await db.flush()
 
+    # Cloud folder provisioning is fire-and-forget — it can take several seconds
+    # and must not block the create-matter response.
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = tenant_result.scalar_one_or_none()
     if tenant and tenant.cloud_root_folder:
-        try:
-            cloud_folder = await initialize_matter_folders(
-                db=db,
-                tenant_id=str(tenant_id),
-                matter_slug=slug,
-                cloud_root=tenant.cloud_root_folder,
+        matter_cloud_root = tenant.cloud_root_folder
+        matter_id_str = str(matter.id)
+        tenant_id_str = str(tenant_id)
+        asyncio.create_task(
+            _provision_cloud_folders(
+                matter_id_str, tenant_id_str, slug, matter_cloud_root
             )
-        except Exception:
-            logger.warning(
-                "Failed to initialize cloud folders for matter %s; creating matter without cloud folders",
-                matter.id,
-                exc_info=True,
-            )
-            cloud_folder = None
-        if not cloud_folder:
-            logger.warning(
-                "Cloud folder provisioning returned empty result for matter %s; creating matter without cloud folders",
-                matter.id,
-            )
-        else:
-            matter.cloud_folder = cloud_folder
+        )
 
     # Create initial event
     event = MatterEvent(

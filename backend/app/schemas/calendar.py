@@ -15,6 +15,7 @@ class CalendarEvent(BaseModel):
     matter_name: Optional[str] = None
     task_id: Optional[uuid.UUID] = None
     url: Optional[str] = None  # frontend nav target
+    is_completed: bool = False  # task is done → show with checkmark/strikethrough
 
 
 class CalendarEventsResponse(BaseModel):
