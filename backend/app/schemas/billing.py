@@ -53,6 +53,14 @@ class TimeEntryResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator(
+        "id", "tenant_id", "matter_id", "user_id", "invoice_id", mode="before"
+    )
+    @classmethod
+    def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
+        """Coerce UUID objects to strings during validation (from_attributes)."""
+        return str(value) if value is not None else None
+
     @field_serializer("id", "tenant_id", "matter_id", "user_id", "invoice_id")
     def _str_uuid(self, value: str | _uuid.UUID | None, _info: object) -> str | None:
         return str(value) if value is not None else None
@@ -104,6 +112,13 @@ class ExpenseResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator(
+        "id", "tenant_id", "matter_id", "user_id", "invoice_id", mode="before"
+    )
+    @classmethod
+    def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
+        return str(value) if value is not None else None
+
 
 class ExpenseListResponse(BaseModel):
     items: list[ExpenseResponse]
@@ -137,6 +152,11 @@ class InvoiceLineItemResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("id", "invoice_id", "source_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
+        return str(value) if value is not None else None
 
 
 class InvoiceCreate(BaseModel):
@@ -184,6 +204,13 @@ class InvoiceResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator(
+        "id", "tenant_id", "matter_id", "retainer_id", "created_by", mode="before"
+    )
+    @classmethod
+    def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
+        return str(value) if value is not None else None
+
 
 class InvoiceListResponse(BaseModel):
     items: list[InvoiceResponse]
@@ -228,6 +255,11 @@ class PaymentResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("id", "tenant_id", "invoice_id", mode="before")
+    @classmethod
+    def _coerce_uuid(cls, value: str | _uuid.UUID | None) -> str | None:
+        return str(value) if value is not None else None
 
 
 # ── Stripe Payment Link ──────────────────────────────────────────────────────
