@@ -63,18 +63,25 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [ ] Public scheduling from synced calendars (consult slots → calendar event creation)
 - [ ] Scheduled post-sprint 13; design deferred to reduce scope creep
 
-#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPIKED
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPIKED → GO
 
-**AUDIT RESULT (2026-06-12):** Phase 1 unstarted; Phase 2 purely speculative. Converted to 1-day spike to confirm LawToolBox commercial viability before scheduling Phase 1. Phase 2 (native CourtListener engine) archived.
+**SPIKE RESULT (2026-06-12):** LawToolBox API confirmed viable. Decision: **GO** — schedule Phase 1 for Sprint 14.
 
-**Pre-work Spike (1 day) — LawToolBox Feasibility**
-- [ ] Contact LawToolBox sales: API pricing model, coverage (50 states / 2,300+ jurisdictions), TTM for partner integration
-- [ ] Decision memo: IF available + cost acceptable → schedule Phase 1 (MEDIUM). IF unavailable → defer or evaluate alternatives. Archive Phase 2 regardless.
+**Findings:**
+- API: REST (OAuth2), production-grade, confirmed live in Clio + MyCase + 10+ others
+- Coverage: All 50 US states + federal courts + Canada (2,300+ jurisdictions)
+- Pricing: Direct $22-42/user/month (volume discounts 80+); partner pricing TBD (expected comparable)
+- TTM: 2-4 weeks realistic for MVP integration
+- SLA: Not published; enterprise adoption (Clio/MyCase) proves production-grade
+- Next step: Send sales inquiry (prepared); await NDA + API docs + sandbox access
+- Decision memo: `docs/research/1305-decision-memo.md`
 
-**Phase 1 (P1, MEDIUM, SCHEDULED AFTER SPIKE)** — LawToolBox Integration
+**Phase 1 (P1, MEDIUM, SPRINT 14)** — LawToolBox Integration
 - [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
-- [ ] `services/docketing.py` LawToolBox API client (trigger + jurisdiction + date → deadline chain); `routers/deadlines.py` CRUD + calculate-from-trigger; hook task-reminder scheduler
-- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage`
+- [ ] `services/deadline_engine.py` LawToolBox API client (OAuth2 token exchange, deadline calculation, rule-update polling)
+- [ ] `routers/deadlines.py` CRUD + calculate-from-trigger + bulk sync endpoints; hook task-reminder scheduler
+- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage` + timeline
+- [ ] Acceptance: Calculate deadlines for test matter in 3+ jurisdictions (verify against published rules); sync to calendar; confirm <500ms response time
 
 **Phase 2 (ARCHIVED)** — Native CourtListener Engine
 - ~~Evaluate native engine seeded from CourtListener~~ — ARCHIVED 2026-06-12 (speculative, only if LawToolBox fails)
@@ -178,6 +185,21 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [ ] E2E smoke test: create account → post transaction → reconcile
 
 **Files:** `frontend/src/pages/TrustAccountingPage.jsx`, `frontend/src/components/TrustAccount{Portfolio,Detail,Reconcile}`, `frontend/src/api.js` (trust group)
+
+### M2 — Intake & Docketing (P1)
+
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPRINT 14
+
+**SPIKE COMPLETED (2026-06-12):** LawToolBox API confirmed viable. Phase 1 scheduled.
+
+**Phase 1 (P1, MEDIUM, SPRINT 14)** — LawToolBox Integration
+- [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
+- [ ] `services/deadline_engine.py` LawToolBox API client (OAuth2 token exchange, deadline calculation, rule-update polling)
+- [ ] `routers/deadlines.py` CRUD + calculate-from-trigger + bulk sync endpoints; hook task-reminder scheduler
+- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage` + timeline
+- [ ] Acceptance: Calculate deadlines for test matter in 3+ jurisdictions (verify against published rules); sync to calendar; confirm <500ms response time
+
+**Files:** `backend/app/migrations/versions/048_deadlines.py`, `backend/app/services/deadline_engine.py`, `backend/app/routers/deadlines.py`, `frontend/src/pages/MatterDetailPage.jsx`, `frontend/src/components/DeadlinesCard.jsx`, `frontend/src/api.js`
 
 ---
 
