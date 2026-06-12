@@ -360,6 +360,80 @@ export const getEstateAccountingSummary = (id) =>
 export const getEstateReport = (id, kind) =>
   api.get(`/plugins/trust-estate/estates/${id}/reports/${kind}`).then(r => r.data)
 
+// ── Domestic relations (family law) ─────────────────────────────────────────
+
+const DOMESTIC = '/plugins/domestic'
+
+export const getDomesticCases = () =>
+  api.get(`${DOMESTIC}/cases`).then(r => r.data)
+
+export const getDomesticStats = () =>
+  api.get(`${DOMESTIC}/cases/stats`).then(r => r.data)
+
+export const createDomesticCase = (data) =>
+  api.post(`${DOMESTIC}/cases`, data).then(r => r.data)
+
+export const getDomesticCase = (id) =>
+  api.get(`${DOMESTIC}/cases/${id}`).then(r => r.data)
+
+export const updateDomesticCase = (id, data) =>
+  api.patch(`${DOMESTIC}/cases/${id}`, data).then(r => r.data)
+
+export const deleteDomesticCase = (id) =>
+  api.delete(`${DOMESTIC}/cases/${id}`).then(r => r.data)
+
+// Generic sub-resource helpers: resource in
+// parties|children|custody|orders|deadlines|events|calculations
+export const listDomesticChildren = (id, resource) =>
+  api.get(`${DOMESTIC}/cases/${id}/${resource}`).then(r => r.data)
+
+export const createDomesticChild = (id, resource, data) =>
+  api.post(`${DOMESTIC}/cases/${id}/${resource}`, data).then(r => r.data)
+
+export const updateDomesticChild = (id, resource, childId, data) =>
+  api.patch(`${DOMESTIC}/cases/${id}/${resource}/${childId}`, data).then(r => r.data)
+
+export const deleteDomesticChild = (id, resource, childId) =>
+  api.delete(`${DOMESTIC}/cases/${id}/${resource}/${childId}`).then(r => r.data)
+
+// Payments (nested under an order)
+export const listOrderPayments = (id, orderId) =>
+  api.get(`${DOMESTIC}/cases/${id}/orders/${orderId}/payments`).then(r => r.data)
+
+export const createOrderPayment = (id, orderId, data) =>
+  api.post(`${DOMESTIC}/cases/${id}/orders/${orderId}/payments`, data).then(r => r.data)
+
+export const deleteOrderPayment = (id, orderId, paymentId) =>
+  api.delete(`${DOMESTIC}/cases/${id}/orders/${orderId}/payments/${paymentId}`).then(r => r.data)
+
+// Child support calculator
+export const getCsJurisdictions = () =>
+  api.get(`${DOMESTIC}/jurisdictions`).then(r => r.data)
+
+export const calculateChildSupport = (data) =>
+  api.post(`${DOMESTIC}/calculate`, data).then(r => r.data)
+
+export const saveChildSupportCalc = (id, data) =>
+  api.post(`${DOMESTIC}/cases/${id}/calculations`, data).then(r => r.data)
+
+export const getChildSupportCalc = (id, calcId) =>
+  api.get(`${DOMESTIC}/cases/${id}/calculations/${calcId}`).then(r => r.data)
+
+export const deleteChildSupportCalc = (id, calcId) =>
+  api.delete(`${DOMESTIC}/cases/${id}/calculations/${calcId}`).then(r => r.data)
+
+export const downloadWorksheetPdf = async (id, calcId) => {
+  const res = await api.get(`${DOMESTIC}/cases/${id}/calculations/${calcId}/worksheet.pdf`, { responseType: 'blob' })
+  const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `child_support_worksheet_${calcId.slice(0, 8)}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 // ── Mediation ──────────────────────────────────────────────────────────────
 
 export const getMediationCases = () =>

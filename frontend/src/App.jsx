@@ -16,6 +16,8 @@ import MatterDetailPage from './pages/MatterDetailPage'
 import RenewalTrackerPage from './pages/RenewalTrackerPage'
 import EstatePortfolioPage from './pages/EstatePortfolioPage'
 import EstateDetailPage from './pages/EstateDetailPage'
+import DomesticPortfolioPage from './pages/DomesticPortfolioPage'
+import DomesticDetailPage from './pages/DomesticDetailPage'
 import MediationPortfolioPage from './pages/MediationPortfolioPage'
 import MediationDetailPage from './pages/MediationDetailPage'
 import BillingPage from './pages/BillingPage'
@@ -260,6 +262,14 @@ export default function App() {
         <Route
           path="/plugins/trust-estate/estates/:id"
           element={<ShellRoute title="Estate"><EstateDetailPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/domestic/cases"
+          element={<ShellRoute title="Domestic Relations"><DomesticPortfolioPage /></ShellRoute>}
+        />
+        <Route
+          path="/plugins/domestic/cases/:id"
+          element={<ShellRoute title="Domestic Case"><DomesticDetailPage /></ShellRoute>}
         />
         <Route
           path="/plugins/mediation/cases"

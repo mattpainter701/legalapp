@@ -41,6 +41,7 @@ from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
 from app.routers.matters import router as matters_router
 from app.routers.estates import router as estates_router
+from app.routers.domestic import router as domestic_router
 from app.routers.mediation import router as mediation_router
 from app.routers.mediation_portal import router as mediation_portal_router
 from app.routers.client_portal import router as client_portal_router
@@ -227,6 +228,7 @@ app.include_router(platform_llm_router, prefix="/api")
 # plugins_router, whose greedy ``POST /{plugin}/{skill}`` skill-execution route
 # would otherwise shadow specific paths like ``/api/plugins/mediation/cases``.
 app.include_router(estates_router)
+app.include_router(domestic_router)
 app.include_router(mediation_router)
 app.include_router(mediation_portal_router)
 app.include_router(plugins_router, prefix="/api")

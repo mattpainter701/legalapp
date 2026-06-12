@@ -152,8 +152,9 @@ _METADATA: dict[str, dict] = {
     },
     "family-law": {
         "category": "Consumer Practice",
-        "description": "Custody, divorce, support, protective order, and property division workflows.",
+        "description": "Domestic relations workspace: case tracking, parties, children, custody, a jurisdiction-aware child support calculator with reproducible worksheets, support orders, and a payment ledger.",
         "matter_types": ["family", "divorce", "custody", "support", "protective order"],
+        "primary_route": "/plugins/domestic/cases",
         "optional_integrations": [
             "google_drive",
             "onedrive",
