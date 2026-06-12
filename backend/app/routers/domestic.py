@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1074,6 +1075,29 @@ async def get_calculation(
         db, ChildSupportCalculation, calc_id, case_id, user.tenant_id
     )
     return CalculationResponse.model_validate(calc)
+
+
+@router.get("/cases/{case_id}/calculations/{calc_id}/worksheet.pdf")
+async def calculation_worksheet_pdf(
+    case_id: str,
+    calc_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Filing-ready PDF of a saved calculation worksheet."""
+    user = await _scope(db, request)
+    calc = await _get_child_row(
+        db, ChildSupportCalculation, calc_id, case_id, user.tenant_id
+    )
+    from app.services.childsupport_pdf import generate_worksheet_pdf
+
+    pdf = generate_worksheet_pdf(calc)
+    fname = f"child_support_worksheet_{calc_id[:8]}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
 
 
 @router.delete(

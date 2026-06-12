@@ -422,6 +422,18 @@ export const getChildSupportCalc = (id, calcId) =>
 export const deleteChildSupportCalc = (id, calcId) =>
   api.delete(`${DOMESTIC}/cases/${id}/calculations/${calcId}`).then(r => r.data)
 
+export const downloadWorksheetPdf = async (id, calcId) => {
+  const res = await api.get(`${DOMESTIC}/cases/${id}/calculations/${calcId}/worksheet.pdf`, { responseType: 'blob' })
+  const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `child_support_worksheet_${calcId.slice(0, 8)}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 // ── Mediation ──────────────────────────────────────────────────────────────
 
 export const getMediationCases = () =>

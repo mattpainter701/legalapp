@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Calculator, AlertTriangle, Save, RefreshCw, Info } from 'lucide-react'
+import { Calculator, AlertTriangle, Save, RefreshCw, Info, GitCompare, X } from 'lucide-react'
 import { getCsJurisdictions, calculateChildSupport, saveChildSupportCalc } from '../api'
 
 function money(v) {
@@ -114,6 +114,7 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
   const [calculating, setCalculating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveLabel, setSaveLabel] = useState('')
+  const [scenarioA, setScenarioA] = useState(null) // pinned snapshot for A/B compare
   const debounceRef = useRef(null)
 
   useEffect(() => {
@@ -169,6 +170,18 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
   }
 
   const selectedJur = jurisdictions.find((j) => j.state_code === state)
+
+  const pinScenarioA = () => {
+    if (!worksheet) return
+    setScenarioA({
+      final: Number(worksheet.final_amount),
+      obligor: worksheet.obligor_role,
+      children: worksheet.num_children,
+      state: worksheet.jurisdiction,
+    })
+  }
+  const scenarioB = worksheet ? Number(worksheet.final_amount) : null
+  const delta = scenarioA && scenarioB !== null ? scenarioB - scenarioA.final : null
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -253,11 +266,38 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
         <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-brand-line bg-brand-bg-soft/50">
             <h3 className="font-serif font-bold text-lg text-brand-ink">Worksheet</h3>
-            <button onClick={runCalc} disabled={calculating}
-              className="flex items-center gap-1.5 text-[12px] font-sans font-medium text-brand-ink-2 hover:text-brand-ink transition-colors">
-              <RefreshCw size={13} className={calculating ? 'animate-spin' : ''} /> Recalculate
-            </button>
+            <div className="flex items-center gap-4">
+              <button onClick={pinScenarioA} disabled={!worksheet}
+                className="flex items-center gap-1.5 text-[12px] font-sans font-medium text-brand-ink-2 hover:text-brand-ink transition-colors disabled:text-brand-muted">
+                <GitCompare size={13} /> Pin as Scenario A
+              </button>
+              <button onClick={runCalc} disabled={calculating}
+                className="flex items-center gap-1.5 text-[12px] font-sans font-medium text-brand-ink-2 hover:text-brand-ink transition-colors">
+                <RefreshCw size={13} className={calculating ? 'animate-spin' : ''} /> Recalculate
+              </button>
+            </div>
           </div>
+
+          {scenarioA && (
+            <div className="flex items-stretch border-b border-brand-line">
+              <div className="flex-1 px-5 py-3 border-r border-brand-line">
+                <p className="text-[10px] uppercase tracking-widest text-brand-muted font-sans mb-0.5">Scenario A (pinned)</p>
+                <p className="font-serif text-xl font-bold text-brand-ink-2">{money(scenarioA.final)}</p>
+              </div>
+              <div className="flex-1 px-5 py-3 border-r border-brand-line">
+                <p className="text-[10px] uppercase tracking-widest text-brand-muted font-sans mb-0.5">Scenario B (current)</p>
+                <p className="font-serif text-xl font-bold text-brand-ink">{money(scenarioB)}</p>
+              </div>
+              <div className="px-5 py-3 flex flex-col justify-center min-w-[110px]">
+                <p className="text-[10px] uppercase tracking-widest text-brand-muted font-sans mb-0.5">Difference</p>
+                <p className={`font-serif text-xl font-bold ${delta > 0 ? 'text-brand-rose' : delta < 0 ? 'text-brand-green' : 'text-brand-ink'}`}>
+                  {delta > 0 ? '+' : ''}{money(delta)}
+                </p>
+              </div>
+              <button onClick={() => setScenarioA(null)} title="Clear comparison"
+                className="px-2 text-brand-muted hover:text-brand-ink"><X size={14} /></button>
+            </div>
+          )}
 
           {calcError && (
             <div className="px-5 py-3 text-brand-rose text-sm font-sans bg-brand-rose/10 border-b border-brand-rose/20">{calcError}</div>

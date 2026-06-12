@@ -3,12 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import {
   Scale, ArrowLeft, Plus, Trash2, Users, Baby, Home,
-  Calculator, FileText, CalendarClock, Activity,
+  Calculator, FileText, CalendarClock, Activity, Download,
 } from 'lucide-react'
 import {
   getDomesticCase, updateDomesticCase,
   listDomesticChildren, createDomesticChild, deleteDomesticChild,
   listOrderPayments, createOrderPayment, deleteOrderPayment,
+  downloadWorksheetPdf,
 } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import ChildSupportCalculator from '../components/ChildSupportCalculator'
@@ -307,12 +308,39 @@ function PaymentLedger({ caseId, order, onChange }) {
 
 function CalculationsTab({ caseId }) {
   const { items, loading, reload } = useResource(caseId, 'calculations')
+  if (loading) return <div><h3 className="font-serif font-bold text-lg text-brand-ink mb-4">Saved Calculations</h3><Loading /></div>
   return (
     <div>
       <h3 className="font-serif font-bold text-lg text-brand-ink mb-4">Saved Calculations</h3>
-      <DataTable loading={loading} items={items} columns={['Label', 'State', 'Children', 'Obligor', 'Presumptive', 'Final', 'Date']}
-        row={(c) => [c.label || '—', c.jurisdiction, c.num_children, <span className="capitalize">{c.obligor_role || '—'}</span>, money(c.presumptive_amount), money(c.final_amount), fmtDate(c.created_at)]}
-        onDelete={(c) => deleteDomesticChild(caseId, 'calculations', c.id).then(reload)} empty="No saved calculations yet. Run one in the Support Calculator tab." />
+      {items.length === 0 ? <Empty msg="No saved calculations yet. Run one in the Support Calculator tab." /> : (
+        <div className="bg-brand-surface border border-brand-line rounded-xl overflow-hidden shadow-sm">
+          <table className="min-w-full text-left">
+            <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">
+              {['Label', 'State', 'Children', 'Obligor', 'Presumptive', 'Final', 'Date', ''].map((h) => (
+                <th key={h} className="px-4 py-3 text-[10px] font-bold text-brand-muted uppercase tracking-widest">{h}</th>
+              ))}</tr></thead>
+            <tbody className="divide-y divide-brand-line">
+              {items.map((c) => (
+                <tr key={c.id} className="hover:bg-brand-bg-soft text-[13px] text-brand-ink-2 font-sans">
+                  <td className="px-4 py-3">{c.label || '—'}</td>
+                  <td className="px-4 py-3">{c.jurisdiction}</td>
+                  <td className="px-4 py-3">{c.num_children}</td>
+                  <td className="px-4 py-3 capitalize">{c.obligor_role || '—'}</td>
+                  <td className="px-4 py-3">{money(c.presumptive_amount)}</td>
+                  <td className="px-4 py-3 font-semibold text-brand-ink">{money(c.final_amount)}</td>
+                  <td className="px-4 py-3">{fmtDate(c.created_at)}</td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button onClick={() => downloadWorksheetPdf(caseId, c.id)} title="Download worksheet PDF"
+                      className="inline-flex items-center text-brand-muted hover:text-brand-accent mr-3"><Download size={14} /></button>
+                    <button onClick={() => deleteDomesticChild(caseId, 'calculations', c.id).then(reload)} title="Delete"
+                      className="inline-flex items-center text-brand-muted hover:text-brand-rose"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

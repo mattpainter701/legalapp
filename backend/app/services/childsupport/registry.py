@@ -12,10 +12,12 @@ from datetime import date
 
 from app.services.childsupport.base import GuidelineProvider
 from app.services.childsupport.jurisdictions.north_dakota import NorthDakotaProvider
+from app.services.childsupport.jurisdictions.texas import TexasProvider
 
 # state_code -> list of providers (newest schedule first). Extend as states land.
 _PROVIDERS: dict[str, list[GuidelineProvider]] = {
     "ND": [NorthDakotaProvider()],
+    "TX": [TexasProvider()],
 }
 
 
