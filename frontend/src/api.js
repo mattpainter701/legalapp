@@ -108,16 +108,17 @@ export const createConversation = (data) =>
 export const getConversation = (id) =>
   api.get(`/conversations/${id}`).then((r) => r.data)
 
-export const sendMessage = (conversationId, content, includePublic = true, usePremium = false) =>
+export const sendMessage = (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) =>
   api
     .post(`/conversations/${conversationId}/messages`, {
       content,
       include_public: includePublic,
       use_premium_llm: usePremium,
+      attachment_ids: attachmentIds,
     })
     .then((r) => r.data)
 
-export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false) {
+export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) {
   const response = await fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     credentials: 'include',
@@ -126,6 +127,7 @@ export const streamMessage = async function* (conversationId, content, includePu
       content,
       include_public: includePublic,
       use_premium_llm: usePremium,
+      attachment_ids: attachmentIds,
     }),
   })
 
@@ -200,6 +202,16 @@ export const uploadDocument = (file) => {
 
 export const deleteDocument = (id) =>
   api.delete(`/documents/${id}`).then((r) => r.data)
+
+export const uploadChatAttachment = (conversationId, file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api
+    .post(`/conversations/${conversationId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data)
+}
 
 // Admin
 export const getAdminUsers = () =>

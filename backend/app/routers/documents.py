@@ -148,7 +148,10 @@ async def list_documents(
 
     result = await db.execute(
         select(Document)
-        .where(Document.tenant_id == user.tenant_id)
+        .where(
+            Document.tenant_id == user.tenant_id,
+            Document.conversation_id.is_(None),
+        )
         .order_by(Document.created_at.desc())
     )
     docs = result.scalars().all()

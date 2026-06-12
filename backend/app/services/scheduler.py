@@ -14,6 +14,8 @@ all tenants' data is accessible globally for the scheduler.
 
 import hashlib
 import logging
+import os
+import shutil
 import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -28,6 +30,7 @@ from sqlalchemy import or_, select, text
 
 from app.config import get_settings
 from app.database import async_session_maker
+from app.models.document import Document
 from app.models.plugin import Estate, Matter, MatterEvent, Renewal
 from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
@@ -96,6 +99,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "SMB Agent Heartbeat",
         "description": "Checks for stale SMB relay agents (no heartbeat in 15 minutes) and marks them paused.",
         "schedule": "Every 15 minutes",
+    },
+    {
+        "name": "chat-attachment-cleanup",
+        "display_name": "Chat Attachment Cleanup",
+        "description": "Deletes expired misc-chat session attachments (rolling temp storage) and their files.",
+        "schedule": "Daily at 3:10 AM ET",
     },
 ]
 
@@ -474,6 +483,18 @@ class LegalScheduler:
             name="SMB Agent Heartbeat",
             replace_existing=True,
         )
+
+        # chat-attachment-cleanup: daily 3:10 AM ET
+        self.scheduler.add_job(
+            self._guarded(
+                "chat-attachment-cleanup", self.run_chat_attachment_cleanup
+            ),
+            CronTrigger(hour=3, minute=10),
+            id="chat-attachment-cleanup",
+            name="Chat Attachment Cleanup",
+            replace_existing=True,
+        )
+        agent_count += 1
 
         self.scheduler.start()
         logger.info("LegalScheduler started with %d agents", agent_count)
@@ -1356,6 +1377,60 @@ class LegalScheduler:
                 logger.exception("[smb-heartbeat] Unhandled error: %s", error_msg)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: chat-attachment-cleanup ───────────────────────────────────────
+
+    async def run_chat_attachment_cleanup(self) -> None:
+        """Delete expired misc-chat session attachments and their files.
+
+        Misc-chat attachments (Conversation.matter_id is null) are stored in
+        rolling temp storage with `Document.expires_at` set. Matter-linked
+        chat attachments and library documents have `expires_at = NULL` and
+        are never touched here.
+        """
+        logger.info("[chat-attachment-cleanup] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "chat-attachment-cleanup")
+            try:
+                await _bypass_rls(session)
+
+                now = datetime.now(timezone.utc)
+                result = await session.execute(
+                    select(Document).where(
+                        Document.expires_at.isnot(None),
+                        Document.expires_at < now,
+                    )
+                )
+                expired_docs = list(result.scalars().all())
+
+                if not expired_docs:
+                    await _log_complete(
+                        session, log, "No expired chat attachments found."
+                    )
+                    logger.info("[chat-attachment-cleanup] Nothing to clean up.")
+                    return
+
+                deleted = 0
+                for doc in expired_docs:
+                    if doc.storage_path:
+                        shutil.rmtree(
+                            os.path.dirname(doc.storage_path), ignore_errors=True
+                        )
+                    await session.delete(doc)
+                    deleted += 1
+
+                await session.commit()
+
+                summary = f"Deleted {deleted} expired chat attachment(s)."
+                await _log_complete(session, log, summary)
+                logger.info("[chat-attachment-cleanup] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception(
+                    "[chat-attachment-cleanup] Unhandled error: %s", error_msg
+                )
+                await _log_failed(session, log, error_msg)
+
     # ─── Manual trigger ───────────────────────────────────────────────────────
 
     async def run_agent_manually(self, agent_name: str) -> Dict[str, Any]:
@@ -1373,6 +1448,7 @@ class LegalScheduler:
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
             "smb-heartbeat": self._check_smb_agent_heartbeats,
+            "chat-attachment-cleanup": self.run_chat_attachment_cleanup,
         }
 
         fn = agent_map.get(agent_name)

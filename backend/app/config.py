@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     EXTRA_CORS_ORIGINS: str = ""
     UPLOAD_DIR: str = "/app/uploads"
     MAX_FILE_SIZE_MB: int = 50
+    # Rolling retention window for misc-chat (non-matter) attachments stored in
+    # UPLOAD_DIR/{tenant_id}/chat-temp/. Matter-linked chat attachments persist.
+    CHAT_ATTACHMENT_TTL_DAYS: int = 7
 
     RAG_TOP_K: int = 8
     EMBEDDING_MODEL: str = "text-embedding-3-small"

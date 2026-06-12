@@ -52,3 +52,14 @@ class MessageResponse(BaseModel):
 class ConversationDetail(BaseModel):
     conversation: ConversationResponse
     messages: List[MessageResponse]
+
+
+class ChatAttachmentResponse(BaseModel):
+    id: str
+    filename: str
+    content_type: Optional[str] = None
+    file_size: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

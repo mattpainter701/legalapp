@@ -1,11 +1,23 @@
 import asyncio
 import logging
+import os
+import shutil
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+import aiofiles
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +29,7 @@ from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
 from app.models.plugin import Matter as MatterModel
 from app.schemas.chat import (
+    ChatAttachmentResponse,
     ConversationCreate,
     ConversationResponse,
     ConversationDetail,
@@ -96,6 +109,68 @@ def _join_context_sections(*sections: str | None) -> str:
     return "\n\n".join(
         section.strip() for section in sections if section and section.strip()
     )
+
+
+async def _build_attachment_context(
+    db: AsyncSession, user, attachment_ids: list[str] | None
+) -> str:
+    """Inject session-attachment text directly into context (Tier 1 — no embeddings).
+
+    For documents that were chunked/embedded (chunk_count > 0), use the stored
+    chunks. Otherwise extract text on-demand from the file on disk.
+    """
+    if not attachment_ids:
+        return ""
+    try:
+        from app.utils.text_processing import extract_text as _extract_text
+
+        attachment_parts = []
+        for aid in attachment_ids:
+            doc_result = await db.execute(
+                select(Document).where(
+                    Document.id == aid,
+                    Document.tenant_id == user.tenant_id,
+                )
+            )
+            doc = doc_result.scalar_one_or_none()
+            if doc is None:
+                continue
+
+            text = ""
+            if doc.chunk_count and doc.chunk_count > 0:
+                from sqlalchemy import text as _sa_text
+
+                chunk_result = await db.execute(
+                    _sa_text(
+                        "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
+                        "ORDER BY chunk_index LIMIT 100"
+                    ),
+                    {"doc_id": str(doc.id)},
+                )
+                text = "\n\n".join(row[0] for row in chunk_result.fetchall())
+            elif doc.storage_path and os.path.exists(doc.storage_path):
+                async with aiofiles.open(doc.storage_path, "rb") as f:
+                    file_bytes = await f.read()
+                text = await asyncio.to_thread(
+                    _extract_text,
+                    file_bytes=file_bytes,
+                    content_type=doc.content_type or "",
+                    filename=doc.filename or "",
+                )
+
+            if text:
+                attachment_parts.append(
+                    f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
+                )
+
+        if attachment_parts:
+            return (
+                "--- Attached Files (session-only, not saved to project) ---\n\n"
+                + "\n\n---\n\n".join(attachment_parts)
+            )
+    except Exception:
+        logger.warning("Failed to build attachment context", exc_info=True)
+    return ""
 
 
 def _conversation_to_response(
@@ -321,6 +396,113 @@ async def get_conversation(
     )
 
 
+@router.post(
+    "/{conversation_id}/attachments",
+    response_model=ChatAttachmentResponse,
+    status_code=201,
+)
+async def upload_chat_attachment(
+    conversation_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a session attachment for a chat conversation (Tier 1 — no embeddings).
+
+    Misc conversations (no matter_id) get rolling temp storage with a TTL
+    (UPLOAD_DIR/{tenant_id}/chat-temp/{conversation_id}/), cleaned up by the
+    chat-attachment-cleanup scheduled job. Matter-linked conversations persist
+    under the matter's chatattachments subdirectory
+    (UPLOAD_DIR/{tenant_id}/matters/{matter_slug}/chatattachments/).
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == user.tenant_id,
+        )
+    )
+    conv = result.scalar_one_or_none()
+
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if conv.user_id != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    file_bytes = await file.read()
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
+        )
+
+    document_id = uuid.uuid4()
+    safe_filename = os.path.basename(file.filename)
+    expires_at = None
+
+    if conv.matter_id:
+        matter_result = await db.execute(
+            select(MatterModel.slug).where(
+                MatterModel.id == conv.matter_id,
+                MatterModel.tenant_id == user.tenant_id,
+            )
+        )
+        matter_row = matter_result.one_or_none()
+        matter_slug = matter_row[0] if matter_row else str(conv.matter_id)
+        storage_dir = os.path.join(
+            settings.UPLOAD_DIR,
+            str(user.tenant_id),
+            "matters",
+            matter_slug,
+            "chatattachments",
+            str(document_id),
+        )
+    else:
+        storage_dir = os.path.join(
+            settings.UPLOAD_DIR,
+            str(user.tenant_id),
+            "chat-temp",
+            str(conversation_id),
+            str(document_id),
+        )
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=settings.CHAT_ATTACHMENT_TTL_DAYS
+        )
+
+    os.makedirs(storage_dir, exist_ok=True)
+    storage_path = os.path.join(storage_dir, safe_filename)
+
+    async with aiofiles.open(storage_path, "wb") as out_file:
+        await out_file.write(file_bytes)
+
+    doc = Document(
+        id=document_id,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        conversation_id=conv.id,
+        matter_id=conv.matter_id,
+        filename=safe_filename,
+        content_type=file.content_type,
+        file_size=len(file_bytes),
+        storage_path=storage_path,
+        status="ready",
+        chunk_count=0,
+        expires_at=expires_at,
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+
+    return ChatAttachmentResponse.model_validate(doc)
+
+
 @router.delete("/{conversation_id}", status_code=204)
 async def delete_conversation(
     conversation_id: str,
@@ -344,6 +526,14 @@ async def delete_conversation(
 
     if conv.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Remove attachment files from disk before the FK cascade deletes their rows.
+    attachment_result = await db.execute(
+        select(Document.storage_path).where(Document.conversation_id == conv.id)
+    )
+    for (storage_path,) in attachment_result.all():
+        if storage_path:
+            shutil.rmtree(os.path.dirname(storage_path), ignore_errors=True)
 
     await db.delete(conv)
     await db.commit()
@@ -466,53 +656,9 @@ async def send_message(
             )
 
     # 3b. Session attachments — inject file text directly into context (no embeddings)
-    attachment_context = ""
-    if hasattr(body, "attachment_ids") and body.attachment_ids:
-        try:
-            from app.utils.text_processing import extract_text as _extract_text
-
-            attachment_parts = []
-            for aid in body.attachment_ids:
-                doc_result = await db.execute(
-                    select(Document).where(
-                        Document.id == aid,
-                        Document.tenant_id == user.tenant_id,
-                    )
-                )
-                doc = doc_result.scalar_one_or_none()
-                if doc is None:
-                    continue
-
-                text = ""
-                if doc.chunk_count and doc.chunk_count > 0:
-                    from sqlalchemy import text as _sa_text
-
-                    chunk_result = await db.execute(
-                        _sa_text(
-                            "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
-                            "ORDER BY chunk_index LIMIT 100"
-                        ),
-                        {"doc_id": str(doc.id)},
-                    )
-                    text = "\n\n".join(row[0] for row in chunk_result.fetchall())
-                else:
-                    file_path = doc.file_path or (
-                        f"{settings.UPLOAD_DIR}/{user.tenant_id}/{doc.id}/{doc.filename}"
-                    )
-                    text = await asyncio.to_thread(_extract_text, file_path)
-
-                if text:
-                    attachment_parts.append(
-                        f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
-                    )
-
-            if attachment_parts:
-                attachment_context = (
-                    "--- Attached Files (session-only, not saved to project) ---\n\n"
-                    + "\n\n---\n\n".join(attachment_parts)
-                )
-        except Exception:
-            pass  # Non-fatal
+    attachment_context = await _build_attachment_context(
+        db, user, body.attachment_ids if hasattr(body, "attachment_ids") else None
+    )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
@@ -946,53 +1092,9 @@ async def stream_message(
             )
 
     # 3b. Session attachments — inject file text directly into context (no embeddings)
-    attachment_context = ""
-    if hasattr(body, "attachment_ids") and body.attachment_ids:
-        try:
-            from app.utils.text_processing import extract_text as _extract_text
-
-            attachment_parts = []
-            for aid in body.attachment_ids:
-                doc_result = await db.execute(
-                    select(Document).where(
-                        Document.id == aid,
-                        Document.tenant_id == user.tenant_id,
-                    )
-                )
-                doc = doc_result.scalar_one_or_none()
-                if doc is None:
-                    continue
-
-                text = ""
-                if doc.chunk_count and doc.chunk_count > 0:
-                    from sqlalchemy import text as _sa_text
-
-                    chunk_result = await db.execute(
-                        _sa_text(
-                            "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
-                            "ORDER BY chunk_index LIMIT 100"
-                        ),
-                        {"doc_id": str(doc.id)},
-                    )
-                    text = "\n\n".join(row[0] for row in chunk_result.fetchall())
-                else:
-                    file_path = doc.file_path or (
-                        f"{settings.UPLOAD_DIR}/{user.tenant_id}/{doc.id}/{doc.filename}"
-                    )
-                    text = await asyncio.to_thread(_extract_text, file_path)
-
-                if text:
-                    attachment_parts.append(
-                        f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
-                    )
-
-            if attachment_parts:
-                attachment_context = (
-                    "--- Attached Files (session-only, not saved to project) ---\n\n"
-                    + "\n\n---\n\n".join(attachment_parts)
-                )
-        except Exception:
-            pass  # Non-fatal
+    attachment_context = await _build_attachment_context(
+        db, user, body.attachment_ids if hasattr(body, "attachment_ids") else None
+    )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False

@@ -9,13 +9,13 @@ import {
   sendMessage,
   streamMessage,
   createConversation,
-  uploadDocument,
+  uploadChatAttachment,
 } from '../api'
 
 export default function ChatPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { conversations, setConversations, documents, setDocuments, activeConvId, setActiveConvId } = useAppShell()
+  const { conversations, setConversations, activeConvId, setActiveConvId } = useAppShell()
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -24,6 +24,7 @@ export default function ChatPage() {
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
+  const [pendingAttachments, setPendingAttachments] = useState([])
   const fileInputRef = useRef(null)
 
   const handleUploadClick = () => {
@@ -43,13 +44,25 @@ export default function ChatPage() {
   }
 
   const uploadFiles = async (files) => {
+    let convId = activeConvId
+
+    if (!convId) {
+      try {
+        const conv = await createConversation()
+        setConversations((prev) => [conv, ...prev])
+        setActiveConvId(conv.id)
+        setActiveConvTitle(conv.title || 'New Conversation')
+        convId = conv.id
+      } catch (err) {
+        console.error('Failed to create conversation', err)
+        return
+      }
+    }
+
     for (const file of files) {
       try {
-        const doc = await uploadDocument(file)
-        setDocuments((prev) => {
-          const exists = prev.find((d) => d.id === doc.id)
-          return exists ? prev : [doc, ...prev]
-        })
+        const doc = await uploadChatAttachment(convId, file)
+        setPendingAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }])
       } catch (err) {
         console.error('Upload failed:', err)
       }
@@ -146,8 +159,11 @@ export default function ChatPage() {
       created_at: new Date().toISOString(),
     }
 
+    const attachmentIds = pendingAttachments.map((a) => a.id)
+
     setMessages((prev) => [...prev, userMessage])
     setInputValue('')
+    setPendingAttachments([])
     setIsSending(true)
 
     try {
@@ -164,7 +180,7 @@ export default function ChatPage() {
       let accumulatedText = ''
       let streamError = null
 
-      for await (const token of streamMessage(convId, content, includePublic, usePremium)) {
+      for await (const token of streamMessage(convId, content, includePublic, usePremium, attachmentIds)) {
         if (token === '[STREAM_COMPLETE]') {
           break
         } else if (token.startsWith('[ERROR]')) {
@@ -212,7 +228,7 @@ export default function ChatPage() {
     } finally {
       setIsSending(false)
     }
-  }, [inputValue, isSending, activeConvId, includePublic, usePremium, setConversations, setActiveConvId])
+  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId])
 
   const handleExportConversation = () => {
     const content = messages
@@ -277,6 +293,10 @@ export default function ChatPage() {
           onDropFiles={handleDropFiles}
           isSending={isSending}
           disabled={false}
+          pendingAttachments={pendingAttachments}
+          onRemoveAttachment={(id) =>
+            setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
+          }
         />
         <input
           ref={fileInputRef}
