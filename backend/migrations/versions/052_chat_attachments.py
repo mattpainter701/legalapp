@@ -18,8 +18,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "051"
-down_revision = "050"
+revision = "052"
+down_revision = "051"
 branch_labels = None
 depends_on = None
 
@@ -55,21 +55,15 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
-    op.create_index(
-        "ix_documents_conversation_id", "documents", ["conversation_id"]
-    )
+    op.create_index("ix_documents_conversation_id", "documents", ["conversation_id"])
     op.create_index("ix_documents_expires_at", "documents", ["expires_at"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_documents_expires_at", table_name="documents")
     op.drop_index("ix_documents_conversation_id", table_name="documents")
-    op.drop_constraint(
-        "fk_documents_matter_id", "documents", type_="foreignkey"
-    )
-    op.drop_constraint(
-        "fk_documents_conversation_id", "documents", type_="foreignkey"
-    )
+    op.drop_constraint("fk_documents_matter_id", "documents", type_="foreignkey")
+    op.drop_constraint("fk_documents_conversation_id", "documents", type_="foreignkey")
     op.drop_column("documents", "expires_at")
     op.drop_column("documents", "matter_id")
     op.drop_column("documents", "conversation_id")
