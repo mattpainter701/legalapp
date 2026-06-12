@@ -48,16 +48,36 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 ### M2 — Intake & litigation (P1)
 
-#### 1304. Public Intake Forms + Online Scheduling (P1, LARGE) — PENDING
-- [ ] Migration `047_intake_forms`: `intake_forms` (public slug, schema JSON, conditional logic), `intake_form_submissions`
-- [ ] `routers/intake_forms.py`: firm CRUD + public `GET/POST /public/intake/{slug}` → create Contact+Lead, notify attorney, optional conflict pre-check; public scheduling from synced calendars; rate-limit/spam protection
-- [ ] Frontend: `IntakeFormsPage` builder; public form + booking render; surface submissions in `IntakePage`
+#### 1304. Public Intake Forms + Online Scheduling (P1, LARGE) — PENDING (REFINED)
 
-#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — PENDING
+**AUDIT RESULT (2026-06-12):** Spec conflates two features (form builder + scheduling). Scope split into Phase 1 (small–medium, competitive gap) and Phase 2 (scheduling + conditional logic, deferred). Phase 1 unblocks lead capture from public web.
+
+**Phase 1 (P1, SMALL–MEDIUM) — Public Intake Form → Auto-Lead**
+- [ ] Migration `047_intake_forms`: `intake_forms` (public slug, schema JSON), `intake_form_submissions`
+- [ ] `routers/intake_forms.py`: firm CRUD + public `GET/POST /public/intake/{slug}` → create Contact+Lead + notify assigned attorney; rate-limit/spam protection
+- [ ] Frontend: `IntakeFormsPage` builder (JSON schema editor); public form renderer; submissions surface in `IntakePage`
+- [ ] No conditional logic (v1), no scheduling
+
+**Phase 2 (P1, MEDIUM, DEFERRED) — Conditional Logic + Online Scheduling**
+- [ ] Conditional field visibility (show/hide fields based on selections)
+- [ ] Public scheduling from synced calendars (consult slots → calendar event creation)
+- [ ] Scheduled post-sprint 13; design deferred to reduce scope creep
+
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPIKED
+
+**AUDIT RESULT (2026-06-12):** Phase 1 unstarted; Phase 2 purely speculative. Converted to 1-day spike to confirm LawToolBox commercial viability before scheduling Phase 1. Phase 2 (native CourtListener engine) archived.
+
+**Pre-work Spike (1 day) — LawToolBox Feasibility**
+- [ ] Contact LawToolBox sales: API pricing model, coverage (50 states / 2,300+ jurisdictions), TTM for partner integration
+- [ ] Decision memo: IF available + cost acceptable → schedule Phase 1 (MEDIUM). IF unavailable → defer or evaluate alternatives. Archive Phase 2 regardless.
+
+**Phase 1 (P1, MEDIUM, SCHEDULED AFTER SPIKE)** — LawToolBox Integration
 - [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
-- [ ] Phase 1: `services/docketing.py` LawToolBox client (trigger + jurisdiction + date → deadline chain); `routers/deadlines.py` CRUD + calculate-from-trigger; hook task-reminder scheduler
+- [ ] `services/docketing.py` LawToolBox API client (trigger + jurisdiction + date → deadline chain); `routers/deadlines.py` CRUD + calculate-from-trigger; hook task-reminder scheduler
 - [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage`
-- [ ] Phase 2 (later): evaluate native engine seeded from CourtListener
+
+**Phase 2 (ARCHIVED)** — Native CourtListener Engine
+- ~~Evaluate native engine seeded from CourtListener~~ — ARCHIVED 2026-06-12 (speculative, only if LawToolBox fails)
 
 #### 1306. Two-Way SMS / Text (P1, SMALL–MEDIUM) — PENDING
 - [ ] Migration `049_sms`: SMS fields on `communication_log` (`external_id`, `direction`, `from_number`, `to_number`); tenant Twilio config
@@ -66,20 +86,66 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 ### M3 — Efficiency & depth (P1/P2)
 
-#### 1307. No-Code Workflow Automation (P1, LARGE) — PENDING
-- [ ] Migration `050_workflows`: `workflows`, `workflow_actions`, `workflow_runs`
-- [ ] `services/workflow_engine.py` (domain events → actions via APScheduler); `routers/workflows.py` CRUD + manual run + history
-- [ ] Frontend: `WorkflowsPage` trigger→action builder + run log
+#### 1307. No-Code Workflow Automation (P1, LARGE) — PARKED
 
-#### 1308. Depth & polish (P2) — PENDING
-- [ ] Document automation overhaul: native DOCX/PDF assembly with field mapping (supersedes text-only templates)
-- [ ] Contact/matter custom fields + contact↔contact relationships
+**AUDIT RESULT (2026-06-12):** Spec is vague (events/actions/UI undefined). User demand indirect (competitive gap analysis, no customer requests). P1 competing tasks (1304, 1305, 1306) on critical path first. **PARKED** pending 1301–1306 stabilization + user interviews.
+
+**Next steps (Sprint 14 or later):**
+- Gather attorney interviews: "What manual repetitive workflows slow you down most?"
+- If intake (1304) or deadlines (1305) unlock new firms, they'll ask about automation
+- Refine spec: list top 5 events (matter_created, task_completed, invoice_sent, payment_received, document_signed) + 5 actions (create_task, send_email, update_matter_status, notify_client, create_event)
+- Propose MICRO scope for Phase 1: manual-only triggering, task auto-creation, no scheduling, JSON editor UI
+
+**Design (DEFERRED):**
+- [ ] Migration `050_workflows`: `workflows`, `workflow_actions`, `workflow_runs`
+- [ ] `services/workflow_engine.py` (domain events → actions); `routers/workflows.py` CRUD + manual run + history
+- [ ] Frontend: `WorkflowsPage` builder + run log
+
+#### 1308a. Document Automation — Native DOCX/PDF Assembly (P1, MEDIUM) — REFINED
+
+**AUDIT RESULT (2026-06-12):** User demand exists (Tabs3/Smokeball parity). Existing text templates (v0.8.0) as foundation. Scope clear: python-docx for Phase 1, Jinja2+pandoc for Phase 2. **PROMOTED TO P1** (was P2).
+
+**Phase 1 (P1, MEDIUM, 2 weeks)** — DOCX Upload → Field Mapping → Render
+- [ ] Migration: reuse existing `DocumentTemplate` table; add `template_type` (text/docx) + `docx_file_path`
+- [ ] Backend: `services/document_automation.py` — read DOCX with python-docx, extract form fields, render with variable substitution, save to matter
+- [ ] `routers/document_templates.py` extension: `POST /templates/{id}/render` endpoint (maps field_name → {{variable}} → substitutes from matter/contact data)
+- [ ] Frontend: `TemplatesPage` enhancement — DOCX uploader, field mapping UI (highlight placeholders in preview), render + download
+- [ ] Acceptance: Upload sample engagement letter DOCX, map 5 fields (client_name, attorney_name, effective_date, scope, fee_rate), render → download works
+
+**Phase 2 (P2, LARGE, DEFERRED)** — Conditional Logic + PDF
+- [ ] Conditional rendering: {{#if}} blocks, {{#each}} loops (Jinja2)
+- [ ] PDF generation: DOCX → HTML → WeasyPrint or pandoc
+- [ ] Field types: signature blocks, date pickers, dropdowns
+- [ ] Scheduled post-Phase 1
+
+#### 1308b. Reporting/BI — Accounting Reports (P1, MEDIUM) — REFINED
+
+**AUDIT RESULT (2026-06-12):** Data foundation complete (TimeEntry, Invoice, Payment models indexed). Zero billing reports frontend. User demand implicit (accounting parity, P2 backlog). **PROMOTED TO P1** (was P2 sub-item).
+
+**Phase 1 (P1, 3–4 days)** — 3 Core Reports
+- [ ] Backend: `services/reporting.py` — SQL aggregations for:
+  1. **Realization Report:** Billable hours + billed amount by matter/period (TimeEntry WHERE is_billable = TRUE)
+  2. **WIP (Work-in-Progress):** Unbilled time entries by matter (TimeEntry WHERE invoice_id IS NULL)
+  3. **A/R Aging:** Invoices by status + days overdue (Invoice WHERE due_date < TODAY, sorted by age)
+- [ ] `routers/reports.py` endpoints: `GET /reports/billing/realization`, `/billing/wip`, `/billing/aging` (with optional ?matter_id=, ?period_start=, ?period_end= filters)
+- [ ] Frontend: `ReportsPage` tabs (one per report), date-range filter, CSV download button; query via `api.js`
+- [ ] Acceptance: Pull realization report for Q2, see hours vs revenue by matter; export to CSV
+
+**Phase 2 (P2, LATER)** — Advanced Reports
+- [ ] Profitability ranking, custom filters, pivot tables, trend charts, realization %, blended rates
+- [ ] Real-time dashboard (no longer static reports)
+- [ ] Scheduled post-Phase 1
+
+#### 1308c. Contact/Matter Custom Fields + Relationships (P2, LARGE) — PENDING
+- [ ] Contact↔contact relationships (e.g., co-counsel, opposing counsel)
+- [ ] Matter custom fields (firm-defined fields)
+- [ ] Scheduled post-Core Bolster
+
+#### 1308d. Depth & polish — Future items (P2) — PENDING
 - [ ] Email-to-matter auto-filing (+ include in conflict search)
 - [ ] Conflict-check hardening: indexed partial/phonetic search (rival Tabs3)
-- [ ] Reporting/BI: realization/collection, WIP, A/R aging, matter profitability
-- [ ] Native mobile apps (XL) — deferred
 
-**External dependencies to line up early:** e-sign provider (Dropbox Sign/DocuSign, 1302), LawToolBox commercial API (1305), Twilio account+number (1306).
+**External dependencies to line up early:** e-sign provider (Dropbox Sign/DocuSign, 1302), LawToolBox commercial API (1305 spike), Twilio account+number (1306).
 
 ### M4 — Platform hardening (P1)
 
@@ -90,6 +156,28 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [ ] Custom subroles: firm can clone a base role and toggle individual permissions → saved as tenant-scoped custom role
 - [ ] Module visibility gating: admin can disable unpurchased addon modules per tenant; sidebar/route hide disabled modules; `TenantSettings.modules` JSON list of enabled modules; dev override flag to see all modules regardless
 - [ ] Invoicing lock (DONE — hotfix): `generate_invoice`, `update_invoice`, `create_payment`, `export_invoice` gated to `require_admin` in `billing_extended.py`
+
+---
+
+## Sprint 14 — Trust & Accounting Frontends (v0.15.0)
+
+**Goal:** Ship frontend UIs for fully-built backend systems (trust accounting, reporting). Backlog refinement from 2026-06-12 audit completed 1307 (parked) + 1308 split (promote 1308a & 1308b to P1).
+
+### M1 — Accounting & Finance (P1)
+
+#### 1314. Trust Accounting Frontend (P0, MEDIUM) — PENDING
+
+**AUDIT PROMOTED (2026-06-12):** Backend 100% complete (9 endpoints in `trust_accounting.py`, migrations 017 + reconciliation logic). Modest frontend scope (~1 week) unblocks accounting workflows. No reason to defer.
+
+- [ ] `TrustAccountingPage` + sidebar nav route
+- [ ] Trust Account Portfolio view: list (name, balance, bank, status), create/close modals, filters
+- [ ] Trust Account Detail page: balance ledger, transaction history, auto-replenish config, edit/close actions
+- [ ] Reconciliation screen: bank balance input, outstanding deposits/disbursements, three-way reconcile calc, mark-as-reconciled action
+- [ ] Matter Detail integration: trust balance card (quick-link to account)
+- [ ] API client (`api.js`): 9 endpoint wrappers (CRUD accounts, CRUD transactions, reconcile)
+- [ ] E2E smoke test: create account → post transaction → reconcile
+
+**Files:** `frontend/src/pages/TrustAccountingPage.jsx`, `frontend/src/components/TrustAccount{Portfolio,Detail,Reconcile}`, `frontend/src/api.js` (trust group)
 
 ---
 
@@ -227,8 +315,18 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 
 ## Future
 
+### Archived (2026-06-12)
+
+**Native Mobile Apps (XL)** — ARCHIVED with conditional revisit trigger
+- ✗ No customer demand signal; responsive-web ship (Sprint 12, task 1110) covers table-stakes mobile UX
+- ✗ Competitive pressure rated P2 (competitive-gap-analysis.md) — not a switching blocker
+- ✗ P0/P1 roadmap (client portal, e-sig, trust accounting, docketing, intake, SMS, workflows) takes priority
+- **Revisit Q4 2026 IF:** (1) ≥3 customer requests cite iOS/Android as decision blocker, (2) major competitor mobile-exclusive feature ships, (3) analytics show >15% iOS/Android traffic, or (4) team has post-Sprint-14 capacity
+
+### Deferred (revisit later)
+
 - [ ] **Time tracking advanced:** allow rate override on invoice creation screen for admin
-- [ ] **Templates overhaul:** support PDF/DOCX native templates with field mapping (currently text-only)
+- [ ] ~~**Templates overhaul:** support PDF/DOCX native templates~~ — MOVED TO 1308a (Document Automation, P1)
 
 ---
 
@@ -280,7 +378,7 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Trust Accounting: `trust_accounting.py` (545 lines, 9 endpoints) — all real DB code. Models: TrustAccount + TrustTransaction. Migration 017.
 - [x] Estates: `estates.py` (1420 lines, 44 endpoints) — all real DB code. 9 models (Estate + EstateEvent + 7 sub-entities). Migrations 008, 030, 032.
 - [x] Estate frontend: PortfolioPage (335L) + DetailPage (565L, 9 tabs) + EstateSubTable (212L) — fully built.
-- [ ] **Gap: Trust Accounting has NO frontend** — no pages, no API functions in `api.js`, no routes in `App.jsx`. Backend is headless.
+- [x] **RESOLVED (2026-06-12): Trust Accounting frontend promoted to Sprint 14 as task 1314** — Backend is ready for consumption. Frontend effort ~1 week.
 - [ ] **Gap: Trust models not in `models/__init__.py`** — TrustAccount/TrustTransaction imported directly by router (cosmetic, not blocking)
 - [ ] **Gap: Estate schemas use Pydantic v1-style config** — `class Config: from_attributes = True` vs v2-style `model_config` (cosmetic)
 
