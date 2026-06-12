@@ -10,9 +10,11 @@ Tasks router — deadline and task management.
   DELETE /api/tasks/{id}       delete/cancel
 """
 
+import asyncio
+import logging
 import uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -22,10 +24,71 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.task import Task
 from app.models.user import User
+from app.services import google_calendar, microsoft_calendar
 from app.services.email import email_service
 from app.schemas.task import TaskCreate, TaskListResponse, TaskResponse, TaskUpdate
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# Fields that affect the pushed calendar event when changed
+_CALENDAR_RELEVANT_FIELDS = {"title", "description", "task_type", "due_date", "status"}
+
+
+def _fire_calendar_sync(coro: Coroutine, *, task_id: str, provider: str) -> None:
+    """Fire-and-forget a calendar push, logging (not dropping) failures."""
+
+    async def _run() -> None:
+        try:
+            await coro
+        except Exception as exc:
+            logger.warning(
+                "Calendar sync failed for task %s (provider=%s): %s",
+                task_id,
+                provider,
+                exc,
+            )
+
+    asyncio.create_task(_run())
+
+
+def _push_task_to_calendars(task: Task, tenant_id: str) -> None:
+    """Fire-and-forget upsert of a task's event to Google and Microsoft."""
+    if not task.due_date:
+        return
+    task_id = str(task.id)
+    is_completed = task.status == "completed"
+    kwargs = dict(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        title=task.task_type or task.title or "",
+        due_date=task.due_date.isoformat(),
+        description=task.description or "",
+        is_completed=is_completed,
+    )
+    _fire_calendar_sync(
+        google_calendar.upsert_task_event(**kwargs), task_id=task_id, provider="google"
+    )
+    _fire_calendar_sync(
+        microsoft_calendar.upsert_task_event(**kwargs),
+        task_id=task_id,
+        provider="microsoft",
+    )
+
+
+def _remove_task_from_calendars(task_id: str, tenant_id: str) -> None:
+    """Fire-and-forget removal of a task's event from Google and Microsoft."""
+    _fire_calendar_sync(
+        google_calendar.delete_task_event(tenant_id=tenant_id, task_id=task_id),
+        task_id=task_id,
+        provider="google",
+    )
+    _fire_calendar_sync(
+        microsoft_calendar.delete_task_event(tenant_id=tenant_id, task_id=task_id),
+        task_id=task_id,
+        provider="microsoft",
+    )
 
 
 @router.get("/overdue", response_model=TaskListResponse)
@@ -177,21 +240,8 @@ async def create_task(
     await db.commit()
     await db.refresh(task)
 
-    # Fire-and-forget: push to Google Calendar if due_date is set
-    if task.due_date:
-        import asyncio as _asyncio
-        from app.services.google_calendar import upsert_task_event
-
-        _asyncio.create_task(
-            upsert_task_event(
-                tenant_id=tenant_id,
-                task_id=str(task.id),
-                title=task.task_type or task.title or "",
-                due_date=task.due_date.isoformat(),
-                description=task.description or "",
-                is_completed=False,
-            )
-        )
+    # Fire-and-forget: push to Google + Microsoft calendars if due_date is set
+    _push_task_to_calendars(task, tenant_id)
 
     return TaskResponse.model_validate(task)
 
