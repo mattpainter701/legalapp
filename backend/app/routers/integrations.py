@@ -74,6 +74,17 @@ GOOGLE_ADMIN_SCOPES = (
     "https://www.googleapis.com/auth/drive"
 )
 
+# Per-user (intent=user) scopes. These MUST be used for both the authorize URL
+# and the token exchange so the two can never drift apart.
+MICROSOFT_USER_SCOPES = (
+    "offline_access User.Read Mail.Read Files.ReadWrite.All Calendars.ReadWrite"
+)
+GOOGLE_USER_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.readonly "
+    "https://www.googleapis.com/auth/calendar "
+    "https://www.googleapis.com/auth/drive"
+)
+
 
 def _expires_at(expires_in: int) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -118,11 +129,7 @@ async def microsoft_connect(
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
-    scopes = (
-        MICROSOFT_ADMIN_SCOPES
-        if intent == "admin"
-        else "offline_access Mail.Read Files.Read.All Calendars.ReadWrite"
-    )
+    scopes = MICROSOFT_ADMIN_SCOPES if intent == "admin" else MICROSOFT_USER_SCOPES
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
@@ -165,7 +172,7 @@ async def microsoft_callback(
                 "grant_type": "authorization_code",
                 "scope": MICROSOFT_ADMIN_SCOPES
                 if intent == "admin"
-                else "offline_access Mail.Read Files.Read.All",
+                else MICROSOFT_USER_SCOPES,
             },
         )
         if token_resp.status_code != 200:
@@ -309,11 +316,7 @@ async def google_connect(
     )
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/google/callback"
-    scopes = (
-        GOOGLE_ADMIN_SCOPES
-        if intent == "admin"
-        else "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar"
-    )
+    scopes = GOOGLE_ADMIN_SCOPES if intent == "admin" else GOOGLE_USER_SCOPES
 
     authorize_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
