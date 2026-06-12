@@ -604,7 +604,7 @@ export default function PluginPage() {
                     </div>
                     <div className="flex flex-col">
                       <span className="text-[13px] font-semibold text-brand-ink font-sans">Premium Model</span>
-                      <span className="text-[11px] text-brand-muted font-sans group-hover:text-brand-ink transition-colors">Claude Opus • Slower • Higher quality</span>
+                      <span className="text-[11px] text-brand-muted font-sans group-hover:text-brand-ink transition-colors">Premium • Slower • Higher quality</span>
                     </div>
                   </label>
 

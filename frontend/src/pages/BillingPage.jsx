@@ -186,12 +186,12 @@ export default function BillingPage() {
             </thead>
             <tbody className="divide-y divide-brand-line">
               <tr className="py-2">
-                <td className="py-2 text-brand-ink-2">DeepSeek (primary)</td>
+                <td className="py-2 text-brand-ink-2">Standard</td>
                 <td className="py-2 text-right text-brand-muted">$2.70 / 1M input</td>
                 <td className="py-2 text-right text-brand-muted">$0.27 / 1M input</td>
               </tr>
               <tr>
-                <td className="py-2 text-brand-ink-2">Claude Opus 4 (premium)</td>
+                <td className="py-2 text-brand-ink-2">Premium</td>
                 <td className="py-2 text-right text-brand-muted">$30 / 1M input</td>
                 <td className="py-2 text-right text-brand-muted">$3 / 1M input</td>
               </tr>
