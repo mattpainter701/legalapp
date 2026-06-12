@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react'
-import { FileText, Send, Upload, Sparkles } from 'lucide-react'
+import { FileText, Send, Upload, Sparkles, X } from 'lucide-react'
 
 export default function ChatInput({
   inputValue,
@@ -9,6 +9,8 @@ export default function ChatInput({
   onDropFiles,
   isSending,
   disabled,
+  pendingAttachments = [],
+  onRemoveAttachment,
   placeholder = "Ask a legal question or drop a document here...",
 }) {
   const textareaRef = useRef(null)
@@ -82,6 +84,30 @@ export default function ChatInput({
         </div>
       )}
       <div className="max-w-4xl mx-auto flex flex-col gap-3">
+        {/* Pending attachments */}
+        {pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {pendingAttachments.map((att) => (
+              <span
+                key={att.id}
+                className="inline-flex items-center gap-1.5 text-xs font-mono px-2 py-1 bg-brand-line/30 border border-brand-line rounded text-brand-ink"
+              >
+                <FileText size={12} />
+                {att.filename}
+                {onRemoveAttachment && (
+                  <button
+                    onClick={() => onRemoveAttachment(att.id)}
+                    className="text-brand-muted hover:text-brand-rose transition-colors"
+                    title="Remove attachment"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Quick examples dropdown */}
         <div className="flex justify-center relative">
           <button
