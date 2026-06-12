@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+export const API_BASE_URL = BASE_URL
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -896,6 +897,10 @@ export const syncCalendarDeadlines = (provider = 'microsoft') =>
 
 export const getCalendarProviders = () =>
   api.get('/auth/calendar-providers').then(r => r.data)
+
+export const connectCalendarIntegration = (provider) => {
+  window.location.href = `${BASE_URL}/integrations/${provider}/connect?intent=user`
+}
 
 // ── Document Templates ──────────────────────────────────────────────────────
 

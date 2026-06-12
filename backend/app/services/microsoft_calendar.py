@@ -7,7 +7,7 @@ import httpx
 
 from app.config import get_settings
 from app.database import async_session_maker
-from app.services.token_vault import get_fresh_token
+from app.services.token_vault import get_fresh_token, get_fresh_user_token
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -20,13 +20,22 @@ CLARITY_TASK_PROP_GUID = "b7d271f9-3a4e-4f6c-9d5a-2c8e1f0a6b3d"
 CLARITY_TASK_PROP_ID = f"String {{{CLARITY_TASK_PROP_GUID}}} Name clarity_task_id"
 
 
-async def _get_token(tenant_id: str) -> str | None:
+async def _get_token(tenant_id: str, user_id: str | None = None) -> str | None:
     try:
         async with async_session_maker() as db:
+            if user_id:
+                token = await get_fresh_user_token(
+                    db, tenant_id, user_id, "microsoft"
+                )
+                if token:
+                    return token
             return await get_fresh_token(db, tenant_id, "microsoft")
     except Exception:
         logger.warning(
-            "Failed to get Microsoft token for tenant %s", tenant_id, exc_info=True
+            "Failed to get Microsoft token for tenant %s user %s",
+            tenant_id,
+            user_id,
+            exc_info=True,
         )
         return None
 
@@ -71,6 +80,7 @@ async def upsert_task_event(
     description: str = "",
     matter_name: str = "",
     is_completed: bool = False,
+    user_id: str | None = None,
 ) -> dict | None:
     """Create or update an Outlook calendar event for a task.
 
@@ -80,7 +90,7 @@ async def upsert_task_event(
     if not title:
         return None
 
-    token = await _get_token(tenant_id)
+    token = await _get_token(tenant_id, user_id)
     if not token:
         logger.warning(
             "No Microsoft token for tenant %s — skipping calendar push", tenant_id
@@ -163,9 +173,10 @@ async def upsert_task_event(
 async def delete_task_event(
     tenant_id: str,
     task_id: str,
+    user_id: str | None = None,
 ) -> bool:
     """Remove the Outlook calendar event for a cancelled/deleted task."""
-    token = await _get_token(tenant_id)
+    token = await _get_token(tenant_id, user_id)
     if not token:
         return False
 

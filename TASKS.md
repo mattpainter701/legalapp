@@ -9,6 +9,7 @@
 - **Needs Action empty when items due today/tomorrow:** Expanded `needsAction()` to flag due-today items. Added `dueTomorrow()` classifier and "Upcoming" board column in `MatterPortfolioPage.jsx`. Due-tomorrow count shown in My Matters header.
 - **Clarity Legal first query not recognized:** Added 150ms settle delay after conversation creation before streaming call in `ChatPage.jsx`. Backend streaming endpoint retries conversation lookup once (200ms). Global `unhandledrejection` handler suppresses orphaned "Cannot respond" errors in `api.js`.
 - **Invoicing functions not admin-gated:** Locked `POST /invoices/generate`, `PATCH /invoices/{id}`, `POST /payments`, and `POST /invoices/{id}/export` to admin role via `require_admin` dependency in `billing_extended.py`. Time/expense CRUD remains open for all users to log their work.
+- **Google/OAuth, calendar sync, and integration stability:** Normalized Google userinfo scope aliases, fixed new-matter cloud provisioning imports, restored manifest icons, made admin/user integration OAuth redirects honor the configured API base URL, moved post-connect directory sync off the OAuth callback path, and aligned task calendar push with per-user calendar tokens.
 
 ---
 

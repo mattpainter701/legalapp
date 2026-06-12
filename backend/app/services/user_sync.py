@@ -207,7 +207,9 @@ class UserSyncService:
                         raise RuntimeError(
                             "Google Directory access denied (HTTP 403). "
                             "Ensure the Admin SDK API is enabled in your Google Cloud Console "
-                            "and the OAuth consent includes admin.directory.user.readonly scope. "
+                            "and that the authorizing Google account is a Workspace admin with "
+                            "Directory read access. OAuth consent must include "
+                            "admin.directory.user.readonly scope. "
                             "Re-authorize in Admin → Integrations."
                         )
                     raise RuntimeError(

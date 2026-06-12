@@ -33,7 +33,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 # Fields that affect the pushed calendar event when changed
-_CALENDAR_RELEVANT_FIELDS = {"title", "description", "task_type", "due_date", "status"}
+_CALENDAR_RELEVANT_FIELDS = {
+    "title",
+    "description",
+    "task_type",
+    "due_date",
+    "status",
+    "assigned_to_user_id",
+}
 
 
 def _fire_calendar_sync(coro: Coroutine, *, task_id: str, provider: str) -> None:
@@ -53,12 +60,18 @@ def _fire_calendar_sync(coro: Coroutine, *, task_id: str, provider: str) -> None
     asyncio.create_task(_run())
 
 
+def _task_calendar_user_id(task: Task) -> str | None:
+    user_id = task.assigned_to_user_id or task.created_by_user_id
+    return str(user_id) if user_id else None
+
+
 def _push_task_to_calendars(task: Task, tenant_id: str) -> None:
     """Fire-and-forget upsert of a task's event to Google and Microsoft."""
     if not task.due_date:
         return
     task_id = str(task.id)
     is_completed = task.status == "completed"
+    user_id = _task_calendar_user_id(task)
     kwargs = dict(
         tenant_id=tenant_id,
         task_id=task_id,
@@ -66,6 +79,7 @@ def _push_task_to_calendars(task: Task, tenant_id: str) -> None:
         due_date=task.due_date.isoformat(),
         description=task.description or "",
         is_completed=is_completed,
+        user_id=user_id,
     )
     _fire_calendar_sync(
         google_calendar.upsert_task_event(**kwargs), task_id=task_id, provider="google"
@@ -77,15 +91,21 @@ def _push_task_to_calendars(task: Task, tenant_id: str) -> None:
     )
 
 
-def _remove_task_from_calendars(task_id: str, tenant_id: str) -> None:
+def _remove_task_from_calendars(
+    task_id: str, tenant_id: str, user_id: str | None = None
+) -> None:
     """Fire-and-forget removal of a task's event from Google and Microsoft."""
     _fire_calendar_sync(
-        google_calendar.delete_task_event(tenant_id=tenant_id, task_id=task_id),
+        google_calendar.delete_task_event(
+            tenant_id=tenant_id, task_id=task_id, user_id=user_id
+        ),
         task_id=task_id,
         provider="google",
     )
     _fire_calendar_sync(
-        microsoft_calendar.delete_task_event(tenant_id=tenant_id, task_id=task_id),
+        microsoft_calendar.delete_task_event(
+            tenant_id=tenant_id, task_id=task_id, user_id=user_id
+        ),
         task_id=task_id,
         provider="microsoft",
     )
@@ -287,7 +307,10 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    previous_calendar_user_id = _task_calendar_user_id(task)
     updates = payload.model_dump(exclude_none=True)
+    calendar_changed = bool(_CALENDAR_RELEVANT_FIELDS & set(updates))
+    assignment_changed = "assigned_to_user_id" in updates
 
     # Auto-set completed_at when marking complete
     if updates.get("status") == "completed" and not task.completed_at:
@@ -300,6 +323,19 @@ async def update_task(
 
     await db.commit()
     await db.refresh(task)
+
+    if calendar_changed:
+        if assignment_changed and previous_calendar_user_id:
+            _remove_task_from_calendars(
+                str(task.id), tenant_id, previous_calendar_user_id
+            )
+        if task.status == "cancelled" or not task.due_date:
+            _remove_task_from_calendars(
+                str(task.id), tenant_id, _task_calendar_user_id(task)
+            )
+        else:
+            _push_task_to_calendars(task, tenant_id)
+
     return TaskResponse.model_validate(task)
 
 
@@ -322,8 +358,12 @@ async def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    task_id_str = str(task.id)
     await db.delete(task)
     await db.commit()
+    _remove_task_from_calendars(
+        task_id_str, tenant_id, _task_calendar_user_id(task)
+    )
 
 
 @router.post("/{task_id}/remind", status_code=202)

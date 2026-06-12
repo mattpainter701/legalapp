@@ -189,3 +189,33 @@ async def test_permissions_returns_user_count_and_freshness(
     assert data["google"]["user_count"] >= 1
     assert data["google"]["last_sync_total"] == 5
     assert data["google"]["last_sync_status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_permissions_accepts_google_userinfo_scope_aliases(
+    client, db_session, test_tenant
+):
+    db_session.add(
+        TenantCredential(
+            tenant_id=test_tenant.id,
+            provider="google",
+            encrypted_access_token="enc",
+            scopes=(
+                "openid "
+                "https://www.googleapis.com/auth/userinfo.email "
+                "https://www.googleapis.com/auth/userinfo.profile "
+                "https://www.googleapis.com/auth/admin.directory.user.readonly "
+                "https://www.googleapis.com/auth/gmail.readonly "
+                "https://www.googleapis.com/auth/drive "
+                "https://www.googleapis.com/auth/calendar"
+            ),
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/admin/permissions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["google"]["missing_required"] == []
+    assert data["google"]["health"] == "healthy"

@@ -6,6 +6,7 @@ import {
   completeOnboarding,
   skipOnboarding,
   updateOnboardingStep,
+  API_BASE_URL,
 } from '../api'
 
 const STEPS = [
@@ -53,11 +54,11 @@ export default function OnboardingWizard() {
   }
 
   const handleConnectMicrosoft = () => {
-    window.location.href = `${window.location.origin}/api/integrations/microsoft/connect?intent=admin`
+    window.location.href = `${API_BASE_URL}/integrations/microsoft/connect?intent=admin`
   }
 
   const handleConnectGoogle = () => {
-    window.location.href = `${window.location.origin}/api/integrations/google/connect?intent=admin`
+    window.location.href = `${API_BASE_URL}/integrations/google/connect?intent=admin`
   }
 
   const handleSyncUsers = async () => {

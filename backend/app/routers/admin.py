@@ -1142,6 +1142,19 @@ SCOPES_REQUIRED_GOOGLE = [
     "https://www.googleapis.com/auth/calendar",
 ]
 
+SCOPE_ALIASES_GOOGLE = {
+    "email": {"email", "https://www.googleapis.com/auth/userinfo.email"},
+    "profile": {"profile", "https://www.googleapis.com/auth/userinfo.profile"},
+}
+
+
+def _scope_is_granted(required_scope: str, granted: set[str], provider: str) -> bool:
+    if required_scope in granted:
+        return True
+    if provider == "google":
+        return bool(SCOPE_ALIASES_GOOGLE.get(required_scope, set()) & granted)
+    return False
+
 
 @router.get("/permissions")
 async def get_permissions_audit(
@@ -1194,8 +1207,15 @@ async def get_permissions_audit(
                 **freshness,
             }
         granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
-        missing = [s for s in required if s not in granted]
-        extra = [s for s in granted if s not in required]
+        granted_set = set(granted)
+        missing = [
+            s for s in required if not _scope_is_granted(s, granted_set, provider)
+        ]
+        extra = [
+            s
+            for s in granted
+            if not any(_scope_is_granted(req, {s}, provider) for req in required)
+        ]
         return {
             "connected": True,
             "granted_scopes": granted,

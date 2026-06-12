@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings } from '../api'
+import { API_BASE_URL, getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings } from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
@@ -18,6 +18,8 @@ const SCOPE_LABELS_GOOGLE = {
   'openid': 'OpenID Connect',
   'email': 'Email address',
   'profile': 'Profile info',
+  'https://www.googleapis.com/auth/userinfo.email': 'Email address',
+  'https://www.googleapis.com/auth/userinfo.profile': 'Profile info',
   'https://www.googleapis.com/auth/admin.directory.user.readonly': 'Read directory users',
   'https://www.googleapis.com/auth/gmail.readonly': 'Read Gmail messages',
   'https://www.googleapis.com/auth/drive.readonly': 'Read Google Drive files (read-only)',
@@ -117,9 +119,9 @@ export default function IntegrationsPanel() {
   const handleReauthorize = (provider) => {
     const intent = 'admin'
     if (provider === 'microsoft') {
-      window.location.href = `${window.location.origin}/api/integrations/microsoft/connect?intent=${intent}`
+      window.location.href = `${API_BASE_URL}/integrations/microsoft/connect?intent=${intent}`
     } else {
-      window.location.href = `${window.location.origin}/api/integrations/google/connect?intent=${intent}`
+      window.location.href = `${API_BASE_URL}/integrations/google/connect?intent=${intent}`
     }
   }
 

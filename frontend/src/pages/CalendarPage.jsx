@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCalendarEvents, syncCalendarDeadlines, getCalendarProviders } from '../api'
+import { getCalendarEvents, syncCalendarDeadlines, getCalendarProviders, connectCalendarIntegration } from '../api'
 import { ChevronLeft, ChevronRight, CalendarDays, ClipboardList, Building2, RefreshCw } from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,12 @@ const TYPE_STYLES = {
     label: 'bg-amber-100 text-amber-700',
     icon: CalendarDays,
   },
+  external_calendar: {
+    bg: 'bg-slate-50 border-slate-200',
+    dot: 'bg-slate-500',
+    label: 'bg-slate-100 text-slate-700',
+    icon: CalendarDays,
+  },
 }
 
 const TYPE_LABELS = {
@@ -61,6 +67,23 @@ const TYPE_LABELS = {
   matter_key_date: 'Key Date',
   renewal: 'Renewal',
   estate_deadline: 'Estate',
+  external_calendar: 'Synced',
+}
+
+function providerEventDate(evt) {
+  const raw = evt.start || evt.end
+  if (!raw) return null
+  return String(raw).slice(0, 10)
+}
+
+function mergeCalendarEvents(internalEvents, providerEvents) {
+  const seen = new Set()
+  return [...internalEvents, ...providerEvents].filter((event) => {
+    const key = event.id || `${event.event_type}-${event.date}-${event.title}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function EventChip({ event, onClick }) {
@@ -103,6 +126,8 @@ export default function CalendarPage() {
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState(null) // { type: 'success'|'error', text: string }
   const [calendarProvider, setCalendarProvider] = useState(null)
+  const [connectProvider, setConnectProvider] = useState(null)
+  const [providerEvents, setProviderEvents] = useState([])
 
   useEffect(() => {
     getCalendarProviders()
@@ -110,6 +135,7 @@ export default function CalendarPage() {
         if (data.providers && data.providers.length > 0) {
           setCalendarProvider(data.providers[0])
         }
+        setConnectProvider(data.connect_provider || data.login_provider || data.tenant_providers?.[0] || null)
       })
       .catch(() => {})
   }, [])
@@ -122,15 +148,17 @@ export default function CalendarPage() {
       // Show current month + next month for context
       const eom = endOfMonth(new Date(pivot.getFullYear(), pivot.getMonth() + 1, 1))
       const data = await getCalendarEvents(toIso(som), toIso(eom))
-      setEvents(data.events || [])
-      setTotal(data.total || 0)
+      const visibleProviderEvents = providerEvents.filter((event) => event.date >= toIso(som) && event.date <= toIso(eom))
+      const mergedEvents = mergeCalendarEvents(data.events || [], visibleProviderEvents)
+      setEvents(mergedEvents)
+      setTotal(mergedEvents.length)
     } catch (err) {
       setError('Failed to load calendar events.')
       console.error(err)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [providerEvents])
 
   useEffect(() => {
     fetchEvents(pivotDate)
@@ -158,12 +186,32 @@ export default function CalendarPage() {
     setSyncMessage(null)
     try {
       const result = await syncCalendarDeadlines(provider)
+      const mappedProviderEvents = (result.events || [])
+        .map((event) => {
+          const date = providerEventDate(event)
+          if (!date) return null
+          return {
+            id: `${provider}-${event.id}`,
+            title: event.subject || '(No title)',
+            date,
+            event_type: 'external_calendar',
+            url: null,
+            provider,
+            location: event.location || '',
+          }
+        })
+        .filter(Boolean)
+      setProviderEvents(mappedProviderEvents)
+      const mergedEvents = mergeCalendarEvents(
+        events.filter((event) => event.event_type !== 'external_calendar'),
+        mappedProviderEvents,
+      )
+      setEvents(mergedEvents)
+      setTotal(mergedEvents.length)
       setSyncMessage({
         type: 'success',
-        text: `Synced ${result.deadlines_created ?? 0} deadline(s) to ${provider === 'google' ? 'Google Calendar' : 'Microsoft Calendar'}.`,
+        text: `Synced ${result.deadlines_created ?? 0} deadline(s) and loaded ${mappedProviderEvents.length} ${provider === 'google' ? 'Google Calendar' : 'Microsoft Calendar'} event(s).`,
       })
-      // Refresh local events list after sync
-      fetchEvents(pivotDate)
     } catch (err) {
       const detail =
         err?.response?.data?.detail ||
@@ -173,6 +221,11 @@ export default function CalendarPage() {
     } finally {
       setSyncing(false)
     }
+  }
+
+  const handleConnectCalendar = () => {
+    const provider = connectProvider || 'microsoft'
+    connectCalendarIntegration(provider)
   }
 
   return (
@@ -186,7 +239,7 @@ export default function CalendarPage() {
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
           <div className="flex items-center gap-2">
-            {calendarProvider && (
+            {calendarProvider ? (
               <button
                 onClick={() => handleSync(calendarProvider)}
                 disabled={syncing}
@@ -195,6 +248,15 @@ export default function CalendarPage() {
               >
                 <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
                 {syncing ? 'Syncing…' : 'Sync Calendar'}
+              </button>
+            ) : (
+              <button
+                onClick={handleConnectCalendar}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink transition-colors"
+                title="Connect your calendar to sync events"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Connect Calendar
               </button>
             )}
           </div>

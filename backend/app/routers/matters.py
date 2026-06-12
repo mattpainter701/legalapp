@@ -1,5 +1,6 @@
 """Matter/case management router — firm-wide matters with assignments, notes, retainers, billing."""
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone
@@ -10,7 +11,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db, set_tenant_context
+from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.billing import TimeEntry, Invoice, Payment
 from app.models.communication_log import CommunicationLog

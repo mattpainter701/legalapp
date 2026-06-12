@@ -27,6 +27,7 @@ POST /litigation/matters and POST /commercial/renewals are not swallowed by the 
 import uuid
 import re
 import json
+import logging
 from datetime import date, datetime, timezone
 from typing import List
 
@@ -87,6 +88,7 @@ from app.services.retrieval_planner import RetrievalPlanner
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
+logger = logging.getLogger(__name__)
 
 # Module-level singletons (same pattern as chat router)
 llm_service = LLMService()

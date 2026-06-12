@@ -3,6 +3,7 @@ Test fixtures for Clarity Legal backend.
 """
 
 import asyncio
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -21,7 +22,10 @@ from app.models.user import User
 
 settings = get_settings()
 
-TEST_DB_URL = "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
+TEST_DB_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://test:test@localhost:5432/legalapp_test",
+)
 
 
 def pytest_collection_modifyitems(items):

@@ -17,6 +17,9 @@
   - **Live Model Catalog v2:** Derived capability tags (vision, tool_use, reasoning, research, rag, legal, large_context, structured_output) from provider model metadata; legal-specific heuristics flag models mentioning law/litigation/contract/compliance in descriptions; capability filter pills, colored badges, pricing/modality display per row; compact ApplyRouteDropdown replaces six inline routing buttons; show-all toggle removes 60-model cap
 
 ### Fixed
+- **OAuth/integration stability:** Normalized Google userinfo scope aliases in integration health checks, made admin/user integration OAuth redirects use the configured API base URL, moved post-connect directory sync to a background task, restored missing manifest icons, and improved Google Directory 403 messaging.
+- **Calendar/task sync:** Task calendar pushes now prefer the assigned/creator user's connected Google/Microsoft calendar token, remove old events on reassignment, and keep completed/uncompleted task changes reflected in external calendars.
+- **Backend bug sweep:** Fixed missing billing admin import, plugin router logger crash, new-matter cloud provisioning imports, and made the backend test database URL configurable with `TEST_DATABASE_URL`.
 - **Matter/admin/SMB stability sweep:** Fixed tenant settings UUID response
   validation, hardened matter list/detail serialization for legacy null fields,
   prevented cloud-folder share failures from aborting matter workflows, corrected

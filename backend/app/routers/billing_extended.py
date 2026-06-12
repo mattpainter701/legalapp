@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
-from app.middleware.tenant import get_current_user
+from app.middleware.tenant import get_current_user, require_admin
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
 from app.schemas.billing import (

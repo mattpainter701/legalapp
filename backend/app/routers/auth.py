@@ -20,6 +20,7 @@ from app.config import get_settings
 from app.database import enable_rls_bypass, get_db
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
+from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
@@ -1221,4 +1222,22 @@ async def get_calendar_providers(
         if token:
             providers.append(provider)
 
-    return {"providers": providers}
+    tenant_rows = await db.execute(
+        select(TenantCredential.provider).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.is_active.is_(True),
+            TenantCredential.provider.in_(["microsoft", "google"]),
+        )
+    )
+    tenant_providers = list(dict.fromkeys(tenant_rows.scalars().all()))
+    login_provider = user.oauth_provider if user.oauth_provider in providers else None
+    if not login_provider and user.oauth_provider in ("microsoft", "google"):
+        login_provider = user.oauth_provider
+    connect_provider = login_provider or (tenant_providers[0] if tenant_providers else None)
+
+    return {
+        "providers": providers,
+        "tenant_providers": tenant_providers,
+        "login_provider": login_provider,
+        "connect_provider": connect_provider,
+    }

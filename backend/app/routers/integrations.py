@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import json as _json
 import logging
 import secrets
@@ -13,7 +14,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
@@ -85,9 +86,22 @@ GOOGLE_USER_SCOPES = (
     "https://www.googleapis.com/auth/drive"
 )
 
+SCOPE_ALIASES_GOOGLE = {
+    "email": {"email", "https://www.googleapis.com/auth/userinfo.email"},
+    "profile": {"profile", "https://www.googleapis.com/auth/userinfo.profile"},
+}
+
 
 def _expires_at(expires_in: int) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
+def _scope_is_granted(required_scope: str, granted: set[str], provider: str) -> bool:
+    if required_scope in granted:
+        return True
+    if provider == "google":
+        return bool(SCOPE_ALIASES_GOOGLE.get(required_scope, set()) & granted)
+    return False
 
 
 def _require_state_user(meta: dict | None, intent: str) -> tuple[str, str]:
@@ -283,11 +297,10 @@ async def microsoft_callback(
 
         await db.commit()
 
-        # Onboarding hook: if admin just connected an integration during onboarding,
-        # auto-advance step and trigger user sync
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "microsoft")
             await _ensure_cloud_root(db, tenant_id)
+            _schedule_user_sync_post_connect(tenant_id, "microsoft")
 
     return await _post_connect_redirect(db, tenant_id, "microsoft")
 
@@ -457,11 +470,10 @@ async def google_callback(
 
         await db.commit()
 
-        # Onboarding hook: if admin just connected an integration during onboarding,
-        # auto-advance step and trigger user sync
         if intent == "admin":
             await _onboarding_post_connect(db, tenant_id, "google")
             await _ensure_cloud_root(db, tenant_id)
+            _schedule_user_sync_post_connect(tenant_id, "google")
 
     return await _post_connect_redirect(db, tenant_id, "google")
 
@@ -473,7 +485,7 @@ async def _onboarding_post_connect(
     db: AsyncSession, tenant_id: str, provider: str
 ) -> None:
     """After admin connects an integration during onboarding, advance the step
-    and auto-trigger user directory sync."""
+    so the background directory sync can run without blocking OAuth redirect."""
     import logging
 
     _logger = logging.getLogger(__name__)
@@ -490,30 +502,68 @@ async def _onboarding_post_connect(
         # Advance from step 1 (consent) to step 2 (syncing)
         if tenant.onboarding_step < 2:
             tenant.onboarding_step = 2
-
-            # Auto-trigger user directory sync
-            try:
-                from app.services.user_sync import UserSyncService
-
-                sync_svc = UserSyncService()
-                if provider == "microsoft":
-                    await sync_svc.sync_microsoft_users(db, tenant_id)
-                elif provider == "google":
-                    await sync_svc.sync_google_users(db, tenant_id)
-
-                # After sync, advance to step 3 (review)
-                tenant.onboarding_step = 3
-            except Exception as sync_err:
-                _logger.warning(
-                    "Auto user sync failed during onboarding for tenant %s: %s",
-                    tenant_id,
-                    sync_err,
-                )
-                # Stay at step 2 so admin can retry
-
             await db.commit()
     except Exception as exc:
         _logger.warning("Onboarding post-connect hook failed: %s", exc)
+
+
+def _schedule_user_sync_post_connect(tenant_id: str, provider: str) -> None:
+    """Run the best-effort directory sync outside the OAuth redirect response."""
+    asyncio.create_task(_sync_users_post_connect(tenant_id, provider))
+
+
+async def _sync_users_post_connect(
+    tenant_id: str, provider: str
+) -> None:
+    """Best-effort directory sync after admin re-authorization.
+
+    This clears stale failure state immediately when new consent/API settings are
+    valid, and records the real provider error when they are not.
+    """
+    async with async_session_maker() as db:
+        await set_tenant_context(db, tenant_id)
+        await _sync_users_post_connect_with_session(db, tenant_id, provider)
+
+
+async def _sync_users_post_connect_with_session(
+    db: AsyncSession, tenant_id: str, provider: str
+) -> None:
+    try:
+        from app.services.user_sync import UserSyncService
+
+        sync_svc = UserSyncService()
+        if provider == "microsoft":
+            await sync_svc.sync_microsoft_users(db, tenant_id)
+        elif provider == "google":
+            await sync_svc.sync_google_users(db, tenant_id)
+
+        from app.models.tenant import Tenant
+
+        result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = result.scalar_one_or_none()
+        if tenant and not tenant.onboarding_completed and tenant.onboarding_step < 3:
+            tenant.onboarding_step = 3
+            await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "Post-connect user sync failed for tenant %s provider=%s: %s",
+            tenant_id,
+            provider,
+            exc,
+        )
+        try:
+            from app.services.user_sync import UserSyncService
+
+            await UserSyncService().record_sync_failure(
+                db, tenant_id, provider, str(exc)
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record post-connect sync failure for tenant %s provider=%s",
+                tenant_id,
+                provider,
+                exc_info=True,
+            )
 
 
 async def _post_connect_redirect(
@@ -595,8 +645,11 @@ async def integration_status(
         if not granted:
             return required.split()
         granted_set = set(granted.split())
-        required_set = set(required.split())
-        return sorted(required_set - granted_set)
+        return sorted(
+            scope
+            for scope in required.split()
+            if not _scope_is_granted(scope, granted_set, provider)
+        )
 
     ms_required = MICROSOFT_ADMIN_SCOPES
     google_required = GOOGLE_ADMIN_SCOPES
