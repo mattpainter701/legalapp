@@ -25,6 +25,17 @@ from app.models.estate import (
     EstateDeadline,
     EstateAccountingEntry,
 )
+from app.models.domestic import (
+    DomesticCase,
+    DomesticParty,
+    DomesticChild,
+    CustodyArrangement,
+    SupportOrder,
+    SupportPayment,
+    ChildSupportCalculation,
+    DomesticDeadline,
+    DomesticEvent,
+)
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
 from app.models.retainer import Retainer, RetainerTransaction
@@ -86,6 +97,15 @@ __all__ = [
     "MediationAsset",
     "MediationDocument",
     "MediationProposal",
+    "DomesticCase",
+    "DomesticParty",
+    "DomesticChild",
+    "CustodyArrangement",
+    "SupportOrder",
+    "SupportPayment",
+    "ChildSupportCalculation",
+    "DomesticDeadline",
+    "DomesticEvent",
     "MatterAssignment",
     "MatterNote",
     "Retainer",
