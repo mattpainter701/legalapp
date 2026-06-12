@@ -125,7 +125,7 @@ async def upload_matter_document(
 
     doc_id = uuid.uuid4()
     safe_filename = os.path.basename(file.filename)
-    storage_path = await matter_file_store.store_matter_file(
+    storage_result = await matter_file_store.store_matter_file(
         db=db,
         tenant_id=str(user.tenant_id),
         matter_slug=matter.slug,
@@ -145,7 +145,9 @@ async def upload_matter_document(
         filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),
-        storage_path=storage_path,
+        storage_path=storage_result.storage_path,
+        storage_backend=storage_result.storage_backend,
+        storage_error=storage_result.storage_error,
         description=description,
         document_category=document_category,
     )

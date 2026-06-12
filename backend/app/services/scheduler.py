@@ -27,14 +27,16 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import or_, select, text
 
 from app.config import get_settings
-from app.database import async_session_maker
+from app.database import async_session_maker, set_tenant_context
 from app.models.plugin import Estate, Matter, MatterEvent, Renewal
 from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
 from app.models.tenant_credential import TenantCredential
+from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.user_oauth_token import UserOAuthToken
 from app.services.cloud_sync import CloudSyncService
 from app.services.email import email_service
 
@@ -78,6 +80,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Cloud Metadata Sync",
         "description": "Syncs file/email metadata from connected Google and Microsoft accounts into the cloud index.",
         "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
+    },
+    {
+        "name": "email-agent",
+        "display_name": "Email Matter Filing",
+        "description": "Scans connected user mailboxes and auto-links matter-related emails.",
+        "schedule": "Every 30 minutes",
+    },
+    {
+        "name": "calendar-sync",
+        "display_name": "Calendar Deadline Sync",
+        "description": "Pushes matter key dates to connected user calendars.",
+        "schedule": "Every hour",
     },
     {
         "name": "estate-deadline-watcher",
@@ -452,7 +466,27 @@ class LegalScheduler:
             replace_existing=True,
         )
 
-        agent_count = 6
+        # email-agent: every 30 minutes
+        self.scheduler.add_job(
+            self._guarded("email-agent", self.run_email_agent),
+            "interval",
+            minutes=30,
+            id="email-agent",
+            name="Email Matter Filing",
+            replace_existing=True,
+        )
+
+        # calendar-sync: every hour
+        self.scheduler.add_job(
+            self._guarded("calendar-sync", self.run_calendar_sync),
+            "interval",
+            hours=1,
+            id="calendar-sync",
+            name="Calendar Deadline Sync",
+            replace_existing=True,
+        )
+
+        agent_count = 8
 
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:
@@ -544,12 +578,14 @@ class LegalScheduler:
                             {
                                 "contract_name": r.contract_name,
                                 "vendor": r.vendor,
-                                "value": str(r.contract_value_annual)
-                                if r.contract_value_annual
-                                else "",
-                                "cancel_by": cancel_by.strftime("%Y-%m-%d")
-                                if cancel_by
-                                else "—",
+                                "value": (
+                                    str(r.contract_value_annual)
+                                    if r.contract_value_annual
+                                    else ""
+                                ),
+                                "cancel_by": (
+                                    cancel_by.strftime("%Y-%m-%d") if cancel_by else "—"
+                                ),
                                 "business_owner": r.business_owner or "—",
                                 "days_until": days,
                                 "status": r.status,
@@ -910,9 +946,11 @@ class LegalScheduler:
                                         "matter_name": m.matter_name,
                                         "matter_type": m.matter_type,
                                         "risk_level": m.risk_level or "unknown",
-                                        "days_since_update": days_ago
-                                        if days_ago is not None
-                                        else "never",
+                                        "days_since_update": (
+                                            days_ago
+                                            if days_ago is not None
+                                            else "never"
+                                        ),
                                     }
                                 )
 
@@ -1022,9 +1060,11 @@ class LegalScheduler:
                             to_email=assignee.email,
                             task_title=task.title,
                             due_date=due_str,
-                            assignee_name=assignee.full_name
-                            if hasattr(assignee, "full_name")
-                            else None,
+                            assignee_name=(
+                                assignee.full_name
+                                if hasattr(assignee, "full_name")
+                                else None
+                            ),
                         )
                         if sent:
                             emails_sent += 1
@@ -1229,6 +1269,155 @@ class LegalScheduler:
                 await _bypass_rls(session)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: email-agent ───────────────────────────────────────────────────
+
+    async def run_email_agent(self) -> None:
+        """Auto-file matter emails for users with delegated mail credentials."""
+        logger.info("[email-agent] Starting run")
+        from app.services.email_agent import email_agent
+        from app.services.llm import LLMService
+        from app.services.llm_routing import resolve_llm_route
+
+        async with async_session_maker() as session:
+            log = await _log_start(session, "email-agent")
+            try:
+                await _bypass_rls(session)
+
+                result = await session.execute(
+                    select(
+                        UserOAuthToken.tenant_id,
+                        UserOAuthToken.user_id,
+                        UserOAuthToken.provider,
+                        Tenant.name,
+                    )
+                    .join(Tenant, Tenant.id == UserOAuthToken.tenant_id)
+                    .where(UserOAuthToken.provider.in_(["microsoft", "google"]))
+                )
+                token_rows = result.all()
+
+                if not token_rows:
+                    await _log_complete(
+                        session, log, "No delegated mail tokens -- nothing to scan."
+                    )
+                    logger.info("[email-agent] No delegated mail tokens.")
+                    return
+
+                llm = LLMService()
+                scanned = 0
+                failed = 0
+                processed = 0
+
+                for tenant_id, user_id, provider, tenant_name in token_rows:
+                    try:
+                        await set_tenant_context(session, str(tenant_id))
+                        standard_route = await resolve_llm_route(
+                            session, str(tenant_id), use_premium=False
+                        )
+                        premium_route = await resolve_llm_route(
+                            session, str(tenant_id), use_premium=True
+                        )
+                        results = await email_agent.process_emails(
+                            db=session,
+                            tenant_id=str(tenant_id),
+                            user_id=str(user_id),
+                            provider=provider,
+                            llm_service=llm,
+                            tenant_name=tenant_name or "Clarity Legal",
+                            max_emails=20,
+                            standard_model=standard_route.model,
+                            premium_model=premium_route.model,
+                        )
+                        scanned += 1
+                        processed += len(results)
+                    except Exception as tenant_err:
+                        failed += 1
+                        logger.warning(
+                            "[email-agent] Scan failed for tenant=%s user=%s provider=%s: %s",
+                            tenant_id,
+                            user_id,
+                            provider,
+                            tenant_err,
+                        )
+                        await _bypass_rls(session)
+
+                await _bypass_rls(session)
+                summary = (
+                    f"Scanned {scanned}/{len(token_rows)} mailbox connection(s); "
+                    f"processed {processed} email(s); {failed} failed."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[email-agent] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[email-agent] Unhandled error: %s", error_msg)
+                await _bypass_rls(session)
+                await _log_failed(session, log, error_msg)
+
+    # ─── Agent: calendar-sync ────────────────────────────────────────────────
+
+    async def run_calendar_sync(self) -> None:
+        """Push matter key dates to users with delegated calendar credentials."""
+        logger.info("[calendar-sync] Starting run")
+        from app.services.calendar_sync import calendar_sync
+
+        async with async_session_maker() as session:
+            log = await _log_start(session, "calendar-sync")
+            try:
+                await _bypass_rls(session)
+
+                result = await session.execute(
+                    select(
+                        UserOAuthToken.tenant_id,
+                        UserOAuthToken.user_id,
+                        UserOAuthToken.provider,
+                    ).where(UserOAuthToken.provider.in_(["microsoft", "google"]))
+                )
+                token_rows = result.all()
+
+                if not token_rows:
+                    await _log_complete(
+                        session, log, "No delegated calendar tokens -- nothing to sync."
+                    )
+                    logger.info("[calendar-sync] No delegated calendar tokens.")
+                    return
+
+                synced = 0
+                failed = 0
+                created = 0
+
+                for tenant_id, user_id, provider in token_rows:
+                    try:
+                        result_data = await calendar_sync.sync_deadlines_to_calendar(
+                            session, str(tenant_id), str(user_id), provider
+                        )
+                        synced += 1
+                        created += result_data.get("created", 0)
+                    except Exception as tenant_err:
+                        failed += 1
+                        logger.warning(
+                            "[calendar-sync] Sync failed for tenant=%s user=%s provider=%s: %s",
+                            tenant_id,
+                            user_id,
+                            provider,
+                            tenant_err,
+                        )
+                        await _bypass_rls(session)
+
+                await _bypass_rls(session)
+                summary = (
+                    f"Synced {synced}/{len(token_rows)} calendar connection(s); "
+                    f"created {created} deadline event(s); {failed} failed."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[calendar-sync] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception("[calendar-sync] Unhandled error: %s", error_msg)
+                await _bypass_rls(session)
+                await _log_failed(session, log, error_msg)
+
     # ─── Agent: user-sync ─────────────────────────────────────────────────────
 
     async def run_user_sync(self) -> None:
@@ -1370,6 +1559,8 @@ class LegalScheduler:
             "oc-status": self.run_oc_status,
             "task-reminder": self._check_task_reminders,
             "cloud-sync": self.run_cloud_sync,
+            "email-agent": self.run_email_agent,
+            "calendar-sync": self.run_calendar_sync,
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
             "smb-heartbeat": self._check_smb_agent_heartbeats,

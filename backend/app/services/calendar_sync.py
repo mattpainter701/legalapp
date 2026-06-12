@@ -286,8 +286,27 @@ class CalendarSyncService:
         matters = result.scalars().all()
 
         created = 0
+        skipped_existing = 0
         today = date.today()
         cutoff = today + timedelta(days=90)
+        existing_keys: set[tuple[str, str]] = set()
+        try:
+            if provider == "microsoft":
+                existing_events = await self.ms_get_events(
+                    db, tenant_id, user_id, days_ahead=90
+                )
+            else:
+                existing_events = await self.google_get_events(
+                    db, tenant_id, user_id, days_ahead=90
+                )
+            existing_keys = {
+                (str(evt.get("subject") or ""), _event_start_date(evt.get("start")))
+                for evt in existing_events
+            }
+        except Exception as exc:
+            logger.warning(
+                "Could not preflight existing calendar events for dedupe: %s", exc
+            )
 
         for matter in matters:
             key_dates = matter.key_dates or {}
@@ -310,6 +329,10 @@ class CalendarSyncService:
                     subject = f"[Clarity] {label}: {matter.matter_name}"
                     body = f"Matter: {matter.matter_name}\nType: {matter.matter_type}\nStatus: {matter.status}\nDeadline: {label}"
 
+                    if (subject, d.isoformat()) in existing_keys:
+                        skipped_existing += 1
+                        continue
+
                     try:
                         if provider == "microsoft":
                             result_ev = await self.ms_create_event(
@@ -321,6 +344,7 @@ class CalendarSyncService:
                             )
                         if result_ev:
                             created += 1
+                            existing_keys.add((subject, d.isoformat()))
                     except Exception as exc:
                         logger.warning(
                             "Failed to create calendar event for matter %s: %s",
@@ -328,7 +352,20 @@ class CalendarSyncService:
                             exc,
                         )
 
-        return {"created": created, "provider": provider}
+        return {
+            "created": created,
+            "skipped_existing": skipped_existing,
+            "provider": provider,
+        }
+
+
+def _event_start_date(start: object) -> str:
+    if isinstance(start, str):
+        return start[:10]
+    if isinstance(start, dict):
+        value = start.get("date") or start.get("dateTime") or ""
+        return str(value)[:10]
+    return ""
 
 
 calendar_sync = CalendarSyncService()

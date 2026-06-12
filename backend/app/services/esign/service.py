@@ -63,7 +63,7 @@ async def complete_request_if_done(
         document_name=document_name or "document",
         signers=signers,
     )
-    storage_path = await _file_store.store_matter_file(
+    storage_result = await _file_store.store_matter_file(
         db=db,
         tenant_id=str(matter.tenant_id),
         matter_slug=matter.slug,
@@ -80,7 +80,9 @@ async def complete_request_if_done(
         filename=filename,
         content_type=content_type,
         file_size=len(content),
-        storage_path=storage_path,
+        storage_path=storage_result.storage_path,
+        storage_backend=storage_result.storage_backend,
+        storage_error=storage_result.storage_error,
         description="Executed copy / certificate of completion",
         document_category="signed",
         portal_visible=True,

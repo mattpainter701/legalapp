@@ -39,6 +39,8 @@ class MatterDocument(Base):
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    storage_backend: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    storage_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     document_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Firm controls which case files are visible in the client portal.

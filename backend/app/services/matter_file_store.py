@@ -11,6 +11,7 @@ the multi-hop folder traversal and go directly to the pre-created folder.
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,21 @@ logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
+
+
+@dataclass(frozen=True)
+class MatterFileStorageResult:
+    """Outcome of storing a matter file."""
+
+    storage_path: str
+    storage_backend: str
+    storage_error: str | None = None
+
+
+@dataclass(frozen=True)
+class _CloudStoreAttempt:
+    path: str | None = None
+    error: str | None = None
 
 
 class MatterFileStore:
@@ -40,8 +56,8 @@ class MatterFileStore:
         content_type: str,
         matter_cloud_folder: dict | None = None,
         preferred_provider: str | None = None,
-    ) -> str:
-        """Upload a file. Returns the storage path/URL.
+    ) -> MatterFileStorageResult:
+        """Upload a file. Returns the storage path/URL plus backend metadata.
 
         When matter_cloud_folder is provided, uploads directly to the pre-provisioned
         subfolder ID instead of traversing the folder tree.
@@ -67,9 +83,11 @@ class MatterFileStore:
 
         providers = _ordered_providers(preferred_provider)
 
+        cloud_errors: list[str] = []
+
         for provider in providers:
             if provider == "onedrive":
-                path = await self._try_store_onedrive(
+                attempt = await self._try_store_onedrive(
                     db,
                     tenant_id,
                     matter_slug,
@@ -79,10 +97,14 @@ class MatterFileStore:
                     content_type,
                     folder_id=onedrive_folder_id,
                 )
-                if path:
-                    return path
+                if attempt.path:
+                    return MatterFileStorageResult(
+                        storage_path=attempt.path, storage_backend="onedrive"
+                    )
+                if attempt.error:
+                    cloud_errors.append(attempt.error)
             elif provider == "google_drive":
-                path = await self._try_store_google_drive(
+                attempt = await self._try_store_google_drive(
                     db,
                     tenant_id,
                     matter_slug,
@@ -92,12 +114,21 @@ class MatterFileStore:
                     content_type,
                     folder_id=gdrive_folder_id,
                 )
-                if path:
-                    return path
+                if attempt.path:
+                    return MatterFileStorageResult(
+                        storage_path=attempt.path, storage_backend="google_drive"
+                    )
+                if attempt.error:
+                    cloud_errors.append(attempt.error)
 
-        # Fallback: local disk
-        return await self._store_local(
+        # Fallback: local disk, preserving the cloud failure reason for UI/admins.
+        local_path = await self._store_local(
             tenant_id, matter_slug, category, filename, content
+        )
+        return MatterFileStorageResult(
+            storage_path=local_path,
+            storage_backend="local",
+            storage_error="; ".join(cloud_errors)[:1000] if cloud_errors else None,
         )
 
     async def _try_store_onedrive(
@@ -110,12 +141,12 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
-    ) -> str | None:
-        """Try to store in customer's OneDrive. Returns URL or None."""
+    ) -> _CloudStoreAttempt:
+        """Try to store in customer's OneDrive. Returns URL or classified error."""
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
-                return None
+                return _CloudStoreAttempt(error="onedrive:no_token")
 
             if folder_id:
                 parent_id = folder_id
@@ -124,34 +155,49 @@ class MatterFileStore:
                     token, ["claritylegal-records", matter_slug, category]
                 )
 
-            upload_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.put(
-                    upload_url,
-                    content=content,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": content_type,
-                    },
+            async def _upload(target_parent_id: str) -> httpx.Response:
+                upload_url = f"{GRAPH_BASE}/me/drive/items/{target_parent_id}:/{filename}:/content"
+                async with httpx.AsyncClient(timeout=60) as client:
+                    return await client.put(
+                        upload_url,
+                        content=content,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": content_type,
+                        },
+                    )
+
+            resp = await _upload(parent_id)
+            if resp.status_code == 404 and folder_id:
+                logger.warning(
+                    "OneDrive folder id %s was stale for %s; retrying by path",
+                    folder_id,
+                    filename,
                 )
-                if resp.status_code in (200, 201):
-                    data = resp.json()
-                    web_url = data.get("webUrl") or data.get(
-                        "@microsoft.graph.downloadUrl", ""
-                    )
-                    logger.info("Stored %s in OneDrive: %s", filename, web_url)
-                    return web_url
-                else:
-                    logger.warning(
-                        "OneDrive upload failed for %s: %s %s",
-                        filename,
-                        resp.status_code,
-                        resp.text[:200],
-                    )
-                    return None
+                parent_id = await _ensure_onedrive_path(
+                    token, ["claritylegal-records", matter_slug, category]
+                )
+                resp = await _upload(parent_id)
+
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                web_url = data.get("webUrl") or data.get(
+                    "@microsoft.graph.downloadUrl", ""
+                )
+                logger.info("Stored %s in OneDrive: %s", filename, web_url)
+                return _CloudStoreAttempt(path=web_url)
+
+            reason = _classify_cloud_http_error("onedrive", resp)
+            logger.warning(
+                "OneDrive upload failed for %s: %s %s",
+                filename,
+                resp.status_code,
+                resp.text[:200],
+            )
+            return _CloudStoreAttempt(error=reason)
         except Exception as exc:
             logger.warning("OneDrive storage attempt failed: %s", exc)
-            return None
+            return _CloudStoreAttempt(error=f"onedrive:exception:{type(exc).__name__}")
 
     async def _try_store_google_drive(
         self,
@@ -163,12 +209,12 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
-    ) -> str | None:
-        """Try to store in customer's Google Drive. Returns URL or None."""
+    ) -> _CloudStoreAttempt:
+        """Try to store in customer's Google Drive. Returns URL or classified error."""
         try:
             token = await get_fresh_token(db, tenant_id, "google")
             if not token:
-                return None
+                return _CloudStoreAttempt(error="google_drive:no_token")
 
             if folder_id:
                 parent_id = folder_id
@@ -177,44 +223,62 @@ class MatterFileStore:
                     token, ["claritylegal-records", matter_slug, category]
                 )
 
-            metadata = {"name": filename, "parents": [parent_id]}
             boundary = "legalapp_upload_boundary"
-            body = (
-                f"--{boundary}\r\n"
-                f"Content-Type: application/json\r\n\r\n"
-                f"{json.dumps(metadata)}\r\n"
-                f"--{boundary}\r\n"
-                f"Content-Type: {content_type}\r\n\r\n"
-            ).encode("utf-8")
-            body += content
-            body += f"\r\n--{boundary}--\r\n".encode("utf-8")
 
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart",
-                    content=body,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": f"multipart/related; boundary={boundary}",
-                    },
-                )
-                if resp.status_code in (200, 201):
-                    data = resp.json()
-                    file_id = data.get("id", "")
-                    web_link = f"https://drive.google.com/file/d/{file_id}/view"
-                    logger.info("Stored %s in Google Drive: %s", filename, web_link)
-                    return web_link
-                else:
-                    logger.warning(
-                        "Google Drive upload failed for %s: %s %s",
-                        filename,
-                        resp.status_code,
-                        resp.text[:200],
+            async def _upload(target_parent_id: str) -> httpx.Response:
+                upload_metadata = {"name": filename, "parents": [target_parent_id]}
+                upload_body = (
+                    f"--{boundary}\r\n"
+                    f"Content-Type: application/json\r\n\r\n"
+                    f"{json.dumps(upload_metadata)}\r\n"
+                    f"--{boundary}\r\n"
+                    f"Content-Type: {content_type}\r\n\r\n"
+                ).encode("utf-8")
+                upload_body += content
+                upload_body += f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+                async with httpx.AsyncClient(timeout=60) as client:
+                    return await client.post(
+                        f"{GOOGLE_UPLOAD_BASE}/files?uploadType=multipart",
+                        content=upload_body,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": f"multipart/related; boundary={boundary}",
+                        },
                     )
-                    return None
+
+            resp = await _upload(parent_id)
+            if resp.status_code == 404 and folder_id:
+                logger.warning(
+                    "Google Drive folder id %s was stale for %s; retrying by path",
+                    folder_id,
+                    filename,
+                )
+                parent_id = await _ensure_gdrive_path(
+                    token, ["claritylegal-records", matter_slug, category]
+                )
+                resp = await _upload(parent_id)
+
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                file_id = data.get("id", "")
+                web_link = f"https://drive.google.com/file/d/{file_id}/view"
+                logger.info("Stored %s in Google Drive: %s", filename, web_link)
+                return _CloudStoreAttempt(path=web_link)
+
+            reason = _classify_cloud_http_error("google_drive", resp)
+            logger.warning(
+                "Google Drive upload failed for %s: %s %s",
+                filename,
+                resp.status_code,
+                resp.text[:200],
+            )
+            return _CloudStoreAttempt(error=reason)
         except Exception as exc:
             logger.warning("Google Drive storage attempt failed: %s", exc)
-            return None
+            return _CloudStoreAttempt(
+                error=f"google_drive:exception:{type(exc).__name__}"
+            )
 
     async def _store_local(
         self,
@@ -231,6 +295,20 @@ class MatterFileStore:
         full_path.write_bytes(content)
         logger.info("Stored %s locally at %s", filename, full_path)
         return str(full_path)
+
+
+def _classify_cloud_http_error(provider: str, resp: httpx.Response) -> str:
+    """Return a stable reason code for cloud upload failures."""
+    status = resp.status_code
+    if status in (401, 403):
+        bucket = "auth"
+    elif status == 404:
+        bucket = "stale_folder"
+    elif status in (408, 409, 423, 425, 429) or status >= 500:
+        bucket = "retryable"
+    else:
+        bucket = "http"
+    return f"{provider}:{bucket}:http_{status}"
 
 
 def _extract_subfolder_id(

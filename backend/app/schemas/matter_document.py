@@ -14,6 +14,8 @@ class MatterDocumentResponse(BaseModel):
     filename: str
     content_type: str | None
     file_size: int | None
+    storage_backend: str | None = None
+    storage_error: str | None = None
     description: str | None
     document_category: str | None
     portal_visible: bool = False
