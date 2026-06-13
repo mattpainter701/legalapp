@@ -112,7 +112,10 @@ def _join_context_sections(*sections: str | None) -> str:
 
 
 async def _build_attachment_context(
-    db: AsyncSession, user, attachment_ids: list[str] | None
+    db: AsyncSession,
+    user,
+    conversation: Conversation,
+    attachment_ids: list[str] | None,
 ) -> str:
     """Inject session-attachment text directly into context (Tier 1 — no embeddings).
 
@@ -130,6 +133,7 @@ async def _build_attachment_context(
                 select(Document).where(
                     Document.id == aid,
                     Document.tenant_id == user.tenant_id,
+                    Document.conversation_id == conversation.id,
                 )
             )
             doc = doc_result.scalar_one_or_none()
@@ -143,9 +147,10 @@ async def _build_attachment_context(
                 chunk_result = await db.execute(
                     _sa_text(
                         "SELECT content FROM chunks WHERE document_id = CAST(:doc_id AS uuid) "
+                        "AND tenant_id = CAST(:tenant_id AS uuid) "
                         "ORDER BY chunk_index LIMIT 100"
                     ),
-                    {"doc_id": str(doc.id)},
+                    {"doc_id": str(doc.id), "tenant_id": str(user.tenant_id)},
                 )
                 text = "\n\n".join(row[0] for row in chunk_result.fetchall())
             elif doc.storage_path and os.path.exists(doc.storage_path):
@@ -657,7 +662,10 @@ async def send_message(
 
     # 3b. Session attachments — inject file text directly into context (no embeddings)
     attachment_context = await _build_attachment_context(
-        db, user, body.attachment_ids if hasattr(body, "attachment_ids") else None
+        db,
+        user,
+        conv,
+        body.attachment_ids if hasattr(body, "attachment_ids") else None,
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
@@ -1093,7 +1101,10 @@ async def stream_message(
 
     # 3b. Session attachments — inject file text directly into context (no embeddings)
     attachment_context = await _build_attachment_context(
-        db, user, body.attachment_ids if hasattr(body, "attachment_ids") else None
+        db,
+        user,
+        conv,
+        body.attachment_ids if hasattr(body, "attachment_ids") else None,
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)

@@ -13,6 +13,7 @@ import pytest_asyncio
 
 from app.models.tenant_credential import TenantCredential
 from app.models.plugin import Matter
+from app.models.user_oauth_token import UserOAuthToken
 from app.services.teams import TEAMS_REQUIRED_SCOPES
 
 
@@ -161,6 +162,84 @@ class TestLinkCRUD:
         assert first.status_code == 201
         assert second.status_code == 201
         assert first.json()["id"] == second.json()["id"]
+
+    async def test_create_rejects_matter_outside_tenant(
+        self, client, ms_connected, db_session, test_user
+    ):
+        matter = await _add_matter(db_session, uuid.uuid4(), test_user.id)
+
+        create = await client.post(
+            "/api/integrations/teams/links",
+            json={
+                "matter_id": str(matter.id),
+                "team_id": "team-1",
+                "channel_id": "chan-1",
+            },
+        )
+
+        assert create.status_code == 404
+        assert create.json()["detail"] == "Matter not found"
+
+    async def test_notification_settings_reject_matter_outside_tenant(
+        self, client, ms_connected, db_session, test_user
+    ):
+        matter = await _add_matter(db_session, uuid.uuid4(), test_user.id)
+
+        resp = await client.put(
+            "/api/integrations/teams/notification-settings",
+            json={
+                "settings": [
+                    {
+                        "event_type": "deadline_approaching",
+                        "team_id": "team-1",
+                        "channel_id": "chan-1",
+                        "matter_id": str(matter.id),
+                        "is_enabled": True,
+                    }
+                ]
+            },
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Matter not found"
+
+
+@pytest.mark.asyncio
+async def test_get_token_falls_back_when_user_token_lacks_teams_scopes(
+    db_session, test_tenant, test_user, ms_connected, monkeypatch
+):
+    from app.services import teams as teams_service
+
+    user_token = UserOAuthToken(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        provider="microsoft",
+        encrypted_access_token="placeholder",
+        encrypted_refresh_token=None,
+        scopes="offline_access User.Read",
+    )
+    db_session.add(user_token)
+    await db_session.commit()
+
+    calls = {"user": 0, "tenant_credential_id": None}
+
+    async def fake_user_token(*args, **kwargs):
+        calls["user"] += 1
+        return "user-token"
+
+    async def fake_tenant_token(db, tenant_id, provider, credential_id=None):
+        calls["tenant_credential_id"] = credential_id
+        return "tenant-token"
+
+    monkeypatch.setattr(teams_service, "get_fresh_user_token", fake_user_token)
+    monkeypatch.setattr(teams_service, "get_fresh_token", fake_tenant_token)
+
+    token = await teams_service._get_token(str(test_tenant.id), str(test_user.id))
+
+    assert token == "tenant-token"
+    assert calls["user"] == 0
+    assert calls["tenant_credential_id"] == str(ms_connected.id)
 
 
 # ── Dispatcher ────────────────────────────────────────────────────────────
