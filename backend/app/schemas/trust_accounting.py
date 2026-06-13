@@ -27,6 +27,10 @@ class TrustAccountUpdate(BaseModel):
     account_name: Optional[str] = None
     bank_name: Optional[str] = None
     account_number_masked: Optional[str] = None
+    bank_account_id: Optional[str] = Field(
+        default=None,
+        description="Link this client ledger to a pooled trust bank account",
+    )
     minimum_balance: Optional[Decimal] = Field(default=None, ge=0)
     auto_replenish_enabled: Optional[bool] = None
     auto_replenish_amount: Optional[Decimal] = Field(default=None, ge=0)
@@ -41,6 +45,7 @@ class TrustAccountResponse(BaseModel):
     account_name: str
     bank_name: Optional[str] = None
     account_number_masked: Optional[str] = None
+    bank_account_id: Optional[str] = None
     current_balance: Decimal
     minimum_balance: Optional[Decimal] = None
     auto_replenish_enabled: bool
@@ -163,3 +168,114 @@ class ReconciliationResponse(BaseModel):
     reconciling_items: list[ReconciliationLine] = []
     notes: Optional[str] = None
     reconciled_at: Optional[datetime] = None
+
+
+# ── Pooled Trust Bank Accounts ──────────────────────────────────────────────
+
+
+class TrustBankAccountCreate(BaseModel):
+    account_name: str = Field(..., min_length=1, max_length=300)
+    bank_name: Optional[str] = None
+    account_number_masked: Optional[str] = Field(
+        default=None, max_length=10, description="Last 4 digits only"
+    )
+    notes: Optional[str] = None
+
+
+class TrustBankAccountUpdate(BaseModel):
+    account_name: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_number_masked: Optional[str] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class TrustBankAccountResponse(BaseModel):
+    id: str
+    tenant_id: str
+    account_name: str
+    bank_name: Optional[str] = None
+    account_number_masked: Optional[str] = None
+    is_active: bool
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    book_balance: Decimal = Field(
+        ..., description="Sum of current_balance across all linked client ledgers"
+    )
+    client_ledger_count: int = Field(
+        ..., description="Number of client (per-matter) ledgers linked to this account"
+    )
+
+    model_config = {"from_attributes": True}
+
+
+class TrustBankAccountListResponse(BaseModel):
+    items: list[TrustBankAccountResponse]
+    total: int
+    total_book_balance: Decimal
+
+
+# ── Pooled Reconciliation ────────────────────────────────────────────────────
+
+
+class PooledReconciliationRequest(BaseModel):
+    bank_balance: Decimal = Field(..., description="Balance per bank statement")
+    as_of_date: Optional[date] = None
+    outstanding_deposits: Decimal = Field(
+        default=0, description="Deposits not yet on bank statement"
+    )
+    outstanding_disbursements: Decimal = Field(
+        default=0, description="Disbursements not yet cleared"
+    )
+    notes: Optional[str] = None
+
+
+class TrustReconciliationSnapshot(BaseModel):
+    """A persisted three-way reconciliation snapshot."""
+
+    id: str
+    bank_account_id: Optional[str] = None
+    trust_account_id: Optional[str] = None
+    as_of_date: date
+    bank_balance: Decimal
+    book_balance: Decimal
+    trust_liability: Decimal
+    unallocated: Decimal
+    outstanding_deposits: Decimal
+    outstanding_disbursements: Decimal
+    adjusted_bank_balance: Decimal
+    difference: Decimal
+    is_reconciled: bool
+    reconciling_items: list[ReconciliationLine] = []
+    notes: Optional[str] = None
+    reconciled_by: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Client Ledger Statement ─────────────────────────────────────────────────
+
+
+class TrustLedgerStatementLine(BaseModel):
+    transaction_date: date
+    transaction_type: str
+    description: str
+    amount: Decimal = Field(
+        ..., description="Signed amount: positive for credit, negative for debit"
+    )
+    running_balance: Decimal
+    reference_number: Optional[str] = None
+
+
+class TrustLedgerStatementResponse(BaseModel):
+    trust_account_id: str
+    account_name: str
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    opening_balance: Decimal
+    closing_balance: Decimal
+    total_credits: Decimal
+    total_debits: Decimal
+    lines: list[TrustLedgerStatementLine] = []

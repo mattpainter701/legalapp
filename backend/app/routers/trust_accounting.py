@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
-from app.models.trust_accounting import TrustAccount, TrustTransaction
+from app.models.trust_accounting import (
+    TrustAccount,
+    TrustTransaction,
+)
 from app.models.plugin import Matter
 from app.schemas.trust_accounting import (
     TrustAccountCreate,
@@ -173,6 +176,8 @@ async def update_trust_account(
 
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
+        if key == "bank_account_id" and value is not None:
+            value = uuid.UUID(value)
         setattr(account, key, value)
 
     await db.commit()
@@ -448,6 +453,29 @@ async def reconcile_trust_account(
             txn.reconciled_at = reconciled_at
         await db.commit()
 
+    # Persist a reconciliation snapshot (trust_account_id set, bank_account_id
+    # left null — this is a per-matter client-ledger reconciliation).
+    snapshot = TrustReconciliation(
+        tenant_id=user.tenant_id,
+        bank_account_id=None,
+        trust_account_id=account.id,
+        as_of_date=as_of_date,
+        bank_balance=body.bank_balance,
+        book_balance=trust_liability,
+        trust_liability=trust_liability,
+        unallocated=unallocated,
+        outstanding_deposits=body.outstanding_deposits,
+        outstanding_disbursements=body.outstanding_disbursements,
+        adjusted_bank_balance=adjusted_bank,
+        difference=difference,
+        is_reconciled=is_reconciled,
+        reconciling_items=[line.model_dump(mode="json") for line in reconciling_items],
+        notes=body.notes,
+        reconciled_by=user.id,
+    )
+    db.add(snapshot)
+    await db.commit()
+
     return ReconciliationResponse(
         trust_account_id=str(account.id),
         as_of_date=as_of_date,
@@ -542,4 +570,508 @@ async def get_reconciliation_status(
         is_reconciled=len(unreconciled) == 0,
         difference=Decimal("0"),
         reconciling_items=reconciling_items,
+    )
+
+
+# ── Pooled Trust Bank Accounts ───────────────────────────────────────────────
+#
+# A pooled bank account represents a single real-world IOLTA bank account.
+# Multiple per-matter client ledgers (TrustAccount rows) can be linked to one
+# pooled bank account via TrustAccount.bank_account_id. The "book balance" of
+# a pooled bank account is the sum of the current_balance of every linked
+# client ledger — i.e. the firm's total trust liability for that bank account.
+
+
+async def _bank_account_book_balance(
+    db: AsyncSession, tenant_id: uuid.UUID, bank_account_id: uuid.UUID
+) -> tuple[Decimal, int]:
+    """Compute (book_balance, client_ledger_count) for a pooled bank account."""
+    result = await db.execute(
+        select(
+            func.coalesce(func.sum(TrustAccount.current_balance), 0),
+            func.count(TrustAccount.id),
+        ).where(
+            TrustAccount.tenant_id == tenant_id,
+            TrustAccount.bank_account_id == bank_account_id,
+        )
+    )
+    total, count = result.one()
+    return Decimal(total), int(count)
+
+
+@router.post("/bank-accounts", status_code=201)
+async def create_trust_bank_account(
+    body: TrustBankAccountCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TrustBankAccountResponse:
+    """Create a pooled IOLTA bank account."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    bank_account = TrustBankAccount(
+        tenant_id=user.tenant_id,
+        account_name=body.account_name,
+        bank_name=body.bank_name,
+        account_number_masked=body.account_number_masked,
+        notes=body.notes,
+    )
+    db.add(bank_account)
+    await db.commit()
+    await db.refresh(bank_account)
+
+    return TrustBankAccountResponse(
+        **TrustBankAccountResponse.model_validate(bank_account).model_dump(
+            exclude={"book_balance", "client_ledger_count"}
+        ),
+        book_balance=Decimal("0"),
+        client_ledger_count=0,
+    )
+
+
+@router.get("/bank-accounts")
+async def list_trust_bank_accounts(
+    request: Request,
+    is_active: bool | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> TrustBankAccountListResponse:
+    """List pooled IOLTA bank accounts with computed book balances."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    stmt = select(TrustBankAccount).where(TrustBankAccount.tenant_id == user.tenant_id)
+    if is_active is not None:
+        stmt = stmt.where(TrustBankAccount.is_active.is_(is_active))
+    stmt = stmt.order_by(TrustBankAccount.account_name)
+
+    result = await db.execute(stmt)
+    accounts = result.scalars().all()
+
+    items = []
+    total_book_balance = Decimal("0")
+    for account in accounts:
+        book_balance, count = await _bank_account_book_balance(
+            db, user.tenant_id, account.id
+        )
+        total_book_balance += book_balance
+        items.append(
+            TrustBankAccountResponse(
+                **TrustBankAccountResponse.model_validate(account).model_dump(
+                    exclude={"book_balance", "client_ledger_count"}
+                ),
+                book_balance=book_balance,
+                client_ledger_count=count,
+            )
+        )
+
+    return TrustBankAccountListResponse(
+        items=items,
+        total=len(items),
+        total_book_balance=total_book_balance,
+    )
+
+
+@router.get("/bank-accounts/{bank_account_id}")
+async def get_trust_bank_account(
+    bank_account_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TrustBankAccountResponse:
+    """Get a single pooled bank account with computed book balance."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TrustBankAccount).where(
+            TrustBankAccount.id == bank_account_id,
+            TrustBankAccount.tenant_id == user.tenant_id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Trust bank account not found")
+
+    book_balance, count = await _bank_account_book_balance(
+        db, user.tenant_id, account.id
+    )
+
+    return TrustBankAccountResponse(
+        **TrustBankAccountResponse.model_validate(account).model_dump(
+            exclude={"book_balance", "client_ledger_count"}
+        ),
+        book_balance=book_balance,
+        client_ledger_count=count,
+    )
+
+
+@router.patch("/bank-accounts/{bank_account_id}")
+async def update_trust_bank_account(
+    bank_account_id: str,
+    body: TrustBankAccountUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TrustBankAccountResponse:
+    """Update a pooled bank account."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TrustBankAccount).where(
+            TrustBankAccount.id == bank_account_id,
+            TrustBankAccount.tenant_id == user.tenant_id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Trust bank account not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(account, key, value)
+
+    await db.commit()
+    await db.refresh(account)
+
+    book_balance, count = await _bank_account_book_balance(
+        db, user.tenant_id, account.id
+    )
+
+    return TrustBankAccountResponse(
+        **TrustBankAccountResponse.model_validate(account).model_dump(
+            exclude={"book_balance", "client_ledger_count"}
+        ),
+        book_balance=book_balance,
+        client_ledger_count=count,
+    )
+
+
+# ── Pooled Three-Way Reconciliation ─────────────────────────────────────────
+#
+# For a pooled bank account:
+#
+#   book_balance = trust_liability = sum of current_balance across all client
+#                                     ledgers linked to this bank account
+#
+#   unallocated  = funds received into the pool but not yet credited to any
+#                   client ledger. This pass has no separate "unallocated
+#                   holding" construct distinct from the client ledgers
+#                   themselves (every deposit transaction is posted directly
+#                   to a client ledger), so unallocated is always 0 here.
+#                   The field is retained for forward-compatibility with a
+#                   future "unallocated funds" holding account, and to keep
+#                   the same bank == book + unallocated identity used by the
+#                   per-account reconciliation.
+#
+#   adjusted_bank_balance = bank_balance + outstanding_deposits
+#                            - outstanding_disbursements
+#
+#   difference = adjusted_bank_balance - (trust_liability + unallocated)
+#   is_reconciled = (difference == 0)
+
+
+@router.post("/bank-accounts/{bank_account_id}/reconcile")
+async def reconcile_trust_bank_account(
+    bank_account_id: str,
+    body: PooledReconciliationRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TrustReconciliationSnapshot:
+    """Perform and persist a three-way reconciliation for a pooled bank account."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TrustBankAccount).where(
+            TrustBankAccount.id == bank_account_id,
+            TrustBankAccount.tenant_id == user.tenant_id,
+        )
+    )
+    bank_account = result.scalar_one_or_none()
+    if not bank_account:
+        raise HTTPException(status_code=404, detail="Trust bank account not found")
+
+    as_of_date = body.as_of_date or date.today()
+
+    # Trust liability / book balance = sum of all linked client ledgers
+    ledgers_result = await db.execute(
+        select(TrustAccount).where(
+            TrustAccount.tenant_id == user.tenant_id,
+            TrustAccount.bank_account_id == bank_account.id,
+        )
+    )
+    ledgers = ledgers_result.scalars().all()
+    trust_liability = sum((a.current_balance for a in ledgers), Decimal("0"))
+    book_balance = trust_liability
+
+    # Unallocated — see note above: always 0 in this pass (no separate
+    # unallocated-funds holding account exists yet).
+    unallocated = Decimal("0")
+
+    adjusted_bank = (
+        body.bank_balance + body.outstanding_deposits - body.outstanding_disbursements
+    )
+    difference = adjusted_bank - (trust_liability + unallocated)
+    is_reconciled = difference == Decimal("0")
+
+    # Reconciling items: one line per linked client ledger, plus any
+    # outstanding deposit/disbursement adjustments supplied by the user.
+    reconciling_items: list[ReconciliationLine] = []
+    for ledger in ledgers:
+        reconciling_items.append(
+            ReconciliationLine(
+                description=f"[{ledger.account_name}] client ledger balance",
+                amount=ledger.current_balance,
+                is_outstanding=False,
+            )
+        )
+
+    if body.outstanding_deposits:
+        reconciling_items.append(
+            ReconciliationLine(
+                description="Outstanding deposits (not yet on bank statement)",
+                amount=body.outstanding_deposits,
+                is_outstanding=True,
+            )
+        )
+
+    if body.outstanding_disbursements:
+        reconciling_items.append(
+            ReconciliationLine(
+                description="Outstanding disbursements (not yet cleared)",
+                amount=-body.outstanding_disbursements,
+                is_outstanding=True,
+            )
+        )
+
+    snapshot = TrustReconciliation(
+        tenant_id=user.tenant_id,
+        bank_account_id=bank_account.id,
+        trust_account_id=None,
+        as_of_date=as_of_date,
+        bank_balance=body.bank_balance,
+        book_balance=book_balance,
+        trust_liability=trust_liability,
+        unallocated=unallocated,
+        outstanding_deposits=body.outstanding_deposits,
+        outstanding_disbursements=body.outstanding_disbursements,
+        adjusted_bank_balance=adjusted_bank,
+        difference=difference,
+        is_reconciled=is_reconciled,
+        reconciling_items=[line.model_dump(mode="json") for line in reconciling_items],
+        notes=body.notes,
+        reconciled_by=user.id,
+    )
+    db.add(snapshot)
+    await db.commit()
+    await db.refresh(snapshot)
+
+    return TrustReconciliationSnapshot(
+        id=str(snapshot.id),
+        bank_account_id=str(snapshot.bank_account_id),
+        trust_account_id=None,
+        as_of_date=snapshot.as_of_date,
+        bank_balance=snapshot.bank_balance,
+        book_balance=snapshot.book_balance,
+        trust_liability=snapshot.trust_liability,
+        unallocated=snapshot.unallocated,
+        outstanding_deposits=snapshot.outstanding_deposits,
+        outstanding_disbursements=snapshot.outstanding_disbursements,
+        adjusted_bank_balance=snapshot.adjusted_bank_balance,
+        difference=snapshot.difference,
+        is_reconciled=snapshot.is_reconciled,
+        reconciling_items=reconciling_items,
+        notes=snapshot.notes,
+        reconciled_by=str(snapshot.reconciled_by) if snapshot.reconciled_by else None,
+        created_at=snapshot.created_at,
+    )
+
+
+@router.get("/bank-accounts/{bank_account_id}/reconciliations")
+async def list_trust_bank_account_reconciliations(
+    bank_account_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[TrustReconciliationSnapshot]:
+    """List persisted reconciliation snapshots for a pooled bank account, newest first."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    bank_result = await db.execute(
+        select(TrustBankAccount).where(
+            TrustBankAccount.id == bank_account_id,
+            TrustBankAccount.tenant_id == user.tenant_id,
+        )
+    )
+    if not bank_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Trust bank account not found")
+
+    result = await db.execute(
+        select(TrustReconciliation)
+        .where(
+            TrustReconciliation.tenant_id == user.tenant_id,
+            TrustReconciliation.bank_account_id == uuid.UUID(bank_account_id),
+        )
+        .order_by(TrustReconciliation.created_at.desc())
+    )
+    snapshots = result.scalars().all()
+
+    return [
+        TrustReconciliationSnapshot(
+            id=str(s.id),
+            bank_account_id=str(s.bank_account_id) if s.bank_account_id else None,
+            trust_account_id=str(s.trust_account_id) if s.trust_account_id else None,
+            as_of_date=s.as_of_date,
+            bank_balance=s.bank_balance,
+            book_balance=s.book_balance,
+            trust_liability=s.trust_liability,
+            unallocated=s.unallocated,
+            outstanding_deposits=s.outstanding_deposits,
+            outstanding_disbursements=s.outstanding_disbursements,
+            adjusted_bank_balance=s.adjusted_bank_balance,
+            difference=s.difference,
+            is_reconciled=s.is_reconciled,
+            reconciling_items=[
+                ReconciliationLine(**item) for item in (s.reconciling_items or [])
+            ],
+            notes=s.notes,
+            reconciled_by=str(s.reconciled_by) if s.reconciled_by else None,
+            created_at=s.created_at,
+        )
+        for s in snapshots
+    ]
+
+
+# ── Client Ledger Statement ─────────────────────────────────────────────────
+
+
+@router.get("/accounts/{account_id}/statement")
+async def get_trust_account_statement(
+    account_id: str,
+    request: Request,
+    start: date | None = Query(None),
+    end: date | None = Query(None),
+    format: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a client (per-matter) trust ledger statement.
+
+    Returns a running-balance statement of all transactions in the optional
+    [start, end] date window (inclusive). ``opening_balance`` is the signed
+    sum of all transactions strictly before ``start`` (or 0 if ``start`` is
+    omitted). Pass ``?format=csv`` for a CSV download.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    account_result = await db.execute(
+        select(TrustAccount).where(
+            TrustAccount.id == account_id,
+            TrustAccount.tenant_id == user.tenant_id,
+        )
+    )
+    account = account_result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Trust account not found")
+
+    def _signed_amount(txn: TrustTransaction) -> Decimal:
+        if txn.transaction_type in CREDIT_TYPES:
+            return txn.amount
+        if txn.transaction_type in DEBIT_TYPES:
+            return -txn.amount
+        # adjustment — sign carried by the stored amount itself
+        return txn.amount
+
+    # Opening balance = signed sum of all transactions strictly before `start`
+    opening_balance = Decimal("0")
+    if start is not None:
+        opening_result = await db.execute(
+            select(TrustTransaction).where(
+                TrustTransaction.trust_account_id == uuid.UUID(account_id),
+                TrustTransaction.transaction_date < start,
+            )
+        )
+        for txn in opening_result.scalars().all():
+            opening_balance += _signed_amount(txn)
+
+    # Transactions within [start, end] (inclusive), ordered chronologically
+    stmt = select(TrustTransaction).where(
+        TrustTransaction.trust_account_id == uuid.UUID(account_id)
+    )
+    if start is not None:
+        stmt = stmt.where(TrustTransaction.transaction_date >= start)
+    if end is not None:
+        stmt = stmt.where(TrustTransaction.transaction_date <= end)
+    stmt = stmt.order_by(
+        TrustTransaction.transaction_date.asc(), TrustTransaction.created_at.asc()
+    )
+
+    result = await db.execute(stmt)
+    transactions = result.scalars().all()
+
+    lines: list[TrustLedgerStatementLine] = []
+    running_balance = opening_balance
+    total_credits = Decimal("0")
+    total_debits = Decimal("0")
+    for txn in transactions:
+        signed = _signed_amount(txn)
+        running_balance += signed
+        if signed >= 0:
+            total_credits += signed
+        else:
+            total_debits += -signed
+        lines.append(
+            TrustLedgerStatementLine(
+                transaction_date=txn.transaction_date,
+                transaction_type=txn.transaction_type,
+                description=txn.description,
+                amount=signed,
+                running_balance=running_balance,
+                reference_number=txn.reference_number,
+            )
+        )
+
+    closing_balance = running_balance
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=[
+                "transaction_date",
+                "transaction_type",
+                "description",
+                "amount",
+                "running_balance",
+                "reference_number",
+            ],
+        )
+        writer.writeheader()
+        for line in lines:
+            writer.writerow(
+                {
+                    "transaction_date": line.transaction_date.isoformat(),
+                    "transaction_type": line.transaction_type,
+                    "description": line.description,
+                    "amount": str(line.amount),
+                    "running_balance": str(line.running_balance),
+                    "reference_number": line.reference_number or "",
+                }
+            )
+        buffer.seek(0)
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=trust_statement.csv"},
+        )
+
+    return TrustLedgerStatementResponse(
+        trust_account_id=str(account.id),
+        account_name=account.account_name,
+        period_start=start,
+        period_end=end,
+        opening_balance=opening_balance,
+        closing_balance=closing_balance,
+        total_credits=total_credits,
+        total_debits=total_debits,
+        lines=lines,
     )

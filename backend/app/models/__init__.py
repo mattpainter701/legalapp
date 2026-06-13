@@ -65,6 +65,12 @@ from app.models.smb_file_index import SmbFileIndex
 from app.models.smb_access_log import SmbAccessLog
 from app.models.matter_smb_share import MatterSmbShare
 from app.models.api_access_log import ApiAccessLog
+from app.models.trust_accounting import (
+    TrustAccount,
+    TrustTransaction,
+    TrustBankAccount,
+    TrustReconciliation,
+)
 
 __all__ = [
     "Tenant",
@@ -134,4 +140,8 @@ __all__ = [
     "SmbAccessLog",
     "MatterSmbShare",
     "ApiAccessLog",
+    "TrustAccount",
+    "TrustTransaction",
+    "TrustBankAccount",
+    "TrustReconciliation",
 ]
