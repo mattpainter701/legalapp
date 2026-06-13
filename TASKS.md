@@ -63,28 +63,9 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [ ] Public scheduling from synced calendars (consult slots → calendar event creation)
 - [ ] Scheduled post-sprint 13; design deferred to reduce scope creep
 
-#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPIKED → GO
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — DROPPED
 
-**SPIKE RESULT (2026-06-12):** LawToolBox API confirmed viable. Decision: **GO** — schedule Phase 1 for Sprint 14.
-
-**Findings:**
-- API: REST (OAuth2), production-grade, confirmed live in Clio + MyCase + 10+ others
-- Coverage: All 50 US states + federal courts + Canada (2,300+ jurisdictions)
-- Pricing: Direct $22-42/user/month (volume discounts 80+); partner pricing TBD (expected comparable)
-- TTM: 2-4 weeks realistic for MVP integration
-- SLA: Not published; enterprise adoption (Clio/MyCase) proves production-grade
-- Next step: Send sales inquiry (prepared); await NDA + API docs + sandbox access
-- Decision memo: `docs/research/1305-decision-memo.md`
-
-**Phase 1 (P1, MEDIUM, SPRINT 14)** — LawToolBox Integration
-- [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
-- [ ] `services/deadline_engine.py` LawToolBox API client (OAuth2 token exchange, deadline calculation, rule-update polling)
-- [ ] `routers/deadlines.py` CRUD + calculate-from-trigger + bulk sync endpoints; hook task-reminder scheduler
-- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage` + timeline
-- [ ] Acceptance: Calculate deadlines for test matter in 3+ jurisdictions (verify against published rules); sync to calendar; confirm <500ms response time
-
-**Phase 2 (ARCHIVED)** — Native CourtListener Engine
-- ~~Evaluate native engine seeded from CourtListener~~ — ARCHIVED 2026-06-12 (speculative, only if LawToolBox fails)
+**DROPPED (2026-06-13):** LawToolBox path abandoned. No customer demand pull; not pursuing commercial deadline-engine integration at this time. Revisit only if litigation firms explicitly cite court-rules deadlines as a blocker. Research artifacts retained in `docs/research/1305-*.md` for reference.
 
 #### 1306. Two-Way SMS / Text (P1, SMALL–MEDIUM) — PENDING
 - [ ] Migration `049_sms`: SMS fields on `communication_log` (`external_id`, `direction`, `from_number`, `to_number`); tenant Twilio config
@@ -152,7 +133,7 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 - [ ] Email-to-matter auto-filing (+ include in conflict search)
 - [ ] Conflict-check hardening: indexed partial/phonetic search (rival Tabs3)
 
-**External dependencies to line up early:** e-sign provider (Dropbox Sign/DocuSign, 1302), LawToolBox commercial API (1305 spike), Twilio account+number (1306).
+**External dependencies to line up early:** e-sign provider (Dropbox Sign/DocuSign, 1302), Twilio account+number (1306).
 
 ### M4 — Platform hardening (P1)
 
@@ -188,18 +169,9 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 ### M2 — Intake & Docketing (P1)
 
-#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — SPRINT 14
+#### 1305. Court-Rules Deadline / Docketing Engine (P1, MEDIUM) — DROPPED
 
-**SPIKE COMPLETED (2026-06-12):** LawToolBox API confirmed viable. Phase 1 scheduled.
-
-**Phase 1 (P1, MEDIUM, SPRINT 14)** — LawToolBox Integration
-- [ ] Migration `048_deadlines`: `deadline_rulesets`, `matter_deadlines`; migrate `Matter.key_dates` JSON → rows
-- [ ] `services/deadline_engine.py` LawToolBox API client (OAuth2 token exchange, deadline calculation, rule-update polling)
-- [ ] `routers/deadlines.py` CRUD + calculate-from-trigger + bulk sync endpoints; hook task-reminder scheduler
-- [ ] Frontend: Deadlines section on `MatterDetailPage`; surface on `CalendarPage` + timeline
-- [ ] Acceptance: Calculate deadlines for test matter in 3+ jurisdictions (verify against published rules); sync to calendar; confirm <500ms response time
-
-**Files:** `backend/app/migrations/versions/048_deadlines.py`, `backend/app/services/deadline_engine.py`, `backend/app/routers/deadlines.py`, `frontend/src/pages/MatterDetailPage.jsx`, `frontend/src/components/DeadlinesCard.jsx`, `frontend/src/api.js`
+**DROPPED (2026-06-13):** LawToolBox path abandoned (see M2 backlog entry above). Not pursuing commercial deadline-engine integration without explicit customer demand.
 
 ---
 
