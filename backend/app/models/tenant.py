@@ -152,6 +152,17 @@ class TenantSettings(Base):
     # Notes/audit info
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Firm branding (Task 1303) — used on branded PDF exports (e.g. trust
+    # ledger statements). All nullable; fall back to Tenant.name /
+    # Tenant.address when unset.
+    firm_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    firm_logo_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    firm_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    firm_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    firm_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    firm_website: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    firm_pdf_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
