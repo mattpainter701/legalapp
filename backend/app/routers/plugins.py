@@ -408,6 +408,7 @@ async def _build_plugin_cloud_context(
             hits=hits,
             tenant_id=tenant_id,
             max_chars=settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+            user_id=user_id,
         )
         serializable_hits = [
             {

@@ -79,7 +79,7 @@ class UserSyncService:
         async with httpx.AsyncClient() as client:
             url = f"{GRAPH_BASE}/users"
             params = {
-                "$select": "id,mail,userPrincipalName,displayName,givenName,surname,jobTitle,department",
+                "$select": "id,mail,userPrincipalName,displayName,givenName,surname,jobTitle,department,accountEnabled",
                 "$top": 200,
             }
 
@@ -100,6 +100,10 @@ class UserSyncService:
             await set_tenant_context(db, tenant_id)
 
             for ms_user in all_users:
+                if ms_user.get("accountEnabled") is False:
+                    skipped += 1
+                    continue
+
                 email = (
                     (ms_user.get("mail") or ms_user.get("userPrincipalName") or "")
                     .lower()
@@ -177,7 +181,6 @@ class UserSyncService:
                 "customer": "my_customer",
                 "maxResults": 200,
                 "projection": "basic",
-                "query": "isSuspended=false",
             }
 
             all_users = []
@@ -225,6 +228,10 @@ class UserSyncService:
             await set_tenant_context(db, tenant_id)
 
             for g_user in all_users:
+                if g_user.get("suspended") is True:
+                    skipped += 1
+                    continue
+
                 email = (g_user.get("primaryEmail") or "").lower().strip()
                 if not email:
                     skipped += 1

@@ -57,3 +57,27 @@ class MatterDocument(Base):
         server_default="now()",
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    @property
+    def cloud_url(self) -> str | None:
+        """External edit/view URL when this document is backed by customer cloud."""
+        if self.storage_path and self.storage_path.startswith(("http://", "https://")):
+            return self.storage_path
+        return None
+
+    @property
+    def storage_backend(self) -> str:
+        """Best-effort storage backend label derived from the stored location."""
+        cloud_url = self.cloud_url
+        if not cloud_url:
+            return "local"
+        lowered = cloud_url.lower()
+        if "drive.google.com" in lowered or "docs.google.com" in lowered:
+            return "google_drive"
+        if (
+            "sharepoint.com" in lowered
+            or "1drv.ms" in lowered
+            or "onedrive.live.com" in lowered
+        ):
+            return "onedrive"
+        return "cloud"

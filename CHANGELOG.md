@@ -21,6 +21,9 @@
 ### Changed
 - **Task 1305 — Court-Rules Deadline Engine: dropped.** LawToolBox commercial-API path abandoned (no customer-demand pull); research artifacts retained under `docs/research/1305-*.md`. Revisit only on explicit litigation-firm demand.
 
+### Fixed
+- **Cloud workspace integrations:** Matter documents now expose live OneDrive/Google Drive links for cloud-backed files, matter cloud folders can be force-provisioned and synced from the matter Documents tab, cloud file lists are scoped to the provisioned matter folder, cloud content fetches preserve the requesting user's token context, email inbox scans dedupe provider messages, disabled/suspended directory users are skipped, and Google Directory sync no longer sends the invalid `isSuspended=false` query.
+
 ## [0.14.0] — 2026-06-06
 
 ### Sprint 12 — LiteLLM Gateway & AI Operations Control Plane

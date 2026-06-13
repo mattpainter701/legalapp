@@ -76,6 +76,10 @@ async def initialize_cloud_root_folder(
                 exc,
             )
 
+    if result:
+        result["path"] = "claritylegal-records"
+        result["subfolders"] = list(MATTER_SUBFOLDERS)
+
     return result
 
 
@@ -96,7 +100,13 @@ async def initialize_matter_folders(
         ms_token = await get_fresh_token(db, tenant_id, "microsoft")
         if ms_token:
             try:
-                root_id = cloud_root["onedrive"]["id"]
+                root_id = (
+                    cloud_root["onedrive"].get("id")
+                    or cloud_root["onedrive"].get("matters_folder_id")
+                    or cloud_root["onedrive"].get("matter_folder_id")
+                )
+                if not root_id:
+                    raise RuntimeError("OneDrive cloud root missing folder id")
                 matter_folder = await _ensure_onedrive_folder(
                     ms_token, matter_slug, root_id
                 )
@@ -123,7 +133,13 @@ async def initialize_matter_folders(
         g_token = await get_fresh_token(db, tenant_id, "google")
         if g_token:
             try:
-                root_id = cloud_root["google_drive"]["id"]
+                root_id = (
+                    cloud_root["google_drive"].get("id")
+                    or cloud_root["google_drive"].get("matters_folder_id")
+                    or cloud_root["google_drive"].get("matter_folder_id")
+                )
+                if not root_id:
+                    raise RuntimeError("Google Drive cloud root missing folder id")
                 matter_folder = await _ensure_gdrive_folder(
                     g_token, matter_slug, root_id
                 )
@@ -143,6 +159,13 @@ async def initialize_matter_folders(
                     matter_slug,
                     exc,
                 )
+
+    if result:
+        result["path"] = matter_relative_path(matter_slug)
+        result["subfolder_paths"] = {
+            sub: f"{matter_relative_path(matter_slug)}/{sub}"
+            for sub in MATTER_SUBFOLDERS
+        }
 
     return result
 

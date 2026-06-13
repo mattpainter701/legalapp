@@ -13,6 +13,7 @@ class _FakeResp:
     def __init__(self, status_code, payload):
         self.status_code = status_code
         self._payload = payload
+        self.text = ""
 
     def json(self):
         return self._payload
@@ -23,6 +24,7 @@ class _FakeClient:
 
     def __init__(self, payload):
         self._payload = payload
+        self.calls = []
 
     async def __aenter__(self):
         return self
@@ -31,6 +33,7 @@ class _FakeClient:
         return False
 
     async def get(self, url, headers=None, params=None):
+        self.calls.append({"url": url, "headers": headers, "params": dict(params or {})})
         return _FakeResp(200, self._payload)
 
 
@@ -163,6 +166,110 @@ async def test_sync_does_not_relicense_existing_user(db_session, test_tenant):
     ).scalar_one()
     # Regression B: existing license untouched by sync
     assert owner.license_active is True
+
+
+@pytest.mark.asyncio
+async def test_ms_sync_skips_disabled_directory_users(db_session, test_tenant):
+    db_session.add(
+        TenantCredential(
+            tenant_id=test_tenant.id,
+            provider="microsoft",
+            encrypted_access_token="enc",
+            scopes="User.Read.All",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    payload = {
+        "value": [
+            {
+                "id": "ms-disabled",
+                "mail": "disabled@testfirm.com",
+                "displayName": "Disabled User",
+                "accountEnabled": False,
+            },
+            {
+                "id": "ms-enabled",
+                "mail": "enabled@testfirm.com",
+                "displayName": "Enabled User",
+                "accountEnabled": True,
+            },
+        ]
+    }
+    fake_client = _FakeClient(payload)
+    with (
+        patch(
+            "app.services.user_sync.get_fresh_token", new=AsyncMock(return_value="tok")
+        ),
+        patch(
+            "app.services.user_sync.httpx.AsyncClient",
+            return_value=fake_client,
+        ),
+    ):
+        res = await UserSyncService().sync_microsoft_users(
+            db_session, str(test_tenant.id)
+        )
+
+    assert res["created"] == 1
+    assert res["skipped"] == 1
+    assert "accountEnabled" in fake_client.calls[0]["params"]["$select"]
+
+    disabled = (
+        await db_session.execute(select(User).where(User.email == "disabled@testfirm.com"))
+    ).scalar_one_or_none()
+    assert disabled is None
+
+
+@pytest.mark.asyncio
+async def test_google_sync_filters_suspended_users_locally(db_session, test_tenant):
+    db_session.add(
+        TenantCredential(
+            tenant_id=test_tenant.id,
+            provider="google",
+            encrypted_access_token="enc",
+            scopes="https://www.googleapis.com/auth/admin.directory.user.readonly",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    payload = {
+        "users": [
+            {
+                "id": "g-suspended",
+                "primaryEmail": "suspended@testfirm.com",
+                "name": {"fullName": "Suspended User"},
+                "suspended": True,
+            },
+            {
+                "id": "g-active",
+                "primaryEmail": "active@testfirm.com",
+                "name": {"fullName": "Active User"},
+                "suspended": False,
+            },
+        ]
+    }
+    fake_client = _FakeClient(payload)
+    with (
+        patch(
+            "app.services.user_sync.get_fresh_token", new=AsyncMock(return_value="tok")
+        ),
+        patch(
+            "app.services.user_sync.httpx.AsyncClient",
+            return_value=fake_client,
+        ),
+    ):
+        res = await UserSyncService().sync_google_users(db_session, str(test_tenant.id))
+
+    assert res["created"] == 1
+    assert res["skipped"] == 1
+    assert "query" not in fake_client.calls[0]["params"]
+
+    suspended = (
+        await db_session.execute(select(User).where(User.email == "suspended@testfirm.com"))
+    ).scalar_one_or_none()
+    assert suspended is None
 
 
 @pytest.mark.asyncio

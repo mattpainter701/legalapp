@@ -153,13 +153,18 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
 
     root = await cloud_init.initialize_cloud_root_folder(None, "tenant-1")
 
-    assert root["path"] == "claritylegal"
-    assert root["matters_path"] == "claritylegal/matters"
-    assert root["subfolders"] == ["emails", "uploads", "msgs", "chat history"]
+    assert root["path"] == "claritylegal-records"
+    assert root["subfolders"] == [
+        "emails",
+        "documents",
+        "pleadings",
+        "correspondence",
+        "billing",
+    ]
     assert "onedrive" in root
     assert "google_drive" in root
-    assert root["onedrive"]["matters_folder_id"] == "od:od:root:claritylegal:matters"
-    assert root["google_drive"]["matters_folder_id"] == "gd:gd:root:claritylegal:matters"
+    assert root["onedrive"]["id"] == "od:root:claritylegal-records"
+    assert root["google_drive"]["id"] == "gd:root:claritylegal-records"
 
 
 @pytest.mark.asyncio
@@ -194,12 +199,13 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
         },
     )
 
-    assert metadata["path"] == "claritylegal/matters/acme-v-smith"
+    assert metadata["path"] == "claritylegal-records/acme-v-smith"
     assert metadata["subfolder_paths"] == {
-        "emails": "claritylegal/matters/acme-v-smith/emails",
-        "uploads": "claritylegal/matters/acme-v-smith/uploads",
-        "msgs": "claritylegal/matters/acme-v-smith/msgs",
-        "chat history": "claritylegal/matters/acme-v-smith/chat history",
+        "emails": "claritylegal-records/acme-v-smith/emails",
+        "documents": "claritylegal-records/acme-v-smith/documents",
+        "pleadings": "claritylegal-records/acme-v-smith/pleadings",
+        "correspondence": "claritylegal-records/acme-v-smith/correspondence",
+        "billing": "claritylegal-records/acme-v-smith/billing",
     }
     assert set(metadata["onedrive"]["subfolders"]) == set(metadata["subfolder_paths"])
     assert set(metadata["google_drive"]["subfolders"]) == set(metadata["subfolder_paths"])

@@ -4,6 +4,7 @@ import uuid as uuid_mod
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -32,6 +33,26 @@ async def _auto_log_and_task(
 
         # Match email to matters by sender/recipient
         matched_matter_ids = await _match_email_to_matters(db, tid, email)
+        message_id = email.get("id")
+        provider = email.get("provider") or email.get("source")
+        external_ref = email.get("external_ref") or (
+            f"{provider}:{message_id}" if provider and message_id else message_id
+        )
+
+        if external_ref:
+            possible_refs = [external_ref]
+            if message_id and message_id != external_ref:
+                possible_refs.append(message_id)
+            existing = await db.execute(
+                select(CommunicationLog.id).where(
+                    CommunicationLog.tenant_id == tid,
+                    CommunicationLog.channel == "email",
+                    CommunicationLog.external_ref.in_(possible_refs),
+                )
+            )
+            if existing.scalar_one_or_none():
+                logger.info("Skipping already logged email %s", external_ref)
+                return
 
         log = CommunicationLog(
             tenant_id=tid,
@@ -43,7 +64,7 @@ async def _auto_log_and_task(
             body=email.get("body_preview"),
             created_by_user_id=uid,
             occurred_at=datetime.now(timezone.utc),
-            external_ref=email.get("id"),
+            external_ref=external_ref,
             matter_id=matched_matter_ids[0] if matched_matter_ids else None,
         )
         db.add(log)
@@ -86,7 +107,7 @@ async def _auto_log_and_task(
                     created_by_user_id=uid,
                     assigned_to_user_id=uid,
                     source="email_agent",
-                    external_ref=email.get("id"),
+                    external_ref=external_ref,
                     matter_id=matched_matter_ids[0] if matched_matter_ids else None,
                 )
                 db.add(task)
@@ -306,6 +327,9 @@ Draft a professional response email. The attorney will review before sending. Do
             raise ValueError(f"Unknown email provider: {provider}")
 
         for email in emails:
+            if email.get("id") and not email.get("external_ref"):
+                email["external_ref"] = f"{provider}:{email['id']}"
+            email.setdefault("provider", provider)
             classification = await self.classify_email(
                 email,
                 llm_service,

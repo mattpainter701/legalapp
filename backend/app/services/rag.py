@@ -358,6 +358,7 @@ async def hybrid_rag_query(
                                     hits=cloud_hits,
                                     tenant_id=tenant_id,
                                     max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                                    user_id=user_id,
                                 )
                             )
                             cloud_context = await build_cloud_context(

@@ -5,11 +5,13 @@ from app.routers import platform as platform_router
 from app.routers import platform_llm as platform_llm_router
 from app.models.llm_provider_key import LLMProviderKey
 
+TEST_PLATFORM_KEY = "test-platform-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
 
 @pytest.mark.asyncio
 async def test_platform_llm_config_round_trip(client: AsyncClient):
-    platform_router.settings.PLATFORM_SECRET_KEY = "test-platform-key"
-    headers = {"X-Platform-Key": "test-platform-key"}
+    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
+    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
 
     update = await client.put(
         "/api/platform/llm-config",
@@ -58,8 +60,8 @@ def test_provider_route_builder_litellm_model_prefixes():
 async def test_provider_route_builder_rejects_mismatched_key_provider(
     client: AsyncClient, db_session
 ):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = "test-platform-key"
-    headers = {"X-Platform-Key": "test-platform-key"}
+    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
+    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
 
     key = LLMProviderKey(
         name="DeepSeek test key",
@@ -90,8 +92,8 @@ async def test_provider_route_builder_rejects_mismatched_key_provider(
 
 @pytest.mark.asyncio
 async def test_provider_key_invalid_uuid_returns_400(client: AsyncClient):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = "test-platform-key"
-    headers = {"X-Platform-Key": "test-platform-key"}
+    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
+    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
 
     resp = await client.delete(
         "/api/platform/llm/provider-keys/not-a-uuid",

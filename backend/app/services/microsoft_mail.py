@@ -37,7 +37,9 @@ async def ms_read_mail_user(
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    url = f"{GRAPH_BASE}/users/{user_id}/messages"
+    # The OAuth token is delegated for the signed-in Microsoft user. The local
+    # Clarity user_id is not an Entra/Graph user id, so use /me for mailbox reads.
+    url = f"{GRAPH_BASE}/me/messages"
     params = {
         "$filter": f"receivedDateTime ge {since}",
         "$top": max_results,

@@ -17,6 +17,8 @@ class MatterDocumentResponse(BaseModel):
     description: str | None
     document_category: str | None
     portal_visible: bool = False
+    storage_backend: str = "local"
+    cloud_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

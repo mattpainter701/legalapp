@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 
+DOCUMENT_CATEGORY_FOLDER_MAP = {
+    "pleading": "pleadings",
+    "pleadings": "pleadings",
+    "correspondence": "correspondence",
+    "billing": "billing",
+    "contract": "documents",
+    "evidence": "documents",
+    "other": "documents",
+    "general": "documents",
+}
+
 
 class MatterFileStore:
     """Store matter files in the customer's connected cloud storage."""
@@ -58,11 +69,12 @@ class MatterFileStore:
         )
 
         # Resolve per-provider folder IDs from matter_cloud_folder if available
+        canonical_folder = _document_folder_for_category(category)
         onedrive_folder_id = _extract_subfolder_id(
-            matter_cloud_folder, "onedrive", category
+            matter_cloud_folder, "onedrive", canonical_folder
         )
         gdrive_folder_id = _extract_subfolder_id(
-            matter_cloud_folder, "google_drive", category
+            matter_cloud_folder, "google_drive", canonical_folder
         )
 
         providers = _ordered_providers(preferred_provider)
@@ -73,7 +85,7 @@ class MatterFileStore:
                     db,
                     tenant_id,
                     matter_slug,
-                    category,
+                    canonical_folder,
                     filename,
                     content,
                     content_type,
@@ -86,7 +98,7 @@ class MatterFileStore:
                     db,
                     tenant_id,
                     matter_slug,
-                    category,
+                    canonical_folder,
                     filename,
                     content,
                     content_type,
@@ -97,7 +109,7 @@ class MatterFileStore:
 
         # Fallback: local disk
         return await self._store_local(
-            tenant_id, matter_slug, category, filename, content
+            tenant_id, matter_slug, canonical_folder, filename, content
         )
 
     async def _try_store_onedrive(
@@ -245,7 +257,28 @@ def _extract_subfolder_id(
     subfolders = provider_data.get("subfolders")
     if not subfolders:
         return None
-    return subfolders.get(category)
+    for key in _folder_lookup_keys(category):
+        if key in subfolders:
+            return subfolders[key]
+    return None
+
+
+def _document_folder_for_category(category: str | None) -> str:
+    """Map UI document categories to provisioned matter cloud folders."""
+    normalized = (category or "general").strip().lower()
+    return DOCUMENT_CATEGORY_FOLDER_MAP.get(normalized, normalized or "documents")
+
+
+def _folder_lookup_keys(category: str) -> list[str]:
+    """Return compatible subfolder keys across historical matter layouts."""
+    keys = [category]
+    if category == "documents":
+        keys.append("uploads")
+    elif category == "pleadings":
+        keys.extend(["pleading", "documents", "uploads"])
+    elif category != "uploads":
+        keys.extend(["documents", "uploads"])
+    return list(dict.fromkeys(keys))
 
 
 def _ordered_providers(preferred: str | None) -> list[str]:

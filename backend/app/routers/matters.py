@@ -51,8 +51,10 @@ from app.schemas.matter import (
 from app.services.plugins.manifest import get_plugin_manifest
 from app.models.tenant_credential import TenantCredential
 from app.services.cloud_search import CloudSearchService
+from app.services.cloud_sync import CloudSyncService
 
 _cloud_search = CloudSearchService()
+_cloud_sync = CloudSyncService()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
@@ -79,6 +81,101 @@ async def _get_matter_or_404(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
     return matter
+
+
+async def _share_matter_with_assignees(
+    db: AsyncSession, tenant_id: uuid.UUID, matter: Matter
+) -> None:
+    """Best-effort cloud folder sharing for users assigned to this matter."""
+    if not matter.cloud_folder:
+        return
+
+    user_rows = await db.execute(
+        select(User.email).where(
+            User.tenant_id == tenant_id,
+            User.id.in_(
+                select(MatterAssignment.user_id).where(
+                    MatterAssignment.matter_id == matter.id
+                )
+            ),
+        )
+    )
+    assigned_emails = [email for (email,) in user_rows.all() if email]
+    if not assigned_emails:
+        return
+
+    try:
+        await share_matter_folders(
+            db=db,
+            tenant_id=str(tenant_id),
+            cloud_folder=matter.cloud_folder,
+            user_emails=assigned_emails,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to share cloud folders for matter %s",
+            matter.id,
+            exc_info=True,
+        )
+
+
+async def _build_matter_cloud_files_response(
+    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, matter: Matter
+) -> dict:
+    """Return live cloud files scoped to the provisioned matter folder when possible."""
+    tenant_id_str = str(tenant_id)
+
+    cred_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == tenant_id,
+            TenantCredential.is_active.is_(True),
+        )
+    )
+    creds = cred_result.scalars().all()
+    if not creds:
+        return {"files": [], "connected": False}
+
+    keywords = [w for w in (matter.matter_name or "").split() if len(w) > 2][:6]
+    if matter.case_number:
+        keywords.insert(0, matter.case_number)
+
+    plan = {
+        "keywords": keywords,
+        "max_hits": 20,
+        "date_after": "",
+        "sources": ["drive", "onedrive", "sharepoint"],
+    }
+
+    try:
+        hits = await _cloud_search.search(
+            db=db,
+            plan=plan,
+            tenant_id=tenant_id_str,
+            user_id=str(user_id),
+            matter_cloud_folder=matter.cloud_folder,
+        )
+    except Exception:
+        logger.warning(
+            "Matter cloud file search failed for matter %s", matter.id, exc_info=True
+        )
+        return {"files": [], "connected": True}
+
+    return {
+        "connected": True,
+        "files": [
+            {
+                "id": h.object_id,
+                "title": h.title,
+                "snippet": h.snippet,
+                "url": h.url,
+                "source": h.source,
+                "provider": h.provider,
+                "mime_type": h.mime_type,
+                "modified_time": h.modified_time,
+            }
+            for h in hits
+        ],
+    }
 
 
 def _validate_primary_plugin(primary_plugin: str | None) -> str | None:
@@ -126,6 +223,7 @@ async def _provision_cloud_folders(
     """
     try:
         async with async_session_maker() as db:
+            await set_tenant_context(db, tenant_id)
             cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=tenant_id,
@@ -137,6 +235,9 @@ async def _provision_cloud_folders(
                 matter = result.scalar_one_or_none()
                 if matter:
                     matter.cloud_folder = cloud_folder
+                    await _share_matter_with_assignees(
+                        db, uuid.UUID(tenant_id), matter
+                    )
                     await db.commit()
     except Exception:
         logger.warning(
@@ -1981,62 +2082,12 @@ async def get_matter_cloud_files(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search cloud integrations for files related to this matter by name."""
-    tenant_id = str(current_user.tenant_id)
-    await set_tenant_context(db, tenant_id)
-
+    """Search cloud integrations for files related to this matter."""
+    await set_tenant_context(db, str(current_user.tenant_id))
     matter = await _get_matter_or_404(db, matter_id, current_user.tenant_id)
-
-    # Check if tenant has any active cloud credentials
-    cred_result = await db.execute(
-        select(TenantCredential).where(
-            TenantCredential.tenant_id == current_user.tenant_id,
-            TenantCredential.is_active.is_(True),
-        )
+    return await _build_matter_cloud_files_response(
+        db, current_user.tenant_id, current_user.id, matter
     )
-    creds = cred_result.scalars().all()
-
-    if not creds:
-        return {"files": [], "connected": False}
-
-    # Search using matter name as keywords
-    keywords = [w for w in matter.matter_name.split() if len(w) > 2][:6]
-    if matter.case_number:
-        keywords.insert(0, matter.case_number)
-
-    plan = {
-        "keywords": keywords,
-        "max_hits": 20,
-        "date_after": "",
-        "sources": None,
-    }
-
-    try:
-        hits = await _cloud_search.search(
-            db=db,
-            plan=plan,
-            tenant_id=tenant_id,
-            user_id=str(current_user.id),
-        )
-    except Exception:
-        return {"files": [], "connected": True}
-
-    return {
-        "connected": True,
-        "files": [
-            {
-                "id": h.object_id,
-                "title": h.title,
-                "snippet": h.snippet,
-                "url": h.url,
-                "source": h.source,
-                "provider": h.provider,
-                "mime_type": h.mime_type,
-                "modified_time": h.modified_time,
-            }
-            for h in hits
-        ],
-    }
 
 
 # ── Cloud folder endpoints ───────────────────────────────────────────────────
@@ -2125,32 +2176,7 @@ async def provision_matter_cloud_folder(
         )
 
     matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}
-
-    # Share with current assignees
-    user_rows = await db.execute(
-        select(User.email).where(
-            User.tenant_id == tenant_id,
-            User.id.in_(
-                select(MatterAssignment.user_id).where(
-                    MatterAssignment.matter_id == matter.id
-                )
-            ),
-        )
-    )
-    assigned_emails = [email for (email,) in user_rows.all() if email]
-    try:
-        await share_matter_folders(
-            db=db,
-            tenant_id=str(tenant_id),
-            cloud_folder=matter.cloud_folder,
-            user_emails=assigned_emails,
-        )
-    except Exception:
-        logger.warning(
-            "Failed to share cloud folders for matter %s",
-            matter.id,
-            exc_info=True,
-        )
+    await _share_matter_with_assignees(db, tenant_id, matter)
 
     await db.commit()
     await db.refresh(matter)
@@ -2159,6 +2185,63 @@ async def provision_matter_cloud_folder(
         status="provisioned",
         providers=matter.cloud_folder,
     )
+
+
+@router.post("/{matter_id}/cloud-folder/sync")
+async def sync_matter_cloud_folder(
+    matter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Provision if needed, refresh cloud metadata, and return matter cloud files."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    tenant_id_str = str(tenant_id)
+    await set_tenant_context(db, tenant_id_str)
+
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    provisioned = False
+
+    if not matter.cloud_folder:
+        tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = tenant_result.scalar_one_or_none()
+        if not tenant or not tenant.cloud_root_folder:
+            raise HTTPException(
+                status_code=422,
+                detail="No cloud credentials configured for this tenant",
+            )
+
+        cloud_folder = await initialize_matter_folders(
+            db=db,
+            tenant_id=tenant_id_str,
+            matter_slug=matter.slug,
+            cloud_root=tenant.cloud_root_folder,
+        )
+        if not cloud_folder:
+            raise HTTPException(
+                status_code=422,
+                detail="Cloud folder provisioning returned empty result",
+            )
+        matter.cloud_folder = {**(matter.cloud_folder or {}), **cloud_folder}
+        provisioned = True
+
+    await _share_matter_with_assignees(db, tenant_id, matter)
+    await db.commit()
+    await db.refresh(matter)
+
+    sync_counts = await _cloud_sync.sync_all(db, tenant_id_str)
+    files = await _build_matter_cloud_files_response(
+        db, tenant_id, current_user.id, matter
+    )
+
+    return {
+        "status": "synced",
+        "provisioned": provisioned,
+        "providers": matter.cloud_folder or {},
+        "sync_counts": sync_counts,
+        "connected": files.get("connected", False),
+        "files": files.get("files", []),
+    }
 
 
 # ── Slug generation ───────────────────────────────────────────────────────────

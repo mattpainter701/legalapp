@@ -286,6 +286,7 @@ class CloudSearchService:
         hit: CloudHit,
         tenant_id: str,
         max_chars: int = 2000,
+        user_id: str | None = None,
     ) -> str | None:
         """Fetch full text content for a single hit.
 
@@ -299,20 +300,20 @@ class CloudSearchService:
             if hit.provider == "google":
                 if hit.source == "drive":
                     return await self._fetch_google_drive_content(
-                        db, hit, tenant_id, max_chars
+                        db, hit, tenant_id, max_chars, user_id
                     )
                 if hit.source == "gmail":
                     return await self._fetch_gmail_content(
-                        db, hit, tenant_id, max_chars
+                        db, hit, tenant_id, max_chars, user_id
                     )
             elif hit.provider == "microsoft":
                 if hit.source in ("onedrive", "sharepoint"):
                     return await self._fetch_onedrive_content(
-                        db, hit, tenant_id, max_chars
+                        db, hit, tenant_id, max_chars, user_id
                     )
                 if hit.source == "outlook":
                     return await self._fetch_outlook_content(
-                        db, hit, tenant_id, max_chars
+                        db, hit, tenant_id, max_chars, user_id
                     )
         except Exception:
             logger.exception(
@@ -326,6 +327,7 @@ class CloudSearchService:
         hits: list[CloudHit],
         tenant_id: str,
         max_chars: int = 2000,
+        user_id: str | None = None,
     ) -> list[dict]:
         """Fetch content for multiple hits.
 
@@ -334,7 +336,9 @@ class CloudSearchService:
         """
         results: list[dict] = []
         for hit in hits:
-            content = await self.fetch_content(db, hit, tenant_id, max_chars)
+            content = await self.fetch_content(
+                db, hit, tenant_id, max_chars, user_id=user_id
+            )
             results.append({"hit": hit, "content": content})
         return results
 
@@ -719,8 +723,9 @@ class CloudSearchService:
         hit: CloudHit,
         tenant_id: str,
         max_chars: int,
+        user_id: str | None,
     ) -> str | None:
-        token = await self._get_google_token(db, tenant_id, None)
+        token = await self._get_google_token(db, tenant_id, user_id)
         if not token:
             return hit.snippet or None
 
@@ -755,8 +760,9 @@ class CloudSearchService:
         hit: CloudHit,
         tenant_id: str,
         max_chars: int,
+        user_id: str | None,
     ) -> str | None:
-        token = await self._get_google_token(db, tenant_id, None)
+        token = await self._get_google_token(db, tenant_id, user_id)
         if not token:
             return hit.snippet or None
 
@@ -783,8 +789,9 @@ class CloudSearchService:
         hit: CloudHit,
         tenant_id: str,
         max_chars: int,
+        user_id: str | None,
     ) -> str | None:
-        token = await self._get_microsoft_token(db, tenant_id, None)
+        token = await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
             return hit.snippet or None
 
@@ -809,8 +816,9 @@ class CloudSearchService:
         hit: CloudHit,
         tenant_id: str,
         max_chars: int,
+        user_id: str | None,
     ) -> str | None:
-        token = await self._get_microsoft_token(db, tenant_id, None)
+        token = await self._get_microsoft_token(db, tenant_id, user_id)
         if not token:
             return hit.snippet or None
 

@@ -8,6 +8,8 @@ import {
   getMatterDocumentDownloadUrl,
   getMatterCloudFolder,
   provisionMatterCloudFolder,
+  syncMatterCloudFolder,
+  getMatterCloudFiles,
 } from '../api'
 import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff } from 'lucide-react'
 
@@ -39,9 +41,17 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function CloudFolderCard({ matterId }) {
+function storageLabel(backend) {
+  if (backend === 'google_drive') return 'Google Drive'
+  if (backend === 'onedrive') return 'OneDrive'
+  if (backend === 'cloud') return 'Cloud'
+  return 'Local'
+}
+
+function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
   const [status, setStatus] = useState(null)
   const [provisioning, setProvisioning] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState(null)
 
   useEffect(() => {
@@ -54,13 +64,36 @@ function CloudFolderCard({ matterId }) {
     try {
       const result = await provisionMatterCloudFolder(matterId)
       setStatus(result)
+      onFolderChange?.(result.providers || {})
       setToast({ type: 'success', msg: 'Cloud folder set up successfully.' })
     } catch (err) {
       setToast({ type: 'error', msg: err?.response?.data?.detail || 'Provisioning failed.' })
     } finally {
       setProvisioning(false)
     }
-  }, [matterId])
+  }, [matterId, onFolderChange])
+
+  const handleSync = useCallback(async () => {
+    setSyncing(true)
+    setToast(null)
+    try {
+      const result = await syncMatterCloudFolder(matterId)
+      setStatus({
+        status: result.providers ? 'provisioned' : result.status,
+        providers: result.providers || {},
+      })
+      onFolderChange?.(result.providers || {})
+      onSynced?.(result.files || [])
+      setToast({
+        type: 'success',
+        msg: `Synced ${result.files?.length ?? 0} cloud file${result.files?.length === 1 ? '' : 's'}.`,
+      })
+    } catch (err) {
+      setToast({ type: 'error', msg: err?.response?.data?.detail || 'Cloud sync failed.' })
+    } finally {
+      setSyncing(false)
+    }
+  }, [matterId, onFolderChange, onSynced])
 
   if (!status) return null
 
@@ -76,7 +109,7 @@ function CloudFolderCard({ matterId }) {
       </div>
 
       {isProvisioned ? (
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {od?.url && (
             <a
               href={od.url}
@@ -97,6 +130,14 @@ function CloudFolderCard({ matterId }) {
               <ExternalLink size={13} /> Open in Google Drive
             </a>
           )}
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink text-[12px] font-sans font-medium rounded-lg hover:bg-brand-bg-soft disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Sync folder'}
+          </button>
         </div>
       ) : (
         <div className="flex items-center gap-3">
@@ -108,6 +149,14 @@ function CloudFolderCard({ matterId }) {
           >
             {provisioning ? <RefreshCw size={12} className="animate-spin" /> : <Cloud size={12} />}
             {provisioning ? 'Setting up…' : 'Set Up Cloud Folder'}
+          </button>
+          <button
+            onClick={handleSync}
+            disabled={syncing || provisioning}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink text-[12px] font-sans font-medium rounded-lg hover:bg-brand-bg-soft disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing…' : 'Provision + Sync'}
           </button>
         </div>
       )}
@@ -121,8 +170,9 @@ function CloudFolderCard({ matterId }) {
   )
 }
 
-export default function MatterDocumentsTab({ matterId }) {
+export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
   const [docs, setDocs] = useState([])
+  const [cloudFiles, setCloudFiles] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -133,6 +183,7 @@ export default function MatterDocumentsTab({ matterId }) {
   const [uploadCategory, setUploadCategory] = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  const [uploadNotice, setUploadNotice] = useState(null)
   const fileInputRef = useRef(null)
 
   // Inline edit state
@@ -147,8 +198,14 @@ export default function MatterDocumentsTab({ matterId }) {
     'block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5'
 
   useEffect(() => {
-    getMatterDocuments(matterId)
-      .then((data) => setDocs(data.items || []))
+    Promise.all([
+      getMatterDocuments(matterId),
+      getMatterCloudFiles(matterId).catch(() => null),
+    ])
+      .then(([data, cloudData]) => {
+        setDocs(data.items || [])
+        if (cloudData) setCloudFiles(cloudData.files || [])
+      })
       .catch(() => setError('Failed to load documents.'))
       .finally(() => setLoading(false))
   }, [matterId])
@@ -157,6 +214,7 @@ export default function MatterDocumentsTab({ matterId }) {
     if (!uploadFile) return
     setUploading(true)
     setUploadError(null)
+    setUploadNotice(null)
     try {
       const formData = new FormData()
       formData.append('file', uploadFile)
@@ -169,6 +227,17 @@ export default function MatterDocumentsTab({ matterId }) {
       setUploadDescription('')
       setUploadCategory('')
       if (fileInputRef.current) fileInputRef.current.value = ''
+      if (newDoc.cloud_url) {
+        setUploadNotice({
+          type: 'success',
+          text: `Saved to ${storageLabel(newDoc.storage_backend)}. Edits happen in the firm's cloud copy.`,
+        })
+      } else {
+        setUploadNotice({
+          type: 'warning',
+          text: 'Saved locally because no writable cloud folder was available.',
+        })
+      }
     } catch (err) {
       const msg =
         err?.response?.data?.detail || 'Upload failed. Check file size (max 50MB).'
@@ -253,7 +322,56 @@ export default function MatterDocumentsTab({ matterId }) {
   return (
     <div className="space-y-6">
       {/* Cloud folder status */}
-      <CloudFolderCard matterId={matterId} />
+      <CloudFolderCard
+        matterId={matterId}
+        onFolderChange={onCloudFolderChange}
+        onSynced={setCloudFiles}
+      />
+
+      {cloudFiles?.length > 0 && (
+        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 border-b border-brand-line bg-brand-bg-soft/50 flex items-center justify-between">
+            <h3 className="text-[13px] font-bold font-sans text-brand-ink uppercase tracking-wider">
+              Synced Cloud Files
+            </h3>
+            <span className="text-[12px] text-brand-muted font-sans">{cloudFiles.length}</span>
+          </div>
+          <div className="divide-y divide-brand-line/60">
+            {cloudFiles.slice(0, 12).map((file, i) => (
+              <a
+                key={file.id || i}
+                href={file.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 px-5 py-3 hover:bg-brand-bg-soft transition-colors"
+              >
+                <Cloud size={15} className="text-brand-accent shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold text-brand-ink font-sans truncate">
+                    {file.title}
+                  </div>
+                  <div className="text-[11px] text-brand-muted font-sans uppercase tracking-wide">
+                    {file.provider} / {file.source}
+                  </div>
+                </div>
+                <ExternalLink size={13} className="text-brand-muted shrink-0" />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {uploadNotice && (
+        <div
+          className={`border rounded-xl px-4 py-3 text-[13px] font-sans ${
+            uploadNotice.type === 'success'
+              ? 'bg-brand-green/10 border-brand-green/25 text-brand-green'
+              : 'bg-brand-amber/10 border-brand-amber/25 text-brand-ink'
+          }`}
+        >
+          {uploadNotice.text}
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -468,6 +586,17 @@ export default function MatterDocumentsTab({ matterId }) {
                         >
                           {doc.filename}
                         </button>
+                        {doc.cloud_url && (
+                          <a
+                            href={doc.cloud_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 flex items-center gap-1 text-[11px] font-sans text-brand-accent hover:underline"
+                            title={`Open in ${storageLabel(doc.storage_backend)}`}
+                          >
+                            <ExternalLink size={11} /> Open in {storageLabel(doc.storage_backend)}
+                          </a>
+                        )}
                       </td>
                       <td className="px-5 py-3">
                         {doc.document_category ? (
@@ -477,7 +606,15 @@ export default function MatterDocumentsTab({ matterId }) {
                         )}
                       </td>
                       <td className="px-5 py-3 text-brand-muted">
-                        {formatBytes(doc.file_size)}
+                        <div>{formatBytes(doc.file_size)}</div>
+                        <div
+                          className={`mt-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide ${
+                            doc.cloud_url ? 'text-brand-accent' : 'text-brand-muted'
+                          }`}
+                        >
+                          {doc.cloud_url && <Cloud size={10} />}
+                          {storageLabel(doc.storage_backend)}
+                        </div>
                       </td>
                       <td className="px-5 py-3 text-brand-ink-2 max-w-[200px] truncate">
                         {doc.description || (
@@ -516,13 +653,13 @@ export default function MatterDocumentsTab({ matterId }) {
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">
                           <a
-                            href={getMatterDocumentDownloadUrl(matterId, doc.id)}
+                            href={doc.cloud_url || getMatterDocumentDownloadUrl(matterId, doc.id)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-brand-muted hover:text-brand-ink transition-colors"
-                            title="Download"
+                            title={doc.cloud_url ? `Open in ${storageLabel(doc.storage_backend)}` : 'Download'}
                           >
-                            <Download size={16} />
+                            {doc.cloud_url ? <ExternalLink size={16} /> : <Download size={16} />}
                           </a>
                           <button
                             onClick={() => handleDelete(doc.id)}
