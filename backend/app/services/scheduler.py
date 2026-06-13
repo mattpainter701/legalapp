@@ -799,6 +799,29 @@ class LegalScheduler:
                         if sent:
                             emails_sent += 1
 
+                    # Mirror deadline alerts to any linked Teams channels. The
+                    # dispatcher opens its own tenant-scoped session and never
+                    # raises, so it is safe alongside this RLS-bypassed loop.
+                    from app.services import teams_notify
+
+                    for alert in tenant_alerts:
+                        deadlines = alert.get("deadlines", [])
+                        if not deadlines:
+                            continue
+                        soonest = deadlines[0]
+                        await teams_notify.notify(
+                            str(tenant_id),
+                            "deadline_approaching",
+                            title=f"Deadline approaching — {soonest['days_until']} day(s)",
+                            fields={
+                                "matter_name": alert["matter_name"],
+                                "Deadline": soonest["label"],
+                                "Due": soonest["date"],
+                                "Risk": alert.get("risk_level", "unknown"),
+                            },
+                            matter_id=alert["matter_id"],
+                        )
+
                 total_deadlines = sum(
                     len(a["deadlines"])
                     for alerts in alerts_by_tenant.values()

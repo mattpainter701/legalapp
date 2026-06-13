@@ -13,6 +13,73 @@
 
 ---
 
+## Sprint 14 — Microsoft Teams Integration & Custom Apps
+
+**Goal:** Let firms manage and collaborate with their users via Microsoft Teams, gated to tenants with an active Microsoft 365 integration. Build incrementally from matter↔channel linking + outbound notifications (shipped) up to a full Teams app — one **shared published** Clarity Legal Teams app (single Azure AD registration + single manifest) that each tenant admin-consents/installs into their own M365 tenant; all per-tenant state stays in our DB keyed by `tenant_id`. Design rationale + auth split in the plan; new migrations start at **053**. Cross-cutting: reuse the existing Microsoft `TenantCredential` token vault (`get_fresh_token`, `refresh_microsoft_token`), tenant RLS on all new tables, scope-gated admin endpoints, best-effort dispatch that never blocks requests/jobs.
+
+**Auth split (recommended & in use):** delegated Microsoft Graph (existing `TenantCredential`, provider="microsoft", widened with Teams scopes on opt-in `&teams=1`) powers Phases 1–2 (linking, messaging, tab SSO). A **dedicated Azure Bot** (Bot Framework app id/password) is introduced only in Phase 3 for proactive 1:1/channel messaging and inbound activities — a bot cannot be delegated-only.
+
+**Teams scopes (delegated):** `Channel.ReadBasic.All ChannelMessage.Send Chat.ReadWrite Team.ReadBasic.All TeamsActivity.Send` — kept separate from the base `MICROSOFT_ADMIN_SCOPES` so existing cloud-only tenants are never marked scope-deficient; admins reconsent with `&teams=1`.
+
+### M1 — Channel linking + outbound notifications (P0) — DONE (Phase 1)
+
+#### 1401. Teams Phase 1 — Gating, linking, Adaptive Card notifications — DONE
+Delegated Graph only. Shipped on `claude/teams-integrations-custom-apps-9xdbr5`.
+- [x] Migration `053_teams_integration`: `teams_channel_links` + `teams_notification_settings` (tenant RLS, FKs CASCADE, unique constraints) — applies + downgrades cleanly through full chain
+- [x] Models `TeamsChannelLink` / `TeamsNotificationSetting` registered in `models/__init__.py`
+- [x] `services/teams.py` Graph client: `list_joined_teams`, `list_channels`, `send_channel_message` (HTML or Adaptive Card), `build_matter_card`; `_graph_request` wrapper with 429/`Retry-After` backoff
+- [x] `services/teams_gate.py`: `require_teams_enabled` dependency (409 not_connected / 403 scopes_missing) + `get_teams_status`
+- [x] `services/teams_notify.py`: best-effort dispatcher (own session, never raises) resolving matter links + event routing → posts cards; wired into the docket-watcher deadline alerts in `scheduler.py`
+- [x] `routers/teams.py` under `/api/integrations/teams/*`: list teams/channels, link CRUD, notification-settings CRUD, test-message — all gated
+- [x] `integrations.py`: `_admin_scopes(teams)` + `&teams=1` opt-in on connect/callback (authorize + token-exchange scope strings kept identical); `teams_connected` / `teams_missing_scopes` added to `IntegrationStatus`
+- [x] Frontend: gated `Teams` admin tab + `TeamsPanel.jsx` (connect/reconsent prompt, team→channel pickers, matter link CRUD, send-test); `api.js` Teams group
+- [x] Tests `tests/test_teams.py` (12 passing): gating, scope detection, link CRUD + idempotency, dispatch payload, card builder, 429 retry
+- [ ] Follow-up: full notification-rules editor UI (backend CRUD exists; panel ships linking + test only)
+- [ ] Follow-up: dispatch hooks at additional MatterEvent sites (`matters.py`, `tasks.py`, `calendar.py`, `estates.py`, `domestic.py`) — currently wired at docket-watcher only
+
+### M2 — Shared published Teams app + embedded tab w/ SSO (P1) — Phase 2
+
+#### 1402. Teams app manifest & "custom app" packaging (P1, MEDIUM) — PENDING
+One shared, published Clarity Legal Teams app. No per-tenant manifests.
+- [ ] New repo dir `teams-app/`: `manifest.json` (Teams schema v1.16+) — single app `id`, `developer`, `name`/`description`, `color.png` + `outline.png` icons, `validDomains` (exact frontend tab host), `webApplicationInfo` `{ id: MICROSOFT_CLIENT_ID, resource: "api://{frontend-host}/{client-id}" }`
+- [ ] Configurable/personal tab entry → `{FRONTEND_URL}/teams/tab`; (Phase 3) `bot` block added later
+- [ ] Zip build script → `clarity-legal-teams.zip` (sideloadable); **do not commit the zip**
+- [ ] Config: consume `TEAMS_APP_ID` (already added) for channel/tab deep links
+- [ ] Operator doc: Azure AD `Expose an API` (`api://…/access_as_user`, pre-authorize Teams desktop/web client IDs); import in Teams Developer Portal; install via org app catalog / Teams Admin Center
+- [ ] **Risk:** `validDomains` must list the exact tab host and `webApplicationInfo.resource` must match the AAD Application ID URI — most common silent tab/SSO load failure
+
+#### 1403. Embedded Teams tab with SSO (P1, MEDIUM) — PENDING
+Render the existing React app as a Teams tab authenticated via Teams JS SSO.
+- [ ] Backend `POST /api/teams/sso/exchange` in `routers/teams.py`: validate the Teams JS AAD token (audience = our app, issuer = AAD); map `oid`→`User` via directory-synced identity (`user_sync.py`), fallback `email`/`preferred_username`; match `tid` against the tenant's M365 directory to prevent cross-tenant binding; mint the normal Clarity JWT (`sub`/`tenant_id`/`jti` shape the middleware expects) so the tab reuses existing auth
+- [ ] AAD token-validation helper (JWKS fetch/cache, audience/issuer/exp checks)
+- [ ] Frontend `pages/TeamsTab.jsx` at `/teams/tab`: load `@microsoft/teams-js`, `app.initialize()` + `getAuthToken()`, POST to SSO exchange, store JWT, render a Teams-themed subset (matter events/tasks)
+- [ ] Frontend `pages/TeamsTabConfig.jsx` at `/teams/config`: configurable-tab settings to bind a matter; register both routes
+- [ ] Gate tab entry/UI on `microsoft.teams_connected`
+- [ ] Tests: SSO exchange happy path + wrong-audience/expired token rejected; `tid` cross-tenant binding refused; identity-mapping fallbacks
+- [ ] Verify E2E: upload `clarity-legal-teams.zip`, open tab, confirm SSO maps to correct user/tenant
+- [ ] **Risk:** Clarity JWT minting must not widen claims; reuse existing `SECRET_KEY`/`ALGORITHM` + `jti` blacklist semantics
+
+### M3 — Two-way bot: proactive messaging + inbound commands (P2) — Phase 3
+
+#### 1404. Azure Bot registration & conversation references (P2, MEDIUM) — PENDING
+Branded, bidirectional bot. Requires app-level Bot Framework credentials.
+- [ ] Migration `054_teams_conversation_refs`: `TeamsConversationRef` (`tenant_id`, `user_id` nullable, `aad_object_id`, `conversation_id`, `service_url`, `channel_id`/`team_id`, `conversation_type`, `bot_id`, `raw_reference` JSON; unique `(tenant_id, conversation_id)`; tenant RLS) — register in `models/__init__.py`
+- [ ] Config: `TEAMS_BOT_APP_ID`, `TEAMS_BOT_APP_PASSWORD` (+ optional `TEAMS_BOT_TENANT_ID`)
+- [ ] `services/teams_bot.py`: Bot Framework adapter — JWT validation, capture/persist `ConversationReference` on first install/message, proactive `continue_conversation`
+- [ ] Operator: Azure Bot Service registration; messaging endpoint `{BACKEND_URL}/api/teams/bot/messages`; enable Teams channel; generate app password; add `bot` block to manifest (scopes personal/team/groupchat)
+- [ ] **Risk:** proactive messaging can't DM a user the bot has never heard from — persist conversation refs on first contact; degrade to channel post / email when none exists
+
+#### 1405. Bot activities webhook + proactive routing (P2, MEDIUM) — PENDING
+- [ ] `POST /api/teams/bot/messages` webhook in `routers/teams.py`
+- [ ] Add `/api/teams/bot/messages` to `SKIP_PATHS` in `middleware/tenant.py` (no Clarity JWT inbound); handler validates the **Bot Framework JWT** itself, resolves `tenant_id` from the activity's AAD `tid` → `TenantCredential`/synced user, then **explicitly `set_tenant_context`** before any tenant-scoped query
+- [ ] Inbound command handlers (e.g. matter status, log time, deadlines) returning Adaptive Cards
+- [ ] `teams_notify.py`: route 1:1 user notifications to bot proactive using stored conversation refs, falling back to channel post / email
+- [ ] Tests: webhook auth (invalid/missing Bot Framework JWT → 401; valid → 200 + stores `TeamsConversationRef`); tenant resolution from activity; proactive-send uses stored ref
+- [ ] Verify E2E: install app, DM the bot, confirm conversation ref stored + proactive reply
+- [ ] **Risk (RLS on webhook):** path has no JWT — blank tenant context makes RLS return zero rows; tenant must be resolved from the activity and set before querying
+
+---
+
 ## Sprint 13 — Core Standard Bolster (Practice-Management Parity)
 
 **Goal:** Reach table-stakes parity with Clio / MyCase / PracticePanther on the practice-management core so the AI moat wins deals instead of being disqualified on a feature checklist. All work lands in the **standard** (flat-seat) tier. Full design + data models in [`docs/core-bolster-implementation-plan.md`](docs/core-bolster-implementation-plan.md); rationale in [`docs/competitive-gap-analysis.md`](docs/competitive-gap-analysis.md). New migrations start at **044**. Cross-cutting: RLS on all new tables, audit logging, tier gating via `TenantSettings.features`, Pydantic v2 schemas + `models/__init__.py` registration.

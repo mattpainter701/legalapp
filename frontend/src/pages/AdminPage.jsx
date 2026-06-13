@@ -20,6 +20,7 @@ import CloudSearchAdmin from './CloudSearchAdmin'
 import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsPanel from '../components/IntegrationsPanel'
+import TeamsPanel from '../components/TeamsPanel'
 import QBOPanel from '../components/QBOPanel'
 import { Spinner, Toggle } from '../components/ui'
 import { ArrowLeft, UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
@@ -1072,6 +1073,7 @@ export default function AdminPage() {
     { id: 'cloud-search', label: 'Cloud Search' },
     { id: 'smb', label: 'File Shares' },
     { id: 'integrations', label: 'Integrations' },
+    { id: 'teams', label: 'Teams' },
     { id: 'qbo', label: 'QuickBooks' },
     { id: 'settings', label: 'Settings' },
   ]
@@ -1147,6 +1149,7 @@ export default function AdminPage() {
           {activeTab === 'cloud-search' && <CloudSearchAdmin />}
           {activeTab === 'smb' && <SmbAdminPage />}
           {activeTab === 'integrations' && <IntegrationsPanel />}
+          {activeTab === 'teams' && <TeamsPanel />}
           {activeTab === 'qbo' && <QBOPanel />}
         </div>
       </div>

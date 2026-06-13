@@ -280,6 +280,26 @@ export const triggerUserSync = () =>
 export const retryCloudInit = () =>
   api.post('/integrations/cloud-init/retry').then((r) => r.data)
 
+// ── Microsoft Teams ───────────────────────────────────────────────────────────
+export const getIntegrationStatus = () =>
+  api.get('/integrations/status').then((r) => r.data)
+export const getTeamsTeams = () =>
+  api.get('/integrations/teams/teams').then((r) => r.data)
+export const getTeamsChannels = (teamId) =>
+  api.get(`/integrations/teams/teams/${teamId}/channels`).then((r) => r.data)
+export const getTeamsLinks = () =>
+  api.get('/integrations/teams/links').then((r) => r.data)
+export const createTeamsLink = (data) =>
+  api.post('/integrations/teams/links', data).then((r) => r.data)
+export const deleteTeamsLink = (id) =>
+  api.delete(`/integrations/teams/links/${id}`).then((r) => r.data)
+export const getTeamsNotificationSettings = () =>
+  api.get('/integrations/teams/notification-settings').then((r) => r.data)
+export const updateTeamsNotificationSettings = (settings) =>
+  api.put('/integrations/teams/notification-settings', { settings }).then((r) => r.data)
+export const sendTeamsTestMessage = (data) =>
+  api.post('/integrations/teams/test-message', data).then((r) => r.data)
+
 // Customer LLM
 export const configureCustomerLLM = (config) =>
   api.post('/admin/customer-llm/configure', config).then((r) => r.data)
