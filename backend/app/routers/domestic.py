@@ -360,9 +360,7 @@ async def list_parties(
     return [PartyResponse.model_validate(p) for p in result.scalars().all()]
 
 
-@router.post(
-    "/cases/{case_id}/parties", response_model=PartyResponse, status_code=201
-)
+@router.post("/cases/{case_id}/parties", response_model=PartyResponse, status_code=201)
 async def create_party(
     case_id: str,
     body: PartyCreate,
@@ -382,9 +380,7 @@ async def create_party(
     return PartyResponse.model_validate(party)
 
 
-@router.patch(
-    "/cases/{case_id}/parties/{party_id}", response_model=PartyResponse
-)
+@router.patch("/cases/{case_id}/parties/{party_id}", response_model=PartyResponse)
 async def update_party(
     case_id: str,
     party_id: str,
@@ -393,9 +389,7 @@ async def update_party(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    party = await _get_child_row(
-        db, DomesticParty, party_id, case_id, user.tenant_id
-    )
+    party = await _get_child_row(db, DomesticParty, party_id, case_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
     if "contact_id" in data:
         data["contact_id"] = _as_uuid(data["contact_id"])
@@ -415,9 +409,7 @@ async def delete_party(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    party = await _get_child_row(
-        db, DomesticParty, party_id, case_id, user.tenant_id
-    )
+    party = await _get_child_row(db, DomesticParty, party_id, case_id, user.tenant_id)
     await db.delete(party)
     await db.commit()
 
@@ -461,9 +453,7 @@ async def list_children(
     return [ChildResponse.model_validate(c) for c in result.scalars().all()]
 
 
-@router.post(
-    "/cases/{case_id}/children", response_model=ChildResponse, status_code=201
-)
+@router.post("/cases/{case_id}/children", response_model=ChildResponse, status_code=201)
 async def create_child(
     case_id: str,
     body: ChildCreate,
@@ -485,9 +475,7 @@ async def create_child(
     return ChildResponse.model_validate(child)
 
 
-@router.patch(
-    "/cases/{case_id}/children/{child_id}", response_model=ChildResponse
-)
+@router.patch("/cases/{case_id}/children/{child_id}", response_model=ChildResponse)
 async def update_child(
     case_id: str,
     child_id: str,
@@ -496,9 +484,7 @@ async def update_child(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    child = await _get_child_row(
-        db, DomesticChild, child_id, case_id, user.tenant_id
-    )
+    child = await _get_child_row(db, DomesticChild, child_id, case_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
     if "primary_residence_party_id" in data:
         data["primary_residence_party_id"] = _as_uuid(
@@ -520,9 +506,7 @@ async def delete_child(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    child = await _get_child_row(
-        db, DomesticChild, child_id, case_id, user.tenant_id
-    )
+    child = await _get_child_row(db, DomesticChild, child_id, case_id, user.tenant_id)
     await db.delete(child)
     await db.commit()
 
@@ -571,9 +555,7 @@ async def create_custody(
     return CustodyResponse.model_validate(row)
 
 
-@router.patch(
-    "/cases/{case_id}/custody/{custody_id}", response_model=CustodyResponse
-)
+@router.patch("/cases/{case_id}/custody/{custody_id}", response_model=CustodyResponse)
 async def update_custody(
     case_id: str,
     custody_id: str,
@@ -656,9 +638,29 @@ async def create_order(
     data = body.model_dump()
     for fk in ("obligor_party_id", "obligee_party_id", "calculation_id"):
         data[fk] = _as_uuid(data.get(fk))
-    order = SupportOrder(
-        id=uuid.uuid4(), tenant_id=user.tenant_id, case_id=cid, **data
-    )
+
+    # Cross-case guard: referenced party / calculation IDs must belong to THIS
+    # case (and tenant). Prevents linking an order to another case's records.
+    async def _in_case(model, row_id) -> bool:
+        if row_id is None:
+            return True
+        res = await db.execute(
+            select(model.id).where(
+                model.id == row_id,
+                model.case_id == cid,
+                model.tenant_id == user.tenant_id,
+            )
+        )
+        return res.scalar_one_or_none() is not None
+
+    if not await _in_case(DomesticParty, data["obligor_party_id"]):
+        raise HTTPException(status_code=404, detail="Obligor party not found")
+    if not await _in_case(DomesticParty, data["obligee_party_id"]):
+        raise HTTPException(status_code=404, detail="Obligee party not found")
+    if not await _in_case(ChildSupportCalculation, data["calculation_id"]):
+        raise HTTPException(status_code=404, detail="Calculation not found")
+
+    order = SupportOrder(id=uuid.uuid4(), tenant_id=user.tenant_id, case_id=cid, **data)
     db.add(order)
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
@@ -668,9 +670,7 @@ async def create_order(
     return SupportOrderResponse.model_validate(order)
 
 
-@router.patch(
-    "/cases/{case_id}/orders/{order_id}", response_model=SupportOrderResponse
-)
+@router.patch("/cases/{case_id}/orders/{order_id}", response_model=SupportOrderResponse)
 async def update_order(
     case_id: str,
     order_id: str,
@@ -679,9 +679,7 @@ async def update_order(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    order = await _get_child_row(
-        db, SupportOrder, order_id, case_id, user.tenant_id
-    )
+    order = await _get_child_row(db, SupportOrder, order_id, case_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
     for fk in ("obligor_party_id", "obligee_party_id", "calculation_id"):
         if fk in data:
@@ -702,9 +700,7 @@ async def delete_order(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    order = await _get_child_row(
-        db, SupportOrder, order_id, case_id, user.tenant_id
-    )
+    order = await _get_child_row(db, SupportOrder, order_id, case_id, user.tenant_id)
     await db.delete(order)
     await db.commit()
 
@@ -745,9 +741,7 @@ async def create_payment(
     db: AsyncSession = Depends(get_db),
 ):
     user = await _scope(db, request)
-    order = await _get_child_row(
-        db, SupportOrder, order_id, case_id, user.tenant_id
-    )
+    order = await _get_child_row(db, SupportOrder, order_id, case_id, user.tenant_id)
     # Default allocation: current first, remainder to arrears.
     amount = body.amount or Decimal("0")
     current = body.applied_to_current
@@ -800,6 +794,21 @@ async def delete_payment(
     payment = result.scalar_one_or_none()
     if payment is None:
         raise HTTPException(status_code=404, detail="Payment not found")
+    # Restore the arrears that this payment had applied, so deleting a payment
+    # rolls back its effect on the order's arrears balance.
+    if payment.applied_to_arrears:
+        order_res = await db.execute(
+            select(SupportOrder).where(
+                SupportOrder.id == order_id,
+                SupportOrder.tenant_id == user.tenant_id,
+            )
+        )
+        order = order_res.scalar_one_or_none()
+        if order is not None:
+            order.arrears_balance = (
+                order.arrears_balance or Decimal("0")
+            ) + payment.applied_to_arrears
+            order.updated_at = datetime.now(timezone.utc)
     await db.delete(payment)
     await db.commit()
 
@@ -912,9 +921,7 @@ async def list_events(
     return [EventResponse.model_validate(e) for e in result.scalars().all()]
 
 
-@router.post(
-    "/cases/{case_id}/events", response_model=EventResponse, status_code=201
-)
+@router.post("/cases/{case_id}/events", response_model=EventResponse, status_code=201)
 async def create_event(
     case_id: str,
     body: EventCreate,
@@ -995,9 +1002,7 @@ async def calculate_preview(
     return WorksheetResponse(**worksheet.to_dict())
 
 
-@router.get(
-    "/cases/{case_id}/calculations", response_model=List[CalculationListItem]
-)
+@router.get("/cases/{case_id}/calculations", response_model=List[CalculationListItem])
 async def list_calculations(
     case_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ):
@@ -1011,9 +1016,7 @@ async def list_calculations(
         )
         .order_by(ChildSupportCalculation.created_at.desc())
     )
-    return [
-        CalculationListItem.model_validate(c) for c in result.scalars().all()
-    ]
+    return [CalculationListItem.model_validate(c) for c in result.scalars().all()]
 
 
 @router.post(
@@ -1100,9 +1103,7 @@ async def calculation_worksheet_pdf(
     )
 
 
-@router.delete(
-    "/cases/{case_id}/calculations/{calc_id}", status_code=204
-)
+@router.delete("/cases/{case_id}/calculations/{calc_id}", status_code=204)
 async def delete_calculation(
     case_id: str,
     calc_id: str,
