@@ -1218,4 +1218,15 @@ export const reconcileTrustAccount = (id, body) =>
 export const getTrustReconciliation = (id) =>
   api.get(`/trust/accounts/${id}/reconciliation`).then(r => r.data)
 
+export const downloadTrustStatementPdf = (accountId, params = {}) =>
+  api.get(`/trust/accounts/${accountId}/statement`, { params: { ...params, format: 'pdf' }, responseType: 'blob' }).then(r => r.data)
+
+// ── Firm Branding ────────────────────────────────────────────────────────────
+
+export const getFirmBranding = () =>
+  api.get('/firm/branding').then(r => r.data)
+
+export const updateFirmBranding = (body) =>
+  api.put('/firm/branding', body).then(r => r.data)
+
 export default api
