@@ -22,6 +22,7 @@ import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsPanel from '../components/IntegrationsPanel'
 import TeamsPanel from '../components/TeamsPanel'
 import QBOPanel from '../components/QBOPanel'
+import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import { Spinner, Toggle } from '../components/ui'
 import { ArrowLeft, UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
 
@@ -1042,6 +1043,9 @@ function SettingsTab() {
       {featureSettings && (
         <FeatureFlagsSection settings={featureSettings} onUpdate={(s) => setFeatureSettings(s)} />
       )}
+
+      {/* Firm Branding */}
+      <FirmBrandingPanel />
 
       {/* Alerts & Budgets */}
       <AlertsSection />

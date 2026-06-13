@@ -3,11 +3,12 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   getTrustAccount, updateTrustAccount, closeTrustAccount,
   createTrustTransaction, listTrustTransactions,
+  downloadTrustStatementPdf, triggerBlobDownload,
 } from '../api'
 import TrustAccountReconcile from './TrustAccountReconcile'
 import {
   Landmark, ArrowLeft, Plus, X, Loader2, Pencil, Lock,
-  ArrowDownCircle, ArrowUpCircle, Scale, ShieldCheck,
+  ArrowDownCircle, ArrowUpCircle, Scale, ShieldCheck, FileText,
 } from 'lucide-react'
 
 const money = (v) => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -43,6 +44,10 @@ export default function TrustAccountDetail() {
   const [txLoading, setTxLoading] = useState(false)
 
   const [tab, setTab] = useState('ledger') // 'ledger' | 'reconcile'
+
+  // PDF statement download
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [pdfError, setPdfError] = useState(null)
 
   // Edit
   const [editing, setEditing] = useState(false)
@@ -120,6 +125,19 @@ export default function TrustAccountDetail() {
       setSaveError(err?.response?.data?.detail || 'Failed to save changes.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDownloadPdf = async () => {
+    setDownloadingPdf(true)
+    setPdfError(null)
+    try {
+      const blob = await downloadTrustStatementPdf(id)
+      triggerBlobDownload(blob, 'trust_statement.pdf')
+    } catch (err) {
+      setPdfError(err?.response?.data?.detail || 'Failed to download statement PDF.')
+    } finally {
+      setDownloadingPdf(false)
     }
   }
 
@@ -389,6 +407,21 @@ export default function TrustAccountDetail() {
               <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Net Change</div>
               <div className="text-lg font-mono font-semibold text-brand-ink">{money(txSummary.net_change)}</div>
             </div>
+          </div>
+
+          {/* Statement download */}
+          <div className="flex items-center justify-end gap-2 mb-4">
+            {pdfError && (
+              <span className="text-sm text-brand-rose font-sans">{pdfError}</span>
+            )}
+            <button
+              onClick={handleDownloadPdf}
+              disabled={downloadingPdf}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-medium rounded-xl shadow-sm hover:bg-brand-surface-2 transition-colors disabled:opacity-50"
+            >
+              {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" strokeWidth={1.5} />}
+              Download PDF
+            </button>
           </div>
 
           {/* Transaction table */}
