@@ -33,7 +33,9 @@ class _FakeClient:
         return False
 
     async def get(self, url, headers=None, params=None):
-        self.calls.append({"url": url, "headers": headers, "params": dict(params or {})})
+        self.calls.append(
+            {"url": url, "headers": headers, "params": dict(params or {})}
+        )
         return _FakeResp(200, self._payload)
 
 
@@ -184,16 +186,16 @@ async def test_ms_sync_skips_disabled_directory_users(db_session, test_tenant):
     payload = {
         "value": [
             {
+                "id": "ms-active",
+                "mail": "active@testfirm.com",
+                "displayName": "Active User",
+                "accountEnabled": True,
+            },
+            {
                 "id": "ms-disabled",
                 "mail": "disabled@testfirm.com",
                 "displayName": "Disabled User",
                 "accountEnabled": False,
-            },
-            {
-                "id": "ms-enabled",
-                "mail": "enabled@testfirm.com",
-                "displayName": "Enabled User",
-                "accountEnabled": True,
             },
         ]
     }
@@ -211,18 +213,28 @@ async def test_ms_sync_skips_disabled_directory_users(db_session, test_tenant):
             db_session, str(test_tenant.id)
         )
 
-    assert res["created"] == 1
-    assert res["skipped"] == 1
+    assert res == {"created": 1, "updated": 0, "skipped": 1, "total": 2}
     assert "accountEnabled" in fake_client.calls[0]["params"]["$select"]
 
+    active = (
+        await db_session.execute(
+            select(User).where(User.email == "active@testfirm.com")
+        )
+    ).scalar_one()
+    assert active.license_active is False
+
     disabled = (
-        await db_session.execute(select(User).where(User.email == "disabled@testfirm.com"))
+        await db_session.execute(
+            select(User).where(User.email == "disabled@testfirm.com")
+        )
     ).scalar_one_or_none()
     assert disabled is None
 
 
 @pytest.mark.asyncio
-async def test_google_sync_filters_suspended_users_locally(db_session, test_tenant):
+async def test_google_sync_avoids_directory_query_filter_and_skips_suspended(
+    db_session, test_tenant
+):
     db_session.add(
         TenantCredential(
             tenant_id=test_tenant.id,
@@ -237,16 +249,16 @@ async def test_google_sync_filters_suspended_users_locally(db_session, test_tena
     payload = {
         "users": [
             {
-                "id": "g-suspended",
-                "primaryEmail": "suspended@testfirm.com",
-                "name": {"fullName": "Suspended User"},
-                "suspended": True,
-            },
-            {
-                "id": "g-active",
+                "id": "g-1",
                 "primaryEmail": "active@testfirm.com",
                 "name": {"fullName": "Active User"},
                 "suspended": False,
+            },
+            {
+                "id": "g-2",
+                "primaryEmail": "suspended@testfirm.com",
+                "name": {"fullName": "Suspended User"},
+                "suspended": True,
             },
         ]
     }
@@ -262,12 +274,20 @@ async def test_google_sync_filters_suspended_users_locally(db_session, test_tena
     ):
         res = await UserSyncService().sync_google_users(db_session, str(test_tenant.id))
 
-    assert res["created"] == 1
-    assert res["skipped"] == 1
+    assert res == {"created": 1, "updated": 0, "skipped": 1, "total": 2}
     assert "query" not in fake_client.calls[0]["params"]
 
+    active = (
+        await db_session.execute(
+            select(User).where(User.email == "active@testfirm.com")
+        )
+    ).scalar_one()
+    assert active.license_active is False
+
     suspended = (
-        await db_session.execute(select(User).where(User.email == "suspended@testfirm.com"))
+        await db_session.execute(
+            select(User).where(User.email == "suspended@testfirm.com")
+        )
     ).scalar_one_or_none()
     assert suspended is None
 

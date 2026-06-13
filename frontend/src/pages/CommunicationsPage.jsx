@@ -5,6 +5,7 @@ import {
   createCommunication,
   updateCommunication,
   deleteCommunication,
+  scanEmailInbox,
 } from '../api'
 import ContactPicker from '../components/ContactPicker'
 import {
@@ -21,6 +22,7 @@ import {
   Trash2,
   Pencil,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -409,6 +411,8 @@ export default function CommunicationsPage() {
   // Modal state
   const [showModal, setShowModal] = useState(false)
   const [editEntry, setEditEntry] = useState(null)
+  const [emailSyncing, setEmailSyncing] = useState(null)
+  const [emailSyncResult, setEmailSyncResult] = useState(null)
 
   const fetchLogs = useCallback(async () => {
     setLoading(true)
@@ -457,6 +461,23 @@ export default function CommunicationsPage() {
       setTotal((t) => t - 1)
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to delete.')
+    }
+  }
+
+  const handleEmailSync = async (provider) => {
+    setEmailSyncing(provider)
+    setEmailSyncResult(null)
+    setError(null)
+    try {
+      const result = await scanEmailInbox(provider, 20)
+      setEmailSyncResult(result)
+      setFilterChannel('email')
+      setOffset(0)
+      await fetchLogs()
+    } catch (err) {
+      setError(err?.response?.data?.detail || `Failed to sync ${provider} email.`)
+    } finally {
+      setEmailSyncing(null)
     }
   }
 
@@ -567,16 +588,41 @@ export default function CommunicationsPage() {
               <span className="ml-2 text-brand-accent text-xs">— filtered</span>
             )}
           </div>
-          <button
-            onClick={() => {
-              setEditEntry(null)
-              setShowModal(true)
-            }}
-            className="flex items-center gap-2 px-3 py-1.5 bg-brand-ink text-white text-sm hover:bg-brand-ink-2 transition-colors"
-          >
-            <Plus size={14} />
-            Log Communication
-          </button>
+          <div className="flex items-center gap-2">
+            {emailSyncResult && (
+              <span className="hidden md:inline text-xs text-brand-muted">
+                {emailSyncResult.emails_processed ?? 0} email{emailSyncResult.emails_processed === 1 ? '' : 's'} scanned
+              </span>
+            )}
+            <button
+              onClick={() => handleEmailSync('microsoft')}
+              disabled={!!emailSyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink text-sm hover:bg-brand-bg-soft disabled:opacity-50 transition-colors"
+              title="Scan Outlook mail"
+            >
+              <RefreshCw size={13} className={emailSyncing === 'microsoft' ? 'animate-spin' : ''} />
+              Outlook
+            </button>
+            <button
+              onClick={() => handleEmailSync('google')}
+              disabled={!!emailSyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink text-sm hover:bg-brand-bg-soft disabled:opacity-50 transition-colors"
+              title="Scan Gmail"
+            >
+              <RefreshCw size={13} className={emailSyncing === 'google' ? 'animate-spin' : ''} />
+              Gmail
+            </button>
+            <button
+              onClick={() => {
+                setEditEntry(null)
+                setShowModal(true)
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 bg-brand-ink text-white text-sm hover:bg-brand-ink-2 transition-colors"
+            >
+              <Plus size={14} />
+              Log Communication
+            </button>
+          </div>
         </div>
 
         {/* List */}

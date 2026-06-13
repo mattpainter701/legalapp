@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { API_BASE_URL, getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings } from '../api'
+import { API_BASE_URL, getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings, triggerCloudSync } from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
   'User.Read.All': 'Read all user profiles',
-  'Mail.Read': 'Read mail across organization',
+  'Mail.Read': 'Read signed-in mailbox',
   'Files.Read.All': 'Read all files (OneDrive + SharePoint)',
   'Files.ReadWrite.All': 'Read & write files (OneDrive + SharePoint)',
   'Sites.Read.All': 'Access SharePoint sites',
@@ -37,6 +37,8 @@ export default function IntegrationsPanel() {
   const [primaryCloud, setPrimaryCloud] = useState(null)
   const [cloudSaving, setCloudSaving] = useState(false)
   const [cloudSaved, setCloudSaved] = useState(false)
+  const [contentSyncing, setContentSyncing] = useState(false)
+  const [contentSyncResult, setContentSyncResult] = useState(null)
 
   const relTime = (iso) => {
     if (!iso) return 'never'
@@ -125,6 +127,19 @@ export default function IntegrationsPanel() {
     }
   }
 
+  const handleContentSync = async () => {
+    setContentSyncing(true)
+    setContentSyncResult(null)
+    try {
+      const result = await triggerCloudSync()
+      setContentSyncResult(result)
+    } catch {
+      setContentSyncResult({ error: 'Cloud file/email sync failed.' })
+    } finally {
+      setContentSyncing(false)
+    }
+  }
+
   const overallColors = {
     healthy: 'bg-green-100 text-green-700 border-green-200',
     attention_needed: 'bg-amber-100 text-amber-700 border-amber-200',
@@ -155,7 +170,32 @@ export default function IntegrationsPanel() {
         </div>
 
         {/* Cloud folder setup */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {contentSyncResult && !contentSyncResult.error && (
+            <span className="text-xs text-green-700 font-medium">
+              Synced {contentSyncResult.total ?? 0} cloud item{contentSyncResult.total === 1 ? '' : 's'}
+            </span>
+          )}
+          {contentSyncResult?.error && (
+            <span className="text-xs text-red-600 font-medium">{contentSyncResult.error}</span>
+          )}
+          <button
+            onClick={handleContentSync}
+            disabled={contentSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+          >
+            {contentSyncing ? (
+              <>
+                <span className="w-3 h-3 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+                Syncing…
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 11-2.64-6.36M21 3v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                Sync files + email
+              </>
+            )}
+          </button>
           {retryResult && !retryResult.error && (
             <span className="text-xs text-green-700 font-medium">
               Cloud folders ready · {retryResult.matters_initialized} matter{retryResult.matters_initialized !== 1 ? 's' : ''} set up
