@@ -1070,7 +1070,7 @@ async def get_trust_account_statement(
             headers={"Content-Disposition": "attachment; filename=trust_statement.csv"},
         )
 
-    return TrustLedgerStatementResponse(
+    statement = TrustLedgerStatementResponse(
         trust_account_id=str(account.id),
         account_name=account.account_name,
         period_start=start,
@@ -1081,3 +1081,18 @@ async def get_trust_account_statement(
         total_debits=total_debits,
         lines=lines,
     )
+
+    if format == "pdf":
+        tenant_result = await db.execute(
+            select(Tenant).where(Tenant.id == user.tenant_id)
+        )
+        tenant = tenant_result.scalar_one()
+        branding = await get_firm_branding(db, tenant)
+        pdf_bytes = generate_trust_statement_pdf(statement, branding)
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=trust_statement.pdf"},
+        )
+
+    return statement
