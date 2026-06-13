@@ -1,10 +1,14 @@
 """Tests for conversation and message endpoints."""
 
+import uuid
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.routers.chat import _join_context_sections
+from app.models.document import Chunk, Document
 from app.models.tenant import TenantSettings
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
@@ -99,6 +103,88 @@ async def test_send_message_returns_assistant(
     assert msg["role"] == "assistant"
     assert len(msg["content"]) > 0
     assert "sources" in msg
+
+
+@pytest.mark.asyncio
+async def test_send_message_scopes_attachment_context_to_active_conversation(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    test_user,
+    mock_llm,
+    mock_embeddings,
+):
+    active_conv = (await client.post("/api/conversations", json={})).json()
+    other_conv = (await client.post("/api/conversations", json={})).json()
+
+    active_doc_id = uuid.uuid4()
+    other_doc_id = uuid.uuid4()
+    db_session.add_all(
+        [
+            Document(
+                id=active_doc_id,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                conversation_id=uuid.UUID(active_conv["id"]),
+                filename="active-attachment.txt",
+                content_type="text/plain",
+                file_size=128,
+                status="ready",
+                chunk_count=1,
+            ),
+            Document(
+                id=other_doc_id,
+                tenant_id=test_tenant.id,
+                user_id=test_user.id,
+                conversation_id=uuid.UUID(other_conv["id"]),
+                filename="other-attachment.txt",
+                content_type="text/plain",
+                file_size=128,
+                status="ready",
+                chunk_count=1,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    db_session.add_all(
+        [
+            Chunk(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                document_id=active_doc_id,
+                content="ACTIVE_CONVERSATION_ATTACHMENT_TEXT",
+                chunk_index=0,
+            ),
+            Chunk(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                document_id=other_doc_id,
+                content="OTHER_CONVERSATION_ATTACHMENT_TEXT",
+                chunk_index=0,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = ("", [], [])
+        resp = await client.post(
+            f"/api/conversations/{active_conv['id']}/messages",
+            json={
+                "content": "Use the attached files.",
+                "include_public": False,
+                "use_premium_llm": False,
+                "attachment_ids": [str(active_doc_id), str(other_doc_id)],
+            },
+        )
+
+    assert resp.status_code == 201
+    context = mock_llm.call_args.kwargs["context"]
+    assert "ACTIVE_CONVERSATION_ATTACHMENT_TEXT" in context
+    assert "active-attachment.txt" in context
+    assert "OTHER_CONVERSATION_ATTACHMENT_TEXT" not in context
+    assert "other-attachment.txt" not in context
 
 
 @pytest.mark.asyncio

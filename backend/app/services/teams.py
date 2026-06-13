@@ -3,17 +3,21 @@
 Reuses the existing tenant-wide Microsoft credential (``TenantCredential``
 provider="microsoft") through the token vault. Phase 1 supports listing the
 admin's joined teams + channels and posting messages / Adaptive Cards to a
-channel. All calls degrade gracefully (return None / [] and log) so a Teams
-failure never breaks the calling request or scheduler job.
+channel. Token configuration errors are surfaced to admin endpoints; background
+notification dispatch catches them and degrades to a no-op.
 """
 
 import asyncio
 import logging
+import uuid
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
-from app.database import async_session_maker
+from app.database import async_session_maker, set_tenant_context
+from app.models.tenant_credential import TenantCredential
+from app.models.user_oauth_token import UserOAuthToken
 from app.services.token_vault import get_fresh_token, get_fresh_user_token
 
 logger = logging.getLogger(__name__)
@@ -32,23 +36,108 @@ TEAMS_REQUIRED_SCOPES = (
 )
 
 
-async def _get_token(tenant_id: str, user_id: str | None = None) -> str | None:
-    """Resolve a fresh Microsoft Graph token, preferring a per-user token."""
+class TeamsIntegrationError(RuntimeError):
+    """Raised when Teams has no scoped, usable Microsoft Graph token."""
+
+
+def _missing_required_scopes(granted: str | None) -> list[str]:
+    granted_set = set((granted or "").split())
+    return sorted(s for s in TEAMS_REQUIRED_SCOPES.split() if s not in granted_set)
+
+
+def _has_required_scopes(granted: str | None) -> bool:
+    return not _missing_required_scopes(granted)
+
+
+async def _get_token(tenant_id: str, user_id: str | None = None) -> str:
+    """Resolve a fresh Microsoft Graph token with Teams-scoped fallback.
+
+    A per-user token is only usable when its stored scopes satisfy the Teams
+    requirement. Otherwise the tenant credential is used, provided it is also
+    scoped for Teams.
+    """
     try:
+        tenant_uuid = uuid.UUID(str(tenant_id))
+        user_uuid = uuid.UUID(str(user_id)) if user_id else None
         async with async_session_maker() as db:
-            if user_id:
-                token = await get_fresh_user_token(db, tenant_id, user_id, "microsoft")
-                if token:
-                    return token
-            return await get_fresh_token(db, tenant_id, "microsoft")
+            await set_tenant_context(db, str(tenant_uuid))
+            if user_uuid:
+                user_result = await db.execute(
+                    select(UserOAuthToken).where(
+                        UserOAuthToken.user_id == user_uuid,
+                        UserOAuthToken.tenant_id == tenant_uuid,
+                        UserOAuthToken.provider == "microsoft",
+                    )
+                )
+                user_token = user_result.scalar_one_or_none()
+                if user_token and _has_required_scopes(user_token.scopes):
+                    token = await get_fresh_user_token(
+                        db, tenant_id, user_id, "microsoft"
+                    )
+                    if token:
+                        return token
+                    logger.warning(
+                        "Scoped Microsoft user token unavailable for tenant %s user %s; falling back to tenant credential",
+                        tenant_id,
+                        user_id,
+                    )
+                elif user_token:
+                    logger.info(
+                        "Microsoft user token for tenant %s user %s missing Teams scopes %s; falling back to tenant credential",
+                        tenant_id,
+                        user_id,
+                        _missing_required_scopes(user_token.scopes),
+                    )
+
+            tenant_result = await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.tenant_id == tenant_uuid,
+                    TenantCredential.provider == "microsoft",
+                    TenantCredential.is_active,
+                )
+            )
+            tenant_credentials = tenant_result.scalars().all()
+            tenant_credential = next(
+                (
+                    cred
+                    for cred in tenant_credentials
+                    if _has_required_scopes(cred.scopes)
+                ),
+                None,
+            )
+            if not tenant_credential:
+                missing = (
+                    _missing_required_scopes(tenant_credentials[0].scopes)
+                    if tenant_credentials
+                    else list(TEAMS_REQUIRED_SCOPES.split())
+                )
+                raise TeamsIntegrationError(
+                    "Microsoft Teams integration is missing required scopes: "
+                    + ", ".join(missing)
+                )
+
+            token = await get_fresh_token(
+                db,
+                str(tenant_uuid),
+                "microsoft",
+                credential_id=str(tenant_credential.id),
+            )
+            if token:
+                return token
+
+            raise TeamsIntegrationError(
+                "Microsoft Teams integration has required scopes but no usable token"
+            )
+    except TeamsIntegrationError:
+        raise
     except Exception:
         logger.warning(
-            "Failed to get Microsoft token for tenant %s user %s",
+            "Failed to get Microsoft Teams token for tenant %s user %s",
             tenant_id,
             user_id,
             exc_info=True,
         )
-        return None
+        raise TeamsIntegrationError("Unable to resolve Microsoft Teams token")
 
 
 async def _graph_request(
