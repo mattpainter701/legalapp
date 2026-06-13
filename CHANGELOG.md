@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Task 1308b — Accounting Reports (Phase 1):** Three core billing reports with CSV export.
+  - Backend (`routers/reports.py`): tenant-scoped `GET /api/reports/billing/realization` (per-matter billable hours/amount vs collected, realization %), `/billing/wip` (uninvoiced billable time + value), and `/billing/aging` (outstanding invoice balances bucketed 0–30 / 31–60 / 61–90 / 90+ days overdue). Each endpoint supports `?format=csv` for a downloadable CSV.
+  - Frontend (`ReportsPage`): tab bar (Overview / Realization / WIP / A/R Aging) with sortable tables and per-report Download CSV buttons; new `api.js` report fetchers + CSV blob helpers.
+
+### Changed
+- **Task 1305 — Court-Rules Deadline Engine: dropped.** LawToolBox commercial-API path abandoned (no customer-demand pull); research artifacts retained under `docs/research/1305-*.md`. Revisit only on explicit litigation-firm demand.
+
 ## [0.14.0] — 2026-06-06
 
 ### Sprint 12 — LiteLLM Gateway & AI Operations Control Plane

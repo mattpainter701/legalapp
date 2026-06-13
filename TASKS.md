@@ -110,14 +110,14 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 **AUDIT RESULT (2026-06-12):** Data foundation complete (TimeEntry, Invoice, Payment models indexed). Zero billing reports frontend. User demand implicit (accounting parity, P2 backlog). **PROMOTED TO P1** (was P2 sub-item).
 
-**Phase 1 (P1, 3–4 days)** — 3 Core Reports
-- [ ] Backend: `services/reporting.py` — SQL aggregations for:
-  1. **Realization Report:** Billable hours + billed amount by matter/period (TimeEntry WHERE is_billable = TRUE)
-  2. **WIP (Work-in-Progress):** Unbilled time entries by matter (TimeEntry WHERE invoice_id IS NULL)
-  3. **A/R Aging:** Invoices by status + days overdue (Invoice WHERE due_date < TODAY, sorted by age)
-- [ ] `routers/reports.py` endpoints: `GET /reports/billing/realization`, `/billing/wip`, `/billing/aging` (with optional ?matter_id=, ?period_start=, ?period_end= filters)
-- [ ] Frontend: `ReportsPage` tabs (one per report), date-range filter, CSV download button; query via `api.js`
-- [ ] Acceptance: Pull realization report for Q2, see hours vs revenue by matter; export to CSV
+**Phase 1 (P1, 3–4 days) — DELIVERED 2026-06-13** — 3 Core Reports
+- [x] Backend: per-matter SQL aggregations added to `routers/reports.py` (helpers `_realization_report`, `_wip_report`, `_aging_report`):
+  1. **Realization Report:** billable hours/amount (TimeEntry WHERE is_billable=TRUE) vs collected (Payment→Invoice), realization %
+  2. **WIP (Work-in-Progress):** uninvoiced billable time by matter (TimeEntry WHERE is_billable=TRUE AND invoice_id IS NULL)
+  3. **A/R Aging:** outstanding invoice balances bucketed by days overdue (0–30 / 31–60 / 61–90 / 90+)
+- [x] `routers/reports.py` endpoints: `GET /api/reports/billing/{realization,wip,aging}`, each tenant-scoped + `?format=csv` export (commit `199823f`)
+- [x] Frontend: `ReportsPage` tab bar (Overview / Realization / WIP / A/R Aging), sortable tables, per-report CSV download (commit `042a0b4`)
+- [ ] Acceptance: code complete + frontend build passes; **backend pytest not run locally** (test Postgres `localhost:5434` unreachable from Windows host — Docker Desktop networking); verify on next deploy. Date-range filters deferred to Phase 2.
 
 **Phase 2 (P2, LATER)** — Advanced Reports
 - [ ] Profitability ranking, custom filters, pivot tables, trend charts, realization %, blended rates
