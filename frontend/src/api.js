@@ -811,6 +811,9 @@ export const updateCommunication = (id, data) =>
 export const deleteCommunication = (id) =>
   api.delete(`/communications/${id}`).then(r => r.data)
 
+export const scanEmailInbox = (provider, maxEmails = 20) =>
+  api.post('/email/scan', { provider, max_emails: maxEmails }).then(r => r.data)
+
 // ── Intake / Leads ─────────────────────────────────────────────────────────
 
 export const getLeads = (params = {}) =>
@@ -867,6 +870,9 @@ export const getMatterCloudFolder = (matterId) =>
 export const provisionMatterCloudFolder = (matterId) =>
   api.post(`/matters/${matterId}/cloud-folder/provision`).then(r => r.data)
 
+export const syncMatterCloudFolder = (matterId) =>
+  api.post(`/matters/${matterId}/cloud-folder/sync`).then(r => r.data)
+
 // ── Reports ─────────────────────────────────────────────────────────────────
 
 export const getMatterStatusReport = () =>
@@ -880,6 +886,35 @@ export const getOverdueTasksReport = () =>
 
 export const getReportsBundle = () =>
   api.get('/reports/bundle').then(r => r.data)
+
+export const getRealizationReport = () =>
+  api.get('/reports/billing/realization').then(r => r.data)
+
+export const getWipReport = () =>
+  api.get('/reports/billing/wip').then(r => r.data)
+
+export const getAgingReport = () =>
+  api.get('/reports/billing/aging').then(r => r.data)
+
+export const downloadRealizationCsv = () =>
+  api.get('/reports/billing/realization', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+
+export const downloadWipCsv = () =>
+  api.get('/reports/billing/wip', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+
+export const downloadAgingCsv = () =>
+  api.get('/reports/billing/aging', { params: { format: 'csv' }, responseType: 'blob' }).then(r => r.data)
+
+export const triggerBlobDownload = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
 
 // ── Calendar ────────────────────────────────────────────────────────────────
 
