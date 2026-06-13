@@ -38,3 +38,34 @@ class FirmReportBundle(BaseModel):
     intake_funnel: IntakeFunnelReport
     overdue_tasks: OverdueTasksReport
     generated_at: str  # ISO datetime string
+
+
+class RealizationReportRow(BaseModel):
+    """Per-matter billable-vs-collected realization."""
+
+    matter_id: str
+    matter_name: str
+    billable_hours: float
+    billable_amount: float
+    collected_amount: float
+    realization_pct: float  # collected_amount / billable_amount * 100, rounded to 1dp
+
+
+class WipReportRow(BaseModel):
+    """Per-matter uninvoiced (work-in-progress) billable time."""
+
+    matter_id: str
+    matter_name: str
+    wip_hours: float
+    wip_value: float
+
+
+class AgingReportRow(BaseModel):
+    """Per-matter outstanding A/R balance bucketed by days overdue."""
+
+    matter_id: str
+    matter_name: str
+    days_0_30: float
+    days_31_60: float
+    days_61_90: float
+    days_90_plus: float
