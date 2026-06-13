@@ -8,6 +8,8 @@ import pytest
 
 from app.models.billing import Invoice, Payment, TimeEntry
 from app.models.plugin import Matter
+from app.models.tenant import Tenant
+from app.models.user import User
 
 
 def _make_matter(tenant_id, user_id, name="Case A", slug=None) -> Matter:
