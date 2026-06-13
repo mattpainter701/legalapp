@@ -609,6 +609,25 @@ async def _bank_account_book_balance(
     return Decimal(total), int(count)
 
 
+def _bank_account_response(
+    account: "TrustBankAccount", book_balance: Decimal, count: int
+) -> TrustBankAccountResponse:
+    """Build a TrustBankAccountResponse from an ORM row + computed balances."""
+    return TrustBankAccountResponse(
+        id=str(account.id),
+        tenant_id=str(account.tenant_id),
+        account_name=account.account_name,
+        bank_name=account.bank_name,
+        account_number_masked=account.account_number_masked,
+        is_active=account.is_active,
+        notes=account.notes,
+        created_at=account.created_at,
+        updated_at=account.updated_at,
+        book_balance=book_balance,
+        client_ledger_count=count,
+    )
+
+
 @router.post("/bank-accounts", status_code=201)
 async def create_trust_bank_account(
     body: TrustBankAccountCreate,
@@ -630,13 +649,7 @@ async def create_trust_bank_account(
     await db.commit()
     await db.refresh(bank_account)
 
-    return TrustBankAccountResponse(
-        **TrustBankAccountResponse.model_validate(bank_account).model_dump(
-            exclude={"book_balance", "client_ledger_count"}
-        ),
-        book_balance=Decimal("0"),
-        client_ledger_count=0,
-    )
+    return _bank_account_response(bank_account, Decimal("0"), 0)
 
 
 @router.get("/bank-accounts")
@@ -664,15 +677,7 @@ async def list_trust_bank_accounts(
             db, user.tenant_id, account.id
         )
         total_book_balance += book_balance
-        items.append(
-            TrustBankAccountResponse(
-                **TrustBankAccountResponse.model_validate(account).model_dump(
-                    exclude={"book_balance", "client_ledger_count"}
-                ),
-                book_balance=book_balance,
-                client_ledger_count=count,
-            )
-        )
+        items.append(_bank_account_response(account, book_balance, count))
 
     return TrustBankAccountListResponse(
         items=items,
@@ -705,13 +710,7 @@ async def get_trust_bank_account(
         db, user.tenant_id, account.id
     )
 
-    return TrustBankAccountResponse(
-        **TrustBankAccountResponse.model_validate(account).model_dump(
-            exclude={"book_balance", "client_ledger_count"}
-        ),
-        book_balance=book_balance,
-        client_ledger_count=count,
-    )
+    return _bank_account_response(account, book_balance, count)
 
 
 @router.patch("/bank-accounts/{bank_account_id}")
@@ -746,13 +745,7 @@ async def update_trust_bank_account(
         db, user.tenant_id, account.id
     )
 
-    return TrustBankAccountResponse(
-        **TrustBankAccountResponse.model_validate(account).model_dump(
-            exclude={"book_balance", "client_ledger_count"}
-        ),
-        book_balance=book_balance,
-        client_ledger_count=count,
-    )
+    return _bank_account_response(account, book_balance, count)
 
 
 # ── Pooled Three-Way Reconciliation ─────────────────────────────────────────

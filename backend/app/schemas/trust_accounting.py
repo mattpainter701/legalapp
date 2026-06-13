@@ -1,10 +1,27 @@
 """Pydantic schemas for IOLTA trust accounting — accounts, transactions, reconciliation."""
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class _ORMResponse(BaseModel):
+    """Base for responses built from ORM rows.
+
+    Reads attributes (``from_attributes``) and coerces UUID values to ``str``
+    so models that declare id/foreign-key fields as ``str`` validate cleanly
+    from SQLAlchemy objects (Pydantic v2 does not auto-cast UUID → str).
+    """
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _uuid_to_str(cls, v):
+        return str(v) if isinstance(v, uuid.UUID) else v
 
 
 # ── Trust Account ────────────────────────────────────────────────────────────
@@ -38,7 +55,7 @@ class TrustAccountUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-class TrustAccountResponse(BaseModel):
+class TrustAccountResponse(_ORMResponse):
     id: str
     tenant_id: str
     matter_id: str
@@ -86,7 +103,7 @@ class TrustTransactionCreate(BaseModel):
     notes: Optional[str] = None
 
 
-class TrustTransactionResponse(BaseModel):
+class TrustTransactionResponse(_ORMResponse):
     id: str
     tenant_id: str
     trust_account_id: str
@@ -190,7 +207,7 @@ class TrustBankAccountUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-class TrustBankAccountResponse(BaseModel):
+class TrustBankAccountResponse(_ORMResponse):
     id: str
     tenant_id: str
     account_name: str
@@ -231,7 +248,7 @@ class PooledReconciliationRequest(BaseModel):
     notes: Optional[str] = None
 
 
-class TrustReconciliationSnapshot(BaseModel):
+class TrustReconciliationSnapshot(_ORMResponse):
     """A persisted three-way reconciliation snapshot."""
 
     id: str
