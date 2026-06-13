@@ -117,7 +117,7 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
   3. **A/R Aging:** outstanding invoice balances bucketed by days overdue (0–30 / 31–60 / 61–90 / 90+)
 - [x] `routers/reports.py` endpoints: `GET /api/reports/billing/{realization,wip,aging}`, each tenant-scoped + `?format=csv` export (commit `199823f`)
 - [x] Frontend: `ReportsPage` tab bar (Overview / Realization / WIP / A/R Aging), sortable tables, per-report CSV download (commit `042a0b4`)
-- [ ] Acceptance: code complete + frontend build passes; **backend pytest not run locally** (test Postgres `localhost:5434` unreachable from Windows host — Docker Desktop networking); verify on next deploy. Date-range filters deferred to Phase 2.
+- [x] Acceptance: deployed to hypervisor 2026-06-13 (commit `b77deab`); **6/6 backend report tests pass** against real Postgres; frontend build passes; live endpoints return 401 unauth (wired). Date-range filters deferred to Phase 2.
 
 **Phase 2 (P2, LATER)** — Advanced Reports
 - [ ] Profitability ranking, custom filters, pivot tables, trend charts, realization %, blended rates
