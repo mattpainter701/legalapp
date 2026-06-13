@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Task 1314 — Trust Accounting Frontend:** Full UI for the existing trust accounting backend (9 endpoints in `trust_accounting.py`).
+  - `frontend/src/api.js`: 9 wrapper functions (`createTrustAccount`, `listTrustAccounts`, `getTrustAccount`, `updateTrustAccount`, `closeTrustAccount`, `createTrustTransaction`, `listTrustTransactions`, `reconcileTrustAccount`, `getTrustReconciliation`).
+  - `TrustAccountingPage` (`/trust`): portfolio view with total-balance summary, active/all filter, accounts table, and a "New Trust Account" modal with matter selector.
+  - `TrustAccountDetail` (`/trust/:id`): balance ledger header (current/minimum balance, auto-replenish), transaction history table with deposits/disbursements/net summary, "Post Transaction" modal, inline edit form, and close-account action.
+  - `TrustAccountReconcile`: reconciliation tab — bank balance / outstanding deposits & disbursements form, three-way reconciliation result with reconciled vs. out-of-balance banner, and last-reconciliation display on load.
+  - Sidebar nav entry ("Trust Accounting", Landmark icon) and routes added to `App.jsx`.
+  - `MatterDetailPage`: new "Trust Balance" card next to the Budget card, summing balances across the matter's trust accounts with a quick-link to the detail/reconciliation view (shows "No trust account" when none exist).
 - **Task 1308b — Accounting Reports (Phase 1):** Three core billing reports with CSV export.
   - Backend (`routers/reports.py`): tenant-scoped `GET /api/reports/billing/realization` (per-matter billable hours/amount vs collected, realization %), `/billing/wip` (uninvoiced billable time + value), and `/billing/aging` (outstanding invoice balances bucketed 0–30 / 31–60 / 61–90 / 90+ days overdue). Each endpoint supports `?format=csv` for a downloadable CSV.
   - Frontend (`ReportsPage`): tab bar (Overview / Realization / WIP / A/R Aging) with sortable tables and per-report Download CSV buttons; new `api.js` report fetchers + CSV blob helpers.

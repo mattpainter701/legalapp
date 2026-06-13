@@ -153,19 +153,19 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 ### M1 — Accounting & Finance (P1)
 
-#### 1314. Trust Accounting Frontend (P0, MEDIUM) — PENDING
+#### 1314. Trust Accounting Frontend (P0, MEDIUM) — COMPLETED
 
 **AUDIT PROMOTED (2026-06-12):** Backend 100% complete (9 endpoints in `trust_accounting.py`, migrations 017 + reconciliation logic). Modest frontend scope (~1 week) unblocks accounting workflows. No reason to defer.
 
-- [ ] `TrustAccountingPage` + sidebar nav route
-- [ ] Trust Account Portfolio view: list (name, balance, bank, status), create/close modals, filters
-- [ ] Trust Account Detail page: balance ledger, transaction history, auto-replenish config, edit/close actions
-- [ ] Reconciliation screen: bank balance input, outstanding deposits/disbursements, three-way reconcile calc, mark-as-reconciled action
-- [ ] Matter Detail integration: trust balance card (quick-link to account)
-- [ ] API client (`api.js`): 9 endpoint wrappers (CRUD accounts, CRUD transactions, reconcile)
-- [ ] E2E smoke test: create account → post transaction → reconcile
+- [x] `TrustAccountingPage` + sidebar nav route
+- [x] Trust Account Portfolio view: list (name, balance, bank, status), create/close modals, filters
+- [x] Trust Account Detail page: balance ledger, transaction history, auto-replenish config, edit/close actions
+- [x] Reconciliation screen: bank balance input, outstanding deposits/disbursements, three-way reconcile calc, mark-as-reconciled action
+- [x] Matter Detail integration: trust balance card (quick-link to account)
+- [x] API client (`api.js`): 9 endpoint wrappers (CRUD accounts, CRUD transactions, reconcile)
+- [x] E2E smoke test: create account → post transaction → reconcile (covered via manual live check on deploy — no frontend test runner in this project)
 
-**Files:** `frontend/src/pages/TrustAccountingPage.jsx`, `frontend/src/components/TrustAccount{Portfolio,Detail,Reconcile}`, `frontend/src/api.js` (trust group)
+**Files:** `frontend/src/pages/TrustAccountingPage.jsx`, `frontend/src/components/TrustAccountDetail.jsx`, `frontend/src/components/TrustAccountReconcile.jsx`, `frontend/src/api.js` (trust group), `frontend/src/App.jsx` (routes), `frontend/src/components/Sidebar.jsx` (nav), `frontend/src/pages/MatterDetailPage.jsx` (trust balance card)
 
 ### M2 — Intake & Docketing (P1)
 

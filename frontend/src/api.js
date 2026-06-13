@@ -1170,4 +1170,32 @@ export const deleteSmbShare = (shareId) =>
 export const searchSmbFiles = (params) =>
   api.get('/v1/smb/files/search', { params }).then(r => r.data)
 
+// ── Trust Accounting ─────────────────────────────────────────────────────────
+export const createTrustAccount = (body) =>
+  api.post('/trust/accounts', body).then(r => r.data)
+
+export const listTrustAccounts = (params) =>
+  api.get('/trust/accounts', { params }).then(r => r.data)
+
+export const getTrustAccount = (id) =>
+  api.get(`/trust/accounts/${id}`).then(r => r.data)
+
+export const updateTrustAccount = (id, body) =>
+  api.patch(`/trust/accounts/${id}`, body).then(r => r.data)
+
+export const closeTrustAccount = (id) =>
+  api.post(`/trust/accounts/${id}/close`).then(r => r.data)
+
+export const createTrustTransaction = (body) =>
+  api.post('/trust/transactions', body).then(r => r.data)
+
+export const listTrustTransactions = (params) =>
+  api.get('/trust/transactions', { params }).then(r => r.data)
+
+export const reconcileTrustAccount = (id, body) =>
+  api.post(`/trust/accounts/${id}/reconcile`, body).then(r => r.data)
+
+export const getTrustReconciliation = (id) =>
+  api.get(`/trust/accounts/${id}/reconciliation`).then(r => r.data)
+
 export default api

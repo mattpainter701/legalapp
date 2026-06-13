@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import FileUpload from './FileUpload'
 import IntegrationPanel from './IntegrationPanel'
-import { Plus, Blocks, FileText, Trash2, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User, ChevronRight } from 'lucide-react'
+import { Plus, Blocks, FileText, Trash2, Scale, CheckCircle2, Loader2, Search, Pin, X, BarChart2, CalendarDays, MessageSquare, FileSignature, Briefcase, Clock, Receipt, User, ChevronRight, Landmark } from 'lucide-react'
 
 const NAV_ITEMS = [
   { path: '/matters',        label: 'My Matters',       icon: Briefcase,    primary: true },
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { path: '/communications', label: 'Communications',   icon: MessageSquare },
   { path: '/time-tracking',  label: 'Time Tracking',    icon: Clock         },
   { path: '/invoices',       label: 'Invoices',         icon: Receipt       },
+  { path: '/trust',          label: 'Trust Accounting', icon: Landmark      },
   { path: '/reports',        label: 'Reports',          icon: BarChart2     },
   { path: '/templates',      label: 'Templates',        icon: FileSignature },
   { path: '/plugins',        label: 'Add-on Modules',   icon: Blocks        },

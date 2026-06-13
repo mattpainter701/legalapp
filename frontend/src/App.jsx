@@ -28,6 +28,8 @@ import ContactDetailPage from './pages/ContactDetailPage'
 import TasksPage from './pages/TasksPage'
 import IntakePage from './pages/IntakePage'
 import ReportsPage from './pages/ReportsPage'
+import TrustAccountingPage from './pages/TrustAccountingPage'
+import TrustAccountDetail from './components/TrustAccountDetail'
 import CalendarPage from './pages/CalendarPage'
 import CommunicationsPage from './pages/CommunicationsPage'
 import TemplatesPage from './pages/TemplatesPage'
@@ -212,6 +214,14 @@ export default function App() {
         <Route
           path="/reports"
           element={<ShellRoute title="Reports"><ReportsPage /></ShellRoute>}
+        />
+        <Route
+          path="/trust"
+          element={<ShellRoute title="Trust Accounting"><TrustAccountingPage /></ShellRoute>}
+        />
+        <Route
+          path="/trust/:id"
+          element={<ShellRoute title="Trust Account"><TrustAccountDetail /></ShellRoute>}
         />
         <Route
           path="/templates"

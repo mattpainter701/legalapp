@@ -12,6 +12,7 @@ import {
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, voidSignatureRequest,
+  syncMatterCloudFolder, listTrustAccounts,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
@@ -47,6 +48,7 @@ const Icons = {
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
   send: 'M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z',
+  refresh: 'M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6',
   chevronDown: 'M6 9l6 6 6-6',
   chevronRight: 'M9 18l6-6-6-6',
   checkCircle: 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3',
@@ -155,6 +157,9 @@ export default function MatterDetailPage() {
   // Budget
   const [budget, setBudget] = useState(null)
 
+  // Trust accounts
+  const [trustAccounts, setTrustAccounts] = useState([])
+
   // Dashboard
   const [dashboard, setDashboard] = useState(null)
   const [tasks, setTasks] = useState([])
@@ -185,6 +190,8 @@ export default function MatterDetailPage() {
 
   // Cloud files
   const [cloudFiles, setCloudFiles] = useState(null) // null = not loaded yet
+  const [cloudSyncing, setCloudSyncing] = useState(false)
+  const [cloudSyncError, setCloudSyncError] = useState(null)
 
   // Billing
   const [timeEntries, setTimeEntries] = useState([])
@@ -229,15 +236,25 @@ export default function MatterDetailPage() {
     }
   }, [id])
 
+  const loadCloudFiles = useCallback(async () => {
+    try {
+      const data = await getMatterCloudFiles(id)
+      setCloudFiles(data)
+    } catch {
+      setCloudFiles({ connected: false, files: [] })
+    }
+  }, [id])
+
   useEffect(() => {
     loadMatter()
     getMatterBudgetV2(id).then(setBudget).catch(() => {})
+    listTrustAccounts({ matter_id: id }).then(data => setTrustAccounts(data.items || [])).catch(() => {})
     getPlugins().then(data => {
       const list = Array.isArray(data) ? data : data.plugins || []
       setPluginOptions(list.filter(p => p.supports_matter_assignment !== false))
     }).catch(() => {})
-    getMatterCloudFiles(id).then(setCloudFiles).catch(() => {})
-  }, [id, loadMatter])
+    loadCloudFiles()
+  }, [id, loadMatter, loadCloudFiles])
 
   useEffect(() => {
     if (activeTab === 'dashboard') {
@@ -283,6 +300,21 @@ export default function MatterDetailPage() {
       setSaveError('Failed to save changes.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleMatterCloudSync = async () => {
+    setCloudSyncing(true)
+    setCloudSyncError(null)
+    try {
+      const result = await syncMatterCloudFolder(id)
+      setMatter(prev => prev ? { ...prev, cloud_folder: result.providers || {} } : prev)
+      setEditData(prev => ({ ...prev, cloud_folder: result.providers || {} }))
+      setCloudFiles({ connected: result.connected, files: result.files || [] })
+    } catch (err) {
+      setCloudSyncError(err?.response?.data?.detail || 'Cloud folder sync failed.')
+    } finally {
+      setCloudSyncing(false)
     }
   }
 
@@ -477,6 +509,41 @@ export default function MatterDetailPage() {
                 <span className="text-[12px] font-sans text-brand-muted">#{matter.case_number}</span>
               )}
             </div>
+            {(matter.cloud_folder?.onedrive?.url || matter.cloud_folder?.google_drive?.url) && (
+              <div className="flex flex-wrap items-center gap-2 mt-4">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-brand-muted font-sans">Cloud Folder</span>
+                {matter.cloud_folder?.onedrive?.url && (
+                  <a href={matter.cloud_folder.onedrive.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100 transition-colors">
+                    <Icon d={Icons.folder} size={12} /> OneDrive
+                  </a>
+                )}
+                {matter.cloud_folder?.google_drive?.url && (
+                  <a href={matter.cloud_folder.google_drive.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 text-xs font-medium rounded-lg hover:bg-green-100 transition-colors">
+                    <Icon d={Icons.folder} size={12} /> Google Drive
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Trust Balance card */}
+          <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 text-right min-w-[180px] shadow-sm">
+            <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Trust Balance</div>
+            {trustAccounts.length > 0 ? (
+              <>
+                <div className="text-[26px] font-serif font-bold text-brand-ink">
+                  ${trustAccounts.reduce((sum, a) => sum + Number(a.current_balance || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <button
+                  onClick={() => navigate(trustAccounts.length === 1 ? `/trust/${trustAccounts[0].id}` : `/trust?matter_id=${id}`)}
+                  className="text-[12px] text-brand-accent font-sans hover:underline mt-1"
+                >
+                  {trustAccounts.length === 1 ? 'View trust account' : `View ${trustAccounts.length} trust accounts`}
+                </button>
+              </>
+            ) : (
+              <div className="text-[13px] text-brand-muted font-sans">No trust account</div>
+            )}
           </div>
 
           {/* Budget card */}
@@ -573,18 +640,23 @@ export default function MatterDetailPage() {
                   { label: 'Email Client', icon: Icons.mail, action: () => setShowCompose(true) },
                   { label: 'Add Task', icon: Icons.plus, action: () => setShowAddTask(true) },
                   { label: 'Start Chat', icon: Icons.messageSquare, action: handleStartChat },
+                  { label: cloudSyncing ? 'Syncing Cloud' : 'Sync Cloud', icon: Icons.refresh, action: handleMatterCloudSync },
                   { label: 'Add Note', icon: Icons.edit, action: () => { setActiveTab('activity'); setTimeout(() => setShowAddNote(true), 50) } },
                 ].map((a, i) => (
                   <button
                     key={i}
                     onClick={a.action}
+                    disabled={a.label.includes('Syncing')}
                     className="flex items-center gap-2 px-4 py-2.5 bg-brand-bg-soft border border-brand-line text-brand-ink text-[13px] font-sans font-semibold rounded-xl hover:bg-brand-surface hover:border-brand-line-2 hover:-translate-y-[1px] transition-all shadow-sm"
                   >
-                    <Icon d={a.icon} size={15} className="text-brand-accent" />
+                    <Icon d={a.icon} size={15} className={`text-brand-accent ${a.label.includes('Syncing') ? 'animate-spin' : ''}`} />
                     {a.label}
                   </button>
                 ))}
               </div>
+              {cloudSyncError && (
+                <p className="text-brand-rose text-[12px] font-sans mt-3">{cloudSyncError}</p>
+              )}
             </div>
 
             {/* Key Dates + To-Do */}
@@ -677,13 +749,28 @@ export default function MatterDetailPage() {
                   <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={18} className="text-brand-accent" />
                   <h3 className="font-serif font-bold text-lg text-brand-ink">Cloud Files</h3>
                 </div>
-                {cloudFiles?.connected && (
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-brand-green bg-brand-green/10 px-2.5 py-1 rounded-lg border border-brand-green/20">
-                    <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" /> Connected
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {cloudFiles?.connected && (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-brand-green bg-brand-green/10 px-2.5 py-1 rounded-lg border border-brand-green/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" /> Connected
+                    </span>
+                  )}
+                  <button
+                    onClick={handleMatterCloudSync}
+                    disabled={cloudSyncing}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-brand-line text-brand-ink text-[12px] font-sans font-semibold rounded-lg hover:bg-brand-bg-soft disabled:opacity-50 transition-colors"
+                  >
+                    <Icon d={Icons.refresh} size={12} className={cloudSyncing ? 'animate-spin' : ''} />
+                    {cloudSyncing ? 'Syncing…' : 'Sync'}
+                  </button>
+                </div>
               </div>
               <div className="p-4">
+                {cloudSyncError && (
+                  <div className="mb-3 px-3 py-2 bg-brand-rose/10 border border-brand-rose/20 rounded-lg text-brand-rose text-[12px] font-sans">
+                    {cloudSyncError}
+                  </div>
+                )}
                 {cloudFiles === null ? (
                   <div className="flex justify-center py-6"><div className="w-5 h-5 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" /></div>
                 ) : !cloudFiles.connected ? (
@@ -1042,7 +1129,14 @@ export default function MatterDetailPage() {
         {/* ── Documents Tab (includes Parties) ─────────────────────────────────── */}
         {activeTab === 'documents' && (
           <div className="space-y-8">
-            <MatterDocumentsTab matterId={id} />
+            <MatterDocumentsTab
+              matterId={id}
+              onCloudFolderChange={(providers) => {
+                setMatter(prev => prev ? { ...prev, cloud_folder: providers || {} } : prev)
+                setEditData(prev => ({ ...prev, cloud_folder: providers || {} }))
+                loadCloudFiles()
+              }}
+            />
             <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
               <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
                 <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
