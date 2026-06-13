@@ -86,6 +86,35 @@ class TestGating:
         assert resp.json()[0]["display_name"] == "Litigation"
 
 
+# ── Scope preservation on re-auth ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestReauthScopePreservation:
+    async def test_reauth_without_flag_keeps_teams_scopes(self, client, ms_connected):
+        """A generic re-authorize (no &teams=1) must still request Teams scopes
+        when the tenant already consented to them."""
+        resp = await client.get(
+            "/api/integrations/microsoft/connect?intent=admin",
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 307)
+        location = resp.headers["location"]
+        assert "ChannelMessage.Send" in location
+
+    async def test_reauth_without_teams_history_stays_base(
+        self, client, db_session, test_tenant
+    ):
+        """A tenant that never enabled Teams is not forced into Teams consent."""
+        await _add_ms_credential(db_session, test_tenant.id, "offline_access User.Read.All")
+        resp = await client.get(
+            "/api/integrations/microsoft/connect?intent=admin",
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 307)
+        assert "ChannelMessage.Send" not in resp.headers["location"]
+
+
 # ── Status endpoint ───────────────────────────────────────────────────────
 
 
