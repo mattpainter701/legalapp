@@ -287,11 +287,32 @@ async def test_empty_reports_return_empty_lists(
 
 @pytest.mark.asyncio
 async def test_realization_tenant_isolation(client, db_session, test_tenant, test_user):
-    other_tenant_id = uuid.uuid4()
-    other_user_id = uuid.uuid4()
+    # A second tenant + user must really exist — matters.user_id is an FK to users.
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other Law Firm",
+        domain="otherfirm.com",
+        billing_tier="payg",
+        is_active=True,
+    )
+    db_session.add(other_tenant)
+    await db_session.commit()
+
+    other_user = User(
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email="attorney@otherfirm.com",
+        full_name="Other Attorney",
+        role="admin",
+        oauth_provider="google",
+        oauth_subject="google-sub-other",
+        is_active=True,
+    )
+    db_session.add(other_user)
+    await db_session.commit()
 
     own_matter = _make_matter(test_tenant.id, test_user.id, name="Own Case")
-    other_matter = _make_matter(other_tenant_id, other_user_id, name="Other Case")
+    other_matter = _make_matter(other_tenant.id, other_user.id, name="Other Case")
     db_session.add_all([own_matter, other_matter])
     await db_session.commit()
 
@@ -299,7 +320,7 @@ async def test_realization_tenant_isolation(client, db_session, test_tenant, tes
         test_tenant.id, own_matter.id, test_user.id, hours="2.00", rate="100.00"
     )
     other_entry = _make_time_entry(
-        other_tenant_id, other_matter.id, other_user_id, hours="4.00", rate="100.00"
+        other_tenant.id, other_matter.id, other_user.id, hours="4.00", rate="100.00"
     )
     db_session.add_all([own_entry, other_entry])
     await db_session.commit()
