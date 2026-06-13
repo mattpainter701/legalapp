@@ -314,7 +314,7 @@ def generate_trust_statement_pdf(statement, branding: dict) -> bytes:
                     ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_BG),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
                     ("FONTSIZE", (0, 0), (-1, -1), FONT_SIZE_BODY),
-                    ("GRID", (0, 0), (-1, -1), TABLE_GRID_COLOR),
+                    ("GRID", (0, 0), (-1, -1), 0.5, TABLE_GRID_COLOR),
                     ("LINEBELOW", (0, 0), (-1, 0), 1.5, colors.black),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("TOPPADDING", (0, 0), (-1, -1), 3),
