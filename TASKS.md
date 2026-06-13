@@ -107,14 +107,15 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
 - [ ] Decline flow + per-signer email dispatch on send
 
-#### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — DELIVERED (PDF export deferred)
+#### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — DELIVERED
 
 **RECONCILED (2026-06-13):** The frontend portion of this task was delivered by **[1314](#1314-trust-accounting-frontend-p0-medium--completed)** (portfolio/detail/reconcile UI against the existing per-matter `trust_accounting.py` backend). What remains here is the **backend deepening** that 1314 did not touch — pooled bank accounts, persisted reconciliation snapshots, per-client ledgers, overdraft guardrail, and exports. Re-scoped to backend-only; frontend bullet closed.
 
 - [x] Migration `054_trust_ledger` (renumbered from 046 — chained after Teams `053`): `trust_bank_accounts` (pooled, RLS), `trust_accounts.bank_account_id` FK, `trust_reconciliations` (saved snapshots, RLS). Applied to head on deploy 2026-06-13.
 - [x] Backend (in `routers/trust_accounting.py`): pooled bank-account CRUD (`/api/trust/bank-accounts`); pooled three-way reconcile (`bank == book == Σ client ledgers`) with **persisted snapshots**; reconciliation history; per-client ledger statement (`/accounts/{id}/statement`) + **CSV export**; both reconcile endpoints now persist `TrustReconciliation` rows. Models registered in `models/__init__.py` (closed BK05 gap).
 - [x] Overdraft guardrail: pre-existing per-account debit block confirmed + regression test added.
-- [ ] **PDF export deferred** — CSV statement export shipped; PDF (reportlab) is a follow-on.
+- [x] **Firm branding + branded PDF export (2026-06-13):** migration `055_firm_branding` adds branding columns to `tenant_settings` (firm name/logo/address/phone/email/website/PDF-footer); `GET/PUT /api/firm/branding` (`routers/firm.py`, PUT admin-gated, name/address fall back to the tenant record); `services/trust_statement_pdf.py` renders a branded statement (logo fetched best-effort, skipped on failure); `?format=pdf` wired into the statement endpoint. CSV export also shipped. Verified: `test_firm_branding.py` (branding GET/PUT + PDF export) + full trust suite = **16/16 pass** on deploy.
+- [ ] **Frontend (remaining):** firm-branding settings form (Admin) + "Download PDF" button on the trust statement view. Backend API is live; UI not yet built.
 - [x] Tests: `tests/test_trust_ledger.py` — **9/9 pass** against real Postgres on deploy (bank CRUD, ledger linking/book-balance, pooled reconcile balanced+unbalanced, statement + CSV, overdraft, per-account snapshot persistence, tenant isolation).
 - [x] Frontend: `TrustAccountingPage` + route + sidebar nav; ledger views; Reconcile screen; trust balance card on `MatterDetailPage`; `api.js` group — **delivered by 1314 (2026-06-13)**
 
