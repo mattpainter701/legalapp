@@ -14,6 +14,8 @@ from app.middleware.tenant import get_current_user
 from app.models.trust_accounting import (
     TrustAccount,
     TrustTransaction,
+    TrustBankAccount,
+    TrustReconciliation,
 )
 from app.models.plugin import Matter
 from app.schemas.trust_accounting import (
@@ -27,6 +29,14 @@ from app.schemas.trust_accounting import (
     ReconciliationRequest,
     ReconciliationResponse,
     ReconciliationLine,
+    TrustBankAccountCreate,
+    TrustBankAccountUpdate,
+    TrustBankAccountResponse,
+    TrustBankAccountListResponse,
+    PooledReconciliationRequest,
+    TrustReconciliationSnapshot,
+    TrustLedgerStatementLine,
+    TrustLedgerStatementResponse,
 )
 
 router = APIRouter(prefix="/api/trust", tags=["trust accounting"])
