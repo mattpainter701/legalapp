@@ -107,13 +107,18 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
 - [ ] Decline flow + per-signer email dispatch on send
 
-#### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — PENDING
+#### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — DELIVERED (PDF export deferred)
 
 **RECONCILED (2026-06-13):** The frontend portion of this task was delivered by **[1314](#1314-trust-accounting-frontend-p0-medium--completed)** (portfolio/detail/reconcile UI against the existing per-matter `trust_accounting.py` backend). What remains here is the **backend deepening** that 1314 did not touch — pooled bank accounts, persisted reconciliation snapshots, per-client ledgers, overdraft guardrail, and exports. Re-scoped to backend-only; frontend bullet closed.
 
-- [ ] Migration `046_trust_ledger`: `trust_bank_accounts` (pooled), `trust_accounts.bank_account_id` (→ client ledgers), `trust_reconciliations` (saved snapshots)
-- [ ] Backend: pooled-account CRUD; persist reconciliation snapshots; per-client ledger statement; overdraft guardrail (block negative client ledger); CSV/PDF export; extend reconcile to assert sum-of-client-ledgers == book == bank
+- [x] Migration `054_trust_ledger` (renumbered from 046 — chained after Teams `053`): `trust_bank_accounts` (pooled, RLS), `trust_accounts.bank_account_id` FK, `trust_reconciliations` (saved snapshots, RLS). Applied to head on deploy 2026-06-13.
+- [x] Backend (in `routers/trust_accounting.py`): pooled bank-account CRUD (`/api/trust/bank-accounts`); pooled three-way reconcile (`bank == book == Σ client ledgers`) with **persisted snapshots**; reconciliation history; per-client ledger statement (`/accounts/{id}/statement`) + **CSV export**; both reconcile endpoints now persist `TrustReconciliation` rows. Models registered in `models/__init__.py` (closed BK05 gap).
+- [x] Overdraft guardrail: pre-existing per-account debit block confirmed + regression test added.
+- [ ] **PDF export deferred** — CSV statement export shipped; PDF (reportlab) is a follow-on.
+- [x] Tests: `tests/test_trust_ledger.py` — **9/9 pass** against real Postgres on deploy (bank CRUD, ledger linking/book-balance, pooled reconcile balanced+unbalanced, statement + CSV, overdraft, per-account snapshot persistence, tenant isolation).
 - [x] Frontend: `TrustAccountingPage` + route + sidebar nav; ledger views; Reconcile screen; trust balance card on `MatterDetailPage`; `api.js` group — **delivered by 1314 (2026-06-13)**
+
+**Side-effect fix (2026-06-13):** added a `UUID→str` coercion mixin to the trust response schemas, fixing a **pre-existing latent bug** — `TrustAccountResponse`/`TrustTransactionResponse` declared UUID fields as `str` without coercion, so the 1314 create/list/transaction flows would have 500'd in production (never caught: trust was headless until 1314 and had no E2E test). Now verified by the new test suite.
 
 **Follow-on for the UI (after backend lands):** surface pooled-account grouping, saved-snapshot history, per-client ledger statement view, and CSV/PDF export buttons on the 1314 pages.
 

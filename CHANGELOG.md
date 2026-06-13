@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **Task 1303 — Trust Accounting pooled ledger & reconciliation persistence (backend):** Pooled IOLTA bank accounts with three-way reconciliation and saved snapshots.
+  - Migration `054_trust_ledger`: `trust_bank_accounts` (pooled, RLS), `trust_accounts.bank_account_id` FK, `trust_reconciliations` (persisted snapshots, RLS).
+  - `routers/trust_accounting.py`: pooled bank-account CRUD (`/api/trust/bank-accounts`), pooled three-way reconcile (`bank == book == Σ client ledgers`) that persists a snapshot, reconciliation history, and per-client ledger statement (`/accounts/{id}/statement`) with CSV export. The existing per-account reconcile now also persists a snapshot. Trust models registered in `models/__init__.py`.
+  - Fixed a pre-existing latent serialization bug (UUID→str) in trust response schemas that would have 500'd the 1314 create/transaction flows in production; added a shared coercion mixin. Verified by `tests/test_trust_ledger.py` (9/9 passing). PDF statement export deferred.
 - **Task 1314 — Trust Accounting Frontend:** Full UI for the existing trust accounting backend (9 endpoints in `trust_accounting.py`).
   - `frontend/src/api.js`: 9 wrapper functions (`createTrustAccount`, `listTrustAccounts`, `getTrustAccount`, `updateTrustAccount`, `closeTrustAccount`, `createTrustTransaction`, `listTrustTransactions`, `reconcileTrustAccount`, `getTrustReconciliation`).
   - `TrustAccountingPage` (`/trust`): portfolio view with total-balance summary, active/all filter, accounts table, and a "New Trust Account" modal with matter selector.
