@@ -42,6 +42,8 @@ from app.models.retainer import Retainer, RetainerTransaction
 from app.models.scheduler import SchedulerLog
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
+from app.models.teams_channel_link import TeamsChannelLink
+from app.models.teams_notification_setting import TeamsNotificationSetting
 from app.models.error_log import ErrorLog
 from app.models.contact import Contact, Lead
 from app.models.client_portal import ClientPortalInvite
@@ -113,6 +115,8 @@ __all__ = [
     "SchedulerLog",
     "TenantCredential",
     "UserOAuthToken",
+    "TeamsChannelLink",
+    "TeamsNotificationSetting",
     "ErrorLog",
     "Contact",
     "Lead",

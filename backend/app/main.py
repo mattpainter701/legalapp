@@ -24,6 +24,7 @@ from app.routers.plugins import router as plugins_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.dev import router as dev_router
 from app.routers.integrations import router as integrations_router
+from app.routers.teams import router as teams_router
 from app.routers.email_agent import router as email_router
 from app.routers.document_sync import router as document_sync_router
 from app.routers.user_sync import router as user_sync_router
@@ -237,6 +238,7 @@ app.include_router(cloud_admin_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev_router, prefix="/api")
 app.include_router(integrations_router)
+app.include_router(teams_router)
 app.include_router(email_router)
 app.include_router(document_sync_router)
 app.include_router(user_sync_router)

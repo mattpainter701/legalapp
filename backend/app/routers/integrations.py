@@ -19,6 +19,8 @@ from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
+from app.services.teams import TEAMS_REQUIRED_SCOPES
+from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import encrypt_token
 
 settings = get_settings()
@@ -118,10 +120,22 @@ def _require_state_user(meta: dict | None, intent: str) -> tuple[str, str]:
     return user_id, tenant_id
 
 
+def _admin_scopes(teams: bool) -> str:
+    """Admin consent scope string, optionally widened with Teams scopes.
+
+    Teams scopes are only appended on explicit opt-in (``&teams=1``) so existing
+    cloud-only tenants are never forced into broader consent.
+    """
+    if teams:
+        return MICROSOFT_ADMIN_SCOPES + " " + TEAMS_REQUIRED_SCOPES
+    return MICROSOFT_ADMIN_SCOPES
+
+
 @router.get("/microsoft/connect")
 async def microsoft_connect(
     request: Request,
     intent: str = Query("admin", description="admin=tenant-wide, user=per-user"),
+    teams: int = Query(0, description="1=include Microsoft Teams scopes"),
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
@@ -138,12 +152,15 @@ async def microsoft_connect(
             "user_id": str(user.id),
             "tenant_id": str(user.tenant_id),
             "role": user.role,
+            "teams": bool(teams),
         },
     )
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
-    scopes = MICROSOFT_ADMIN_SCOPES if intent == "admin" else MICROSOFT_USER_SCOPES
+    scopes = (
+        _admin_scopes(bool(teams)) if intent == "admin" else MICROSOFT_USER_SCOPES
+    )
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
@@ -174,6 +191,7 @@ async def microsoft_callback(
     token_url = f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/token"
 
     intent = meta.get("intent", "user") if meta else "user"
+    teams_flag = bool(meta.get("teams")) if meta else False
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
@@ -184,7 +202,7 @@ async def microsoft_callback(
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
-                "scope": MICROSOFT_ADMIN_SCOPES
+                "scope": _admin_scopes(teams_flag)
                 if intent == "admin"
                 else MICROSOFT_USER_SCOPES,
             },
@@ -654,9 +672,17 @@ async def integration_status(
     ms_required = MICROSOFT_ADMIN_SCOPES
     google_required = GOOGLE_ADMIN_SCOPES
 
+    ms_connected = ms_row is not None and ms_row.is_active
+    ms_teams_missing = missing_teams_scopes(ms_row.scopes if ms_row else None)
+    ms_teams_connected = (
+        settings.TEAMS_FEATURE_ENABLED
+        and ms_connected
+        and not ms_teams_missing
+    )
+
     ms_status = IntegrationStatus(
         provider="microsoft",
-        connected=ms_row is not None and ms_row.is_active,
+        connected=ms_connected,
         scopes=ms_row.scopes if ms_row else None,
         required_scopes=ms_required,
         missing_scopes=_missing_scopes(
@@ -667,7 +693,13 @@ async def integration_status(
         last_user_sync_at=ms_row.last_user_sync_at if ms_row else None,
         last_user_sync_status=ms_row.last_user_sync_status if ms_row else None,
         last_user_sync_error=ms_row.last_user_sync_error if ms_row else None,
-        last_user_sync_total=ms_row.last_user_sync_total if ms_row else 0,
+        last_user_sync_total=(
+            ms_row.last_user_sync_total
+            if ms_row and ms_row.last_user_sync_total is not None
+            else 0
+        ),
+        teams_connected=ms_teams_connected,
+        teams_missing_scopes=ms_teams_missing,
     )
     google_status = IntegrationStatus(
         provider="google",

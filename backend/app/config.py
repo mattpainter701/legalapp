@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     MICROSOFT_CLIENT_SECRET: str = ""
     MICROSOFT_TENANT_ID: str = "common"
 
+    # ── Microsoft Teams ──────────────────────────────────────────────────────
+    # Master feature flag for Teams collaboration features (channel linking,
+    # outbound Adaptive Card notifications). When False the Teams admin tab and
+    # all /api/integrations/teams endpoints are gated off regardless of consent.
+    TEAMS_FEATURE_ENABLED: bool = True
+    # GUID of the published Clarity Legal Teams app (manifest "id"). Used to
+    # build channel/tab deep links. Empty until the shared app is published.
+    TEAMS_APP_ID: str = ""
+
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
