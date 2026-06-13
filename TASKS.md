@@ -40,11 +40,15 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [ ] Portal signer-identity binding (spike signs the next pending signer; bind to the portal contact/email)
 - [ ] Decline flow + per-signer email dispatch on send
 
-#### 1303. Trust Accounting Frontend + Reconciliation (P0, MEDIUM) — PENDING
-Three-way reconciliation logic already exists in `trust_accounting.py` but is headless (TASKS BK05).
+#### 1303. Trust Accounting — Pooled Ledger & Reconciliation Persistence (Backend) (P0, MEDIUM) — PENDING
+
+**RECONCILED (2026-06-13):** The frontend portion of this task was delivered by **[1314](#1314-trust-accounting-frontend-p0-medium--completed)** (portfolio/detail/reconcile UI against the existing per-matter `trust_accounting.py` backend). What remains here is the **backend deepening** that 1314 did not touch — pooled bank accounts, persisted reconciliation snapshots, per-client ledgers, overdraft guardrail, and exports. Re-scoped to backend-only; frontend bullet closed.
+
 - [ ] Migration `046_trust_ledger`: `trust_bank_accounts` (pooled), `trust_accounts.bank_account_id` (→ client ledgers), `trust_reconciliations` (saved snapshots)
 - [ ] Backend: pooled-account CRUD; persist reconciliation snapshots; per-client ledger statement; overdraft guardrail (block negative client ledger); CSV/PDF export; extend reconcile to assert sum-of-client-ledgers == book == bank
-- [ ] Frontend: `TrustAccountingPage` + route + sidebar nav; ledger views; Reconcile screen; trust balance card on `MatterDetailPage`; `api.js` group
+- [x] Frontend: `TrustAccountingPage` + route + sidebar nav; ledger views; Reconcile screen; trust balance card on `MatterDetailPage`; `api.js` group — **delivered by 1314 (2026-06-13)**
+
+**Follow-on for the UI (after backend lands):** surface pooled-account grouping, saved-snapshot history, per-client ledger statement view, and CSV/PDF export buttons on the 1314 pages.
 
 ### M2 — Intake & litigation (P1)
 
@@ -157,13 +161,15 @@ Three-way reconciliation logic already exists in `trust_accounting.py` but is he
 
 **AUDIT PROMOTED (2026-06-12):** Backend 100% complete (9 endpoints in `trust_accounting.py`, migrations 017 + reconciliation logic). Modest frontend scope (~1 week) unblocks accounting workflows. No reason to defer.
 
+**SCOPE NOTE:** This task delivered the frontend against the **existing per-matter** trust backend. Pooled bank accounts, persisted reconciliation snapshots, per-client ledgers, overdraft guardrail, and CSV/PDF export are **out of scope here** and tracked under **[1303](#1303-trust-accounting--pooled-ledger--reconciliation-persistence-backend-p0-medium--pending)**.
+
 - [x] `TrustAccountingPage` + sidebar nav route
 - [x] Trust Account Portfolio view: list (name, balance, bank, status), create/close modals, filters
 - [x] Trust Account Detail page: balance ledger, transaction history, auto-replenish config, edit/close actions
 - [x] Reconciliation screen: bank balance input, outstanding deposits/disbursements, three-way reconcile calc, mark-as-reconciled action
 - [x] Matter Detail integration: trust balance card (quick-link to account)
 - [x] API client (`api.js`): 9 endpoint wrappers (CRUD accounts, CRUD transactions, reconcile)
-- [x] E2E smoke test: create account → post transaction → reconcile (covered via manual live check on deploy — no frontend test runner in this project)
+- [x] Wiring verified on deploy 2026-06-13 (frontend served 200; `/api/trust/*` return 401 unauth). **Full authed E2E (create account → post transaction → reconcile) not yet run** — needs a logged-in session; no frontend test runner in this project.
 
 **Files:** `frontend/src/pages/TrustAccountingPage.jsx`, `frontend/src/components/TrustAccountDetail.jsx`, `frontend/src/components/TrustAccountReconcile.jsx`, `frontend/src/api.js` (trust group), `frontend/src/App.jsx` (routes), `frontend/src/components/Sidebar.jsx` (nav), `frontend/src/pages/MatterDetailPage.jsx` (trust balance card)
 
@@ -372,7 +378,7 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Trust Accounting: `trust_accounting.py` (545 lines, 9 endpoints) — all real DB code. Models: TrustAccount + TrustTransaction. Migration 017.
 - [x] Estates: `estates.py` (1420 lines, 44 endpoints) — all real DB code. 9 models (Estate + EstateEvent + 7 sub-entities). Migrations 008, 030, 032.
 - [x] Estate frontend: PortfolioPage (335L) + DetailPage (565L, 9 tabs) + EstateSubTable (212L) — fully built.
-- [x] **RESOLVED (2026-06-12): Trust Accounting frontend promoted to Sprint 14 as task 1314** — Backend is ready for consumption. Frontend effort ~1 week.
+- [x] **RESOLVED (2026-06-12 → DELIVERED 2026-06-13): Trust Accounting frontend shipped as task 1314** — portfolio/detail/reconcile UI deployed against the existing per-matter backend. Pooled-ledger backend deepening tracked under 1303.
 - [ ] **Gap: Trust models not in `models/__init__.py`** — TrustAccount/TrustTransaction imported directly by router (cosmetic, not blocking)
 - [ ] **Gap: Estate schemas use Pydantic v1-style config** — `class Config: from_attributes = True` vs v2-style `model_config` (cosmetic)
 
