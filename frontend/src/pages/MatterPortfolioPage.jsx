@@ -331,7 +331,7 @@ export default function MatterPortfolioPage() {
 
         {/* ── My Matters ─────────────────────────────────────────────────────── */}
         <div className="mb-12">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="font-serif font-bold text-2xl text-brand-ink">My Matters</h2>
               {boardColumns.needsAction.length > 0 && (

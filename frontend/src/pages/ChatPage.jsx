@@ -4,6 +4,7 @@ import { useAppShell } from '../components/AppShell'
 import ChatHeader from '../components/ChatHeader'
 import ChatInput from '../components/ChatInput'
 import Messages from '../components/Messages'
+import ChatRail from '../components/chat/ChatRail'
 import {
   getConversation,
   sendMessage,
@@ -15,7 +16,7 @@ import {
 export default function ChatPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { conversations, setConversations, activeConvId, setActiveConvId } = useAppShell()
+  const { conversations, setConversations, activeConvId, setActiveConvId, onConversationDeleted } = useAppShell()
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -25,6 +26,7 @@ export default function ChatPage() {
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState([])
+  const [railOpen, setRailOpen] = useState(false)
   const fileInputRef = useRef(null)
 
   const handleUploadClick = () => {
@@ -120,7 +122,8 @@ export default function ChatPage() {
 
   const handleConversationDeleted = useCallback(
     (id) => {
-      // AppShell handles this now via context, but we still clear local state
+      // AppShell context performs the API delete + list mutation;
+      // here we additionally clear local thread state if it was active.
       if (activeConvId === id) {
         setActiveConvId(null)
         setMessages([])
@@ -128,6 +131,22 @@ export default function ChatPage() {
       }
     },
     [activeConvId, setActiveConvId]
+  )
+
+  const handleRailDeleteConversation = useCallback(
+    (id) => {
+      onConversationDeleted(id)
+      handleConversationDeleted(id)
+    },
+    [onConversationDeleted, handleConversationDeleted]
+  )
+
+  const handleRailSelectConversation = useCallback(
+    (id) => {
+      loadConversation(id)
+      setRailOpen(false)
+    },
+    [loadConversation]
   )
 
   const handleSend = useCallback(async () => {
@@ -254,58 +273,83 @@ export default function ChatPage() {
   })()
 
   return (
-    <div className="flex flex-col h-full bg-brand-bg relative">
-      {/* Background ledger ruling */}
-      <div
-        className="absolute inset-0 pointer-events-none z-0"
-        style={{
-          backgroundImage: 'linear-gradient(#CFC4AE 1px, transparent 1px)',
-          backgroundSize: '100% 24px',
-          opacity: 0.15,
-        }}
+    <div className="flex h-full bg-brand-bg">
+      {/* Desktop rail */}
+      <ChatRail
+        className="hidden lg:flex w-[300px] flex-shrink-0 border-r border-brand-line h-full"
+        onNewConversation={handleNewConversation}
+        onSelectConversation={handleRailSelectConversation}
+        onDeleteConversation={handleRailDeleteConversation}
       />
 
-      <div className="relative z-10 flex flex-col h-full">
-        <ChatHeader
-          activeRef={activeRef}
-          activeConvTitle={activeConvTitle}
-          usePremium={usePremium}
-          setUsePremium={setUsePremium}
-          includePublic={includePublic}
-          setIncludePublic={setIncludePublic}
-          user={null}
-          onExportConversation={handleExportConversation}
-          onSearchMessages={handleSearchMessages}
-          onOpenSidebar={() => {}}
+      {/* Mobile rail drawer */}
+      <div
+        className={`fixed inset-0 bg-black/40 z-30 lg:hidden transition-opacity duration-300 ${railOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setRailOpen(false)}
+        aria-hidden="true"
+      />
+      <ChatRail
+        className={`fixed inset-y-0 left-0 z-40 w-[300px] border-r border-brand-line lg:hidden transition-transform duration-300 ease-in-out ${railOpen ? 'sidebar-visible' : 'sidebar-hidden'}`}
+        onNewConversation={() => { handleNewConversation(); setRailOpen(false) }}
+        onSelectConversation={handleRailSelectConversation}
+        onDeleteConversation={handleRailDeleteConversation}
+        onClose={() => setRailOpen(false)}
+      />
+
+      {/* Thread column */}
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        {/* Background ledger ruling */}
+        <div
+          className="absolute inset-0 pointer-events-none z-0"
+          style={{
+            backgroundImage: 'linear-gradient(#CFC4AE 1px, transparent 1px)',
+            backgroundSize: '100% 24px',
+            opacity: 0.15,
+          }}
         />
 
-        <Messages
-          messages={messages}
-          isLoading={isLoadingMessages}
-          isSending={isSending}
-        />
+        <div className="relative z-10 flex flex-col h-full">
+          <ChatHeader
+            activeRef={activeRef}
+            activeConvTitle={activeConvTitle}
+            usePremium={usePremium}
+            setUsePremium={setUsePremium}
+            includePublic={includePublic}
+            setIncludePublic={setIncludePublic}
+            user={null}
+            onExportConversation={handleExportConversation}
+            onSearchMessages={handleSearchMessages}
+            onOpenSidebar={() => setRailOpen(true)}
+          />
 
-        <ChatInput
-          inputValue={inputValue}
-          onInputChange={setInputValue}
-          onSend={handleSend}
-          onUploadClick={handleUploadClick}
-          onDropFiles={handleDropFiles}
-          isSending={isSending}
-          disabled={false}
-          pendingAttachments={pendingAttachments}
-          onRemoveAttachment={(id) =>
-            setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
-          }
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.docx,.txt"
-          multiple
-          className="hidden"
-          onChange={handleFilesSelected}
-        />
+          <Messages
+            messages={messages}
+            isLoading={isLoadingMessages}
+            isSending={isSending}
+          />
+
+          <ChatInput
+            inputValue={inputValue}
+            onInputChange={setInputValue}
+            onSend={handleSend}
+            onUploadClick={handleUploadClick}
+            onDropFiles={handleDropFiles}
+            isSending={isSending}
+            disabled={false}
+            pendingAttachments={pendingAttachments}
+            onRemoveAttachment={(id) =>
+              setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
+            }
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.txt"
+            multiple
+            className="hidden"
+            onChange={handleFilesSelected}
+          />
+        </div>
       </div>
     </div>
   )

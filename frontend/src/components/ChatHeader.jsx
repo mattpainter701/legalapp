@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, Download, Search, MoreVertical, Menu } from 'lucide-react'
+import { ShieldCheck, Download, Search, MoreVertical, PanelLeft } from 'lucide-react'
 
 export default function ChatHeader({
   activeRef,
@@ -32,11 +32,12 @@ export default function ChatHeader({
       {/* Left: Hamburger (mobile) + Conversation info */}
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <button
-          className="md:hidden p-2 text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
+          className="lg:hidden tap-target text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
           onClick={onOpenSidebar}
-          aria-label="Open sidebar"
+          aria-label="Open conversations panel"
+          title="Conversations & documents"
         >
-          <Menu size={20} />
+          <PanelLeft size={20} />
         </button>
       <div className="flex flex-col min-w-0 flex-1">
         <div className="text-xs font-mono text-brand-muted uppercase tracking-widest mb-0.5 flex items-center gap-2">

@@ -61,7 +61,7 @@ export default function InvoicesPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Invoices</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
@@ -86,7 +86,7 @@ export default function InvoicesPage() {
           onSubmit={handleGenerate}
           style={{
             background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
-            padding: 16, marginBottom: 20, display: 'flex', gap: 12, alignItems: 'end',
+            padding: 16, marginBottom: 20, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end',
           }}
         >
           <div style={{ flex: 1 }}>
@@ -121,7 +121,8 @@ export default function InvoicesPage() {
       ) : invoices.length === 0 ? (
         <p style={{ color: '#9ca3af', fontSize: 13 }}>No invoices yet. Generate one from unbilled time entries.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
               <th style={{ padding: 8 }}>Invoice #</th>
@@ -171,6 +172,7 @@ export default function InvoicesPage() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )

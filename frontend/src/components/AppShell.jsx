@@ -106,20 +106,16 @@ export default function AppShell({ children, title }) {
     activeConvId,
     setActiveConvId,
     loadSidebarData,
+    onSelectConversation: handleSelectConversation,
+    onConversationDeleted: handleConversationDeleted,
+    onDocumentUploaded: handleDocumentUploaded,
+    onDocumentDeleted: handleDocumentDeleted,
   }
 
   return (
     <AppShellContext.Provider value={ctxValue}>
       <div className="flex h-screen bg-brand-bg overflow-hidden">
         <Sidebar
-          conversations={conversations}
-          activeConvId={activeConvId}
-          onSelectConversation={handleSelectConversation}
-          onNewConversation={handleNewConversation}
-          onConversationDeleted={handleConversationDeleted}
-          documents={documents}
-          onDocumentUploaded={handleDocumentUploaded}
-          onDocumentDeleted={handleDocumentDeleted}
           user={user}
           onLogout={handleLogout}
           isOpen={sidebarOpen}
@@ -131,7 +127,7 @@ export default function AppShell({ children, title }) {
           <header className="h-16 bg-brand-surface border-b border-brand-line px-4 md:px-6 flex items-center justify-between flex-shrink-0 z-20">
             <div className="flex items-center gap-3 min-w-0">
               <button
-                className="md:hidden p-2 text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
+                className="md:hidden tap-target text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
                 onClick={() => setSidebarOpen(true)}
                 aria-label="Open sidebar"
               >
