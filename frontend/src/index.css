@@ -164,6 +164,11 @@
   .sidebar-visible {
     transform: translateX(0);
   }
+
+  /* Touch-friendly tap target (>=44px per Apple/Material guidance) */
+  .tap-target {
+    @apply min-h-[44px] min-w-[44px] flex items-center justify-center;
+  }
 }
 
 /* Custom scrollbar */

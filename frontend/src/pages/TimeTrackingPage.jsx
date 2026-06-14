@@ -118,7 +118,7 @@ export default function TimeTrackingPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Time Tracking</h1>
           <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
@@ -154,7 +154,7 @@ export default function TimeTrackingPage() {
               {formError}
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
             <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Matter</label>
             <select
@@ -238,7 +238,8 @@ export default function TimeTrackingPage() {
       ) : entries.length === 0 ? (
         <p style={{ color: '#9ca3af', fontSize: 13 }}>No time entries found.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: '100%', minWidth: 600, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
               <th style={{ padding: 8 }}>Date</th>
@@ -283,6 +284,7 @@ export default function TimeTrackingPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
