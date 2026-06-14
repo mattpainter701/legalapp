@@ -215,6 +215,16 @@ class UserSyncService:
                             "admin.directory.user.readonly scope. "
                             "Re-authorize in Admin → Integrations."
                         )
+                    if resp.status_code == 400 and "invalid input" in detail.lower():
+                        raise RuntimeError(
+                            "Google Directory sync failed: the connected Google account "
+                            "is not a Google Workspace account (or has no directory access). "
+                            "The 'my_customer' directory only exists for Workspace tenants — "
+                            "personal Gmail accounts return HTTP 400 Invalid Input. "
+                            "Connect a Workspace admin account in Admin → Integrations, "
+                            "or disable directory sync for this tenant. "
+                            f"(HTTP 400: {detail[:200]})"
+                        )
                     raise RuntimeError(
                         f"Google Directory sync failed: {resp.status_code} — {detail[:200]}"
                     )

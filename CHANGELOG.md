@@ -24,6 +24,8 @@
 - **Task 1305 — Court-Rules Deadline Engine: dropped.** LawToolBox commercial-API path abandoned (no customer-demand pull); research artifacts retained under `docs/research/1305-*.md`. Revisit only on explicit litigation-firm demand.
 
 ### Fixed
+- **Outlook mail sync used an invalid Graph path:** `cloud_sync.sync_outlook_mail` requested `/users/me/messages`, which Microsoft Graph rejects with `400 TargetIdShouldNotBeMeOrWhitespace` (literal `me` is not a valid `/users/{id}` segment) — so every Outlook mail sync failed. Now uses the `/me/messages` delegated shortcut, matching the working OneDrive call in the same module.
+- **Google Directory sync surfaced a cryptic 400:** a personal (non-Workspace) Google account returns `400 Invalid Input` for the `my_customer` directory. `user_sync` now translates this into an actionable message (connect a Workspace admin account, or disable directory sync) instead of a raw status dump, mirroring the existing 403 handling.
 - **Cloud workspace integrations:** Matter documents now expose live OneDrive/Google Drive links for cloud-backed files, matter cloud folders can be force-provisioned and synced from the matter Documents tab, cloud file lists are scoped to the provisioned matter folder, cloud content fetches preserve the requesting user's token context, email inbox scans dedupe provider messages, disabled/suspended directory users are skipped, and Google Directory sync no longer sends the invalid `isSuspended=false` query.
 
 ## [0.14.0] — 2026-06-06

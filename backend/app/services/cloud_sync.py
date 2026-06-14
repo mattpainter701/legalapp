@@ -422,7 +422,7 @@ class CloudSyncService:
     ) -> int:
         """Sync email metadata from Outlook / Microsoft Graph.
 
-        Fetches ``/users/me/messages`` ordered by ``receivedDateTime desc``
+        Fetches ``/me/messages`` ordered by ``receivedDateTime desc``
         with ``$select=id,subject,bodyPreview,from,toRecipients,
         ccRecipients,receivedDateTime,hasAttachments,conversationId``.
         Snippet uses the ``bodyPreview`` field. Caps at 200 emails.
@@ -432,7 +432,7 @@ class CloudSyncService:
             return 0
 
         count = 0
-        next_url: str | None = f"{GRAPH_BASE}/users/me/messages"
+        next_url: str | None = f"{GRAPH_BASE}/me/messages"
         first_params: dict | None = {
             "$select": (
                 "id,subject,bodyPreview,from,toRecipients,"
