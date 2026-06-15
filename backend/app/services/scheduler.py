@@ -29,7 +29,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import or_, select, text
 
 from app.config import get_settings
-from app.database import async_session_maker
+from app.database import async_session_maker, set_tenant_context
 from app.models.document import Document
 from app.models.plugin import Estate, Matter, MatterEvent, Renewal
 from app.models.smb_agent import SmbAgent
@@ -38,6 +38,7 @@ from app.models.scheduler import SchedulerLog
 from app.models.task import Task
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
+from app.models.user_oauth_token import UserOAuthToken
 from app.services.cloud_sync import CloudSyncService
 from app.services.email import email_service
 
@@ -81,6 +82,12 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Cloud Metadata Sync",
         "description": "Syncs file/email metadata from connected Google and Microsoft accounts into the cloud index.",
         "schedule": f"Every {settings.CLOUD_METADATA_SYNC_INTERVAL_MIN} minutes",
+    },
+    {
+        "name": "correspondence-capture",
+        "display_name": "Correspondence Capture",
+        "description": "Archives full .eml emails matching each matter's capture rules (parties / case number) into the matter file directory.",
+        "schedule": f"Every {settings.CORRESPONDENCE_CAPTURE_INTERVAL_MIN} minutes",
     },
     {
         "name": "estate-deadline-watcher",
@@ -471,6 +478,20 @@ class LegalScheduler:
                 minutes=settings.CLOUD_METADATA_SYNC_INTERVAL_MIN,
                 id="cloud-sync",
                 name="Cloud Metadata Sync",
+                replace_existing=True,
+            )
+            agent_count += 1
+
+        # correspondence-capture: every CORRESPONDENCE_CAPTURE_INTERVAL_MIN minutes
+        if settings.CORRESPONDENCE_CAPTURE_ENABLED:
+            self.scheduler.add_job(
+                self._guarded(
+                    "correspondence-capture", self.run_correspondence_capture
+                ),
+                "interval",
+                minutes=settings.CORRESPONDENCE_CAPTURE_INTERVAL_MIN,
+                id="correspondence-capture",
+                name="Correspondence Capture",
                 replace_existing=True,
             )
             agent_count += 1
@@ -1273,6 +1294,95 @@ class LegalScheduler:
                 await _bypass_rls(session)
                 await _log_failed(session, log, error_msg)
 
+    # ─── Agent: correspondence-capture ────────────────────────────────────────
+
+    async def run_correspondence_capture(self) -> None:
+        """Capture matching emails into matters for every connected user.
+
+        Iterates tenants with active credentials; for each tenant, scans the
+        mailbox of every user that has a Google/Microsoft OAuth token and
+        archives emails matching that tenant's matters' capture rules. Per
+        tenant/user failures are isolated so one bad token cannot abort the run.
+        """
+        from app.services.correspondence_capture import scan_and_capture
+
+        logger.info("[correspondence-capture] Starting run")
+        async with async_session_maker() as session:
+            log = await _log_start(session, "correspondence-capture")
+            try:
+                await _bypass_rls(session)
+
+                result = await session.execute(
+                    select(TenantCredential.tenant_id)
+                    .where(TenantCredential.is_active)
+                    .distinct()
+                )
+                tenant_ids = [row[0] for row in result.all()]
+
+                if not tenant_ids:
+                    await _log_complete(
+                        session,
+                        log,
+                        "No tenants with active credentials — nothing to scan.",
+                    )
+                    logger.info("[correspondence-capture] No connected tenants.")
+                    return
+
+                total_captured = 0
+                users_scanned = 0
+
+                for tenant_id in tenant_ids:
+                    # Tokens carry the provider per user; scope reads to this tenant.
+                    token_rows = await session.execute(
+                        select(
+                            UserOAuthToken.user_id, UserOAuthToken.provider
+                        ).where(
+                            UserOAuthToken.tenant_id == tenant_id,
+                            UserOAuthToken.provider.in_(["google", "microsoft"]),
+                        )
+                    )
+                    for user_id, provider in token_rows.all():
+                        try:
+                            await set_tenant_context(session, str(tenant_id))
+                            user_email = (
+                                await session.execute(
+                                    select(User.email).where(User.id == user_id)
+                                )
+                            ).scalar_one_or_none()
+                            counts = await scan_and_capture(
+                                session,
+                                tenant_id=str(tenant_id),
+                                user_id=str(user_id),
+                                provider=provider,
+                                mailbox_address=user_email,
+                            )
+                            total_captured += counts.get("captured", 0)
+                            users_scanned += 1
+                        except Exception as user_err:
+                            logger.warning(
+                                "[correspondence-capture] Failed for user %s (%s): %s",
+                                user_id,
+                                provider,
+                                user_err,
+                            )
+                            await session.rollback()
+
+                await _bypass_rls(session)
+                summary = (
+                    f"Scanned {users_scanned} mailbox(es) across "
+                    f"{len(tenant_ids)} tenant(s); captured {total_captured} email(s)."
+                )
+                await _log_complete(session, log, summary)
+                logger.info("[correspondence-capture] Complete. %s", summary)
+
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {exc}"
+                logger.exception(
+                    "[correspondence-capture] Unhandled error: %s", error_msg
+                )
+                await _bypass_rls(session)
+                await _log_failed(session, log, error_msg)
+
     # ─── Agent: user-sync ─────────────────────────────────────────────────────
 
     async def run_user_sync(self) -> None:
@@ -1468,6 +1578,7 @@ class LegalScheduler:
             "oc-status": self.run_oc_status,
             "task-reminder": self._check_task_reminders,
             "cloud-sync": self.run_cloud_sync,
+            "correspondence-capture": self.run_correspondence_capture,
             "estate-deadline-watcher": self.run_estate_deadline_watcher,
             "user-sync": self.run_user_sync,
             "smb-heartbeat": self._check_smb_agent_heartbeats,

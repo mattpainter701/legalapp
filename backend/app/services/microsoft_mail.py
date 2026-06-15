@@ -85,6 +85,36 @@ async def ms_read_mail_user(
         return messages
 
 
+async def ms_read_mail_raw(
+    db: AsyncSession,
+    tenant_id: str,
+    user_id: str,
+    message_id: str,
+) -> bytes:
+    """Fetch the full MIME (.eml) for a single message via Graph.
+
+    ``GET /me/messages/{id}/$value`` returns the raw RFC 822 message, suitable
+    for archiving as a ``.eml`` file.
+    """
+    token = await _ms_get_user_token(db, tenant_id, user_id)
+    if not token:
+        raise RuntimeError(f"No Microsoft OAuth token for user {user_id}")
+
+    url = f"{GRAPH_BASE}/me/messages/{message_id}/$value"
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+        if resp.status_code != 200:
+            logger.warning(
+                "MS Graph raw mail fetch failed: %s %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            raise RuntimeError(
+                f"Microsoft Graph raw mail fetch failed: {resp.status_code}"
+            )
+        return resp.content
+
+
 async def ms_read_mail_tenant(
     db: AsyncSession,
     tenant_id: str,

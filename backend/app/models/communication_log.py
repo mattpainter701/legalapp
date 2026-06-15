@@ -11,7 +11,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.database import Base
 
@@ -25,6 +25,7 @@ class CommunicationLog(Base):
         Index("idx_commlogs_matter_id", "matter_id"),
         Index("idx_commlogs_contact_id", "contact_id"),
         Index("idx_commlogs_occurred_at", "tenant_id", "occurred_at"),
+        Index("idx_commlogs_thread_ref", "tenant_id", "thread_ref"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -75,6 +76,17 @@ class CommunicationLog(Base):
     )
     # e.g. email message-id, Twilio call SID
     external_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Stored .eml attachment for captured email correspondence.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("matter_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Provider conversation/thread id — groups captured emails into chains.
+    thread_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # {"from": str, "to": [str], "cc": [str]} — who said what, without a join.
+    participants: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

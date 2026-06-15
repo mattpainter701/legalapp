@@ -834,6 +834,28 @@ export const deleteCommunication = (id) =>
 export const scanEmailInbox = (provider, maxEmails = 20) =>
   api.post('/email/scan', { provider, max_emails: maxEmails }).then(r => r.data)
 
+// ── Matter Correspondence (archived emails) ─────────────────────────────────
+
+export const getMatterCorrespondence = (matterId, params = {}) =>
+  api.get(`/matters/${matterId}/correspondence`, { params }).then(r => r.data)
+
+export const scanMatterCorrespondence = (matterId, provider, maxEmails = null) =>
+  api
+    .post(`/matters/${matterId}/correspondence/scan`, {
+      provider,
+      max_emails: maxEmails,
+    })
+    .then(r => r.data)
+
+export const getCorrespondenceRules = (matterId) =>
+  api.get(`/matters/${matterId}/correspondence/rules`).then(r => r.data)
+
+export const updateCorrespondenceRules = (matterId, rules) =>
+  api.put(`/matters/${matterId}/correspondence/rules`, rules).then(r => r.data)
+
+export const matterCorrespondenceDownloadUrl = (matterId, commId) =>
+  `${API_BASE_URL}/matters/${matterId}/correspondence/${commId}/download`
+
 // ── Intake / Leads ─────────────────────────────────────────────────────────
 
 export const getLeads = (params = {}) =>

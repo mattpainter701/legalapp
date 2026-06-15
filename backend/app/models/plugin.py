@@ -285,6 +285,10 @@ class Matter(Base):
     # SMB share folder bindings for the matter (parallel to cloud_folder).
     smb_folders: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Per-matter email correspondence capture rules. Null ⇒ capture disabled.
+    # Shape: {enabled, match_parties, case_numbers[], keywords[], directions[]}.
+    correspondence_rules: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Plugin workflow binding. Null means a general matter with no paid add-on workflow.
     primary_plugin: Mapped[str | None] = mapped_column(String(100), nullable=True)
     plugin_workflow_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
