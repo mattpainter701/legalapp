@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     CLOUD_SEARCH_CACHE_TTL: int = 300  # 5 min for search results
     CLOUD_METADATA_SYNC_INTERVAL_MIN: int = 15  # Cron interval
 
+    # ── Email Correspondence Capture ─────────────────────────────────────────
+    CORRESPONDENCE_CAPTURE_ENABLED: bool = False  # Master flag for the scheduled job
+    CORRESPONDENCE_CAPTURE_INTERVAL_MIN: int = 30  # Background scan interval
+    CORRESPONDENCE_CAPTURE_MAX_EMAILS: int = 50  # Per mailbox per run
+
     # ── SMB File Share Relay Agent ──────────────────────────────────────────
     SMB_ENABLED: bool = False  # Master feature flag
     SMB_PAIRING_CODE_TTL_MIN: int = 10  # Pairing code expiry in minutes

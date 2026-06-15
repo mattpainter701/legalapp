@@ -15,6 +15,7 @@ import {
   syncMatterCloudFolder, listTrustAccounts,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
+import MatterCorrespondenceTab from '../components/MatterCorrespondenceTab'
 import MatterPartiesTab from '../components/MatterPartiesTab'
 import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
 import AddTaskModal from '../components/AddTaskModal'
@@ -425,6 +426,7 @@ export default function MatterDetailPage() {
     { key: 'activity', label: 'Activity', icon: Icons.clock },
     { key: 'team', label: 'Team', icon: Icons.users },
     { key: 'documents', label: 'Documents', icon: Icons.file },
+    { key: 'correspondence', label: 'Correspondence', icon: Icons.mail },
     { key: 'portal', label: 'Client Portal', icon: Icons.users },
     { key: 'billing', label: 'Billing', icon: Icons.dollar },
     { key: 'chat', label: 'Chat', icon: Icons.messageSquare },
@@ -1124,6 +1126,11 @@ export default function MatterDetailPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ── Correspondence Tab (archived emails) ─────────────────────────────── */}
+        {activeTab === 'correspondence' && (
+          <MatterCorrespondenceTab matterId={id} matter={matter} />
         )}
 
         {/* ── Documents Tab (includes Parties) ─────────────────────────────────── */}

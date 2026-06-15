@@ -38,6 +38,9 @@ from app.routers.communications import router as communications_router
 from app.routers.intake import router as intake_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
+from app.routers.matters_correspondence import (
+    router as matters_correspondence_router,
+)
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
@@ -253,6 +256,7 @@ app.include_router(communications_router)
 app.include_router(intake_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
+app.include_router(matters_correspondence_router)
 app.include_router(reports_router)
 app.include_router(calendar_router)
 app.include_router(matters_router)
