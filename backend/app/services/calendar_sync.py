@@ -112,11 +112,11 @@ class CalendarSyncService:
         event = {
             "subject": subject,
             "start": {
-                "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": start_dt.isoformat(),
                 "timeZone": "America/New_York",
             },
             "end": {
-                "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": end_dt.isoformat(),
                 "timeZone": "America/New_York",
             },
         }
@@ -176,11 +176,11 @@ class CalendarSyncService:
         event = {
             "subject": subject,
             "start": {
-                "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": start_dt.isoformat(),
                 "timeZone": timezone_name or "UTC",
             },
             "end": {
-                "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": end_dt.isoformat(),
                 "timeZone": timezone_name or "UTC",
             },
         }
@@ -321,11 +321,11 @@ class CalendarSyncService:
         event = {
             "summary": subject,
             "start": {
-                "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": start_dt.isoformat(),
                 "timeZone": "America/New_York",
             },
             "end": {
-                "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "dateTime": end_dt.isoformat(),
                 "timeZone": "America/New_York",
             },
         }

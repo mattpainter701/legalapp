@@ -56,7 +56,7 @@ async def create_meeting(
     payload = {
         "topic": topic,
         "type": 2,
-        "start_time": start_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        "start_time": start_at.isoformat(),
         "duration": max(int(duration_minutes), 1),
         "timezone": timezone_name or "UTC",
         "agenda": agenda[:2000] if agenda else "",
@@ -73,7 +73,9 @@ async def create_meeting(
             json=payload,
         )
         if resp.status_code not in (200, 201):
-            logger.warning("Zoom create meeting failed: %s %s", resp.status_code, resp.text[:300])
+            logger.warning(
+                "Zoom create meeting failed: %s %s", resp.status_code, resp.text[:300]
+            )
             raise ZoomIntegrationError(
                 f"Zoom meeting creation failed (HTTP {resp.status_code})."
             )
@@ -106,5 +108,7 @@ async def delete_meeting(
         )
     if resp.status_code in (200, 202, 204, 404):
         return True
-    logger.warning("Zoom delete meeting failed: %s %s", resp.status_code, resp.text[:200])
+    logger.warning(
+        "Zoom delete meeting failed: %s %s", resp.status_code, resp.text[:200]
+    )
     return False

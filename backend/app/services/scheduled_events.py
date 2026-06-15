@@ -11,8 +11,7 @@ from app.services import zoom as zoom_service
 
 
 def _duration_minutes(start_at: datetime, end_at: datetime) -> int:
-    seconds = max((end_at - start_at).total_seconds(), 60)
-    return max(int(seconds // 60), 1)
+    return max(int((end_at - start_at).total_seconds() / 60), 1)
 
 
 def _join_attendees(attendees: list[str] | None) -> list[str]:
@@ -81,7 +80,9 @@ async def create_external_event(
             )
             if result:
                 event.external_calendar_event_id = result.get("id")
-                event.external_calendar_url = result.get("webLink") or result.get("webUrl")
+                event.external_calendar_url = result.get("webLink") or result.get(
+                    "webUrl"
+                )
                 if event.meeting_provider == "teams":
                     online = result.get("onlineMeeting") or {}
                     join_url = _microsoft_join_url(result)
@@ -114,7 +115,9 @@ async def create_external_event(
         event.sync_status = "error"
         event.sync_error = "; ".join(sync_errors)[:2000]
     else:
-        event.sync_status = "synced" if event.calendar_provider or event.join_url else "local"
+        event.sync_status = (
+            "synced" if event.calendar_provider or event.join_url else "local"
+        )
         event.sync_error = None
     return event
 

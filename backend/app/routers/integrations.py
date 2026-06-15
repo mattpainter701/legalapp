@@ -167,9 +167,7 @@ async def microsoft_connect(
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
-    scopes = (
-        _admin_scopes(bool(teams)) if intent == "admin" else MICROSOFT_USER_SCOPES
-    )
+    scopes = _admin_scopes(bool(teams)) if intent == "admin" else MICROSOFT_USER_SCOPES
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
@@ -418,9 +416,6 @@ async def google_callback(
             id_token = token_data.get("id_token")
             if id_token:
                 try:
-                    import base64
-                    import json as _json
-
                     payload = id_token.split(".")[1]
                     # Add padding
                     payload += "=" * (4 - len(payload) % 4)
@@ -508,7 +503,9 @@ async def google_callback(
 @router.get("/zoom/connect")
 async def zoom_connect(
     request: Request,
-    intent: str = Query("user", description="user=per-user, admin=tenant-wide shared Zoom"),
+    intent: str = Query(
+        "user", description="user=per-user, admin=tenant-wide shared Zoom"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
@@ -567,7 +564,11 @@ async def zoom_callback(
             },
         )
     if token_resp.status_code != 200:
-        logger.warning("Zoom token exchange failed: %s %s", token_resp.status_code, token_resp.text[:300])
+        logger.warning(
+            "Zoom token exchange failed: %s %s",
+            token_resp.status_code,
+            token_resp.text[:300],
+        )
         return _error_redirect("zoom", "token_exchange_failed")
 
     token_data = token_resp.json()
@@ -588,7 +589,9 @@ async def zoom_callback(
         row = result.scalar_one_or_none()
         if row:
             row.encrypted_access_token = encrypt_token(access_token)
-            row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
+            row.encrypted_refresh_token = (
+                encrypt_token(refresh_token) if refresh_token else None
+            )
             row.token_expires_at = _expires_at(expires_in)
             row.scopes = scope_str
             row.is_active = True
@@ -599,7 +602,9 @@ async def zoom_callback(
                     tenant_id=uuid.UUID(tenant_id),
                     provider="zoom",
                     encrypted_access_token=encrypt_token(access_token),
-                    encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
+                    encrypted_refresh_token=encrypt_token(refresh_token)
+                    if refresh_token
+                    else None,
                     token_expires_at=_expires_at(expires_in),
                     scopes=scope_str,
                     granted_by_user_id=uuid.UUID(user_id),
@@ -616,7 +621,9 @@ async def zoom_callback(
         row = result.scalar_one_or_none()
         if row:
             row.encrypted_access_token = encrypt_token(access_token)
-            row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
+            row.encrypted_refresh_token = (
+                encrypt_token(refresh_token) if refresh_token else None
+            )
             row.token_expires_at = _expires_at(expires_in)
             row.scopes = scope_str
         else:
@@ -626,7 +633,9 @@ async def zoom_callback(
                     tenant_id=uuid.UUID(tenant_id),
                     provider="zoom",
                     encrypted_access_token=encrypt_token(access_token),
-                    encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
+                    encrypted_refresh_token=encrypt_token(refresh_token)
+                    if refresh_token
+                    else None,
                     token_expires_at=_expires_at(expires_in),
                     scopes=scope_str,
                 )
@@ -669,9 +678,7 @@ def _schedule_user_sync_post_connect(tenant_id: str, provider: str) -> None:
     asyncio.create_task(_sync_users_post_connect(tenant_id, provider))
 
 
-async def _sync_users_post_connect(
-    tenant_id: str, provider: str
-) -> None:
+async def _sync_users_post_connect(tenant_id: str, provider: str) -> None:
     """Best-effort directory sync after admin re-authorization.
 
     This clears stale failure state immediately when new consent/API settings are
@@ -814,9 +821,7 @@ async def integration_status(
     ms_connected = ms_row is not None and ms_row.is_active
     ms_teams_missing = missing_teams_scopes(ms_row.scopes if ms_row else None)
     ms_teams_connected = (
-        settings.TEAMS_FEATURE_ENABLED
-        and ms_connected
-        and not ms_teams_missing
+        settings.TEAMS_FEATURE_ENABLED and ms_connected and not ms_teams_missing
     )
 
     ms_status = IntegrationStatus(
@@ -959,7 +964,9 @@ async def zoom_status(
         "configured": bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
         "connected": bool(row),
         "connection_type": "user" if user_row else "tenant" if tenant_row else None,
-        "expires_at": row.token_expires_at.isoformat() if row and row.token_expires_at else None,
+        "expires_at": row.token_expires_at.isoformat()
+        if row and row.token_expires_at
+        else None,
         "scopes": row.scopes.split() if row and row.scopes else [],
     }
 
