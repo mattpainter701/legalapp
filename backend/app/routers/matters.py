@@ -24,11 +24,21 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
 from app.services.email import EmailService
-from app.services.cloud_init import initialize_matter_folders, share_matter_folders
+from app.services.cloud_init import (
+    ROOT_FOLDER_NAME,
+    initialize_cloud_root_folder,
+    initialize_matter_folders,
+    rename_cloud_folder,
+    resolve_cloud_folder_reference,
+    share_matter_folders,
+)
 from app.schemas.matter import (
     BudgetUtilization,
     MatterAssignmentCreate,
     MatterAssignmentResponse,
+    MatterCloudContextFolderRequest,
+    MatterCloudFolderRemapRequest,
+    MatterCloudFolderRenameRequest,
     MatterCloudFolderStatus,
     MatterCreate,
     MatterListResponse,
@@ -58,6 +68,7 @@ _cloud_sync = CloudSyncService()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
+SUPPORTED_CLOUD_FOLDER_PROVIDERS = {"onedrive", "google_drive"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -551,6 +562,7 @@ async def list_matters(
                 budget_utilization_pct=util_pct,
                 is_overdue=(m.status or "open") in ("active",) and bool(next_deadline),
                 next_deadline=next_deadline,
+                cloud_folder=m.cloud_folder,
                 created_at=m.created_at or datetime.now(timezone.utc),
             )
         )
@@ -844,6 +856,7 @@ async def get_my_matters(
                 budget_utilization_pct=None,
                 is_overdue=overdue_label is not None and "overdue" in overdue_label,
                 next_deadline=next_deadline,
+                cloud_folder=m.cloud_folder,
                 created_at=m.created_at or datetime.now(timezone.utc),
                 my_role=my_role or "associate",
                 my_assignment_id=my_assignment_id,
@@ -2122,6 +2135,91 @@ async def get_matter_cloud_folder(
     return MatterCloudFolderStatus(status="not_provisioned", providers={})
 
 
+def _apply_cloud_provider_metadata(
+    matter: Matter, provider: str, provider_metadata: dict
+) -> dict:
+    """Merge provider folder metadata into Matter.cloud_folder."""
+    cloud_folder = dict(matter.cloud_folder or {})
+    cloud_folder[provider] = provider_metadata
+
+    folder_name = provider_metadata.get("folder_name") or matter.slug
+    cloud_folder["path"] = f"{ROOT_FOLDER_NAME}/{folder_name}"
+    cloud_folder["subfolder_paths"] = {
+        sub: f"{ROOT_FOLDER_NAME}/{folder_name}/{sub}"
+        for sub in provider_metadata.get("subfolders", {})
+    }
+    matter.cloud_folder = cloud_folder
+    return cloud_folder
+
+
+def _cloud_provider_folder_id(metadata: dict | None, *, allow_id: bool = True) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    folder_id = metadata.get("matter_folder_id")
+    if not folder_id and allow_id:
+        folder_id = metadata.get("id")
+    return str(folder_id) if folder_id else None
+
+
+def _cloud_context_folders(cloud_folder: dict | None) -> list[dict]:
+    raw = (cloud_folder or {}).get("context_folders") or []
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _build_cloud_context_folder(
+    provider: str, provider_metadata: dict, label: str | None
+) -> dict:
+    clean_label = (label or "").strip() or None
+    return {
+        "id": str(uuid.uuid4()),
+        "provider": provider,
+        "label": clean_label,
+        "matter_folder_id": provider_metadata.get("matter_folder_id"),
+        "folder_name": provider_metadata.get("folder_name") or "",
+        "url": provider_metadata.get("url") or "",
+        "subfolders": provider_metadata.get("subfolders") or {},
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _assert_cloud_context_not_duplicate(
+    matter: Matter, provider: str, folder_id: str | None
+) -> None:
+    if not folder_id:
+        return
+    cloud_folder = matter.cloud_folder or {}
+    primary_id = _cloud_provider_folder_id(cloud_folder.get(provider), allow_id=True)
+    if primary_id == folder_id:
+        raise HTTPException(
+            status_code=409,
+            detail="That folder is already mapped as the primary matter folder",
+        )
+    for folder in _cloud_context_folders(cloud_folder):
+        if folder.get("provider") != provider:
+            continue
+        existing_id = _cloud_provider_folder_id(folder, allow_id=False)
+        if existing_id == folder_id:
+            raise HTTPException(
+                status_code=409,
+                detail="That folder is already linked as matter context",
+            )
+
+
+async def _repair_tenant_cloud_root(
+    db: AsyncSession, tenant: Tenant, tenant_id: uuid.UUID
+) -> dict:
+    """Refresh tenant root metadata so matter reconnects use the discovered root."""
+    cloud_root = tenant.cloud_root_folder or {}
+    try:
+        fresh = await initialize_cloud_root_folder(db, str(tenant_id))
+        if fresh:
+            cloud_root = {**cloud_root, **fresh}
+            tenant.cloud_root_folder = cloud_root
+    except Exception as exc:
+        logger.warning("Tenant cloud root repair failed for %s: %s", tenant_id, exc)
+    return cloud_root
+
+
 @router.post(
     "/{matter_id}/cloud-folder/provision", response_model=MatterCloudFolderStatus
 )
@@ -2147,7 +2245,10 @@ async def provision_matter_cloud_folder(
 
     tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = tenant_result.scalar_one_or_none()
-    if not tenant or not tenant.cloud_root_folder:
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    cloud_root = await _repair_tenant_cloud_root(db, tenant, tenant_id)
+    if not cloud_root:
         raise HTTPException(
             status_code=422,
             detail="No cloud credentials configured for this tenant",
@@ -2158,7 +2259,7 @@ async def provision_matter_cloud_folder(
             db=db,
             tenant_id=str(tenant_id),
             matter_slug=matter.slug,
-            cloud_root=tenant.cloud_root_folder,
+            cloud_root=cloud_root,
         )
     except Exception as exc:
         logger.warning(
@@ -2187,6 +2288,228 @@ async def provision_matter_cloud_folder(
     )
 
 
+@router.patch(
+    "/{matter_id}/cloud-folder/{provider}/remap",
+    response_model=MatterCloudFolderStatus,
+)
+async def remap_matter_cloud_folder(
+    matter_id: str,
+    provider: str,
+    body: MatterCloudFolderRemapRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remap one provider for this matter to an existing cloud folder."""
+    if provider not in SUPPORTED_CLOUD_FOLDER_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider")
+    if not (body.folder_id or body.folder_url or body.folder_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a folder ID, folder URL, or folder name",
+        )
+
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    tenant_id_str = str(tenant_id)
+    await set_tenant_context(db, tenant_id_str)
+
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    cloud_root = await _repair_tenant_cloud_root(db, tenant, tenant_id)
+    if not cloud_root:
+        raise HTTPException(
+            status_code=422,
+            detail="No cloud root folder configured for this tenant",
+        )
+
+    try:
+        provider_metadata = await resolve_cloud_folder_reference(
+            db=db,
+            tenant_id=tenant_id_str,
+            provider=provider,
+            cloud_root=cloud_root,
+            folder_id=body.folder_id,
+            folder_url=body.folder_url,
+            folder_name=body.folder_name,
+            create_if_missing=body.create_if_missing,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning("Cloud folder remap failed for matter %s: %s", matter_id, exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    providers = _apply_cloud_provider_metadata(matter, provider, provider_metadata)
+    await _share_matter_with_assignees(db, tenant_id, matter)
+    await db.commit()
+
+    return MatterCloudFolderStatus(status="provisioned", providers=providers)
+
+
+@router.post(
+    "/{matter_id}/cloud-folder/context",
+    response_model=MatterCloudFolderStatus,
+)
+async def add_matter_cloud_context_folder(
+    matter_id: str,
+    body: MatterCloudContextFolderRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Attach an additional provider folder as read/search context for a matter."""
+    provider = (body.provider or "").strip().lower()
+    if provider not in SUPPORTED_CLOUD_FOLDER_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider")
+    if not (body.folder_id or body.folder_url or body.folder_name):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a folder ID, folder URL, or folder name",
+        )
+
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    tenant_id_str = str(tenant_id)
+    await set_tenant_context(db, tenant_id_str)
+
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    cloud_root = await _repair_tenant_cloud_root(db, tenant, tenant_id)
+    if body.folder_name and not (body.folder_id or body.folder_url) and not cloud_root:
+        raise HTTPException(
+            status_code=422,
+            detail="No cloud root folder configured for folder-name lookup",
+        )
+
+    try:
+        provider_metadata = await resolve_cloud_folder_reference(
+            db=db,
+            tenant_id=tenant_id_str,
+            provider=provider,
+            cloud_root=cloud_root or {},
+            folder_id=body.folder_id,
+            folder_url=body.folder_url,
+            folder_name=body.folder_name,
+            create_if_missing=body.create_if_missing,
+            ensure_subfolders=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning(
+            "Cloud context folder add failed for matter %s: %s", matter_id, exc
+        )
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    provider_folder_id = _cloud_provider_folder_id(
+        provider_metadata, allow_id=False
+    )
+    _assert_cloud_context_not_duplicate(matter, provider, provider_folder_id)
+
+    cloud_folder = dict(matter.cloud_folder or {})
+    context_folders = _cloud_context_folders(cloud_folder)
+    context_folders.append(
+        _build_cloud_context_folder(provider, provider_metadata, body.label)
+    )
+    cloud_folder["context_folders"] = context_folders
+    matter.cloud_folder = cloud_folder
+
+    await _share_matter_with_assignees(db, tenant_id, matter)
+    await db.commit()
+
+    return MatterCloudFolderStatus(status="provisioned", providers=cloud_folder)
+
+
+@router.delete(
+    "/{matter_id}/cloud-folder/context/{context_folder_id}",
+    response_model=MatterCloudFolderStatus,
+)
+async def remove_matter_cloud_context_folder(
+    matter_id: str,
+    context_folder_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an additional context folder mapping from a matter."""
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    cloud_folder = dict(matter.cloud_folder or {})
+    context_folders = _cloud_context_folders(cloud_folder)
+    next_context = [
+        folder for folder in context_folders if folder.get("id") != context_folder_id
+    ]
+    if len(next_context) == len(context_folders):
+        raise HTTPException(status_code=404, detail="Context folder mapping not found")
+
+    if next_context:
+        cloud_folder["context_folders"] = next_context
+    else:
+        cloud_folder.pop("context_folders", None)
+    matter.cloud_folder = cloud_folder or None
+
+    await db.commit()
+
+    status = "provisioned" if matter.cloud_folder else "not_provisioned"
+    return MatterCloudFolderStatus(status=status, providers=matter.cloud_folder or {})
+
+
+@router.patch(
+    "/{matter_id}/cloud-folder/{provider}/rename",
+    response_model=MatterCloudFolderStatus,
+)
+async def rename_matter_cloud_folder(
+    matter_id: str,
+    provider: str,
+    body: MatterCloudFolderRenameRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename one provider folder for this matter and update stored metadata."""
+    if provider not in SUPPORTED_CLOUD_FOLDER_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported cloud provider")
+
+    current_user = await get_current_user(request, db)
+    tenant_id = current_user.tenant_id
+    tenant_id_str = str(tenant_id)
+    await set_tenant_context(db, tenant_id_str)
+
+    matter = await _get_matter_or_404(db, matter_id, tenant_id)
+    provider_data = (matter.cloud_folder or {}).get(provider) or {}
+    folder_id = provider_data.get("matter_folder_id") or provider_data.get("id")
+    if not folder_id:
+        raise HTTPException(
+            status_code=422,
+            detail="This matter is not mapped to that cloud provider",
+        )
+
+    try:
+        provider_metadata = await rename_cloud_folder(
+            db=db,
+            tenant_id=tenant_id_str,
+            provider=provider,
+            folder_id=folder_id,
+            new_name=body.name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning("Cloud folder rename failed for matter %s: %s", matter_id, exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    providers = _apply_cloud_provider_metadata(matter, provider, provider_metadata)
+    await db.commit()
+
+    return MatterCloudFolderStatus(status="provisioned", providers=providers)
+
+
 @router.post("/{matter_id}/cloud-folder/sync")
 async def sync_matter_cloud_folder(
     matter_id: str,
@@ -2205,7 +2528,10 @@ async def sync_matter_cloud_folder(
     if not matter.cloud_folder:
         tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
         tenant = tenant_result.scalar_one_or_none()
-        if not tenant or not tenant.cloud_root_folder:
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        cloud_root = await _repair_tenant_cloud_root(db, tenant, tenant_id)
+        if not cloud_root:
             raise HTTPException(
                 status_code=422,
                 detail="No cloud credentials configured for this tenant",
@@ -2215,7 +2541,7 @@ async def sync_matter_cloud_folder(
             db=db,
             tenant_id=tenant_id_str,
             matter_slug=matter.slug,
-            cloud_root=tenant.cloud_root_folder,
+            cloud_root=cloud_root,
         )
         if not cloud_folder:
             raise HTTPException(

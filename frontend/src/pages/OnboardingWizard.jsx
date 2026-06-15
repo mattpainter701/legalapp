@@ -99,7 +99,7 @@ export default function OnboardingWizard() {
     setCompleting(true)
     try {
       await skipOnboarding()
-      navigate('/chat', { replace: true })
+      navigate('/matters', { replace: true })
     } catch {
       setError('Failed to skip.')
     } finally {

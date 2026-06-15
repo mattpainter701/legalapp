@@ -57,7 +57,7 @@ export default function LoginPage() {
     try {
       const result = await login({ email, password })
       await authLogin(result.access_token)
-      navigate('/chat', { replace: true })
+      navigate('/matters', { replace: true })
     } catch (err) {
       const detail = err?.response?.data?.detail
       setError(detail || 'Invalid email or password.')

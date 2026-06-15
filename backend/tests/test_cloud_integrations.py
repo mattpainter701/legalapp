@@ -101,6 +101,50 @@ async def test_cloud_search_dispatches_subsource_plans(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cloud_search_scopes_to_primary_and_context_folders(monkeypatch):
+    service = CloudSearchService()
+    drive_folder_ids: list[str | None] = []
+    graph_folder_ids: list[str | None] = []
+
+    async def fake_drive(*args, folder_id=None, **kwargs):
+        drive_folder_ids.append(folder_id)
+        return []
+
+    async def fake_graph(*args, folder_id=None, **kwargs):
+        graph_folder_ids.append(folder_id)
+        return []
+
+    async def fake_index(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(service, "_search_google_drive", fake_drive)
+    monkeypatch.setattr(service, "_search_graph", fake_graph)
+    monkeypatch.setattr(service, "search_index", fake_index)
+
+    await service.search(
+        db=None,
+        plan={"sources": ["drive", "onedrive"], "keywords": ["acme"]},
+        tenant_id="tenant-1",
+        user_id="user-1",
+        matter_cloud_folder={
+            "google_drive": {"matter_folder_id": "gd-primary"},
+            "onedrive": {"matter_folder_id": "od-primary"},
+            "context_folders": [
+                {
+                    "provider": "google_drive",
+                    "matter_folder_id": "gd-context",
+                    "id": "local-ui-id",
+                },
+                {"provider": "onedrive", "matter_folder_id": "od-context"},
+            ],
+        },
+    )
+
+    assert drive_folder_ids == ["gd-primary", "gd-context"]
+    assert graph_folder_ids == ["od-primary", "od-context"]
+
+
+@pytest.mark.asyncio
 async def test_build_cloud_context_accepts_cloud_hit_objects():
     hit = CloudHit(
         provider="google",
@@ -146,10 +190,28 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
     async def fake_web_url(_token, folder_id):
         return f"https://onedrive/{folder_id}"
 
+    async def fake_onedrive_metadata(_token, folder_id):
+        return {
+            "id": folder_id,
+            "name": folder_id.split(":")[-1],
+            "webUrl": f"https://onedrive/{folder_id}",
+            "folder": {},
+        }
+
+    async def fake_gdrive_metadata(_token, folder_id):
+        return {
+            "id": folder_id,
+            "name": folder_id.split(":")[-1],
+            "webViewLink": f"https://drive/{folder_id}",
+            "mimeType": "application/vnd.google-apps.folder",
+        }
+
     monkeypatch.setattr(cloud_init, "get_fresh_token", fake_token)
     monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
     monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
     monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
+    monkeypatch.setattr(cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata)
+    monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
     root = await cloud_init.initialize_cloud_root_folder(None, "tenant-1")
 
@@ -184,10 +246,28 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     async def fake_web_url(_token, folder_id):
         return f"https://onedrive/{folder_id}"
 
+    async def fake_onedrive_metadata(_token, folder_id):
+        return {
+            "id": folder_id,
+            "name": folder_id.split(":")[-1],
+            "webUrl": f"https://onedrive/{folder_id}",
+            "folder": {},
+        }
+
+    async def fake_gdrive_metadata(_token, folder_id):
+        return {
+            "id": folder_id,
+            "name": folder_id.split(":")[-1],
+            "webViewLink": f"https://drive/{folder_id}",
+            "mimeType": "application/vnd.google-apps.folder",
+        }
+
     monkeypatch.setattr(cloud_init, "get_fresh_token", fake_token)
     monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
     monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
     monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
+    monkeypatch.setattr(cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata)
+    monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
     metadata = await cloud_init.initialize_matter_folders(
         None,
@@ -209,3 +289,31 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     }
     assert set(metadata["onedrive"]["subfolders"]) == set(metadata["subfolder_paths"])
     assert set(metadata["google_drive"]["subfolders"]) == set(metadata["subfolder_paths"])
+
+
+def test_cloud_folder_selection_prefers_existing_canonical_before_duplicates():
+    """Re-auth must reconnect to existing roots instead of creating another numbered folder."""
+    from app.services import cloud_init
+
+    items = [
+        {"id": "folder-6", "name": "claritylegal-records 6", "createdDateTime": "2026-06-15T10:00:00Z"},
+        {"id": "folder-2", "name": "claritylegal-records 2", "createdDateTime": "2026-06-10T10:00:00Z"},
+        {"id": "folder-root", "name": "claritylegal-records", "createdDateTime": "2026-06-14T10:00:00Z"},
+    ]
+
+    chosen = cloud_init._choose_existing_folder(items, "claritylegal-records")
+
+    assert chosen["id"] == "folder-root"
+
+
+def test_cloud_folder_selection_falls_back_to_lowest_duplicate_suffix():
+    from app.services import cloud_init
+
+    items = [
+        {"id": "folder-6", "name": "claritylegal-records 6", "createdDateTime": "2026-06-15T10:00:00Z"},
+        {"id": "folder-2", "name": "claritylegal-records 2", "createdDateTime": "2026-06-10T10:00:00Z"},
+    ]
+
+    chosen = cloud_init._choose_existing_folder(items, "claritylegal-records")
+
+    assert chosen["id"] == "folder-2"

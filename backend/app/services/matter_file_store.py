@@ -293,43 +293,11 @@ async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:
     """Ensure a folder path exists in OneDrive, creating folders as needed.
     Returns the folder ID of the deepest folder.
     """
-    parent_id = "root"
-    async with httpx.AsyncClient(timeout=30) as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        for folder_name in folders:
-            children_url = (
-                f"{GRAPH_BASE}/me/drive/root/children"
-                if parent_id == "root"
-                else f"{GRAPH_BASE}/me/drive/items/{parent_id}/children"
-            )
-            search_url = (
-                f"{children_url}"
-                f"?$filter=name eq '{folder_name}' and folder ne null"
-                f"&$select=id,name"
-            )
-            resp = await client.get(search_url, headers=headers)
-            if resp.status_code == 200:
-                items = resp.json().get("value", [])
-                if items:
-                    parent_id = items[0]["id"]
-                    continue
+    from app.services.cloud_init import _ensure_onedrive_folder
 
-            resp = await client.post(
-                children_url,
-                json={
-                    "name": folder_name,
-                    "folder": {},
-                    "@microsoft.graph.conflictBehavior": "rename",
-                },
-                headers=headers,
-            )
-            if resp.status_code in (200, 201):
-                parent_id = resp.json()["id"]
-            else:
-                raise RuntimeError(
-                    f"Failed to create OneDrive folder '{folder_name}': "
-                    f"{resp.status_code} {resp.text[:200]}"
-                )
+    parent_id = "root"
+    for folder_name in folders:
+        parent_id = await _ensure_onedrive_folder(token, folder_name, parent_id)
     return parent_id
 
 
@@ -337,39 +305,9 @@ async def _ensure_gdrive_path(token: str, folders: list[str]) -> str:
     """Ensure a folder path exists in Google Drive, creating folders as needed.
     Returns the folder ID of the deepest folder.
     """
-    parent_id = "root"
-    async with httpx.AsyncClient(timeout=30) as client:
-        headers = {"Authorization": f"Bearer {token}"}
-        for folder_name in folders:
-            query = (
-                f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' "
-                f"and '{parent_id}' in parents and trashed=false"
-            )
-            resp = await client.get(
-                "https://www.googleapis.com/drive/v3/files",
-                params={"q": query, "fields": "files(id,name)"},
-                headers=headers,
-            )
-            if resp.status_code == 200:
-                items = resp.json().get("files", [])
-                if items:
-                    parent_id = items[0]["id"]
-                    continue
+    from app.services.cloud_init import _ensure_gdrive_folder
 
-            resp = await client.post(
-                "https://www.googleapis.com/drive/v3/files",
-                json={
-                    "name": folder_name,
-                    "mimeType": "application/vnd.google-apps.folder",
-                    "parents": [parent_id],
-                },
-                headers=headers,
-            )
-            if resp.status_code in (200, 201):
-                parent_id = resp.json()["id"]
-            else:
-                raise RuntimeError(
-                    f"Failed to create Google Drive folder '{folder_name}': "
-                    f"{resp.status_code} {resp.text[:200]}"
-                )
+    parent_id = "root"
+    for folder_name in folders:
+        parent_id = await _ensure_gdrive_folder(token, folder_name, parent_id)
     return parent_id

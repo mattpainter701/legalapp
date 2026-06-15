@@ -336,6 +336,16 @@ class MatterContextService:
             gd = cloud_folder.get("google_drive")
             if gd and gd.get("url"):
                 storage_lines.append(f"    Google Drive: {gd['url']}")
+            for folder in cloud_folder.get("context_folders") or []:
+                if not isinstance(folder, dict) or not folder.get("url"):
+                    continue
+                provider = (
+                    "OneDrive"
+                    if folder.get("provider") == "onedrive"
+                    else "Google Drive"
+                )
+                label = folder.get("label") or folder.get("folder_name") or "Context"
+                storage_lines.append(f"    Context ({provider}) {label}: {folder['url']}")
             if storage_lines:
                 lines.append("  Cloud File Storage:")
                 lines.extend(storage_lines)

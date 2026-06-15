@@ -11,10 +11,22 @@ const api = axios.create({
   withCredentials: true, // Allow httpOnly cookies to be sent with requests
 })
 
-// Request interceptor: httpOnly cookies are now handled automatically by the browser
-// No longer injecting Authorization header — relies on browser's cookie auto-send
+// Request interceptor: browsers send httpOnly cookies automatically. Keep a
+// bearer fallback because older sessions still store the JWT in localStorage and
+// cross-origin cookie settings can be brittle in dev/proxy setups.
 api.interceptors.request.use(
   (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      if (typeof config.headers?.set === 'function') {
+        config.headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        config.headers = {
+          ...(config.headers || {}),
+          Authorization: `Bearer ${token}`,
+        }
+      }
+    }
     return config
   },
   (error) => Promise.reject(error)
@@ -52,7 +64,11 @@ api.interceptors.response.use(
     try {
       // Single-flight: the first 401 starts the refresh; others await it.
       if (!refreshPromise) {
-        refreshPromise = api.post('/auth/refresh').finally(() => {
+        refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
+          const freshToken = refreshResponse?.data?.access_token
+          if (freshToken) localStorage.setItem('token', freshToken)
+          return refreshResponse
+        }).finally(() => {
           refreshPromise = null
         })
       }
@@ -64,6 +80,17 @@ api.interceptors.response.use(
 
     // Refresh succeeded (new cookies set) — retry the original request once.
     config._retried = true
+    const freshToken = localStorage.getItem('token')
+    if (freshToken) {
+      if (typeof config.headers?.set === 'function') {
+        config.headers.set('Authorization', `Bearer ${freshToken}`)
+      } else {
+        config.headers = {
+          ...(config.headers || {}),
+          Authorization: `Bearer ${freshToken}`,
+        }
+      }
+    }
     return api(config)
   }
 )
@@ -912,6 +939,18 @@ export const getMatterCloudFolder = (matterId) =>
 export const provisionMatterCloudFolder = (matterId) =>
   api.post(`/matters/${matterId}/cloud-folder/provision`).then(r => r.data)
 
+export const remapMatterCloudFolder = (matterId, provider, data) =>
+  api.patch(`/matters/${matterId}/cloud-folder/${provider}/remap`, data).then(r => r.data)
+
+export const renameMatterCloudFolder = (matterId, provider, data) =>
+  api.patch(`/matters/${matterId}/cloud-folder/${provider}/rename`, data).then(r => r.data)
+
+export const addMatterCloudContextFolder = (matterId, data) =>
+  api.post(`/matters/${matterId}/cloud-folder/context`, data).then(r => r.data)
+
+export const removeMatterCloudContextFolder = (matterId, contextFolderId) =>
+  api.delete(`/matters/${matterId}/cloud-folder/context/${contextFolderId}`).then(r => r.data)
+
 export const syncMatterCloudFolder = (matterId) =>
   api.post(`/matters/${matterId}/cloud-folder/sync`).then(r => r.data)
 
@@ -969,7 +1008,7 @@ export const getCalendarEvents = (start, end) => {
 
 export const syncCalendarDeadlines = (provider = 'microsoft') =>
   api
-    .post('/email/calendar', { provider, sync_deadlines: true })
+    .post('/calendar/sync', { provider, sync_deadlines: true })
     .then(r => r.data)
 
 export const getCalendarProviders = () =>

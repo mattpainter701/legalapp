@@ -1,11 +1,18 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
 import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
-import { Menu, Shield } from 'lucide-react'
+import { Briefcase, CalendarDays, CheckSquare, Menu, MessageSquare, Shield } from 'lucide-react'
 
 const AppShellContext = createContext(null)
+
+const MOBILE_NAV_ITEMS = [
+  { path: '/matters', label: 'Matters', icon: Briefcase },
+  { path: '/chat', label: 'Assistant', icon: MessageSquare },
+  { path: '/calendar', label: 'Calendar', icon: CalendarDays },
+  { path: '/tasks', label: 'Tasks', icon: CheckSquare },
+]
 
 export function useAppShell() {
   const ctx = useContext(AppShellContext)
@@ -16,10 +23,20 @@ export function useAppShell() {
 export default function AppShell({ children, title }) {
   const { user, logout: authLogout } = useAuth()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [conversations, setConversations] = useState([])
   const [documents, setDocuments] = useState([])
   const [activeConvId, setActiveConvId] = useState(null)
+
+  const isActiveRoute = useCallback((path) => (
+    pathname === path || pathname.startsWith(path + '/')
+  ), [pathname])
+
+  const handleShellNavigate = useCallback((path) => {
+    navigate(path)
+    setSidebarOpen(false)
+  }, [navigate])
 
   const loadSidebarData = useCallback(async () => {
     try {
@@ -140,7 +157,19 @@ export default function AppShell({ children, title }) {
               )}
             </div>
 
-            <div className="flex items-center gap-3 flex-shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+              <button
+                onClick={() => handleShellNavigate('/matters')}
+                title="My Matters"
+                aria-current={isActiveRoute('/matters') ? 'page' : undefined}
+                className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-semibold uppercase tracking-wider rounded-lg border transition-colors ${
+                  isActiveRoute('/matters')
+                    ? 'bg-brand-ink text-white border-brand-ink'
+                    : 'bg-brand-surface text-brand-ink border-brand-line hover:bg-brand-bg-soft hover:border-brand-line-2'
+                }`}
+              >
+                <Briefcase size={13} /> My Matters
+              </button>
               {user?.role === 'admin' && (
                 <button
                   onClick={() => navigate('/admin')}
@@ -162,6 +191,25 @@ export default function AppShell({ children, title }) {
           <main className="flex-1 overflow-auto">
             {children}
           </main>
+
+          <nav className="md:hidden h-16 bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
+            {MOBILE_NAV_ITEMS.map(({ path, label, icon: Icon }) => {
+              const active = isActiveRoute(path)
+              return (
+                <button
+                  key={path}
+                  onClick={() => handleShellNavigate(path)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`flex flex-col items-center justify-center gap-1 text-[11px] font-sans font-semibold ${
+                    active ? 'text-brand-ink' : 'text-brand-muted hover:text-brand-ink'
+                  }`}
+                >
+                  <Icon size={18} strokeWidth={active ? 2.2 : 1.8} />
+                  <span>{label}</span>
+                </button>
+              )
+            })}
+          </nav>
         </div>
       </div>
     </AppShellContext.Provider>

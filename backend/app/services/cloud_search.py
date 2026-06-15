@@ -94,16 +94,11 @@ class CloudSearchService:
         date_after = plan.get("date_after", "")
         sources = plan.get("sources", None)
 
-        # Extract matter folder IDs for provider-specific scoping
-        gd_folder_id: str | None = None
-        od_folder_id: str | None = None
-        if matter_cloud_folder:
-            gd = matter_cloud_folder.get("google_drive")
-            if gd:
-                gd_folder_id = gd.get("matter_folder_id") or gd.get("id")
-            od = matter_cloud_folder.get("onedrive")
-            if od:
-                od_folder_id = od.get("matter_folder_id") or od.get("id")
+        # Extract primary + contextual matter folder IDs for provider scoping.
+        gd_folder_ids = _cloud_folder_ids_for_provider(
+            matter_cloud_folder, "google_drive"
+        )
+        od_folder_ids = _cloud_folder_ids_for_provider(matter_cloud_folder, "onedrive")
 
         results: list[CloudHit] = []
         tasks = []
@@ -117,17 +112,31 @@ class CloudSearchService:
             or google_sources.intersection(sources)
         ):
             if _source_enabled(sources, "drive"):
-                tasks.append(
-                    self._search_google_drive(
-                        db,
-                        keywords,
-                        date_after,
-                        max_hits,
-                        tenant_id,
-                        user_id,
-                        folder_id=gd_folder_id,
+                if gd_folder_ids:
+                    for folder_id in gd_folder_ids:
+                        tasks.append(
+                            self._search_google_drive(
+                                db,
+                                keywords,
+                                date_after,
+                                max_hits,
+                                tenant_id,
+                                user_id,
+                                folder_id=folder_id,
+                            )
+                        )
+                else:
+                    tasks.append(
+                        self._search_google_drive(
+                            db,
+                            keywords,
+                            date_after,
+                            max_hits,
+                            tenant_id,
+                            user_id,
+                            folder_id=None,
+                        )
                     )
-                )
             if _source_enabled(sources, "gmail"):
                 tasks.append(
                     self._search_gmail(
@@ -140,18 +149,48 @@ class CloudSearchService:
             or "microsoft" in sources
             or microsoft_sources.intersection(sources)
         ):
-            tasks.append(
-                self._search_graph(
-                    db,
-                    keywords,
-                    date_after,
-                    max_hits,
-                    tenant_id,
-                    user_id,
-                    sources,
-                    folder_id=od_folder_id,
-                )
+            use_folder_scoped_onedrive = bool(od_folder_ids) and _source_enabled(
+                sources, "onedrive"
             )
+            if use_folder_scoped_onedrive:
+                for folder_id in od_folder_ids:
+                    tasks.append(
+                        self._search_graph(
+                            db,
+                            keywords,
+                            date_after,
+                            max_hits,
+                            tenant_id,
+                            user_id,
+                            ["onedrive"],
+                            folder_id=folder_id,
+                        )
+                    )
+
+            graph_sources = (
+                _microsoft_sources_without_onedrive(sources)
+                if use_folder_scoped_onedrive
+                else sources
+            )
+            if graph_sources is None or (
+                graph_sources
+                and (
+                    "microsoft" in graph_sources
+                    or microsoft_sources.intersection(graph_sources)
+                )
+            ):
+                tasks.append(
+                    self._search_graph(
+                        db,
+                        keywords,
+                        date_after,
+                        max_hits,
+                        tenant_id,
+                        user_id,
+                        graph_sources,
+                        folder_id=None,
+                    )
+                )
 
         # Always include the locally-synced metadata index. It is a reliable
         # fallback when live tokens are limited and gives the sync subsystem a
@@ -971,6 +1010,51 @@ def _source_enabled(sources: list[str] | None, name: str) -> bool:
     if name in {"onedrive", "sharepoint", "outlook"} and "microsoft" in sources:
         return True
     return False
+
+
+def _cloud_folder_ids_for_provider(
+    matter_cloud_folder: dict | None, provider: str
+) -> list[str]:
+    """Return primary and context folder IDs for a matter/provider mapping."""
+    if not isinstance(matter_cloud_folder, dict):
+        return []
+
+    ids: list[str] = []
+    primary = matter_cloud_folder.get(provider)
+    primary_id = _cloud_folder_id(primary, allow_id=True)
+    if primary_id:
+        ids.append(primary_id)
+
+    for folder in matter_cloud_folder.get("context_folders") or []:
+        if not isinstance(folder, dict) or folder.get("provider") != provider:
+            continue
+        folder_id = _cloud_folder_id(folder, allow_id=False)
+        if folder_id:
+            ids.append(folder_id)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for folder_id in ids:
+        if folder_id not in seen:
+            seen.add(folder_id)
+            deduped.append(folder_id)
+    return deduped
+
+
+def _cloud_folder_id(folder: dict | None, *, allow_id: bool) -> str | None:
+    if not isinstance(folder, dict):
+        return None
+    folder_id = folder.get("matter_folder_id")
+    if not folder_id and allow_id:
+        folder_id = folder.get("id")
+    return str(folder_id) if folder_id else None
+
+
+def _microsoft_sources_without_onedrive(sources: list[str] | None) -> list[str]:
+    """Keep non-OneDrive Microsoft sources for the global Graph query."""
+    if sources is None or "microsoft" in sources:
+        return ["sharepoint", "outlook"]
+    return [source for source in sources if source != "onedrive"]
 
 
 def _parse_index_date(value: str) -> datetime | None:

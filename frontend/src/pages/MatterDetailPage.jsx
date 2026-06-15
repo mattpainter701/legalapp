@@ -87,6 +87,61 @@ function Field({ label, children }) {
     </div>
   )
 }
+function cloudStorageLinks(cloudFolder, compact = false) {
+  const primaryLinks = [
+    { key: 'onedrive', label: 'OneDrive', className: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' },
+    { key: 'google_drive', label: 'Google Drive', className: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100' },
+  ]
+    .map((cfg) => ({ ...cfg, data: cloudFolder?.[cfg.key] }))
+    .filter(({ data }) => data?.url)
+    .map(({ key, label, className, data }) => ({
+      key,
+      label: compact ? label : `${label}${data.folder_name ? `: ${data.folder_name}` : ''}`,
+      title: data.folder_name ? `Open ${data.folder_name}` : `Open ${label} folder`,
+      className,
+      url: data.url,
+    }))
+
+  const contextLinks = (Array.isArray(cloudFolder?.context_folders) ? cloudFolder.context_folders : [])
+    .filter((folder) => folder?.url)
+    .map((folder) => {
+      const providerLabel = folder.provider === 'onedrive' ? 'OneDrive' : 'Google Drive'
+      const name = folder.label || folder.folder_name || 'Context'
+      return {
+        key: folder.id || `${folder.provider}:${folder.matter_folder_id}`,
+        label: compact ? name : `Context: ${name}`,
+        title: `Open ${folder.folder_name || name} (${providerLabel})`,
+        className: 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100',
+        url: folder.url,
+      }
+    })
+
+  return [...primaryLinks, ...contextLinks]
+}
+function hasCloudStorageLinks(cloudFolder) {
+  return cloudStorageLinks(cloudFolder, true).length > 0
+}
+function CloudStorageLinks({ cloudFolder, compact = false }) {
+  const links = cloudStorageLinks(cloudFolder, compact)
+  if (links.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {links.map((link) => (
+        <a
+          key={link.key}
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={link.title}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 border text-xs font-medium rounded-lg transition-colors ${link.className}`}
+        >
+          <Icon d={Icons.folder} size={12} />
+          {link.label}
+        </a>
+      ))}
+    </div>
+  )
+}
 const inputCls = "w-full border border-brand-line rounded-lg px-3 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface transition-all"
 const labelCls = "block text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-1.5"
 
@@ -511,19 +566,10 @@ export default function MatterDetailPage() {
                 <span className="text-[12px] font-sans text-brand-muted">#{matter.case_number}</span>
               )}
             </div>
-            {(matter.cloud_folder?.onedrive?.url || matter.cloud_folder?.google_drive?.url) && (
+            {hasCloudStorageLinks(matter.cloud_folder) && (
               <div className="flex flex-wrap items-center gap-2 mt-4">
                 <span className="text-[11px] font-bold uppercase tracking-widest text-brand-muted font-sans">Cloud Folder</span>
-                {matter.cloud_folder?.onedrive?.url && (
-                  <a href={matter.cloud_folder.onedrive.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100 transition-colors">
-                    <Icon d={Icons.folder} size={12} /> OneDrive
-                  </a>
-                )}
-                {matter.cloud_folder?.google_drive?.url && (
-                  <a href={matter.cloud_folder.google_drive.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 text-xs font-medium rounded-lg hover:bg-green-100 transition-colors">
-                    <Icon d={Icons.folder} size={12} /> Google Drive
-                  </a>
-                )}
+                <CloudStorageLinks cloudFolder={matter.cloud_folder} compact />
               </div>
             )}
           </div>
@@ -1394,7 +1440,16 @@ export default function MatterDetailPage() {
               </div>
             )}
 
-            {settingsSection === 'shares' && <MatterSmbSharesTab matterId={id} />}
+            {settingsSection === 'shares' && (
+              <MatterSmbSharesTab
+                matterId={id}
+                onCloudFolderChange={(providers) => {
+                  setMatter(prev => prev ? { ...prev, cloud_folder: providers || {} } : prev)
+                  setEditData(prev => ({ ...prev, cloud_folder: providers || {} }))
+                  loadCloudFiles()
+                }}
+              />
+            )}
 
             {settingsSection === 'details' && editing ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
@@ -1491,32 +1546,9 @@ export default function MatterDetailPage() {
                 <Field label="Court">{dm.court}</Field>
                 <Field label="Judge">{dm.judge}</Field>
                 <Field label="Counterparty">{dm.counterparty}</Field>
-                {(matter.cloud_folder?.onedrive?.url || matter.cloud_folder?.google_drive?.url) && (
+                {hasCloudStorageLinks(matter.cloud_folder) && (
                   <Field label="Cloud Storage">
-                    <div className="flex flex-wrap gap-2 mt-0.5">
-                      {matter.cloud_folder?.onedrive?.url && (
-                        <a
-                          href={matter.cloud_folder.onedrive.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100 transition-colors"
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          OneDrive
-                        </a>
-                      )}
-                      {matter.cloud_folder?.google_drive?.url && (
-                        <a
-                          href={matter.cloud_folder.google_drive.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 text-green-700 text-xs font-medium rounded-lg hover:bg-green-100 transition-colors"
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          Google Drive
-                        </a>
-                      )}
-                    </div>
+                    <CloudStorageLinks cloudFolder={matter.cloud_folder} />
                   </Field>
                 )}
               </dl>

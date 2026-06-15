@@ -235,6 +235,7 @@ class MatterSummary(BaseModel):
     budget_utilization_pct: float | None
     is_overdue: bool
     next_deadline: datetime | None
+    cloud_folder: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -408,6 +409,32 @@ class MatterCloudFolderStatus(BaseModel):
 
     status: str  # "provisioned" | "not_provisioned"
     providers: dict = {}
+
+
+class MatterCloudFolderRemapRequest(BaseModel):
+    """Remap a matter to an existing provider folder."""
+
+    folder_id: str | None = Field(None, max_length=1000)
+    folder_url: str | None = Field(None, max_length=4000)
+    folder_name: str | None = Field(None, max_length=200)
+    create_if_missing: bool = False
+
+
+class MatterCloudContextFolderRequest(BaseModel):
+    """Attach an additional cloud folder as matter context."""
+
+    provider: str = Field(..., max_length=50)
+    label: str | None = Field(None, max_length=200)
+    folder_id: str | None = Field(None, max_length=1000)
+    folder_url: str | None = Field(None, max_length=4000)
+    folder_name: str | None = Field(None, max_length=200)
+    create_if_missing: bool = False
+
+
+class MatterCloudFolderRenameRequest(BaseModel):
+    """Rename a matter folder in the connected provider."""
+
+    name: str = Field(..., min_length=1, max_length=200)
 
 
 class MatterStats(BaseModel):

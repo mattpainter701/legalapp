@@ -124,7 +124,7 @@ function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (adminOnly && user.role !== 'admin') {
-    return <Navigate to="/chat" replace />
+    return <Navigate to="/matters" replace />
   }
 
   return children

@@ -30,12 +30,12 @@ export default function AuthCallback() {
               if (!s.onboarding_completed) {
                 navigate('/onboarding', { replace: true })
               } else {
-                navigate('/chat', { replace: true })
+                navigate('/matters', { replace: true })
               }
             })
-            .catch(() => navigate('/chat', { replace: true }))
+            .catch(() => navigate('/matters', { replace: true }))
         } else {
-          navigate('/chat', { replace: true })
+          navigate('/matters', { replace: true })
         }
       })
       .catch(() => {

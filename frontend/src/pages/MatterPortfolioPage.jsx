@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
-import { getMattersV2, getMyMatters, setAssignmentActive, getIntegrationsHealth } from '../api'
+import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
 
 function Icon({ d, size = 16, className = '' }) {
@@ -24,6 +24,7 @@ const Icons = {
   grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
   alert: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+  folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
 }
 
 const STATUS_COLORS = {
@@ -78,6 +79,66 @@ function DeadlineBadge({ label }) {
   )
 }
 
+function CloudFolderLinks({ cloudFolder, compact = false }) {
+  const primaryLinks = [
+    { key: 'onedrive', label: 'OneDrive', className: 'text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100' },
+    { key: 'google_drive', label: 'Google Drive', className: 'text-green-700 bg-green-50 border-green-200 hover:bg-green-100' },
+  ]
+    .map((cfg) => ({ ...cfg, data: cloudFolder?.[cfg.key] }))
+    .filter(({ data }) => data?.url)
+    .map(({ key, label, className, data }) => ({
+      key,
+      label: compact ? label : `${label}${data.folder_name ? `: ${data.folder_name}` : ''}`,
+      title: data.folder_name ? `Open ${data.folder_name}` : `Open ${label} folder`,
+      className,
+      url: data.url,
+    }))
+
+  const contextLinks = (Array.isArray(cloudFolder?.context_folders) ? cloudFolder.context_folders : [])
+    .filter((folder) => folder?.url)
+    .map((folder) => {
+      const providerLabel = folder.provider === 'onedrive' ? 'OneDrive' : 'Google Drive'
+      const name = folder.label || folder.folder_name || 'Context'
+      return {
+        key: folder.id || `${folder.provider}:${folder.matter_folder_id}`,
+        label: compact ? name : `Context: ${name}`,
+        title: `Open ${folder.folder_name || name} (${providerLabel})`,
+        className: 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100',
+        url: folder.url,
+      }
+    })
+
+  const links = [...primaryLinks, ...contextLinks]
+
+  if (links.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap gap-1.5" onClick={e => e.stopPropagation()}>
+      {links.map(({ key, label, title, className, url }) => (
+        <a
+          key={key}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={title}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-sans font-semibold transition-colors ${className}`}
+        >
+          <Icon d={Icons.folder} size={11} />
+          {label}
+        </a>
+      ))}
+    </div>
+  )
+}
+
+function hasCloudFolderLinks(cloudFolder) {
+  return Boolean(
+    cloudFolder?.onedrive?.url ||
+    cloudFolder?.google_drive?.url ||
+    (Array.isArray(cloudFolder?.context_folders) && cloudFolder.context_folders.some((folder) => folder?.url))
+  )
+}
+
 const STATUS_OPTIONS = ['all', 'open', 'active', 'pending', 'closed']
 
 // ── "Needs Action" classification ─────────────────────────────────────────────
@@ -102,7 +163,7 @@ function dueTomorrow(m) {
 }
 
 // ── Matter Card (board view) ──────────────────────────────────────────────────
-function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert, cloudConnected }) {
+function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
@@ -121,9 +182,6 @@ function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert, clou
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {cloudConnected && (
-            <span title="Cloud integration active" className="text-[10px] text-brand-accent">☁</span>
-          )}
           {showAlert && <Icon d={Icons.alert} size={15} className="text-brand-rose" />}
         </div>
       </div>
@@ -137,6 +195,10 @@ function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert, clou
       {m.practice_area && (
         <div className="text-[12px] text-brand-accent font-semibold font-sans mb-2">{m.practice_area}</div>
       )}
+
+      <div className="mb-2">
+        <CloudFolderLinks cloudFolder={m.cloud_folder} compact />
+      </div>
 
       {m.active_workers?.length > 0 && (
         <div className="flex items-center gap-1.5 mb-2">
@@ -188,6 +250,9 @@ function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
           {m.practice_area && <span className="text-brand-accent font-medium">{m.practice_area}</span>}
           <span className="capitalize text-brand-muted">Role: <span className="text-brand-ink-2">{m.my_role?.replace(/_/g, ' ')}</span></span>
         </div>
+        <div className="mt-2">
+          <CloudFolderLinks cloudFolder={m.cloud_folder} />
+        </div>
         {m.active_workers?.length > 0 && (
           <div className="mt-1 flex items-center gap-1 text-[11px] text-brand-muted font-sans">
             <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
@@ -229,7 +294,6 @@ export default function MatterPortfolioPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [togglingId, setTogglingId] = useState(null)
   const [viewMode, setViewMode] = useState('board') // 'board' | 'list'
-  const [cloudConnected, setCloudConnected] = useState(false)
 
   const loadMyMatters = () => {
     setMyLoading(true)
@@ -250,11 +314,6 @@ export default function MatterPortfolioPage() {
   useEffect(() => {
     loadMyMatters()
     loadMatters()
-    getIntegrationsHealth().then(data => {
-      const ms = data?.microsoft
-      const g = data?.google
-      setCloudConnected(!!(ms?.connected || g?.connected))
-    }).catch(() => {})
   }, [])
 
   const handleToggleActive = async (assignmentId, matterId, active) => {
@@ -445,7 +504,6 @@ export default function MatterPortfolioPage() {
                           onToggleActive={handleToggleActive}
                           togglingId={togglingId}
                           showAlert={col.showAlert}
-                          cloudConnected={cloudConnected}
                         />
                       ))
                     )}
@@ -569,10 +627,10 @@ export default function MatterPortfolioPage() {
               <table className="min-w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-brand-bg-soft/50 border-b border-brand-line">
-                    {['Matter', 'Client', 'Attorney', 'Practice Area', 'Risk', 'Status', 'Opened', ''].map((h, i) => (
+                    {['Matter', 'Client', 'Attorney', 'Practice Area', 'Cloud Folder', 'Risk', 'Status', 'Opened', ''].map((h, i) => (
                       <th
                         key={i}
-                        className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 7 ? 'pr-6' : ''}`}
+                        className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 8 ? 'pr-6' : ''}`}
                       >
                         {h}
                       </th>
@@ -600,6 +658,12 @@ export default function MatterPortfolioPage() {
                       </td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans text-[13px] whitespace-nowrap">
                         {m.practice_area || <span className="text-brand-muted">—</span>}
+                      </td>
+                      <td className="px-5 py-4 min-w-[180px]">
+                        <CloudFolderLinks cloudFolder={m.cloud_folder} compact />
+                        {!hasCloudFolderLinks(m.cloud_folder) && (
+                          <span className="text-brand-muted text-[13px] font-sans">—</span>
+                        )}
                       </td>
                       <td className="px-5 py-4">
                         <RiskBadge level={m.risk_level} />

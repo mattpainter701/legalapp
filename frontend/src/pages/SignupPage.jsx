@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { register } from '../api'
+import { useAuth } from '../App'
 
 function MicrosoftIcon() {
   return (
@@ -26,6 +27,7 @@ function GoogleIcon() {
 
 export default function SignupPage() {
   const navigate = useNavigate()
+  const { login: authLogin } = useAuth()
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -52,8 +54,8 @@ export default function SignupPage() {
     try {
       const data = { ...form, staff_size: form.staff_size ? parseInt(form.staff_size, 10) : null }
       const res = await register(data)
-      localStorage.setItem('token', res.access_token)
-      navigate('/chat', { replace: true })
+      await authLogin(res.access_token)
+      navigate('/matters', { replace: true })
     } catch (err) {
       setError(err.response?.data?.detail || 'Registration failed')
     } finally {
