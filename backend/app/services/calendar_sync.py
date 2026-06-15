@@ -147,6 +147,93 @@ class CalendarSyncService:
                 return None
             return resp.json()
 
+    async def ms_create_scheduled_event(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str | None,
+        *,
+        subject: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        timezone_name: str = "UTC",
+        body: str = "",
+        location: str = "",
+        attendees: list[str] | None = None,
+        teams_online: bool = False,
+    ) -> dict | None:
+        """Create a timed Outlook calendar event, optionally as a Teams meeting."""
+        token = (
+            await get_fresh_user_token(db, tenant_id, user_id, "microsoft")
+            if user_id
+            else await get_fresh_token(db, tenant_id, "microsoft")
+        )
+        if not token:
+            raise ValueError(
+                "No Microsoft calendar token. Please reconnect your calendar in Settings."
+            )
+
+        event = {
+            "subject": subject,
+            "start": {
+                "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "timeZone": timezone_name or "UTC",
+            },
+            "end": {
+                "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "timeZone": timezone_name or "UTC",
+            },
+        }
+        if body:
+            event["body"] = {"contentType": "text", "content": body}
+        if location:
+            event["location"] = {"displayName": location}
+        if attendees:
+            event["attendees"] = [
+                {"emailAddress": {"address": a}, "type": "required"} for a in attendees
+            ]
+        if teams_online:
+            event["isOnlineMeeting"] = True
+            event["onlineMeetingProvider"] = "teamsForBusiness"
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{GRAPH_BASE}/me/events",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=event,
+            )
+            if resp.status_code not in (200, 201):
+                raise ValueError(
+                    f"Microsoft calendar event create failed (HTTP {resp.status_code})."
+                )
+            return resp.json()
+
+    async def ms_delete_event(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str | None,
+        event_id: str | None,
+    ) -> bool:
+        if not event_id:
+            return False
+        token = (
+            await get_fresh_user_token(db, tenant_id, user_id, "microsoft")
+            if user_id
+            else await get_fresh_token(db, tenant_id, "microsoft")
+        )
+        if not token:
+            return False
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{GRAPH_BASE}/me/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        return resp.status_code in (200, 202, 204, 404)
+
     async def google_get_events(
         self,
         db: AsyncSession,
@@ -266,6 +353,79 @@ class CalendarSyncService:
                 )
                 return None
             return resp.json()
+
+    async def google_create_scheduled_event(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        *,
+        subject: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        timezone_name: str = "UTC",
+        body: str = "",
+        location: str = "",
+        attendees: list[str] | None = None,
+    ) -> dict | None:
+        """Create a timed Google Calendar event."""
+        token = await get_fresh_user_token(db, tenant_id, user_id, "google")
+        if not token:
+            raise ValueError(
+                "No Google calendar token. Please reconnect your calendar in Settings."
+            )
+
+        event = {
+            "summary": subject,
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": timezone_name or "UTC",
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": timezone_name or "UTC",
+            },
+        }
+        if body:
+            event["description"] = body
+        if location:
+            event["location"] = location
+        if attendees:
+            event["attendees"] = [{"email": a} for a in attendees]
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{GOOGLE_CAL_BASE}/calendars/primary/events",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=event,
+            )
+            if resp.status_code not in (200, 201):
+                raise ValueError(
+                    f"Google Calendar event create failed (HTTP {resp.status_code})."
+                )
+            return resp.json()
+
+    async def google_delete_event(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        event_id: str | None,
+    ) -> bool:
+        if not event_id:
+            return False
+        token = await get_fresh_user_token(db, tenant_id, user_id, "google")
+        if not token:
+            return False
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{GOOGLE_CAL_BASE}/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        return resp.status_code in (200, 202, 204, 410)
 
     async def sync_deadlines_to_calendar(
         self,

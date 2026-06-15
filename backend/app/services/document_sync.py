@@ -151,6 +151,7 @@ class DocumentSyncService:
                                 "modified": item.get("lastModifiedDateTime"),
                                 "url": item.get("webUrl"),
                                 "drive": "sharepoint",
+                                "drive_id": drive_id,
                                 "drive_name": drive_name,
                                 "mime_type": mime,
                             }

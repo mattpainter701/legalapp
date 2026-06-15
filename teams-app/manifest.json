@@ -1,0 +1,52 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22",
+  "developer": {
+    "name": "Perevaga Group",
+    "websiteUrl": "https://legalapp.perevagagroup.com",
+    "privacyUrl": "https://legalapp.perevagagroup.com/privacy",
+    "termsOfUseUrl": "https://legalapp.perevagagroup.com/terms"
+  },
+  "name": {
+    "short": "Clarity Legal",
+    "full": "Clarity Legal"
+  },
+  "description": {
+    "short": "Clarity Legal workspace for Microsoft Teams.",
+    "full": "Clarity Legal matter, calendar, and channel workspace for Microsoft Teams."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "1F2937",
+  "staticTabs": [
+    {
+      "entityId": "clarity-legal-personal",
+      "name": "Clarity Legal",
+      "contentUrl": "https://legalapp.perevagagroup.com/teams",
+      "websiteUrl": "https://legalapp.perevagagroup.com/teams",
+      "scopes": [
+        "personal"
+      ]
+    }
+  ],
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://legalapp.perevagagroup.com/teams/config",
+      "canUpdateConfiguration": true,
+      "scopes": [
+        "team"
+      ]
+    }
+  ],
+  "validDomains": [
+    "legalapp.perevagagroup.com"
+  ],
+  "webApplicationInfo": {
+    "id": "c805316c-ac2c-4f68-8ace-a5522889bf50",
+    "resource": "api://legalapp.perevagagroup.com/c805316c-ac2c-4f68-8ace-a5522889bf50"
+  }
+}

@@ -203,6 +203,76 @@ async def integration_health(
     return {"providers": providers, "overall_health": overall_health}
 
 
+@router.get("/integrations/readiness")
+async def integration_readiness(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Redacted integration setup readiness for admin diagnostics."""
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    expected_redirects = {
+        "microsoft": [
+            f"{settings.BACKEND_URL.rstrip('/')}/api/auth/microsoft/callback",
+            f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/microsoft/callback",
+        ],
+        "google": [
+            f"{settings.BACKEND_URL.rstrip('/')}/api/auth/google/callback",
+            f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/google/callback",
+        ],
+        "zoom": [
+            settings.ZOOM_REDIRECT_URI
+            or f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/zoom/callback"
+        ],
+    }
+    env_keys = [
+        "FRONTEND_URL",
+        "BACKEND_URL",
+        "MICROSOFT_CLIENT_ID",
+        "MICROSOFT_CLIENT_SECRET",
+        "MICROSOFT_TENANT_ID",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "ZOOM_CLIENT_ID",
+        "ZOOM_CLIENT_SECRET",
+        "ZOOM_REDIRECT_URI",
+        "TEAMS_APP_ID",
+    ]
+    env_status = {
+        key: {"configured": bool(getattr(settings, key, ""))}
+        for key in env_keys
+    }
+
+    creds_result = await db.execute(
+        select(TenantCredential).where(TenantCredential.tenant_id == admin.tenant_id)
+    )
+    tenant_credentials = {}
+    for cred in creds_result.scalars().all():
+        tenant_credentials[cred.provider] = {
+            "connected": cred.is_active,
+            "scopes": cred.scopes.split() if cred.scopes else [],
+            "expires_at": cred.token_expires_at.isoformat()
+            if cred.token_expires_at
+            else None,
+            "service_account_email": cred.service_account_email,
+        }
+
+    return {
+        "env": env_status,
+        "expected_redirect_uris": expected_redirects,
+        "tenant_credentials": tenant_credentials,
+        "entra_verification_command": (
+            'az ad app show --id <MICROSOFT_CLIENT_ID> --query "web.redirectUris"'
+        ),
+        "notes": [
+            "Auth and integration callbacks are separate; login can work while integrations fail.",
+            "This endpoint cannot verify the live Entra app registration without Azure/Graph access.",
+        ],
+    }
+
+
 @router.get("/usage", response_model=UsageStats)
 async def get_usage_stats(
     request: Request,

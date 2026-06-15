@@ -11,12 +11,11 @@ from app.schemas.email_agent import (
     ProcessedEmail,
     CalendarSyncRequest,
     CalendarSyncResponse,
-    CalendarEventResponse,
 )
 from app.services.email_agent import email_agent
-from app.services.calendar_sync import calendar_sync
 from app.services.llm import LLMService
 from app.services.llm_routing import resolve_llm_route
+from app.routers.calendar import run_calendar_sync
 
 settings = get_settings()
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -110,48 +109,4 @@ async def sync_calendar(
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
-    tenant_id = getattr(request.state, "tenant_id", None)
-    user_id = str(user.id) if not body.user_id else body.user_id
-
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="No tenant context")
-
-    await set_tenant_context(db, tenant_id)
-
-    try:
-        if body.provider == "microsoft":
-            events = await calendar_sync.ms_get_events(db, tenant_id, user_id)
-        elif body.provider == "google":
-            events = await calendar_sync.google_get_events(db, tenant_id, user_id)
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Unsupported provider: {body.provider}"
-            )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    deadlines_created = 0
-    if body.sync_deadlines:
-        try:
-            sync_result = await calendar_sync.sync_deadlines_to_calendar(
-                db, tenant_id, user_id, body.provider
-            )
-            deadlines_created = sync_result.get("created", 0)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    return CalendarSyncResponse(
-        provider=body.provider,
-        events=[
-            CalendarEventResponse(
-                id=e["id"],
-                provider=e["provider"],
-                subject=e.get("subject"),
-                start=e.get("start"),
-                end=e.get("end"),
-                location=e.get("location"),
-            )
-            for e in events
-        ],
-        deadlines_created=deadlines_created,
-    )
+    return await run_calendar_sync(body, user, db)

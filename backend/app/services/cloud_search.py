@@ -99,6 +99,13 @@ class CloudSearchService:
             matter_cloud_folder, "google_drive"
         )
         od_folder_ids = _cloud_folder_ids_for_provider(matter_cloud_folder, "onedrive")
+        sp_folder_refs = [
+            ref
+            for ref in _cloud_folder_refs_for_provider(
+                matter_cloud_folder, "sharepoint"
+            )
+            if ref.get("drive_id")
+        ]
 
         results: list[CloudHit] = []
         tasks = []
@@ -152,6 +159,9 @@ class CloudSearchService:
             use_folder_scoped_onedrive = bool(od_folder_ids) and _source_enabled(
                 sources, "onedrive"
             )
+            use_folder_scoped_sharepoint = bool(sp_folder_refs) and _source_enabled(
+                sources, "sharepoint"
+            )
             if use_folder_scoped_onedrive:
                 for folder_id in od_folder_ids:
                     tasks.append(
@@ -166,10 +176,27 @@ class CloudSearchService:
                             folder_id=folder_id,
                         )
                     )
+            if use_folder_scoped_sharepoint:
+                for ref in sp_folder_refs:
+                    tasks.append(
+                        self._search_sharepoint_folder(
+                            db,
+                            keywords,
+                            max_hits,
+                            tenant_id,
+                            user_id,
+                            drive_id=ref["drive_id"],
+                            folder_id=ref["folder_id"],
+                        )
+                    )
 
             graph_sources = (
-                _microsoft_sources_without_onedrive(sources)
-                if use_folder_scoped_onedrive
+                _microsoft_sources_without_scoped(
+                    sources,
+                    remove_onedrive=use_folder_scoped_onedrive,
+                    remove_sharepoint=use_folder_scoped_sharepoint,
+                )
+                if use_folder_scoped_onedrive or use_folder_scoped_sharepoint
                 else sources
             )
             if graph_sources is None or (
@@ -701,11 +728,14 @@ class CloudSearchService:
             # Determine OneDrive vs SharePoint by the drive type hint
             drive_type = parent_ref.get("driveType", "")
             source = "sharepoint" if drive_type == "documentLibrary" else "onedrive"
+            object_id = resource.get("id", hit_id)
+            if source == "sharepoint" and parent_ref.get("driveId"):
+                object_id = _sharepoint_object_id(parent_ref["driveId"], object_id)
 
             return CloudHit(
                 provider="microsoft",
                 source=source,
-                object_id=resource.get("id", hit_id),
+                object_id=object_id,
                 title=name,
                 snippet=summary,
                 url=web_url,
@@ -836,8 +866,14 @@ class CloudSearchService:
 
         async with httpx.AsyncClient(timeout=30) as client:
             try:
+                object_id = hit.object_id
+                url = f"{GRAPH_BASE}/me/drive/items/{object_id}/content"
+                if hit.source == "sharepoint":
+                    drive_id, item_id = _split_sharepoint_object_id(object_id)
+                    if drive_id and item_id:
+                        url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
                 resp = await client.get(
-                    f"{GRAPH_BASE}/me/drive/items/{hit.object_id}/content",
+                    url,
                     headers={"Authorization": f"Bearer {token}"},
                     follow_redirects=True,
                 )
@@ -964,6 +1000,64 @@ class CloudSearchService:
             )
         return hits
 
+    async def _search_sharepoint_folder(
+        self,
+        db: AsyncSession,
+        keywords: list[str],
+        max_hits: int,
+        tenant_id: str,
+        user_id: str | None,
+        *,
+        drive_id: str,
+        folder_id: str,
+    ) -> list[CloudHit]:
+        """Search inside a specific SharePoint document-library folder."""
+        token = await self._get_microsoft_token(db, tenant_id, user_id)
+        if not token:
+            return []
+        query_string = " ".join(keywords) if keywords else "*"
+        query_string = query_string.replace("'", "''")
+        url = f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}/search(q='{query_string}')"
+        params = {
+            "$top": min(max_hits, 200),
+            "$select": "id,name,webUrl,lastModifiedDateTime,file",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "SharePoint folder search failed: %s %s",
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                    return []
+                data = resp.json()
+            except httpx.RequestError as exc:
+                logger.warning("SharePoint folder search request error: %s", exc)
+                return []
+
+        hits: list[CloudHit] = []
+        for item in data.get("value", []):
+            hits.append(
+                CloudHit(
+                    provider="microsoft",
+                    source="sharepoint",
+                    object_id=_sharepoint_object_id(drive_id, item.get("id", "")),
+                    title=item.get("name", ""),
+                    snippet="",
+                    url=item.get("webUrl", ""),
+                    modified_time=item.get("lastModifiedDateTime", ""),
+                    mime_type=(item.get("file") or {}).get("mimeType", ""),
+                    relevance_score=1.0,
+                )
+            )
+        return hits
+
     @staticmethod
     async def _get_google_token(
         db: AsyncSession,
@@ -1050,11 +1144,75 @@ def _cloud_folder_id(folder: dict | None, *, allow_id: bool) -> str | None:
     return str(folder_id) if folder_id else None
 
 
-def _microsoft_sources_without_onedrive(sources: list[str] | None) -> list[str]:
-    """Keep non-OneDrive Microsoft sources for the global Graph query."""
+def _cloud_folder_refs_for_provider(
+    matter_cloud_folder: dict | None, provider: str
+) -> list[dict[str, str]]:
+    """Return matter folder refs with drive metadata for a provider."""
+    if not isinstance(matter_cloud_folder, dict):
+        return []
+
+    refs: list[dict[str, str]] = []
+    primary = matter_cloud_folder.get(provider)
+    _append_cloud_folder_ref(refs, primary, allow_id=True)
+
+    for folder in matter_cloud_folder.get("context_folders") or []:
+        if not isinstance(folder, dict) or folder.get("provider") != provider:
+            continue
+        _append_cloud_folder_ref(refs, folder, allow_id=False)
+
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for ref in refs:
+        key = (ref.get("drive_id", ""), ref.get("folder_id", ""))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(ref)
+    return deduped
+
+
+def _append_cloud_folder_ref(
+    refs: list[dict[str, str]], folder: dict | None, *, allow_id: bool
+) -> None:
+    folder_id = _cloud_folder_id(folder, allow_id=allow_id)
+    if not folder_id:
+        return
+    ref = {"folder_id": folder_id}
+    if isinstance(folder, dict) and folder.get("drive_id"):
+        ref["drive_id"] = str(folder["drive_id"])
+    refs.append(ref)
+
+
+def _sharepoint_object_id(drive_id: str, item_id: str) -> str:
+    return f"{drive_id}:{item_id}"
+
+
+def _split_sharepoint_object_id(object_id: str) -> tuple[str | None, str | None]:
+    if ":" not in object_id:
+        return None, object_id
+    drive_id, item_id = object_id.split(":", 1)
+    return drive_id or None, item_id or None
+
+
+def _microsoft_sources_without_scoped(
+    sources: list[str] | None,
+    *,
+    remove_onedrive: bool,
+    remove_sharepoint: bool,
+) -> list[str]:
+    """Keep unscoped Microsoft sources for the global Graph query."""
     if sources is None or "microsoft" in sources:
-        return ["sharepoint", "outlook"]
-    return [source for source in sources if source != "onedrive"]
+        remaining = ["onedrive", "sharepoint", "outlook"]
+    else:
+        remaining = [
+            source
+            for source in sources
+            if source in {"onedrive", "sharepoint", "outlook"}
+        ]
+    if remove_onedrive:
+        remaining = [source for source in remaining if source != "onedrive"]
+    if remove_sharepoint:
+        remaining = [source for source in remaining if source != "sharepoint"]
+    return remaining
 
 
 def _parse_index_date(value: str) -> datetime | None:

@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
 
+    # ── Zoom OAuth / meeting provider ────────────────────────────────────────
+    ZOOM_CLIENT_ID: str = ""
+    ZOOM_CLIENT_SECRET: str = ""
+    ZOOM_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
+    ZOOM_WEBHOOK_SECRET_TOKEN: str = ""
+
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
     # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     TOKEN_ENCRYPTION_KEY: str = ""

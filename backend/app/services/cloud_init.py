@@ -7,12 +7,15 @@ Creates the 'claritylegal-records' root folder in the customer's cloud storage
 import logging
 import base64
 import re
+import uuid
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.models.tenant import TenantSettings
 from app.services.token_vault import get_fresh_token
 
 settings = get_settings()
@@ -59,6 +62,36 @@ async def initialize_cloud_root_folder(
         except Exception as exc:
             logger.warning(
                 "Failed to create OneDrive root folder for tenant %s: %s",
+                tenant_id,
+                exc,
+            )
+        try:
+            binding = await _get_sharepoint_binding(db, tenant_id)
+            if binding and binding.get("drive_id"):
+                folder_id = await _ensure_sharepoint_folder(
+                    ms_token,
+                    binding["drive_id"],
+                    ROOT_FOLDER_NAME,
+                    binding.get("root_item_id") or "root",
+                )
+                folder_meta = await _get_sharepoint_folder_metadata(
+                    ms_token, binding["drive_id"], folder_id
+                )
+                result["sharepoint"] = {
+                    "id": folder_id,
+                    "drive_id": binding["drive_id"],
+                    "site_id": binding.get("site_id"),
+                    "folder_name": folder_meta.get("name") or ROOT_FOLDER_NAME,
+                    "url": folder_meta.get("webUrl") or "",
+                }
+                logger.info(
+                    "Ensured %s in SharePoint for tenant %s",
+                    ROOT_FOLDER_NAME,
+                    tenant_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to create SharePoint root folder for tenant %s: %s",
                 tenant_id,
                 exc,
             )
@@ -171,6 +204,47 @@ async def initialize_matter_folders(
             except Exception as exc:
                 logger.warning(
                     "Failed to create Google Drive matter folders for %s: %s",
+                    matter_slug,
+                    exc,
+                )
+
+    # SharePoint
+    if cloud_root.get("sharepoint"):
+        ms_token = await get_fresh_token(db, tenant_id, "microsoft")
+        if ms_token:
+            try:
+                drive_id = cloud_root["sharepoint"].get("drive_id")
+                root_id = (
+                    cloud_root["sharepoint"].get("id")
+                    or cloud_root["sharepoint"].get("matters_folder_id")
+                    or cloud_root["sharepoint"].get("matter_folder_id")
+                )
+                if not drive_id or not root_id:
+                    raise RuntimeError("SharePoint cloud root missing drive/folder id")
+                matter_folder = await _ensure_sharepoint_folder(
+                    ms_token, drive_id, matter_slug, root_id
+                )
+                folder_meta = await _get_sharepoint_folder_metadata(
+                    ms_token, drive_id, matter_folder
+                )
+                subfolders = {}
+                for sub in MATTER_SUBFOLDERS:
+                    sub_id = await _ensure_sharepoint_folder(
+                        ms_token, drive_id, sub, matter_folder
+                    )
+                    subfolders[sub] = sub_id
+                result["sharepoint"] = {
+                    "matter_folder_id": matter_folder,
+                    "drive_id": drive_id,
+                    "site_id": cloud_root["sharepoint"].get("site_id"),
+                    "folder_name": folder_meta.get("name") or matter_slug,
+                    "url": folder_meta.get("webUrl") or "",
+                    "subfolders": subfolders,
+                }
+                logger.info("Created matter folders in SharePoint: %s", matter_slug)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create SharePoint matter folders for %s: %s",
                     matter_slug,
                     exc,
                 )
@@ -361,6 +435,101 @@ async def _ensure_onedrive_folder(token: str, folder_name: str, parent_id: str) 
         )
 
 
+async def _get_sharepoint_binding(db: AsyncSession, tenant_id: str) -> dict | None:
+    result = await db.execute(
+        select(TenantSettings).where(
+            TenantSettings.tenant_id == uuid.UUID(str(tenant_id))
+        )
+    )
+    settings_row = result.scalar_one_or_none()
+    if not settings_row or not isinstance(settings_row.custom_config, dict):
+        return None
+    binding = settings_row.custom_config.get("sharepoint_binding")
+    return binding if isinstance(binding, dict) else None
+
+
+def _sharepoint_children_url(drive_id: str, parent_id: str) -> str:
+    return (
+        f"{GRAPH_BASE}/drives/{drive_id}/root/children"
+        if parent_id == "root"
+        else f"{GRAPH_BASE}/drives/{drive_id}/items/{parent_id}/children"
+    )
+
+
+async def _list_sharepoint_child_folders(
+    client: httpx.AsyncClient, headers: dict, drive_id: str, parent_id: str
+) -> list[dict]:
+    url = _sharepoint_children_url(drive_id, parent_id)
+    params = {"$select": "id,name,folder,webUrl,createdDateTime", "$top": "200"}
+    folders: list[dict] = []
+    while url:
+        resp = await client.get(url, headers=headers, params=params)
+        params = None
+        if resp.status_code != 200:
+            return folders
+        data = resp.json()
+        folders.extend(item for item in data.get("value", []) if item.get("folder"))
+        url = data.get("@odata.nextLink")
+    return folders
+
+
+async def _ensure_sharepoint_folder(
+    token: str, drive_id: str, folder_name: str, parent_id: str
+) -> str:
+    folder_name = _validate_folder_name(folder_name)
+    async with httpx.AsyncClient(timeout=30) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        existing = _choose_existing_folder(
+            await _list_sharepoint_child_folders(client, headers, drive_id, parent_id),
+            folder_name,
+        )
+        if existing:
+            return existing["id"]
+        resp = await client.post(
+            _sharepoint_children_url(drive_id, parent_id),
+            headers=headers,
+            json={
+                "name": folder_name,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": "fail",
+            },
+        )
+        if resp.status_code in (200, 201):
+            return resp.json()["id"]
+        if resp.status_code == 409:
+            existing = _choose_existing_folder(
+                await _list_sharepoint_child_folders(
+                    client, headers, drive_id, parent_id
+                ),
+                folder_name,
+            )
+            if existing:
+                return existing["id"]
+        raise RuntimeError(
+            f"Failed to create SharePoint folder '{folder_name}': "
+            f"{resp.status_code} {resp.text[:200]}"
+        )
+
+
+async def _get_sharepoint_folder_metadata(
+    token: str, drive_id: str, folder_id: str
+) -> dict:
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}",
+            params={"$select": "id,name,webUrl,folder,parentReference"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"SharePoint folder lookup failed: {resp.status_code} {resp.text[:200]}"
+        )
+    item = resp.json()
+    if not item.get("folder"):
+        raise RuntimeError("SharePoint item is not a folder")
+    return item
+
+
 async def _get_onedrive_web_url(token: str, folder_id: str) -> str:
     """Get web URL for a OneDrive folder."""
     try:
@@ -444,6 +613,30 @@ async def build_matter_folder_metadata(
             "subfolders": subfolders,
         }
 
+    if provider == "sharepoint":
+        token = await get_fresh_token(db, tenant_id, "microsoft")
+        if not token:
+            raise RuntimeError("Microsoft credentials are not connected")
+        binding = await _get_sharepoint_binding(db, tenant_id)
+        drive_id = (binding or {}).get("drive_id")
+        if not drive_id:
+            raise RuntimeError("SharePoint drive is not configured")
+        item = await _get_sharepoint_folder_metadata(token, drive_id, folder_id)
+        subfolders = {}
+        if ensure_subfolders:
+            subfolders = {
+                sub: await _ensure_sharepoint_folder(token, drive_id, sub, item["id"])
+                for sub in MATTER_SUBFOLDERS
+            }
+        return {
+            "matter_folder_id": item["id"],
+            "drive_id": drive_id,
+            "site_id": (binding or {}).get("site_id"),
+            "folder_name": item.get("name") or "",
+            "url": item.get("webUrl") or "",
+            "subfolders": subfolders,
+        }
+
     raise ValueError(f"Unsupported cloud provider: {provider}")
 
 
@@ -486,6 +679,26 @@ async def rename_cloud_folder(
         if resp.status_code not in (200, 201):
             raise RuntimeError(
                 f"Google Drive rename failed: {resp.status_code} {resp.text[:200]}"
+            )
+        return await build_matter_folder_metadata(db, tenant_id, provider, folder_id)
+
+    if provider == "sharepoint":
+        token = await get_fresh_token(db, tenant_id, "microsoft")
+        if not token:
+            raise RuntimeError("Microsoft credentials are not connected")
+        binding = await _get_sharepoint_binding(db, tenant_id)
+        drive_id = (binding or {}).get("drive_id")
+        if not drive_id:
+            raise RuntimeError("SharePoint drive is not configured")
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.patch(
+                f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"name": new_name},
+            )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"SharePoint rename failed: {resp.status_code} {resp.text[:200]}"
             )
         return await build_matter_folder_metadata(db, tenant_id, provider, folder_id)
 
@@ -549,6 +762,37 @@ async def resolve_cloud_folder_reference(
             db, tenant_id, provider, resolved_id, ensure_subfolders=ensure_subfolders
         )
 
+    if provider == "sharepoint":
+        token = await get_fresh_token(db, tenant_id, "microsoft")
+        if not token:
+            raise RuntimeError("Microsoft credentials are not connected")
+        binding = await _get_sharepoint_binding(db, tenant_id)
+        drive_id = (binding or {}).get("drive_id")
+        if not drive_id:
+            raise RuntimeError("SharePoint drive is not configured")
+        resolved_id = folder_id
+        if folder_url:
+            item = await _resolve_sharepoint_share_url(token, folder_url)
+            resolved_id = item["id"]
+        elif folder_name:
+            root_id = _cloud_root_provider_id(cloud_root, provider)
+            if not root_id:
+                raise RuntimeError("SharePoint root folder is not configured")
+            match = await _find_sharepoint_child_folder(
+                token, drive_id, folder_name, root_id
+            )
+            if match:
+                resolved_id = match["id"]
+            elif create_if_missing:
+                resolved_id = await _ensure_sharepoint_folder(
+                    token, drive_id, folder_name, root_id
+                )
+        if not resolved_id:
+            raise RuntimeError("SharePoint folder was not found")
+        return await build_matter_folder_metadata(
+            db, tenant_id, provider, resolved_id, ensure_subfolders=ensure_subfolders
+        )
+
     raise ValueError(f"Unsupported cloud provider: {provider}")
 
 
@@ -591,6 +835,19 @@ async def _find_onedrive_child_folder(
         )
 
 
+async def _find_sharepoint_child_folder(
+    token: str, drive_id: str, folder_name: str, parent_id: str
+) -> dict | None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        return _choose_existing_folder(
+            await _list_sharepoint_child_folders(
+                client, headers, drive_id, parent_id
+            ),
+            _validate_folder_name(folder_name),
+        )
+
+
 async def _get_onedrive_folder_metadata(token: str, folder_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
@@ -623,6 +880,24 @@ async def _resolve_onedrive_share_url(token: str, folder_url: str) -> dict:
     item = resp.json()
     if not item.get("folder"):
         raise RuntimeError("OneDrive link does not point to a folder")
+    return item
+
+
+async def _resolve_sharepoint_share_url(token: str, folder_url: str) -> dict:
+    share_id = "u!" + base64.urlsafe_b64encode(folder_url.encode()).decode().rstrip("=")
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{GRAPH_BASE}/shares/{share_id}/driveItem",
+            params={"$select": "id,name,webUrl,folder,parentReference"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"SharePoint shared folder lookup failed: {resp.status_code} {resp.text[:200]}"
+        )
+    item = resp.json()
+    if not item.get("folder"):
+        raise RuntimeError("SharePoint link does not point to a folder")
     return item
 
 

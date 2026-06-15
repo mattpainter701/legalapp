@@ -137,7 +137,8 @@ class TenantSettings(Base):
     customer_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     customer_llm_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Primary cloud provider for document storage. "onedrive" | "google_drive" | None (auto)
+    # Primary cloud provider for document storage.
+    # "onedrive" | "sharepoint" | "google_drive" | None (auto)
     primary_cloud_provider: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )

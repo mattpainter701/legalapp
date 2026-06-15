@@ -1,8 +1,10 @@
 """Admin-only endpoints for cloud search testing, metadata sync, and cache management."""
 
 import logging
+import uuid
 
-from fastapi import APIRouter, Depends, Query, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin as _require_admin
 from app.models.cloud_metadata import CloudMetadata
+from app.models.tenant import TenantSettings
 from app.models.tenant_credential import TenantCredential
 from app.services.cache import ExpertiseCacheManager
 from app.services.cloud_search import CloudSearchService
@@ -20,6 +23,7 @@ from app.services.retrieval_planner import RetrievalPlanner
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 # ── Shared instances (lazy-init at first use) ──────────────────────────
 
@@ -74,6 +78,39 @@ class _CloudSearchTestResponse(BaseModel):
     hits: list[dict]
     total_hits: int
     fetch_content_results: list[dict] | None = None
+
+
+class SharePointBindingRequest(BaseModel):
+    site_id: str
+    site_web_url: str | None = None
+    drive_id: str
+    drive_name: str
+    root_item_id: str | None = None
+    folder_path: str = "/"
+    is_primary: bool = True
+
+
+async def _get_ms_token(db: AsyncSession, tenant_id: str) -> str:
+    from app.services.token_vault import get_fresh_token
+
+    token = await get_fresh_token(db, tenant_id, "microsoft")
+    if not token:
+        raise HTTPException(status_code=424, detail="Microsoft integration not connected")
+    return token
+
+
+async def _tenant_settings(db: AsyncSession, tenant_id: str) -> TenantSettings:
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_uuid)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        return row
+    row = TenantSettings(tenant_id=tenant_uuid)
+    db.add(row)
+    await db.flush()
+    return row
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -191,6 +228,131 @@ async def cloud_search_status(
         "metadata_total": metadata_total,
         "last_sync": last_sync,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  1b. SHAREPOINT BINDING
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/sharepoint/binding")
+async def get_sharepoint_binding(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
+    )
+    settings_row = result.scalar_one_or_none()
+    binding = (
+        (settings_row.custom_config or {}).get("sharepoint_binding")
+        if settings_row
+        else None
+    )
+    return {"binding": binding}
+
+
+@router.get("/sharepoint/sites")
+async def list_sharepoint_sites(
+    request: Request,
+    q: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    token = await _get_ms_token(db, tenant_id)
+    async with httpx.AsyncClient(timeout=30) as client:
+        if q:
+            resp = await client.get(
+                f"{GRAPH_BASE}/sites",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"search": q, "$top": 25},
+            )
+        else:
+            resp = await client.get(
+                f"{GRAPH_BASE}/sites/root",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=424,
+            detail=f"SharePoint site lookup failed (HTTP {resp.status_code}).",
+        )
+    if q:
+        sites = resp.json().get("value", [])
+    else:
+        sites = [resp.json()]
+    return {
+        "items": [
+            {
+                "id": site.get("id"),
+                "name": site.get("displayName") or site.get("name"),
+                "web_url": site.get("webUrl"),
+            }
+            for site in sites
+            if site.get("id")
+        ]
+    }
+
+
+@router.get("/sharepoint/sites/{site_id}/drives")
+async def list_sharepoint_drives(
+    site_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    token = await _get_ms_token(db, tenant_id)
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{GRAPH_BASE}/sites/{site_id}/drives",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=424,
+            detail=f"SharePoint drive lookup failed (HTTP {resp.status_code}).",
+        )
+    return {
+        "items": [
+            {
+                "id": drive.get("id"),
+                "name": drive.get("name"),
+                "web_url": drive.get("webUrl"),
+                "drive_type": drive.get("driveType"),
+            }
+            for drive in resp.json().get("value", [])
+            if drive.get("id")
+        ]
+    }
+
+
+@router.put("/sharepoint/binding")
+async def save_sharepoint_binding(
+    body: SharePointBindingRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await _require_admin(request, db)
+    tenant_id = str(admin.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    settings_row = await _tenant_settings(db, tenant_id)
+    config = dict(settings_row.custom_config or {})
+    binding = body.model_dump()
+    binding["provider"] = "sharepoint"
+    binding["health"] = "configured"
+    config["sharepoint_binding"] = binding
+    settings_row.custom_config = config
+    if body.is_primary:
+        settings_row.primary_cloud_provider = "sharepoint"
+    await db.commit()
+    return {"binding": binding}
 
 
 # ═══════════════════════════════════════════════════════════════════════

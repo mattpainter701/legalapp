@@ -6,6 +6,7 @@ import secrets
 import time as _time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
@@ -87,6 +88,7 @@ GOOGLE_USER_SCOPES = (
     "https://www.googleapis.com/auth/calendar "
     "https://www.googleapis.com/auth/drive"
 )
+ZOOM_SCOPES = "meeting:write meeting:read user:read"
 
 SCOPE_ALIASES_GOOGLE = {
     "email": {"email", "https://www.googleapis.com/auth/userinfo.email"},
@@ -129,6 +131,13 @@ def _admin_scopes(teams: bool) -> str:
     if teams:
         return MICROSOFT_ADMIN_SCOPES + " " + TEAMS_REQUIRED_SCOPES
     return MICROSOFT_ADMIN_SCOPES
+
+
+def _zoom_redirect_uri() -> str:
+    return (
+        settings.ZOOM_REDIRECT_URI
+        or f"{settings.BACKEND_URL}/api/integrations/zoom/callback"
+    )
 
 
 @router.get("/microsoft/connect")
@@ -496,6 +505,136 @@ async def google_callback(
     return await _post_connect_redirect(db, tenant_id, "google")
 
 
+@router.get("/zoom/connect")
+async def zoom_connect(
+    request: Request,
+    intent: str = Query("user", description="user=per-user, admin=tenant-wide shared Zoom"),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if intent == "admin" and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if not settings.ZOOM_CLIENT_ID or not settings.ZOOM_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="Zoom OAuth not configured")
+
+    state = secrets.token_urlsafe(32)
+    await _save_state(
+        request,
+        state,
+        {
+            "intent": intent,
+            "provider": "zoom",
+            "user_id": str(user.id),
+            "tenant_id": str(user.tenant_id),
+            "role": user.role,
+        },
+    )
+
+    redirect_uri = _zoom_redirect_uri()
+    authorize_url = "https://zoom.us/oauth/authorize?" + urlencode(
+        {
+            "response_type": "code",
+            "client_id": settings.ZOOM_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    return RedirectResponse(authorize_url)
+
+
+@router.get("/zoom/callback")
+async def zoom_callback(
+    code: str,
+    state: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    valid, meta = await _consume_state(request, state)
+    if not valid:
+        return _error_redirect("zoom", "invalid_state")
+    intent = meta.get("intent", "user") if meta else "user"
+    user_id, tenant_id = _require_state_user(meta, intent)
+    await set_tenant_context(db, tenant_id)
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://zoom.us/oauth/token",
+            auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _zoom_redirect_uri(),
+            },
+        )
+    if token_resp.status_code != 200:
+        logger.warning("Zoom token exchange failed: %s %s", token_resp.status_code, token_resp.text[:300])
+        return _error_redirect("zoom", "token_exchange_failed")
+
+    token_data = token_resp.json()
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in", 3600)
+    scope_str = token_data.get("scope") or ZOOM_SCOPES
+    if not access_token:
+        return _error_redirect("zoom", "no_access_token")
+
+    if intent == "admin":
+        result = await db.execute(
+            select(TenantCredential).where(
+                TenantCredential.tenant_id == tenant_id,
+                TenantCredential.provider == "zoom",
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.encrypted_access_token = encrypt_token(access_token)
+            row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
+            row.token_expires_at = _expires_at(expires_in)
+            row.scopes = scope_str
+            row.is_active = True
+            row.granted_by_user_id = uuid.UUID(user_id)
+        else:
+            db.add(
+                TenantCredential(
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="zoom",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
+                    granted_by_user_id=uuid.UUID(user_id),
+                )
+            )
+    else:
+        result = await db.execute(
+            select(UserOAuthToken).where(
+                UserOAuthToken.user_id == user_id,
+                UserOAuthToken.tenant_id == tenant_id,
+                UserOAuthToken.provider == "zoom",
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.encrypted_access_token = encrypt_token(access_token)
+            row.encrypted_refresh_token = encrypt_token(refresh_token) if refresh_token else None
+            row.token_expires_at = _expires_at(expires_in)
+            row.scopes = scope_str
+        else:
+            db.add(
+                UserOAuthToken(
+                    user_id=uuid.UUID(user_id),
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="zoom",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=encrypt_token(refresh_token) if refresh_token else None,
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
+                )
+            )
+    await db.commit()
+    return await _post_connect_redirect(db, tenant_id, "zoom")
+
+
 # ── Onboarding hook ─────────────────────────────────────────────────────
 
 
@@ -788,6 +927,67 @@ async def google_disconnect(
     await db.commit()
 
     return {"status": "disconnected", "provider": "google"}
+
+
+@router.get("/zoom/status")
+async def zoom_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    user_result = await db.execute(
+        select(UserOAuthToken).where(
+            UserOAuthToken.user_id == user.id,
+            UserOAuthToken.tenant_id == user.tenant_id,
+            UserOAuthToken.provider == "zoom",
+        )
+    )
+    user_row = user_result.scalar_one_or_none()
+    tenant_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.provider == "zoom",
+            TenantCredential.is_active,
+        )
+    )
+    tenant_row = tenant_result.scalar_one_or_none()
+    row = user_row or tenant_row
+    return {
+        "configured": bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
+        "connected": bool(row),
+        "connection_type": "user" if user_row else "tenant" if tenant_row else None,
+        "expires_at": row.token_expires_at.isoformat() if row and row.token_expires_at else None,
+        "scopes": row.scopes.split() if row and row.scopes else [],
+    }
+
+
+@router.post("/zoom/disconnect")
+async def zoom_disconnect(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    if user.role == "admin":
+        await db.execute(
+            delete(TenantCredential).where(
+                TenantCredential.tenant_id == user.tenant_id,
+                TenantCredential.provider == "zoom",
+            )
+        )
+    await db.execute(
+        delete(UserOAuthToken).where(
+            UserOAuthToken.tenant_id == user.tenant_id,
+            UserOAuthToken.user_id == user.id,
+            UserOAuthToken.provider == "zoom",
+        )
+    )
+    await db.commit()
+    return {"status": "disconnected", "provider": "zoom"}
 
 
 # ── Cloud-init helpers & retry ────────────────────────────────────────────

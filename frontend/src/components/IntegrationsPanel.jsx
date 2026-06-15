@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from 'react'
-import { API_BASE_URL, getAdminPermissions, triggerUserSync, retryCloudInit, getAdminSettings, updateAdminSettings, triggerCloudSync } from '../api'
+import {
+  API_BASE_URL,
+  getAdminPermissions,
+  triggerUserSync,
+  retryCloudInit,
+  getAdminSettings,
+  updateAdminSettings,
+  triggerCloudSync,
+  getIntegrationReadiness,
+  getSharePointBinding,
+  listSharePointSites,
+  listSharePointDrives,
+  saveSharePointBinding,
+} from '../api'
 
 const SCOPE_LABELS_MS = {
   offline_access: 'Offline access (refresh tokens)',
@@ -39,6 +52,9 @@ export default function IntegrationsPanel() {
   const [cloudSaved, setCloudSaved] = useState(false)
   const [contentSyncing, setContentSyncing] = useState(false)
   const [contentSyncResult, setContentSyncResult] = useState(null)
+  const [readiness, setReadiness] = useState(null)
+  const [sharePointBinding, setSharePointBinding] = useState(null)
+  const [sharePointFlash, setSharePointFlash] = useState(null)
 
   const relTime = (iso) => {
     if (!iso) return 'never'
@@ -99,10 +115,14 @@ export default function IntegrationsPanel() {
     Promise.all([
       getAdminPermissions(),
       getAdminSettings(),
+      getIntegrationReadiness().catch(() => null),
+      getSharePointBinding().catch(() => ({ binding: null })),
     ])
-      .then(([perms, settings]) => {
+      .then(([perms, settings, readinessData, bindingData]) => {
         setData(perms)
         setPrimaryCloud(settings.primary_cloud_provider ?? null)
+        setReadiness(readinessData)
+        setSharePointBinding(bindingData?.binding || null)
       })
       .catch(() => setError('Failed to load permissions.'))
       .finally(() => setLoading(false))
@@ -239,6 +259,7 @@ export default function IntegrationsPanel() {
           >
             <option value="">Auto (first available)</option>
             <option value="onedrive">Microsoft OneDrive</option>
+            <option value="sharepoint">Microsoft SharePoint</option>
             <option value="google_drive">Google Drive</option>
           </select>
           {cloudSaving && (
@@ -249,6 +270,19 @@ export default function IntegrationsPanel() {
           )}
         </div>
       </div>
+
+      <ReadinessCard readiness={readiness} />
+
+      <SharePointBindingCard
+        binding={sharePointBinding}
+        onSaved={(binding) => {
+          setSharePointBinding(binding)
+          setPrimaryCloud(binding?.is_primary ? 'sharepoint' : primaryCloud)
+          setSharePointFlash('SharePoint binding saved.')
+        }}
+        flash={sharePointFlash}
+        onFlashClear={() => setSharePointFlash(null)}
+      />
 
       {/* Microsoft card */}
       <ProviderCard
@@ -273,6 +307,229 @@ export default function IntegrationsPanel() {
         onSyncNow={handleSyncNow}
         syncing={syncing}
       />
+    </div>
+  )
+}
+
+function ReadinessCard({ readiness }) {
+  if (!readiness) return null
+  const envEntries = Object.entries(readiness.env || {})
+  const redirects = readiness.expected_redirect_uris || {}
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
+      <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Integration Readiness</h3>
+      <p className="text-brand-ink-2 font-sans text-xs mb-4">
+        Redacted setup status for OAuth apps, callbacks, and tenant credentials.
+      </p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Environment</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {envEntries.map(([key, value]) => (
+              <div key={key} className="flex items-center justify-between gap-3 bg-brand-bg rounded-lg px-3 py-2">
+                <span className="text-xs font-mono text-brand-ink truncate">{key}</span>
+                <span className={`text-[10px] font-bold uppercase ${value.configured ? 'text-green-700' : 'text-red-600'}`}>
+                  {value.configured ? 'Set' : 'Missing'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <h4 className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Expected Redirect URIs</h4>
+          <div className="space-y-2">
+            {Object.entries(redirects).map(([provider, uris]) => (
+              <div key={provider} className="bg-brand-bg rounded-lg px-3 py-2">
+                <div className="text-xs font-bold text-brand-ink capitalize mb-1">{provider}</div>
+                {(uris || []).map((uri) => (
+                  <div key={uri} className="text-[11px] font-mono text-brand-muted break-all">{uri}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-[11px] font-mono text-brand-muted bg-brand-bg px-3 py-2 rounded-lg break-all">
+            {readiness.entra_verification_command}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SharePointBindingCard({ binding, onSaved, flash, onFlashClear }) {
+  const [query, setQuery] = useState('')
+  const [sites, setSites] = useState([])
+  const [drives, setDrives] = useState([])
+  const [siteId, setSiteId] = useState(binding?.site_id || '')
+  const [siteWebUrl, setSiteWebUrl] = useState(binding?.site_web_url || '')
+  const [driveId, setDriveId] = useState(binding?.drive_id || '')
+  const [driveName, setDriveName] = useState(binding?.drive_name || '')
+  const [loadingSites, setLoadingSites] = useState(false)
+  const [loadingDrives, setLoadingDrives] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    setSiteId(binding?.site_id || '')
+    setSiteWebUrl(binding?.site_web_url || '')
+    setDriveId(binding?.drive_id || '')
+    setDriveName(binding?.drive_name || '')
+  }, [binding])
+
+  useEffect(() => {
+    if (!flash) return
+    const timer = setTimeout(onFlashClear, 3000)
+    return () => clearTimeout(timer)
+  }, [flash, onFlashClear])
+
+  const handleSearch = async () => {
+    setLoadingSites(true)
+    setError(null)
+    try {
+      const result = await listSharePointSites(query.trim() || undefined)
+      setSites(result.items || [])
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to load SharePoint sites.')
+    } finally {
+      setLoadingSites(false)
+    }
+  }
+
+  const handleSiteSelect = async (value) => {
+    setSiteId(value)
+    setDriveId('')
+    setDriveName('')
+    const site = sites.find((item) => item.id === value)
+    setSiteWebUrl(site?.web_url || '')
+    if (!value) return
+    setLoadingDrives(true)
+    setError(null)
+    try {
+      const result = await listSharePointDrives(value)
+      setDrives(result.items || [])
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to load document libraries.')
+    } finally {
+      setLoadingDrives(false)
+    }
+  }
+
+  const handleDriveSelect = (value) => {
+    setDriveId(value)
+    const drive = drives.find((item) => item.id === value)
+    setDriveName(drive?.name || '')
+  }
+
+  const handleSave = async () => {
+    if (!siteId || !driveId) return
+    setSaving(true)
+    setError(null)
+    try {
+      const result = await saveSharePointBinding({
+        site_id: siteId,
+        site_web_url: siteWebUrl,
+        drive_id: driveId,
+        drive_name: driveName || 'Documents',
+        root_item_id: 'root',
+        folder_path: '/',
+        is_primary: true,
+      })
+      onSaved(result.binding)
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to save SharePoint binding.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h3 className="text-brand-ink font-sans text-base font-bold mb-1">SharePoint Storage Binding</h3>
+          <p className="text-brand-ink-2 font-sans text-xs">
+            Select the SharePoint site and document library used for matter folders and uploads.
+          </p>
+        </div>
+        {binding?.drive_id && (
+          <span className="shrink-0 text-[10px] font-bold uppercase text-green-700 bg-green-100 px-2 py-1 rounded-full">
+            Configured
+          </span>
+        )}
+      </div>
+
+      {flash && (
+        <div className="mb-3 px-3 py-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-xs font-medium">
+          {flash}
+        </div>
+      )}
+      {error && (
+        <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-medium">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 mb-3">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search sites, or leave blank for root site"
+          className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+        />
+        <button
+          onClick={handleSearch}
+          disabled={loadingSites}
+          className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+        >
+          {loadingSites ? 'Loading...' : 'Load sites'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <select
+          value={siteId}
+          onChange={(e) => handleSiteSelect(e.target.value)}
+          className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+        >
+          <option value="">Select site...</option>
+          {siteId && !sites.some((site) => site.id === siteId) && (
+            <option value={siteId}>{siteWebUrl || siteId}</option>
+          )}
+          {sites.map((site) => (
+            <option key={site.id} value={site.id}>{site.name || site.web_url || site.id}</option>
+          ))}
+        </select>
+        <select
+          value={driveId}
+          onChange={(e) => handleDriveSelect(e.target.value)}
+          disabled={!siteId || loadingDrives}
+          className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+        >
+          <option value="">Select library...</option>
+          {driveId && !drives.some((drive) => drive.id === driveId) && (
+            <option value={driveId}>{driveName || driveId}</option>
+          )}
+          {drives.map((drive) => (
+            <option key={drive.id} value={drive.id}>{drive.name || drive.id}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !siteId || !driveId}
+          className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-medium rounded-lg hover:bg-brand-ink/90 transition-colors disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save SharePoint binding'}
+        </button>
+        {binding?.drive_name && (
+          <span className="text-xs text-brand-muted truncate">
+            Current library: {binding.drive_name}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

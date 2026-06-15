@@ -162,6 +162,61 @@ async def refresh_google_token(
         return new_access_token, expires_in
 
 
+async def refresh_zoom_token(
+    db: AsyncSession,
+    tenant_id: str,
+    credential_id: str | None = None,
+) -> tuple[str, int] | None:
+    """Refresh a tenant-level Zoom token. Returns (new_access_token, expires_in)."""
+    from app.models.tenant_credential import TenantCredential
+
+    await set_tenant_context(db, tenant_id)
+    stmt = select(TenantCredential).where(
+        TenantCredential.tenant_id == tenant_id,
+        TenantCredential.provider == "zoom",
+        TenantCredential.is_active,
+    )
+    if credential_id:
+        stmt = stmt.where(TenantCredential.id == credential_id)
+    result = await db.execute(stmt)
+    cred = result.scalar_one_or_none()
+
+    if not cred or not cred.encrypted_refresh_token:
+        return None
+
+    refresh_token = decrypt_token(cred.encrypted_refresh_token)
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://zoom.us/oauth/token",
+            auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+            data={
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        if resp.status_code != 200:
+            logger.error(
+                "Zoom token refresh failed: status=%d body=%s",
+                resp.status_code,
+                resp.text[:300],
+            )
+            return None
+
+        data = resp.json()
+        new_access_token = data.get("access_token")
+        new_refresh_token = data.get("refresh_token")
+        expires_in = data.get("expires_in", 3600)
+        if not new_access_token:
+            return None
+
+        cred.encrypted_access_token = encrypt_token(new_access_token)
+        if new_refresh_token:
+            cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
+        cred.token_expires_at = _expires_at(expires_in)
+        await db.commit()
+        return new_access_token, expires_in
+
+
 async def get_fresh_token(
     db: AsyncSession,
     tenant_id: str,
@@ -192,6 +247,8 @@ async def get_fresh_token(
         refreshed = await refresh_microsoft_token(db, tenant_id, credential_id)
     elif provider == "google":
         refreshed = await refresh_google_token(db, tenant_id, credential_id)
+    elif provider == "zoom":
+        refreshed = await refresh_zoom_token(db, tenant_id, credential_id)
     else:
         return None
 
@@ -310,6 +367,40 @@ async def get_fresh_user_token(
                 )
                 return None
             token_row.encrypted_access_token = encrypt_token(new_access_token)
+            token_row.token_expires_at = _expires_at(expires_in)
+            await db.commit()
+            return new_access_token
+
+    if provider == "zoom":
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://zoom.us/oauth/token",
+                auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+                data={
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "get_fresh_user_token: zoom refresh failed status=%d user_id=%s",
+                    resp.status_code,
+                    user_id,
+                )
+                return None
+            data = resp.json()
+            new_access_token = data.get("access_token")
+            new_refresh_token = data.get("refresh_token")
+            expires_in = data.get("expires_in", 3600)
+            if not new_access_token:
+                logger.warning(
+                    "get_fresh_user_token: zoom refresh returned no access_token user_id=%s",
+                    user_id,
+                )
+                return None
+            token_row.encrypted_access_token = encrypt_token(new_access_token)
+            if new_refresh_token:
+                token_row.encrypted_refresh_token = encrypt_token(new_refresh_token)
             token_row.token_expires_at = _expires_at(expires_in)
             await db.commit()
             return new_access_token

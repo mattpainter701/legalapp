@@ -1,7 +1,8 @@
-"""Matter file store — routes document storage to customer's cloud (OneDrive/Google Drive).
+"""Matter file store — routes document storage to customer's cloud storage.
 
 Files are stored in the customer's own cloud storage, not ours:
   - MS365 customers → OneDrive: /claritylegal-records/{matter_slug}/{category}/{filename}
+  - SharePoint customers → selected document library/folder
   - Google Workspace → Google Drive: claritylegal-records/{matter_slug}/ folder
   - Fallback → local disk (UPLOAD_DIR)
 
@@ -56,7 +57,7 @@ class MatterFileStore:
 
         When matter_cloud_folder is provided, uploads directly to the pre-provisioned
         subfolder ID instead of traversing the folder tree.
-        preferred_provider controls which cloud is tried first ("onedrive" | "google_drive").
+        preferred_provider controls which cloud is tried first.
         """
         logger.info(
             "Storing %s/%s/%s (%d bytes) for tenant %s via preferred=%s",
@@ -75,6 +76,12 @@ class MatterFileStore:
         )
         gdrive_folder_id = _extract_subfolder_id(
             matter_cloud_folder, "google_drive", canonical_folder
+        )
+        sharepoint_folder_id = _extract_subfolder_id(
+            matter_cloud_folder, "sharepoint", canonical_folder
+        )
+        sharepoint_drive_id = _extract_provider_field(
+            matter_cloud_folder, "sharepoint", "drive_id"
         )
 
         providers = _ordered_providers(preferred_provider)
@@ -103,6 +110,18 @@ class MatterFileStore:
                     content,
                     content_type,
                     folder_id=gdrive_folder_id,
+                )
+                if path:
+                    return path
+            elif provider == "sharepoint":
+                path = await self._try_store_sharepoint(
+                    db,
+                    tenant_id,
+                    filename,
+                    content,
+                    content_type,
+                    folder_id=sharepoint_folder_id,
+                    drive_id=sharepoint_drive_id,
                 )
                 if path:
                     return path
@@ -228,6 +247,55 @@ class MatterFileStore:
             logger.warning("Google Drive storage attempt failed: %s", exc)
             return None
 
+    async def _try_store_sharepoint(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        *,
+        folder_id: str | None,
+        drive_id: str | None,
+    ) -> str | None:
+        """Try to store in a configured SharePoint document library."""
+        if not folder_id or not drive_id:
+            return None
+        try:
+            token = await get_fresh_token(db, tenant_id, "microsoft")
+            if not token:
+                return None
+            upload_url = (
+                f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/"
+                f"{filename}:/content"
+            )
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.put(
+                    upload_url,
+                    content=content,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": content_type,
+                    },
+                )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                web_url = data.get("webUrl") or data.get(
+                    "@microsoft.graph.downloadUrl", ""
+                )
+                logger.info("Stored %s in SharePoint: %s", filename, web_url)
+                return web_url
+            logger.warning(
+                "SharePoint upload failed for %s: %s %s",
+                filename,
+                resp.status_code,
+                resp.text[:200],
+            )
+            return None
+        except Exception as exc:
+            logger.warning("SharePoint storage attempt failed: %s", exc)
+            return None
+
     async def _store_local(
         self,
         tenant_id: str,
@@ -263,6 +331,18 @@ def _extract_subfolder_id(
     return None
 
 
+def _extract_provider_field(
+    cloud_folder: dict | None, provider: str, field: str
+) -> str | None:
+    if not cloud_folder:
+        return None
+    provider_data = cloud_folder.get(provider)
+    if not isinstance(provider_data, dict):
+        return None
+    value = provider_data.get(field)
+    return str(value) if value else None
+
+
 def _document_folder_for_category(category: str | None) -> str:
     """Map UI document categories to provisioned matter cloud folders."""
     normalized = (category or "general").strip().lower()
@@ -283,7 +363,7 @@ def _folder_lookup_keys(category: str) -> list[str]:
 
 def _ordered_providers(preferred: str | None) -> list[str]:
     """Return provider order list based on preference."""
-    all_providers = ["onedrive", "google_drive"]
+    all_providers = ["onedrive", "sharepoint", "google_drive"]
     if preferred in all_providers:
         return [preferred] + [p for p in all_providers if p != preferred]
     return all_providers

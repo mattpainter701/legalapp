@@ -31,6 +31,8 @@ import ReportsPage from './pages/ReportsPage'
 import TrustAccountingPage from './pages/TrustAccountingPage'
 import TrustAccountDetail from './components/TrustAccountDetail'
 import CalendarPage from './pages/CalendarPage'
+import TeamsTabPage from './pages/TeamsTabPage'
+import TeamsTabConfigPage from './pages/TeamsTabConfigPage'
 import CommunicationsPage from './pages/CommunicationsPage'
 import TemplatesPage from './pages/TemplatesPage'
 import TimeTrackingPage from './pages/TimeTrackingPage'
@@ -194,6 +196,14 @@ export default function App() {
         <Route
           path="/calendar"
           element={<ShellRoute title="Calendar"><CalendarPage /></ShellRoute>}
+        />
+        <Route
+          path="/teams"
+          element={<ProtectedRoute><TeamsTabPage /></ProtectedRoute>}
+        />
+        <Route
+          path="/teams/config"
+          element={<ProtectedRoute adminOnly><TeamsTabConfigPage /></ProtectedRoute>}
         />
         <Route
           path="/communications"

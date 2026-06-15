@@ -1,7 +1,27 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCalendarEvents, syncCalendarDeadlines, getCalendarProviders, connectCalendarIntegration } from '../api'
-import { ChevronLeft, ChevronRight, CalendarDays, ClipboardList, Building2, RefreshCw } from 'lucide-react'
+import {
+  getCalendarEvents,
+  syncCalendarDeadlines,
+  getCalendarProviders,
+  connectCalendarIntegration,
+  getZoomStatus,
+  connectZoomIntegration,
+  createScheduledEvent,
+  getMattersV2,
+} from '../api'
+import {
+  ChevronLeft,
+  ChevronRight,
+  CalendarDays,
+  ClipboardList,
+  Building2,
+  RefreshCw,
+  Plus,
+  X,
+  Video,
+  ExternalLink,
+} from 'lucide-react'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,6 +45,17 @@ function formatDisplayDate(isoStr) {
 
 function monthLabel(d) {
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
+function toTimeInput(d) {
+  return d.toTimeString().slice(0, 5)
+}
+
+function formatEventTime(raw) {
+  if (!raw) return null
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
 // ── event chip ───────────────────────────────────────────────────────────────
@@ -60,6 +91,12 @@ const TYPE_STYLES = {
     label: 'bg-slate-100 text-slate-700',
     icon: CalendarDays,
   },
+  scheduled_event: {
+    bg: 'bg-cyan-50 border-cyan-200',
+    dot: 'bg-cyan-500',
+    label: 'bg-cyan-100 text-cyan-700',
+    icon: Video,
+  },
 }
 
 const TYPE_LABELS = {
@@ -68,6 +105,11 @@ const TYPE_LABELS = {
   renewal: 'Renewal',
   estate_deadline: 'Estate',
   external_calendar: 'Synced',
+  scheduled_event: 'Event',
+}
+
+function providerLabel(provider) {
+  return provider === 'google' ? 'Google Calendar' : 'Microsoft Calendar'
 }
 
 function providerEventDate(evt) {
@@ -89,6 +131,12 @@ function mergeCalendarEvents(internalEvents, providerEvents) {
 function EventChip({ event, onClick }) {
   const styles = TYPE_STYLES[event.event_type] || TYPE_STYLES.task_due
   const Icon = styles.icon
+  const timeLabel = formatEventTime(event.start)
+  const meetingLabel = event.meeting_provider === 'teams'
+    ? 'Teams'
+    : event.meeting_provider === 'zoom'
+      ? 'Zoom'
+      : null
 
   return (
     <button
@@ -107,6 +155,11 @@ function EventChip({ event, onClick }) {
         </div>
         {event.matter_name && event.event_type !== 'matter_key_date' && (
           <p className="text-xs text-brand-muted mt-0.5 truncate">{event.matter_name}</p>
+        )}
+        {(timeLabel || meetingLabel) && (
+          <p className="text-xs text-brand-muted mt-0.5 truncate">
+            {[timeLabel, meetingLabel].filter(Boolean).join(' · ')}
+          </p>
         )}
       </div>
       <Icon className="w-3.5 h-3.5 text-brand-muted shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity" />
@@ -128,14 +181,35 @@ export default function CalendarPage() {
   const [calendarProvider, setCalendarProvider] = useState(null)
   const [connectProvider, setConnectProvider] = useState(null)
   const [providerEvents, setProviderEvents] = useState([])
+  const [providerStatus, setProviderStatus] = useState({})
+  const [zoomStatus, setZoomStatus] = useState(null)
+  const [matters, setMatters] = useState([])
+  const [showEventModal, setShowEventModal] = useState(false)
+  const [eventSaving, setEventSaving] = useState(false)
 
   useEffect(() => {
-    getCalendarProviders()
-      .then((data) => {
-        if (data.providers && data.providers.length > 0) {
-          setCalendarProvider(data.providers[0])
+    Promise.all([
+      getCalendarProviders(),
+      getZoomStatus().catch(() => ({ connected: false, configured: false })),
+      getMattersV2({ page_size: 200 }).catch(() => ({ items: [] })),
+    ])
+      .then(([data, zoom, mattersData]) => {
+        const connectedProvider = data.providers?.[0] || null
+        const status = data.provider_status || {}
+        setProviderStatus(status)
+        setZoomStatus(zoom)
+        setMatters(mattersData.items || mattersData || [])
+        const reconnectProvider = ['microsoft', 'google'].find((provider) => status[provider]?.needs_reconnect)
+        if (connectedProvider) {
+          setCalendarProvider(connectedProvider)
+        } else if (reconnectProvider) {
+          setCalendarProvider(null)
+          setSyncMessage({
+            type: 'error',
+            text: `${providerLabel(reconnectProvider)} needs to be reconnected before sync can run.`,
+          })
         }
-        setConnectProvider(data.connect_provider || data.login_provider || data.tenant_providers?.[0] || null)
+        setConnectProvider(data.connect_provider || reconnectProvider || data.login_provider || data.tenant_providers?.[0] || null)
       })
       .catch(() => {})
   }, [])
@@ -178,6 +252,14 @@ export default function CalendarPage() {
   const sortedDates = Object.keys(grouped).sort()
 
   const handleEventClick = (event) => {
+    if (event.join_url) {
+      window.open(event.join_url, '_blank', 'noopener,noreferrer')
+      return
+    }
+    if (event.url?.startsWith('http')) {
+      window.open(event.url, '_blank', 'noopener,noreferrer')
+      return
+    }
     if (event.url) navigate(event.url)
   }
 
@@ -217,6 +299,10 @@ export default function CalendarPage() {
         err?.response?.data?.detail ||
         err?.message ||
         'Calendar sync failed. Please try again.'
+      if (err?.response?.status === 424) {
+        setCalendarProvider(null)
+        setConnectProvider(provider)
+      }
       setSyncMessage({ type: 'error', text: `Calendar sync failed: ${detail}` })
     } finally {
       setSyncing(false)
@@ -226,6 +312,37 @@ export default function CalendarPage() {
   const handleConnectCalendar = () => {
     const provider = connectProvider || 'microsoft'
     connectCalendarIntegration(provider)
+  }
+
+  const handleCreateScheduledEvent = async (form) => {
+    setEventSaving(true)
+    setSyncMessage(null)
+    try {
+      await createScheduledEvent({
+        title: form.title,
+        description: form.description || null,
+        start_at: `${form.date}T${form.start_time}:00`,
+        end_at: `${form.date}T${form.end_time}:00`,
+        timezone: form.timezone || 'UTC',
+        attendees: form.attendees
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+        matter_id: form.matter_id || null,
+        calendar_provider: form.calendar_provider || null,
+        meeting_provider: form.meeting_provider || 'none',
+      })
+      setShowEventModal(false)
+      setSyncMessage({ type: 'success', text: 'Event created.' })
+      await fetchEvents(pivotDate)
+    } catch (err) {
+      setSyncMessage({
+        type: 'error',
+        text: err?.response?.data?.detail || 'Failed to create event.',
+      })
+    } finally {
+      setEventSaving(false)
+    }
   }
 
   return (
@@ -239,6 +356,14 @@ export default function CalendarPage() {
             {loading ? 'Loading…' : `${total} event${total !== 1 ? 's' : ''}`}
           </span>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowEventModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-brand-line bg-brand-surface hover:bg-brand-line/40 text-brand-ink transition-colors"
+              title="Create a scheduled event or online meeting"
+            >
+              <Plus className="w-3 h-3" />
+              New Event
+            </button>
             {calendarProvider ? (
               <button
                 onClick={() => handleSync(calendarProvider)}
@@ -378,6 +503,203 @@ export default function CalendarPage() {
           </div>
         )}
       </div>
+      {showEventModal && (
+        <ScheduledEventModal
+          onClose={() => setShowEventModal(false)}
+          onSubmit={handleCreateScheduledEvent}
+          saving={eventSaving}
+          matters={matters}
+          providerStatus={providerStatus}
+          zoomStatus={zoomStatus}
+          defaultCalendarProvider={calendarProvider}
+          onConnectZoom={() => connectZoomIntegration('user')}
+        />
+      )}
+    </div>
+  )
+}
+
+function ScheduledEventModal({
+  onClose,
+  onSubmit,
+  saving,
+  matters,
+  providerStatus,
+  zoomStatus,
+  defaultCalendarProvider,
+  onConnectZoom,
+}) {
+  const now = new Date()
+  const start = new Date(now.getTime() + 60 * 60 * 1000)
+  start.setMinutes(start.getMinutes() < 30 ? 30 : 0, 0, 0)
+  const end = new Date(start.getTime() + 30 * 60 * 1000)
+  const microsoftConnected = Boolean(providerStatus?.microsoft?.connected)
+  const googleConnected = Boolean(providerStatus?.google?.connected)
+  const zoomConnected = Boolean(zoomStatus?.connected)
+  const initialCalendar =
+    defaultCalendarProvider ||
+    (microsoftConnected ? 'microsoft' : googleConnected ? 'google' : '')
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    date: toIso(start),
+    start_time: toTimeInput(start),
+    end_time: toTimeInput(end),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    attendees: '',
+    matter_id: '',
+    calendar_provider: initialCalendar,
+    meeting_provider: 'none',
+  })
+
+  const setField = (name, value) => {
+    setForm((current) => {
+      const next = { ...current, [name]: value }
+      if (name === 'meeting_provider' && value === 'teams') {
+        next.calendar_provider = 'microsoft'
+      }
+      if (name === 'calendar_provider' && value !== 'microsoft' && current.meeting_provider === 'teams') {
+        next.meeting_provider = 'none'
+      }
+      return next
+    })
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    onSubmit(form)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center px-4">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-xl bg-brand-surface border border-brand-line rounded-xl shadow-xl overflow-hidden"
+      >
+        <div className="h-14 px-5 border-b border-brand-line flex items-center gap-3">
+          <Video className="w-4 h-4 text-brand-accent" />
+          <h2 className="font-serif font-semibold text-base text-brand-ink">Create event</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-auto p-1.5 rounded hover:bg-brand-line text-brand-muted hover:text-brand-ink"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <input
+            value={form.title}
+            onChange={(e) => setField('title', e.target.value)}
+            required
+            placeholder="Event title"
+            className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+          />
+          <textarea
+            value={form.description}
+            onChange={(e) => setField('description', e.target.value)}
+            placeholder="Description"
+            rows={3}
+            className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <input
+              type="date"
+              value={form.date}
+              onChange={(e) => setField('date', e.target.value)}
+              required
+              className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink"
+            />
+            <input
+              type="time"
+              value={form.start_time}
+              onChange={(e) => setField('start_time', e.target.value)}
+              required
+              className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink"
+            />
+            <input
+              type="time"
+              value={form.end_time}
+              onChange={(e) => setField('end_time', e.target.value)}
+              required
+              className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <select
+              value={form.calendar_provider}
+              onChange={(e) => setField('calendar_provider', e.target.value)}
+              disabled={form.meeting_provider === 'teams'}
+              className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink disabled:opacity-60"
+            >
+              <option value="">App calendar only</option>
+              {microsoftConnected && <option value="microsoft">Microsoft Calendar</option>}
+              {googleConnected && <option value="google">Google Calendar</option>}
+            </select>
+            <select
+              value={form.meeting_provider}
+              onChange={(e) => setField('meeting_provider', e.target.value)}
+              className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink"
+            >
+              <option value="none">No online meeting</option>
+              {microsoftConnected && <option value="teams">Microsoft Teams</option>}
+              {zoomConnected && <option value="zoom">Zoom</option>}
+            </select>
+          </div>
+
+          {!zoomConnected && (
+            <button
+              type="button"
+              onClick={onConnectZoom}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-ink border border-brand-line rounded-lg px-3 py-1.5 hover:bg-brand-bg"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Connect Zoom
+            </button>
+          )}
+
+          <select
+            value={form.matter_id}
+            onChange={(e) => setField('matter_id', e.target.value)}
+            className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink"
+          >
+            <option value="">No matter link</option>
+            {matters.map((matter) => (
+              <option key={matter.id} value={matter.id}>
+                {matter.matter_name || matter.name || matter.slug || matter.id}
+              </option>
+            ))}
+          </select>
+
+          <input
+            value={form.attendees}
+            onChange={(e) => setField('attendees', e.target.value)}
+            placeholder="Attendee emails, comma-separated"
+            className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+          />
+        </div>
+
+        <div className="px-5 py-4 border-t border-brand-line flex justify-end gap-2 bg-brand-bg">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 border border-brand-line text-brand-ink text-xs font-medium rounded-lg hover:bg-brand-line/40"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving || !form.title}
+            className="px-4 py-2 bg-brand-ink text-white text-xs font-medium rounded-lg hover:bg-brand-ink/90 disabled:opacity-50"
+          >
+            {saving ? 'Creating...' : 'Create event'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

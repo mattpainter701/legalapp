@@ -17,10 +17,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import enable_rls_bypass, get_db
+from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
+from app.models.user_oauth_token import UserOAuthToken
 from app.models.user import User
 from app.routers.billing import ensure_stripe_customer
 from app.schemas.auth import (
@@ -36,6 +37,11 @@ from app.schemas.auth import (
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+CALENDAR_REQUIRED_SCOPES = {
+    "microsoft": {"Calendars.ReadWrite"},
+    "google": {"https://www.googleapis.com/auth/calendar"},
+}
 
 # OAuth state TTL in seconds
 _STATE_TTL = 600
@@ -1214,13 +1220,49 @@ async def get_calendar_providers(
     user = await get_current_user(request, db)
     from app.services.token_vault import get_fresh_user_token
 
-    providers = []
-    for provider in ("microsoft", "google"):
-        token = await get_fresh_user_token(
-            db, str(user.tenant_id), str(user.id), provider
+    tenant_id = str(user.tenant_id)
+    user_id = str(user.id)
+    await set_tenant_context(db, tenant_id)
+
+    user_rows_result = await db.execute(
+        select(UserOAuthToken).where(
+            UserOAuthToken.tenant_id == user.tenant_id,
+            UserOAuthToken.user_id == user.id,
+            UserOAuthToken.provider.in_(["microsoft", "google"]),
         )
-        if token:
+    )
+    user_rows = {row.provider: row for row in user_rows_result.scalars().all()}
+
+    providers = []
+    provider_status = {}
+    for provider in ("microsoft", "google"):
+        row = user_rows.get(provider)
+        required_scopes = CALENDAR_REQUIRED_SCOPES[provider]
+        granted_scopes = set((row.scopes or "").split()) if row else set()
+        missing_scopes = sorted(required_scopes - granted_scopes) if row else []
+
+        token = None
+        reason = "not_connected"
+        if row and missing_scopes:
+            reason = "missing_scopes"
+        elif row:
+            token = await get_fresh_user_token(db, tenant_id, user_id, provider)
+            reason = None if token else "refresh_failed"
+
+        connected = bool(token)
+        if connected:
             providers.append(provider)
+
+        provider_status[provider] = {
+            "connected": connected,
+            "needs_reconnect": bool(row) and not connected,
+            "reason": reason,
+            "missing_scopes": missing_scopes,
+            "expires_at": row.token_expires_at.isoformat()
+            if row and row.token_expires_at
+            else None,
+            "has_refresh_token": bool(row and row.encrypted_refresh_token),
+        }
 
     tenant_rows = await db.execute(
         select(TenantCredential.provider).where(
@@ -1240,4 +1282,5 @@ async def get_calendar_providers(
         "tenant_providers": tenant_providers,
         "login_provider": login_provider,
         "connect_provider": connect_provider,
+        "provider_status": provider_status,
     }

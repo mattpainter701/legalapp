@@ -300,6 +300,8 @@ export const updateSeatCount = (count) =>
 // Integrations & Permissions
 export const getIntegrationsHealth = () =>
   api.get('/admin/integrations/health').then((r) => r.data)
+export const getIntegrationReadiness = () =>
+  api.get('/admin/integrations/readiness').then((r) => r.data)
 export const getAdminPermissions = () =>
   api.get('/admin/permissions').then((r) => r.data)
 export const triggerUserSync = () =>
@@ -326,6 +328,15 @@ export const updateTeamsNotificationSettings = (settings) =>
   api.put('/integrations/teams/notification-settings', { settings }).then((r) => r.data)
 export const sendTeamsTestMessage = (data) =>
   api.post('/integrations/teams/test-message', data).then((r) => r.data)
+
+// ── Zoom ─────────────────────────────────────────────────────────────────────
+export const getZoomStatus = () =>
+  api.get('/integrations/zoom/status').then((r) => r.data)
+export const connectZoomIntegration = (intent = 'user') => {
+  window.location.href = `${BASE_URL}/integrations/zoom/connect?intent=${intent}`
+}
+export const disconnectZoomIntegration = () =>
+  api.post('/integrations/zoom/disconnect').then((r) => r.data)
 
 // Customer LLM
 export const configureCustomerLLM = (config) =>
@@ -1018,6 +1029,18 @@ export const connectCalendarIntegration = (provider) => {
   window.location.href = `${BASE_URL}/integrations/${provider}/connect?intent=user`
 }
 
+export const listScheduledEvents = (params = {}) =>
+  api.get('/calendar/scheduled-events', { params }).then(r => r.data)
+
+export const createScheduledEvent = (data) =>
+  api.post('/calendar/scheduled-events', data).then(r => r.data)
+
+export const updateScheduledEvent = (id, data) =>
+  api.patch(`/calendar/scheduled-events/${id}`, data).then(r => r.data)
+
+export const deleteScheduledEvent = (id) =>
+  api.delete(`/calendar/scheduled-events/${id}`)
+
 // ── Document Templates ──────────────────────────────────────────────────────
 
 export const getTemplates = () =>
@@ -1204,6 +1227,20 @@ export const getCloudMetadata = (params) =>
 
 export const invalidateCloudCache = () =>
   api.delete('/admin/cloud-search/cache').then(r => r.data)
+
+// ── SharePoint Admin ────────────────────────────────────────────────────────
+
+export const getSharePointBinding = () =>
+  api.get('/admin/sharepoint/binding').then(r => r.data)
+
+export const listSharePointSites = (q) =>
+  api.get('/admin/sharepoint/sites', { params: q ? { q } : {} }).then(r => r.data)
+
+export const listSharePointDrives = (siteId) =>
+  api.get(`/admin/sharepoint/sites/${encodeURIComponent(siteId)}/drives`).then(r => r.data)
+
+export const saveSharePointBinding = (data) =>
+  api.put('/admin/sharepoint/binding', data).then(r => r.data)
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 

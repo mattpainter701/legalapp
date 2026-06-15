@@ -1,5 +1,21 @@
 from pydantic import BaseModel
 
+from app.schemas.calendar import (
+    CalendarSyncRequest,
+    CalendarSyncResponse,
+    ExternalCalendarEventResponse as CalendarEventResponse,
+)
+
+__all__ = [
+    "EmailScanRequest",
+    "EmailScanResponse",
+    "EmailClassification",
+    "ProcessedEmail",
+    "CalendarEventResponse",
+    "CalendarSyncRequest",
+    "CalendarSyncResponse",
+]
+
 
 class EmailScanRequest(BaseModel):
     provider: str = "microsoft"
@@ -32,24 +48,3 @@ class EmailScanResponse(BaseModel):
     user_id: str | None = None
     emails_processed: int
     results: list[ProcessedEmail]
-
-
-class CalendarEventResponse(BaseModel):
-    id: str
-    provider: str
-    subject: str | None = None
-    start: str | None = None
-    end: str | None = None
-    location: str | None = None
-
-
-class CalendarSyncRequest(BaseModel):
-    provider: str = "microsoft"
-    user_id: str | None = None
-    sync_deadlines: bool = False
-
-
-class CalendarSyncResponse(BaseModel):
-    provider: str
-    events: list[CalendarEventResponse]
-    deadlines_created: int = 0
