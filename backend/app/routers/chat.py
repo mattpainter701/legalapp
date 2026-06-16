@@ -40,7 +40,9 @@ from app.schemas.chat import (
 from app.services.embeddings import EmbeddingService
 from app.services.rag import hybrid_rag_query
 from app.services.llm import LLMService
-from app.services.llm_routing import resolve_llm_route
+from app.services.llm_routing import (
+    resolve_llm_route,
+)
 from app.services.billing import calculate_cost
 from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
@@ -109,6 +111,23 @@ def _join_context_sections(*sections: str | None) -> str:
     return "\n\n".join(
         section.strip() for section in sections if section and section.strip()
     )
+
+
+def _auto_tier(query: str, user_requested_premium: bool) -> bool:
+    """Determine whether to use the premium tier based on query complexity.
+
+    - Simple queries (definitions, math, small talk) → standard (even if user
+      requested premium — saves cost).
+    - Complex queries (drafting, analysis, multi-hop) → premium (even if user
+      didn't request it — better quality for hard questions).
+    - Everything else → respect user's choice.
+    """
+    complexity = classify_query_complexity(query)
+    if complexity == "complex":
+        return True  # auto-upgrade to premium
+    if complexity == "simple":
+        return False  # auto-downgrade to standard (save cost)
+    return user_requested_premium
 
 
 async def _build_attachment_context(
@@ -617,13 +636,11 @@ async def send_message(
         if str(m.id) != str(user_msg.id)
     ][-10:]
 
-    # 3a. Load matter context if provided (with caching)
-    matter_context_str = ""
-    matter_pii_findings = []
-    matter_cloud_folder: dict | None = None
-    cache_hit_matter = False
-    if hasattr(body, "matter_id") and body.matter_id:
-        # Fetch matter.cloud_folder for RAG scoping (lightweight, no relationships)
+    # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
+    #     attachment context, and RAG cache check. These are independent reads.
+    async def _load_matter_context_nonstream():
+        if not (hasattr(body, "matter_id") and body.matter_id):
+            return "", [], None, False
         _matter_result = await db.execute(
             select(MatterModel.cloud_folder).where(
                 MatterModel.id == body.matter_id,
@@ -631,52 +648,63 @@ async def send_message(
             )
         )
         _matter_row = _matter_result.first()
-        if _matter_row:
-            matter_cloud_folder = _matter_row[0]
+        _mf = _matter_row[0] if _matter_row else None
 
-        # Try cache first
-        cached_matter = await cache_manager.get_cached_matter_context(
+        cached = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
             tenant_id=str(user.tenant_id),
         )
-        if cached_matter:
-            matter_context_str = cached_matter
-            cache_hit_matter = True
-        else:
-            (
-                matter_context_str,
-                has_pii,
-                matter_pii_findings,
-            ) = await matter_context_service.get_safe_matter_context(
-                db=db,
-                matter_id=body.matter_id,
-                privacy_mode=user.privacy_mode,
-            )
-            # Cache matter context
-            await cache_manager.set_cached_matter_context(
-                matter_id=body.matter_id,
-                tenant_id=str(user.tenant_id),
-                context=matter_context_str,
-                expertise_level=user.expertise_level,
-            )
+        if cached:
+            return cached, [], _mf, True
+        mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=body.matter_id,
+            privacy_mode=user.privacy_mode,
+        )
+        await cache_manager.set_cached_matter_context(
+            matter_id=body.matter_id,
+            tenant_id=str(user.tenant_id),
+            context=mcs,
+            expertise_level=user.expertise_level,
+        )
+        return mcs, mpf if mpf else [], _mf, False
 
-    # 3b. Session attachments — inject file text directly into context (no embeddings)
-    attachment_context = await _build_attachment_context(
-        db,
-        user,
-        conv,
-        body.attachment_ids if hasattr(body, "attachment_ids") else None,
+    (
+        (
+            matter_context_str,
+            matter_pii_findings,
+            matter_cloud_folder,
+            cache_hit_matter,
+        ),
+        attachment_context,
+        memory_context,
+        route,
+        cached_rag,
+    ) = await asyncio.gather(
+        _load_matter_context_nonstream(),
+        _build_attachment_context(
+            db,
+            user,
+            conv,
+            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+        ),
+        memory_service.get_memory_context_for_injection(db=db, user_id=user.id),
+        resolve_llm_route(
+            db,
+            user.tenant_id,
+            use_premium=_auto_tier(body.content, body.use_premium_llm),
+            requested_provider=body.provider,
+        ),
+        cache_manager.get_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
+        ),
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
-    cached_rag = await cache_manager.get_cached_rag_results(
-        question=body.content,
-        tenant_id=str(user.tenant_id),
-        user_id=str(user.id),
-        skill=body.skill if hasattr(body, "skill") else user.default_skill,
-    )
-
     cloud_hits = []
     if cached_rag:
         context_str, chunks = cached_rag
@@ -729,24 +757,12 @@ async def send_message(
         context_str,
     )
 
-    # 4b. Load user memory context for injection into system prompt
-    memory_context = await memory_service.get_memory_context_for_injection(
-        db=db,
-        user_id=user.id,
-    )
-
     # 5. Call LLM (with caching)
     import hashlib
 
     tenant_name = user.tenant.name if user.tenant else "Legal"
     user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
 
-    route = await resolve_llm_route(
-        db,
-        user.tenant_id,
-        use_premium=body.use_premium_llm,
-        requested_provider=body.provider,
-    )
     context_hash = hashlib.md5(f"{route.cache_key}\n{context_str}".encode()).hexdigest()
 
     cache_hit_llm = False
@@ -769,7 +785,7 @@ async def send_message(
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
-                use_premium=body.use_premium_llm,
+                use_premium=_auto_tier(body.content, body.use_premium_llm),
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
@@ -823,7 +839,7 @@ async def send_message(
             tenant_name=tenant_name,
             context=context_str,
             memory_context=memory_context,
-            use_premium=body.use_premium_llm,
+            use_premium=_auto_tier(body.content, body.use_premium_llm),
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
@@ -1058,13 +1074,11 @@ async def stream_message(
         if str(m.id) != str(user_msg.id)
     ][-10:]
 
-    # 3a. Load matter context if provided (with caching)
-    matter_context_str = ""
-    matter_pii_findings = []
-    matter_cloud_folder: dict | None = None
-    cache_hit_matter = False
-    if hasattr(body, "matter_id") and body.matter_id:
-        # Fetch matter.cloud_folder for RAG scoping
+    # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
+    #     attachment context, and RAG cache check. These are independent reads.
+    async def _load_matter_context():
+        if not (hasattr(body, "matter_id") and body.matter_id):
+            return "", [], None, False
         _matter_result = await db.execute(
             select(MatterModel.cloud_folder).where(
                 MatterModel.id == body.matter_id,
@@ -1072,50 +1086,63 @@ async def stream_message(
             )
         )
         _matter_row = _matter_result.first()
-        if _matter_row:
-            matter_cloud_folder = _matter_row[0]
+        _mf = _matter_row[0] if _matter_row else None
 
-        cached_matter = await cache_manager.get_cached_matter_context(
+        cached = await cache_manager.get_cached_matter_context(
             matter_id=body.matter_id,
             tenant_id=str(user.tenant_id),
         )
-        if cached_matter:
-            matter_context_str = cached_matter
-            cache_hit_matter = True
-        else:
-            (
-                matter_context_str,
-                has_pii,
-                matter_pii_findings,
-            ) = await matter_context_service.get_safe_matter_context(
-                db=db,
-                matter_id=body.matter_id,
-                privacy_mode=user.privacy_mode,
-            )
-            await cache_manager.set_cached_matter_context(
-                matter_id=body.matter_id,
-                tenant_id=str(user.tenant_id),
-                context=matter_context_str,
-                expertise_level=user.expertise_level,
-            )
+        if cached:
+            return cached, [], _mf, True
+        mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=body.matter_id,
+            privacy_mode=user.privacy_mode,
+        )
+        await cache_manager.set_cached_matter_context(
+            matter_id=body.matter_id,
+            tenant_id=str(user.tenant_id),
+            context=mcs,
+            expertise_level=user.expertise_level,
+        )
+        return mcs, mpf if mpf else [], _mf, False
 
-    # 3b. Session attachments — inject file text directly into context (no embeddings)
-    attachment_context = await _build_attachment_context(
-        db,
-        user,
-        conv,
-        body.attachment_ids if hasattr(body, "attachment_ids") else None,
+    (
+        (
+            matter_context_str,
+            matter_pii_findings,
+            matter_cloud_folder,
+            cache_hit_matter,
+        ),
+        attachment_context,
+        memory_context,
+        route,
+        cached_rag,
+    ) = await asyncio.gather(
+        _load_matter_context(),
+        _build_attachment_context(
+            db,
+            user,
+            conv,
+            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+        ),
+        memory_service.get_memory_context_for_injection(db=db, user_id=user.id),
+        resolve_llm_route(
+            db,
+            user.tenant_id,
+            use_premium=_auto_tier(body.content, body.use_premium_llm),
+            requested_provider=body.provider,
+        ),
+        cache_manager.get_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
+        ),
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
-    cached_rag = await cache_manager.get_cached_rag_results(
-        question=body.content,
-        tenant_id=str(user.tenant_id),
-        user_id=str(user.id),
-        skill=body.skill if hasattr(body, "skill") else user.default_skill,
-    )
-
     if cached_rag:
         context_str, chunks = cached_rag
         cache_hit_rag = True
@@ -1157,19 +1184,6 @@ async def stream_message(
         context_str,
     )
 
-    # 4b. Load user memory context for system prompt
-    memory_context = await memory_service.get_memory_context_for_injection(
-        db=db,
-        user_id=user.id,
-    )
-
-    route = await resolve_llm_route(
-        db,
-        user.tenant_id,
-        use_premium=body.use_premium_llm,
-        requested_provider=body.provider,
-    )
-
     # Create the streaming generator
     stream_user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
 
@@ -1184,7 +1198,7 @@ async def stream_message(
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
-                use_premium=body.use_premium_llm,
+                use_premium=_auto_tier(body.content, body.use_premium_llm),
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
@@ -1214,7 +1228,7 @@ async def stream_message(
                     messages=retry_messages,
                     tenant_name=tenant_name,
                     context=context_str,
-                    use_premium=body.use_premium_llm,
+                    use_premium=_auto_tier(body.content, body.use_premium_llm),
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,

@@ -49,6 +49,116 @@ class RAGService:
     pass
 
 
+# ── Reciprocal Rank Fusion ─────────────────────────────────────────────────
+
+
+def reciprocal_rank_fusion(
+    dense_results: list[dict],
+    fts_results: list[dict],
+    k: int = 60,
+    dense_weight: float = 0.6,
+    fts_weight: float = 0.4,
+) -> list[dict]:
+    """Merge dense and FTS result sets via Reciprocal Rank Fusion.
+
+    Each result earns score = weight / (k + rank) for each list it appears in.
+    Results are returned sorted by fused score descending.
+
+    The default weighting (0.6 dense / 0.4 FTS) slightly favors semantic
+    similarity over exact keyword match, which works well for legal queries
+    where conceptual relevance matters more than exact string match.
+    """
+    scores: dict[str, tuple[float, dict]] = {}
+
+    for rank, item in enumerate(dense_results):
+        item_id = item.get("id", f"dense_{rank}")
+        item["_dense_rank"] = rank + 1
+        item["_fts_rank"] = None
+        scores[item_id] = (dense_weight / (k + rank + 1), item)
+
+    for rank, item in enumerate(fts_results):
+        item_id = item.get("id", f"fts_{rank}")
+        fts_score = fts_weight / (k + rank + 1)
+        if item_id in scores:
+            existing_score, existing_item = scores[item_id]
+            existing_item["_fts_rank"] = rank + 1
+            scores[item_id] = (existing_score + fts_score, existing_item)
+        else:
+            item["_dense_rank"] = None
+            item["_fts_rank"] = rank + 1
+            scores[item_id] = (fts_score, item)
+
+    fused = sorted(scores.values(), key=lambda x: x[0], reverse=True)
+    results = []
+    for score, item in fused:
+        item["relevance_score"] = round(score, 4)
+        results.append(item)
+    return results
+
+
+# ── Full-Text Search (BM25-like via PostgreSQL tsvector) ────────────────────
+
+
+async def search_chunks_fts(
+    db: AsyncSession,
+    query: str,
+    tenant_id: str,
+    top_k: int = 8,
+) -> list[dict]:
+    """Search chunks by PostgreSQL full-text search (BM25-like).
+
+    Uses plainto_tsquery for user-friendly search that doesn't require
+    tsquery syntax. The query is normalized: punctuation stripped, lowercased,
+    and OR'd together for broad recall.
+    """
+    sql = text("""
+        SELECT
+            id::text,
+            content,
+            case_name,
+            citation,
+            court,
+            decision_date,
+            chunk_index,
+            section_path,
+            clause_type,
+            ts_rank(fts, plainto_tsquery('english', :query)) AS fts_rank,
+            0.0 AS similarity
+        FROM chunks
+        WHERE tenant_id = CAST(:tenant_id AS uuid)
+          AND fts @@ plainto_tsquery('english', :query)
+        ORDER BY fts_rank DESC
+        LIMIT :top_k
+    """)
+
+    result = await db.execute(
+        sql,
+        {
+            "tenant_id": tenant_id,
+            "top_k": top_k,
+            "query": query,
+        },
+    )
+    rows = result.fetchall()
+
+    return [
+        {
+            "id": row.id,
+            "content": row.content,
+            "case_name": row.case_name,
+            "citation": row.citation,
+            "court": row.court,
+            "decision_date": str(row.decision_date) if row.decision_date else None,
+            "chunk_index": row.chunk_index,
+            "section_path": row.section_path or "",
+            "clause_type": row.clause_type or "general",
+            "similarity": float(row.fts_rank),
+            "source": "tenant_document_fts",
+        }
+        for row in rows
+    ]
+
+
 async def search_chunks(
     db: AsyncSession,
     query_embedding: List[float],
@@ -73,6 +183,8 @@ async def search_chunks(
             court,
             decision_date,
             chunk_index,
+            section_path,
+            clause_type,
             1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM chunks
         WHERE tenant_id = CAST(:tenant_id AS uuid)
@@ -95,6 +207,8 @@ async def search_chunks(
             "court": row.court,
             "decision_date": str(row.decision_date) if row.decision_date else None,
             "chunk_index": row.chunk_index,
+            "section_path": row.section_path or "",
+            "clause_type": row.clause_type or "general",
             "similarity": float(row.similarity),
             "source": "tenant_document",
         }
@@ -146,7 +260,7 @@ async def search_public_chunks(
 
 
 async def build_rag_context(chunks: List[dict]) -> str:
-    """Format retrieved chunks into a context string with citation info."""
+    """Format retrieved chunks into a context string with citation and clause metadata."""
     if not chunks:
         return ""
 
@@ -158,6 +272,9 @@ async def build_rag_context(chunks: List[dict]) -> str:
         decision_date = chunk.get("decision_date") or ""
         content = chunk.get("content", "")
         similarity = chunk.get("similarity", 0.0)
+        section_path = chunk.get("section_path") or ""
+        clause_type = chunk.get("clause_type") or "general"
+        source = chunk.get("source", "")
 
         header_parts = [f"[{i}] {case_name}"]
         if citation:
@@ -166,6 +283,12 @@ async def build_rag_context(chunks: List[dict]) -> str:
             header_parts.append(f"Court: {court}")
         if decision_date:
             header_parts.append(f"Date: {decision_date}")
+        if section_path:
+            header_parts.append(f"Section: {section_path}")
+        if clause_type != "general":
+            header_parts.append(f"Type: {clause_type}")
+        if "fts" in source:
+            header_parts.append("(keyword match)")
 
         parts.append(
             "\n".join(header_parts)
@@ -185,23 +308,39 @@ async def full_rag_query(
     include_public: bool = True,
 ) -> Tuple[str, List[dict]]:
     """
-    Full RAG pipeline: embed question, search chunks, build context.
-    Returns (context_string, chunks_list).
+    Hybrid RAG pipeline: dense (pgvector cosine) + FTS (PostgreSQL tsvector)
+    fused via Reciprocal Rank Fusion, plus optional public CourtListener chunks.
 
-    Embedding calls (private + public) run concurrently, and the two vector
-    searches run concurrently once their respective embeddings are ready —
-    this halves the serial latency of the old await-chain.
+    Embedding calls (private + public) and FTS search all run concurrently.
+    Results are fused per-source: private dense + private FTS via RRF, then
+    public chunks are appended (they live in a different embedding space).
     """
+    # Launch all retrieval tasks in parallel
     if include_public:
-        query_embedding, public_embedding = await asyncio.gather(
+        query_embedding, public_embedding, fts_results = await asyncio.gather(
             embedding_service.embed_text(question),
             embedding_service.embed_public_query(question),
+            search_chunks_fts(
+                db=db,
+                query=question,
+                tenant_id=tenant_id,
+                top_k=settings.RAG_TOP_K,
+            ),
         )
     else:
-        query_embedding = await embedding_service.embed_text(question)
+        query_embedding, fts_results = await asyncio.gather(
+            embedding_service.embed_text(question),
+            search_chunks_fts(
+                db=db,
+                query=question,
+                tenant_id=tenant_id,
+                top_k=settings.RAG_TOP_K,
+            ),
+        )
         public_embedding = None
 
-    chunks, public_chunks = await asyncio.gather(
+    # Dense + public searches in parallel
+    dense_chunks, public_chunks = await asyncio.gather(
         search_chunks(
             db=db,
             query_embedding=query_embedding,
@@ -218,7 +357,15 @@ async def full_rag_query(
         if public_embedding is not None
         else _empty_chunks(),
     )
-    chunks = chunks + public_chunks
+
+    # Fuse private dense + FTS results via RRF
+    fused_private = reciprocal_rank_fusion(
+        dense_results=dense_chunks,
+        fts_results=fts_results,
+    )
+
+    # Limit fused results and append public chunks
+    chunks = fused_private[: settings.RAG_TOP_K] + public_chunks
 
     context_str = await build_rag_context(chunks)
     return context_str, chunks

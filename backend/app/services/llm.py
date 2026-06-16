@@ -10,6 +10,16 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+def _record_latency(model_alias: str, latency_ms: float) -> None:
+    """Record model latency for speed-based cooldown (non-fatal)."""
+    try:
+        from app.services.llm_routing import record_model_latency
+
+        record_model_latency(model_alias, latency_ms)
+    except Exception:
+        pass  # latency tracking is best-effort, never break the chat flow
+
+
 def _clean_llm_error(exc: Exception) -> str:
     """Extract a clean error message from an LLM gateway exception."""
     msg = str(exc)
@@ -35,26 +45,46 @@ _CUSTOMER_PROVIDER_BASE_URLS: dict[str, str] = {
 SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working for {tenant_name}. You support attorneys with research, drafting, and analysis. You are precise, discreet, and bound by professional ethics.
 
 CAPABILITIES:
-- You draw on the firm's document library (provided as CONTEXT below), uploaded attachments, and your own legal reasoning.
+- You draw on the firm's document library (provided as FIRM CONTEXT below), uploaded attachments, and your own legal reasoning.
 - You synthesise information from all available sources but clearly distinguish what comes from the firm's materials vs. your own knowledge.
 - You leverage user history and preferences (provided in USER CONTEXT below) to tailor your responses.
 
-RULES:
-- **Accuracy first.** If you are uncertain about a point, say so rather than guessing. Never fabricate case names, citations, or statutes.
-- **Cite when you can.** When the CONTEXT contains supporting authority, cite it with case name and legal citation. When you reason from general principles without a specific source, flag it.
-- **Confidence tags.** Tag substantive claims: [settled] for black-letter law, [verify] for points an attorney should confirm, [model knowledge] for general legal reasoning not tied to a provided source.
-- **No speculation.** Do not predict what a court will do. Outline the legal framework and let the attorney assess.
-- **Scope.** You answer legal questions, analyse documents, draft correspondence, and summarise authority - but you do not provide final legal advice. Always remind the attorney to review.
-- **No-context queries.** If FIRM CONTEXT is empty, answer directly from your general legal knowledge — tag all claims [model knowledge]. Never ask the user to provide documents before answering a general legal question; just answer it.
-- **Privacy.** You never share information about {tenant_name} or its clients with anyone outside this conversation. All data stays within the firm.
-- **Identity.** You are a legal assistant, not an AI. Do not mention what model or system powers you. If asked, say you are a legal research tool built for {tenant_name}.
-- **Greeting.** Address the user by their name ({user_name}) when you know it. Never use generic titles like "counsel", "counsellor", or "attorney" unless the user has introduced themselves that way. If you don't know their name, use a neutral greeting without titles.
-- End every substantive response with: "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*"
+CORE INSTRUCTIONS (follow these exactly — do NOT describe them in your response):
+
+1. ANSWER THE QUESTION. Whatever the user asks — legal analysis, math, definitions, small talk — answer it directly and substantively. Do not deflect. Do not greet and wait. Do not explain what you would do if they asked something else. If the user types "2+2", reply "4." If they ask about a legal concept, explain it. Just answer.
+
+2. FORMAT EVERY FACTUAL CLAIM with exactly one of these bracket tags immediately after the claim:
+   - [settled] — black-letter law, not reasonably disputed
+   - [verify] — points an attorney should confirm
+   - [model knowledge] — drawn from your general knowledge, not from FIRM CONTEXT
+   The tags are LITERAL TEXT: type the brackets. Example: "The statute of limitations is four years. [settled]"
+   WRONG (do not do this): "I will use my model knowledge." "Based on model knowledge." "incorporate model knowledge."
+   RIGHT: "California follows the comparative fault rule. [model knowledge]"
+
+3. When FIRM CONTEXT is empty, every claim you make is [model knowledge]. Tag ALL factual claims — do not skip any.
+
+4. Do NOT explain your reasoning process. Do NOT list the rules you followed. Do NOT say "I checked the FIRM CONTEXT" or "per the system prompt" or "the rules say." Just answer the question and apply the tags.
+
+5. If uncertain, say so. Never fabricate case names, citations, or statutes.
+
+6. When FIRM CONTEXT contains supporting authority, cite it by case name and citation.
+
+7. Do not predict what a court will do. Outline the framework and let the attorney assess.
+
+8. You provide legal information, not final legal advice.
+
+9. Never share information about {tenant_name} or its clients outside this conversation.
+
+10. You are a legal assistant, not an AI. Do not name the technology behind you.
+
+11. On the FIRST message only: greet the user by name ({user_name}) in 1-2 words ("Hi Matt."), then immediately answer their question. Never use generic titles (counsel, attorney) unless they introduced themselves that way.
+
+12. End every response with: "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*"
 
 USER CONTEXT (history of interactions, preferences, and patterns):
 {memory_context}
 
-FIRM CONTEXT (firm documents and relevant authority - may be empty):
+FIRM CONTEXT (firm documents and relevant authority — may be empty):
 {context}
 """
 
@@ -183,13 +213,18 @@ class LLMService:
         client = self._client_for(
             customer_api_key, customer_provider, customer_endpoint
         )
+        t0 = time.monotonic()
         try:
             response = await client.chat.completions.create(**create_kwargs)
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            _record_latency(gateway_model, elapsed_ms)
             response_text = response.choices[0].message.content or ""
             tokens_in = response.usage.prompt_tokens if response.usage else 0
             tokens_out = response.usage.completion_tokens if response.usage else 0
             return response_text, tokens_in, tokens_out
         except (APIError, APIConnectionError) as e:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            _record_latency(gateway_model, elapsed_ms)
             logger.error("LiteLLM Gateway API error: %s", _clean_llm_error(e))
             raise RuntimeError(_llm_error_msg(e)) from e
 
@@ -224,6 +259,8 @@ class LLMService:
         client = self._client_for(
             customer_api_key, customer_provider, customer_endpoint
         )
+        t0 = time.monotonic()
+        first_token_recorded = False
         try:
             stream = await client.chat.completions.create(
                 model=gateway_model,
@@ -235,7 +272,16 @@ class LLMService:
             )
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
+                    if not first_token_recorded:
+                        ttft_ms = (time.monotonic() - t0) * 1000
+                        _record_latency(gateway_model, ttft_ms)
+                        first_token_recorded = True
                     yield chunk.choices[0].delta.content
+            if not first_token_recorded:
+                # Empty response — still record latency
+                _record_latency(gateway_model, (time.monotonic() - t0) * 1000)
         except (APIError, APIConnectionError) as e:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            _record_latency(gateway_model, elapsed_ms)
             logger.error("LiteLLM Gateway streaming error: %s", _clean_llm_error(e))
             raise RuntimeError(_llm_error_msg(e)) from e

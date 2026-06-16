@@ -2,8 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Chat/assistant not falling back to general reasoning or indicating confidence tags (v2):** Second pass on `SYSTEM_PROMPT_TEMPLATE` in `app/services/llm.py`. Added negative examples (WRONG vs RIGHT), explicit "do NOT explain your reasoning process" rule, "greet in 1-2 words then answer" simplification, and a direct "if user types 2+2, reply 4" non-legal-query example. The free-tier models were reading the old prompt as rules to explain rather than follow.
+- **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
+
 ### Added
-- **Task 1303 — Trust Accounting pooled ledger & reconciliation persistence (backend):** Pooled IOLTA bank accounts with three-way reconciliation and saved snapshots.
+- **Clause-level legal chunking:** New `app/utils/legal_chunker.py` replaces fixed 500-token chunking with structure-aware splitting that respects legal document anatomy (sections, articles, numbered clauses). Each chunk carries `section_path` (e.g. "Article I > Section 1.01 > (a)") and `clause_type` (definition/obligation/remedy/governing_law/recital/general) metadata for clause-type-aware retrieval. Migration `060_chunk_metadata_fts` adds the columns + a GIN-indexed `tsvector` column for PostgreSQL full-text search.
+- **Hybrid retrieval (dense + FTS + RRF fusion):** `app/services/rag.py` now runs pgvector cosine similarity and PostgreSQL FTS in parallel, fusing results via Reciprocal Rank Fusion (0.6 dense / 0.4 FTS weight). FTS matches on exact identifiers (section numbers, defined terms, dates) that dense embeddings miss. Context headers now include `section_path`, `clause_type`, and keyword-match indicators.
+- **Complexity-based LLM routing:** `classify_query_complexity()` in `app/services/llm_routing.py` pattern-matches user queries as simple (definitions, math, small talk) or complex (drafting, analysis, multi-hop). `_auto_tier()` in `chat.py` auto-upgrades complex queries to premium and auto-downgrades simple queries to standard — saves cost on lookups, improves quality on hard questions.
+- **Free model speed vetting + auto-cooldown:** `record_model_latency()` tracks per-model time-to-first-token in a ring buffer. Models exceeding 15s latency or with >50% slow samples enter a 5-minute cooldown. Wired into `llm.py` `complete()` and `stream_complete()` for both success and error paths.
+
+### Changed
+- **LiteLLM gateway timeout tuning:** `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, `allowed_fails` 2→1, per-model `timeout` values (15s free, 20-30s paid). Slow free models fail over faster instead of holding connections.
+- **Chat endpoint pre-work parallelized:** Both `/messages` and `/messages/stream` now run matter context, attachment context, memory context, LLM route resolution, and RAG cache check via `asyncio.gather` instead of sequentially. Pooled IOLTA bank accounts with three-way reconciliation and saved snapshots.
   - Migration `054_trust_ledger`: `trust_bank_accounts` (pooled, RLS), `trust_accounts.bank_account_id` FK, `trust_reconciliations` (persisted snapshots, RLS).
   - `routers/trust_accounting.py`: pooled bank-account CRUD (`/api/trust/bank-accounts`), pooled three-way reconcile (`bank == book == Σ client ledgers`) that persists a snapshot, reconciliation history, and per-client ledger statement (`/accounts/{id}/statement`) with CSV export. The existing per-account reconcile now also persists a snapshot. Trust models registered in `models/__init__.py`.
   - Fixed a pre-existing latent serialization bug (UUID→str) in trust response schemas that would have 500'd the 1314 create/transaction flows in production; added a shared coercion mixin.

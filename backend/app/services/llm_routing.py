@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic
@@ -356,3 +357,165 @@ async def resolve_llm_route(
 @event.listens_for(TenantSettings, "after_delete")
 def _invalidate_route_cache_on_tenant_settings_write(mapper, connection, target):
     invalidate_llm_route_cache(target.tenant_id)
+
+
+# ── Query Complexity Classifier ────────────────────────────────────────────
+
+# Simple query patterns — route to standard/free models
+SIMPLE_PATTERNS = [
+    r"^(what|who|when|where)\s+(is|are|was|were)\s",  # definition queries
+    r"^(define|definition of)\s",
+    r"^\d+[\+\-\*\/]\d+",  # math
+    r"^(hi|hello|hey|thanks|thank you|ok|okay|yes|no)[\s!.?]*$",  # small talk
+    r"^how\s+(many|much|long|old)\s",  # factual lookup
+    r"^(can|could|would|will|do|does|did|is|are|was|were)\s+\w+\s",  # yes/no
+]
+
+# Complex query indicators — route to premium (or best available)
+COMPLEX_PATTERNS = [
+    r"\b(draft|prepare|write|compose|generate)\b.*\b(contract|agreement|motion|brief|pleading|letter|document|clause)\b",
+    r"\b(analy[sz]e|review|evaluate|assess|compare|contrast)\b",
+    r"\b(summarize|summarise|outline|explain)\b.*\b(case|ruling|opinion|statute|regulation)\b",
+    r"\b(multi.?jurisdict|conflict of law|choice of law)\b",
+    r"\b(what are the (elements|factors|requirements|grounds|defenses))\b",
+]
+
+
+def classify_query_complexity(query: str) -> str:
+    """Classify a user query as 'simple' or 'complex' for model routing.
+
+    Simple queries are short definition/fact/math/small-talk questions that
+    any model can handle. Complex queries involve drafting, analysis, or
+    multi-hop legal reasoning that benefits from a better model.
+
+    Returns 'simple' or 'complex'.
+    """
+    query_lower = query.strip().lower()
+    query_len = len(query_lower)
+
+    # Very short queries are simple
+    if query_len < 30:
+        return "simple"
+
+    # Check complex patterns first (higher specificity)
+    for pattern in COMPLEX_PATTERNS:
+        if re.search(pattern, query_lower):
+            return "complex"
+
+    # Check simple patterns
+    for pattern in SIMPLE_PATTERNS:
+        if re.search(pattern, query_lower):
+            return "simple"
+
+    # Default: longer queries or queries with legal terms → complex
+    if query_len > 200:
+        return "complex"
+
+    legal_terms = [
+        "statute",
+        "regulation",
+        "liability",
+        "damages",
+        "negligence",
+        "contract",
+        "breach",
+        "plaintiff",
+        "defendant",
+        "jurisdiction",
+        "tort",
+        "fiduciary",
+        "injunction",
+        "discovery",
+        "appeal",
+        "motion",
+        "pleading",
+        "testament",
+        "probate",
+        "custody",
+    ]
+    if any(term in query_lower for term in legal_terms):
+        return "complex"
+
+    return "simple"
+
+
+# ── Model Latency Tracker ──────────────────────────────────────────────────
+
+
+@dataclass
+class ModelLatencySample:
+    model: str
+    latency_ms: float
+    timestamp: float  # monotonic seconds
+
+
+# Per-model latency ring buffer (last N samples)
+LATENCY_BUFFER_SIZE = 8
+_latency_buffers: dict[str, list[ModelLatencySample]] = {}
+
+# Models currently in cooldown (slow → skip)
+_cooldown_until: dict[str, float] = {}
+
+# Thresholds
+LATENCY_WARN_MS = 8000  # 8s — mark as slow
+LATENCY_COOLDOWN_MS = 15000  # 15s — cooldown for 5 minutes
+COOLDOWN_DURATION_S = 300  # 5 minutes
+SLOW_RATIO_THRESHOLD = 0.5  # >50% of recent samples slow → cooldown
+
+
+def record_model_latency(model_alias: str, latency_ms: float) -> None:
+    """Record a latency sample for a model alias."""
+    if model_alias not in _latency_buffers:
+        _latency_buffers[model_alias] = []
+    buf = _latency_buffers[model_alias]
+    buf.append(ModelLatencySample(model_alias, latency_ms, monotonic()))
+    if len(buf) > LATENCY_BUFFER_SIZE:
+        buf.pop(0)
+
+    # Check if model should enter cooldown
+    if len(buf) >= 3:
+        slow_count = sum(1 for s in buf[-6:] if s.latency_ms > LATENCY_COOLDOWN_MS)
+        if slow_count >= 2:
+            _cooldown_until[model_alias] = monotonic() + COOLDOWN_DURATION_S
+
+        # Also check ratio-based cooldown (consistently slow)
+        recent = buf[-4:]
+        slow_ratio = sum(1 for s in recent if s.latency_ms > LATENCY_WARN_MS) / len(
+            recent
+        )
+        if slow_ratio >= SLOW_RATIO_THRESHOLD:
+            _cooldown_until[model_alias] = monotonic() + COOLDOWN_DURATION_S
+
+
+def is_model_in_cooldown(model_alias: str) -> bool:
+    """Check if a model is currently in cooldown (too slow)."""
+    until = _cooldown_until.get(model_alias)
+    if until is None:
+        return False
+    if monotonic() > until:
+        _cooldown_until.pop(model_alias, None)
+        return False
+    return True
+
+
+def get_model_latency_stats(model_alias: str) -> dict | None:
+    """Get latency stats for a model alias. Returns None if no data."""
+    buf = _latency_buffers.get(model_alias)
+    if not buf:
+        return None
+    latencies = [s.latency_ms for s in buf[-6:]]
+    return {
+        "model": model_alias,
+        "avg_ms": round(sum(latencies) / len(latencies)),
+        "p50_ms": round(sorted(latencies)[len(latencies) // 2]),
+        "p95_ms": round(
+            sorted(latencies)[min(len(latencies) - 1, int(len(latencies) * 0.95))]
+        ),
+        "samples": len(latencies),
+        "in_cooldown": is_model_in_cooldown(model_alias),
+    }
+
+
+def get_slow_models() -> list[str]:
+    """Return list of model aliases currently in cooldown."""
+    return [m for m in list(_cooldown_until) if is_model_in_cooldown(m)]

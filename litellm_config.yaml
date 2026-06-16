@@ -6,24 +6,28 @@ model_list:
       model: openai/deepseek-v4-flash-free
       api_base: https://opencode.ai/zen/v1
       api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 15  # fast failover to next model
 
-  # Standard fallback: OpenCode zen Nemotron free
+  # Standard fallback: OpenCode zen Nemotron free (often faster for simple queries)
   - model_name: clarity-standard-zen-nemotron
     litellm_params:
       model: openai/nemotron-3-ultra-free
       api_base: https://opencode.ai/zen/v1
       api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 15
 
   # Standard fallbacks: OpenRouter free models
   - model_name: clarity-standard-openrouter-gemma
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 15
 
   - model_name: clarity-standard-openrouter-qwen
     litellm_params:
       model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 15
 
   # Premium profile: highest-quality drafting/reasoning.
   # Primary: OpenCode go DeepSeek V4 Pro (opencode.ai/zen/go/v1)
@@ -32,6 +36,7 @@ model_list:
       model: openai/deepseek-v4-pro
       api_base: https://opencode.ai/zen/go/v1
       api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 30
 
   # Premium fallback: OpenCode zen DeepSeek V4 Flash (paid, fast)
   - model_name: clarity-premium-zen-flash
@@ -39,25 +44,28 @@ model_list:
       model: openai/deepseek-v4-flash
       api_base: https://opencode.ai/zen/v1
       api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 20
 
   # Premium OpenRouter fallbacks
   - model_name: clarity-premium-openrouter-qwen
     litellm_params:
       model: openrouter/qwen/qwen3-235b-a22b:free
       api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 20
 
   - model_name: clarity-premium-openrouter-gemma
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 20
 
 litellm_settings:
   drop_params: true
   turn_off_message_logging: true
-  request_timeout: 60
-  num_retries: 1
-  allowed_fails: 2
-  cooldown_time: 30
+  request_timeout: 25
+  num_retries: 0
+  allowed_fails: 1
+  cooldown_time: 15
   success_callback: ["langfuse"]
   failure_callback: ["langfuse"]
 
