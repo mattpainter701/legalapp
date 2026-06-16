@@ -36,7 +36,12 @@ class Tenant(Base):
     billing_tier: Mapped[str] = mapped_column(
         String(50), default="payg", server_default="payg"
     )
+    # api_key is nulled out after migration 058 — hash + prefix are used instead.
     api_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    api_key_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    api_key_prefix: Mapped[str | None] = mapped_column(String(8), nullable=True)
     flat_seat_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     stripe_subscription_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True

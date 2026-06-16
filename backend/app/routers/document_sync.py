@@ -54,11 +54,16 @@ async def list_documents(
 
     await set_tenant_context(db, tenant_id)
 
+    # Non-admins are always scoped to their own user; only admins may specify
+    # a different user_id to sync another firm member's personal drive.
+    effective_user_id = (
+        body.user_id if body.user_id and user.role == "admin" else str(user.id)
+    )
     if body.provider == "onedrive":
         docs = await document_sync.sync_onedrive(
             db,
             tenant_id,
-            str(user.id) if not body.user_id else body.user_id,
+            effective_user_id,
             max_files=body.max_files,
         )
     elif body.provider == "sharepoint":
@@ -69,7 +74,7 @@ async def list_documents(
         docs = await document_sync.sync_google_drive(
             db,
             tenant_id,
-            str(user.id) if not body.user_id else body.user_id,
+            effective_user_id,
             max_files=body.max_files,
         )
     else:

@@ -67,7 +67,7 @@ class SmbService:
         """
         await set_tenant_context(db, tenant_id)
 
-        code = secrets.token_urlsafe(6).upper()[:8]
+        code = secrets.token_urlsafe(16)
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=SMB_PAIRING_CODE_TTL_MIN
         )

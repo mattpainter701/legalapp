@@ -99,6 +99,8 @@ async def get_client_portal_context(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> ClientPortalContext:
     """Authenticate a client-portal request via the ``client_portal`` JWT."""
+    import time as _time
+
     token = _read_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -110,6 +112,19 @@ async def get_client_portal_context(
         raise HTTPException(status_code=401, detail="Invalid token")
     if payload.get("client_portal") is not True:
         raise HTTPException(status_code=403, detail="Client portal access only")
+
+    # Check JTI revocation so revoking a portal invite also kills active sessions.
+    jti: str | None = payload.get("jti")
+    if jti:
+        redis = getattr(request.app.state, "redis", None)
+        if redis:
+            if await redis.exists(f"jti:{jti}"):
+                raise HTTPException(status_code=401, detail="Portal session has been revoked")
+        else:
+            blacklist = getattr(request.app.state, "jti_blacklist", {})
+            ts = blacklist.get(jti)
+            if ts and _time.time() < ts:
+                raise HTTPException(status_code=401, detail="Portal session has been revoked")
 
     tenant_id = payload.get("tenant_id")
     matter_id = payload.get("matter_id")

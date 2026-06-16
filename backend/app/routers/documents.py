@@ -196,7 +196,7 @@ async def upload_document(
     )
     os.makedirs(storage_dir, exist_ok=True)
 
-    storage_path = os.path.join(storage_dir, file.filename)
+    storage_path = os.path.join(storage_dir, os.path.basename(file.filename))
 
     # Save file to disk
     async with aiofiles.open(storage_path, "wb") as out_file:
