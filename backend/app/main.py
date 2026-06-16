@@ -299,18 +299,36 @@ app.include_router(users_router)
 # ─────────────────────────────────────────────────────
 @app.get("/health", tags=["health"])
 async def health_check():
-    """Simple health check endpoint."""
+    """Health check endpoint.
+
+    Returns HTTP 200 only when the database is reachable. When the database
+    is down the endpoint returns HTTP 503 so that orchestrators (Docker
+    healthcheck, k8s liveness probe, load-balancer health check) can detect
+    the failure and restart or route around the instance.
+    """
     db_ok = False
+    db_error = None
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
-        pass
+    except Exception as exc:
+        db_error = str(exc)
+
+    if not db_ok:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "unavailable",
+                "detail": db_error,
+                "version": "1.0.0",
+            },
+        )
 
     return {
-        "status": "ok" if db_ok else "degraded",
-        "database": "connected" if db_ok else "unavailable",
+        "status": "ok",
+        "database": "connected",
         "version": "1.0.0",
     }
 
