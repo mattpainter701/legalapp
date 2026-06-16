@@ -97,16 +97,31 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
 
   if (!status) return null
 
-  const od = status.providers?.onedrive
-  const gd = status.providers?.google_drive
+  const providers = status.providers || {}
+  const od = providers.onedrive
+  const gd = providers.google_drive
+  const provStatus = providers._status
+  const provMessage = providers._status_message
   const isProvisioned = status.status === 'provisioned' && (od || gd)
+  const isFailed = provStatus === 'failed'
 
   return (
     <div className="bg-brand-bg border border-brand-line rounded-xl p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <Cloud size={16} className="text-brand-accent" />
         <span className="text-[13px] font-bold font-sans text-brand-ink uppercase tracking-wider">Cloud Storage</span>
+        {isFailed && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold font-sans bg-red-100 text-red-700 border border-red-200">
+            Failed
+          </span>
+        )}
       </div>
+
+      {isFailed && (
+        <p className="text-[12px] font-sans text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
+          Provisioning failed: {provMessage || 'Unknown error'}. You can retry below.
+        </p>
+      )}
 
       {isProvisioned ? (
         <div className="flex flex-wrap items-center gap-3">
@@ -141,14 +156,21 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
         </div>
       ) : (
         <div className="flex items-center gap-3">
-          <span className="text-[13px] font-sans text-brand-muted">Cloud folder not provisioned</span>
+          <span className="text-[13px] font-sans text-brand-muted">
+            {isFailed ? 'Cloud folder provisioning failed' : 'Cloud folder not provisioned'}
+          </span>
+          {isFailed && (
+            <span className="text-[11px] font-sans text-brand-muted">
+              Check your cloud connection in Settings → File Shares, or use "Provision + Sync" to retry.
+            </span>
+          )}
           <button
             onClick={handleProvision}
             disabled={provisioning}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-accent text-white text-[12px] font-sans font-medium rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {provisioning ? <RefreshCw size={12} className="animate-spin" /> : <Cloud size={12} />}
-            {provisioning ? 'Setting up…' : 'Set Up Cloud Folder'}
+            {provisioning ? 'Setting up…' : isFailed ? 'Retry Setup' : 'Set Up Cloud Folder'}
           </button>
           <button
             onClick={handleSync}
