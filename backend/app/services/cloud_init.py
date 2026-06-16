@@ -100,9 +100,7 @@ async def initialize_cloud_root_folder(
     g_token = await get_fresh_token(db, tenant_id, "google")
     if g_token:
         try:
-            folder_id = await _ensure_gdrive_folder(
-                g_token, ROOT_FOLDER_NAME, "root"
-            )
+            folder_id = await _ensure_gdrive_folder(g_token, ROOT_FOLDER_NAME, "root")
             folder_meta = await _get_gdrive_folder_metadata(g_token, folder_id)
             result["google_drive"] = {
                 "id": folder_id,
@@ -132,12 +130,16 @@ async def initialize_matter_folders(
     tenant_id: str,
     matter_slug: str,
     cloud_root: dict,
+    folder_name: str | None = None,
 ) -> dict:
-    """Create per-matter subfolder structure under claritylegal-records/{matter_slug}/.
+    """Create per-matter subfolder structure under claritylegal-records/{folder_name}/.
 
     Returns {provider: {matter_folder_id: str, subfolders: {name: id}}}
     """
     result = {}
+    # Use the human-readable folder_name when provided; fall back to slug for
+    # backward compatibility with existing matters that were provisioned with slugs.
+    matter_folder_name = folder_name or matter_slug
 
     # OneDrive
     if cloud_root.get("onedrive"):
@@ -152,9 +154,11 @@ async def initialize_matter_folders(
                 if not root_id:
                     raise RuntimeError("OneDrive cloud root missing folder id")
                 matter_folder = await _ensure_onedrive_folder(
-                    ms_token, matter_slug, root_id
+                    ms_token, matter_folder_name, root_id
                 )
-                folder_meta = await _get_onedrive_folder_metadata(ms_token, matter_folder)
+                folder_meta = await _get_onedrive_folder_metadata(
+                    ms_token, matter_folder
+                )
                 subfolders = {}
                 for sub in MATTER_SUBFOLDERS:
                     sub_id = await _ensure_onedrive_folder(ms_token, sub, matter_folder)
@@ -186,7 +190,7 @@ async def initialize_matter_folders(
                 if not root_id:
                     raise RuntimeError("Google Drive cloud root missing folder id")
                 matter_folder = await _ensure_gdrive_folder(
-                    g_token, matter_slug, root_id
+                    g_token, matter_folder_name, root_id
                 )
                 folder_meta = await _get_gdrive_folder_metadata(g_token, matter_folder)
                 subfolders = {}
@@ -195,7 +199,7 @@ async def initialize_matter_folders(
                     subfolders[sub] = sub_id
                 result["google_drive"] = {
                     "matter_folder_id": matter_folder,
-                    "folder_name": folder_meta.get("name") or matter_slug,
+                    "folder_name": folder_meta.get("name") or matter_folder_name,
                     "url": folder_meta.get("webViewLink")
                     or f"https://drive.google.com/drive/folders/{matter_folder}",
                     "subfolders": subfolders,
@@ -272,7 +276,8 @@ async def share_matter_folders(
     unique_emails = sorted({email for email in user_emails if email})
 
     context_folders = [
-        folder for folder in (cloud_folder.get("context_folders") or [])
+        folder
+        for folder in (cloud_folder.get("context_folders") or [])
         if isinstance(folder, dict)
     ]
 
@@ -310,7 +315,9 @@ async def share_matter_folders(
                         g_token, folder_id, unique_emails, role=role
                     )
                 except Exception as exc:
-                    logger.warning("Failed to share Google Drive matter folder: %s", exc)
+                    logger.warning(
+                        "Failed to share Google Drive matter folder: %s", exc
+                    )
 
 
 async def _share_onedrive_folder(
@@ -841,9 +848,7 @@ async def _find_sharepoint_child_folder(
     async with httpx.AsyncClient(timeout=30) as client:
         headers = {"Authorization": f"Bearer {token}"}
         return _choose_existing_folder(
-            await _list_sharepoint_child_folders(
-                client, headers, drive_id, parent_id
-            ),
+            await _list_sharepoint_child_folders(client, headers, drive_id, parent_id),
             _validate_folder_name(folder_name),
         )
 

@@ -224,7 +224,7 @@ def _matter_type(value: str | None) -> str:
 
 
 async def _provision_cloud_folders(
-    matter_id: str, tenant_id: str, slug: str, cloud_root: str
+    matter_id: str, tenant_id: str, slug: str, cloud_root: str, matter_name: str = ""
 ) -> None:
     """Fire-and-forget: provision cloud folders for a newly created matter.
 
@@ -235,20 +235,29 @@ async def _provision_cloud_folders(
     try:
         async with async_session_maker() as db:
             await set_tenant_context(db, tenant_id)
+            # Use matter name for the cloud folder (human-readable); append a short
+            # ID suffix for uniqueness so two matters with the same name don't collide.
+            folder_name = matter_name.strip() if matter_name else slug
+            # Sanitize: cloud providers allow most chars, but strip leading/trailing
+            # dots/spaces and collapse multiple spaces.
+            import re
+
+            folder_name = re.sub(r"\s+", " ", folder_name).strip(" .")
+            if not folder_name:
+                folder_name = slug
             cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=tenant_id,
                 matter_slug=slug,
                 cloud_root=cloud_root,
+                folder_name=folder_name,
             )
             if cloud_folder:
                 result = await db.execute(select(Matter).where(Matter.id == matter_id))
                 matter = result.scalar_one_or_none()
                 if matter:
                     matter.cloud_folder = cloud_folder
-                    await _share_matter_with_assignees(
-                        db, uuid.UUID(tenant_id), matter
-                    )
+                    await _share_matter_with_assignees(db, uuid.UUID(tenant_id), matter)
                     await db.commit()
     except Exception:
         logger.warning(
@@ -653,7 +662,11 @@ async def create_matter(
         tenant_id_str = str(tenant_id)
         asyncio.create_task(
             _provision_cloud_folders(
-                matter_id_str, tenant_id_str, slug, matter_cloud_root
+                matter_id_str,
+                tenant_id_str,
+                slug,
+                matter_cloud_root,
+                matter_name=body.matter_name,
             )
         )
 
@@ -2152,7 +2165,9 @@ def _apply_cloud_provider_metadata(
     return cloud_folder
 
 
-def _cloud_provider_folder_id(metadata: dict | None, *, allow_id: bool = True) -> str | None:
+def _cloud_provider_folder_id(
+    metadata: dict | None, *, allow_id: bool = True
+) -> str | None:
     if not isinstance(metadata, dict):
         return None
     folder_id = metadata.get("matter_folder_id")
@@ -2406,9 +2421,7 @@ async def add_matter_cloud_context_folder(
         )
         raise HTTPException(status_code=422, detail=str(exc))
 
-    provider_folder_id = _cloud_provider_folder_id(
-        provider_metadata, allow_id=False
-    )
+    provider_folder_id = _cloud_provider_folder_id(provider_metadata, allow_id=False)
     _assert_cloud_context_not_duplicate(matter, provider, provider_folder_id)
 
     cloud_folder = dict(matter.cloud_folder or {})
