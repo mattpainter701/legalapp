@@ -12,6 +12,7 @@ Endpoints:
   POST /api/mcp/api-key      — regenerate the tenant's API key (admin only)
 """
 
+import hashlib
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -82,7 +83,10 @@ async def _get_user_and_tenant(
     """Authenticate via JWT Bearer or X-API-Key header."""
     api_key = request.headers.get("X-API-Key")
     if api_key:
-        result = await db.execute(select(Tenant).where(Tenant.api_key == api_key))
+        key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+        result = await db.execute(
+            select(Tenant).where(Tenant.api_key_hash == key_hash)
+        )
         tenant = result.scalar_one_or_none()
         if not tenant:
             raise HTTPException(status_code=401, detail="Invalid API key")
@@ -242,10 +246,13 @@ async def regenerate_api_key(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    tenant.api_key = secrets.token_hex(32)
+    raw_key = secrets.token_hex(32)
+    tenant.api_key = None
+    tenant.api_key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    tenant.api_key_prefix = raw_key[:8]
     await db.commit()
 
-    return {"api_key": tenant.api_key}
+    return {"api_key": raw_key}
 
 
 @router.get("/api-key")
@@ -261,11 +268,11 @@ async def get_api_key_info(
     result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     tenant = result.scalar_one_or_none()
 
-    api_key = tenant.api_key if tenant else None
-    masked = (api_key[:8] + "..." + api_key[-4:]) if api_key else None
+    has_key = bool(tenant and tenant.api_key_hash)
+    masked = (tenant.api_key_prefix + "..." + tenant.api_key_hash[-4:]) if has_key else None
 
     return {
-        "has_api_key": api_key is not None,
+        "has_api_key": has_key,
         "api_key_masked": masked,
         "mcp_server_url": f"{settings.BACKEND_URL}/api/mcp",
         "tools": [t["name"] for t in _TOOLS],

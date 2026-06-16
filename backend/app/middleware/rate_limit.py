@@ -31,6 +31,9 @@ AUTH_LIMITS = {
     "/api/auth/register": (5, 600),
     "/api/auth/forgot-password": (5, 900),
     "/api/auth/reset-password": (5, 900),
+    # SMB agent registration is unauthenticated; rate-limit by IP to slow
+    # brute-force of active pairing codes.
+    "/api/v1/smb/agents/register": (5, 300),
 }
 SKIP_PREFIXES = (
     "/api/auth/",

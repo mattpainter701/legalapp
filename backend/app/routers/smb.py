@@ -89,6 +89,16 @@ async def agent_sync(
         raise HTTPException(status_code=403, detail="Agent ID mismatch")
 
     tenant_id = str(agent.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    share_result = await db.execute(
+        select(SmbShare).where(
+            SmbShare.id == share_id,
+            SmbShare.tenant_id == agent.tenant_id,
+        )
+    )
+    if share_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Share not found or access denied")
+
     result = await smb_service.sync_files(db, agent_id, tenant_id, share_id, body)
     await db.commit()
     return result

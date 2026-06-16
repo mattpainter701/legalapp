@@ -214,6 +214,20 @@ async def get_portal_context(
 
     # 1. Magic-link party token.
     if payload.get("portal") is True:
+        # Revocation check — allows revoking a mediation invite mid-session.
+        jti: str | None = payload.get("jti")
+        if jti:
+            redis = getattr(request.app.state, "redis", None)
+            if redis:
+                if await redis.exists(f"jti:{jti}"):
+                    raise HTTPException(status_code=401, detail="Portal session has been revoked")
+            else:
+                import time as _time
+                blacklist = getattr(request.app.state, "jti_blacklist", {})
+                ts = blacklist.get(jti)
+                if ts and _time.time() < ts:
+                    raise HTTPException(status_code=401, detail="Portal session has been revoked")
+
         tenant_id = payload.get("tenant_id")
         ctx = PortalContext(
             tenant_id=tenant_id,

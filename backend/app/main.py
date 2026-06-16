@@ -93,11 +93,33 @@ async def lifespan(app: FastAPI):
 
     app.state.jti_blacklist: dict[str, float] = {}
 
-    # Database connection test
+    # Database connection test + least-privilege role assertion.
+    # RLS is only enforced when the runtime role is NOT a superuser and does NOT
+    # have BYPASSRLS. Connecting as the owner/superuser silently bypasses ALL
+    # policies, defeating the entire tenant isolation model.
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("Database connection successful")
+        async with engine.connect() as conn:
+            row = await conn.execute(
+                text(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles"
+                    " WHERE rolname = current_user"
+                )
+            )
+            role_row = row.fetchone()
+            if role_row and (role_row[0] or role_row[1]):
+                logger.error(
+                    "SECURITY: database role '%s' is superuser=%s bypassrls=%s. "
+                    "RLS tenant isolation is NOT enforced. Connect as the "
+                    "least-privilege 'clarity_app' role (see scripts/provision_app_role.sql).",
+                    "current_user",
+                    role_row[0],
+                    role_row[1],
+                )
+            else:
+                logger.info("DB role check passed: RLS is enforced for this connection")
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
 
