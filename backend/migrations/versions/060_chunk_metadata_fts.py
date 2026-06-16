@@ -17,8 +17,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "060_chunk_metadata_fts"
-down_revision: Union[str, None] = "059_matter_correspondence"
+revision: str = "060"
+down_revision: Union[str, None] = "059"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
