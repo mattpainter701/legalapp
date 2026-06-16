@@ -279,5 +279,4 @@ class StripePaymentLinkResponse(BaseModel):
 
 
 class InvoiceExportRequest(BaseModel):
-    invoice_id: str
     format: str = "csv"  # csv, pdf, ledes1998b

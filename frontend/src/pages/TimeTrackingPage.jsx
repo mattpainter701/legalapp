@@ -109,11 +109,11 @@ export default function TimeTrackingPage() {
     }
   }
 
-  const totalHours = entries.reduce((s, e) => s + (e.hours || 0), 0)
-  const totalAmount = entries.reduce((s, e) => s + (e.amount || 0), 0)
+  const totalHours = entries.reduce((s, e) => s + Number(e.hours || 0), 0)
+  const totalAmount = entries.reduce((s, e) => s + Number(e.amount || 0), 0)
   const unbilledAmount = entries
     .filter((e) => e.status === 'draft' || !e.invoice_id)
-    .reduce((s, e) => s + (e.amount || 0), 0)
+    .reduce((s, e) => s + Number(e.amount || 0), 0)
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>

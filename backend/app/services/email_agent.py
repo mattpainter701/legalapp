@@ -4,6 +4,7 @@ import uuid as uuid_mod
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -311,20 +312,23 @@ Draft a professional response email. The attorney will review before sending. Do
     ) -> list[dict]:
         results = []
 
-        if provider == "microsoft":
-            from app.services.microsoft_mail import ms_read_mail_user
+        try:
+            if provider == "microsoft":
+                from app.services.microsoft_mail import ms_read_mail_user
 
-            emails = await ms_read_mail_user(
-                db, tenant_id, user_id, max_results=max_emails
-            )
-        elif provider == "google":
-            from app.services.google_mail import gmail_read_mail
+                emails = await ms_read_mail_user(
+                    db, tenant_id, user_id, max_results=max_emails
+                )
+            elif provider == "google":
+                from app.services.google_mail import gmail_read_mail
 
-            emails = await gmail_read_mail(
-                db, tenant_id, user_id, max_results=max_emails
-            )
-        else:
-            raise ValueError(f"Unknown email provider: {provider}")
+                emails = await gmail_read_mail(
+                    db, tenant_id, user_id, max_results=max_emails
+                )
+            else:
+                raise ValueError(f"Unknown email provider: {provider}")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
         for email in emails:
             if email.get("id") and not email.get("external_ref"):
