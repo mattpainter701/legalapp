@@ -131,6 +131,12 @@ class MatterFileStore:
             tenant_id, matter_slug, canonical_folder, filename, content
         )
 
+    # Files larger than this use chunked/resumable upload to avoid timeouts.
+    _CHUNK_THRESHOLD_ONEDRIVE = 4 * 1024 * 1024  # 4 MiB
+    _CHUNK_THRESHOLD_GOOGLE = 5 * 1024 * 1024  # 5 MiB
+    # Chunk size for upload sessions.
+    _CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
+
     async def _try_store_onedrive(
         self,
         db: AsyncSession,
@@ -142,7 +148,7 @@ class MatterFileStore:
         content_type: str,
         folder_id: str | None = None,
     ) -> str | None:
-        """Try to store in customer's OneDrive. Returns URL or None."""
+        """Try to store in customer's OneDrive. Uses upload session for files > 4 MiB."""
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
@@ -155,7 +161,16 @@ class MatterFileStore:
                     token, ["claritylegal-records", matter_slug, category]
                 )
 
-            upload_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
+            if len(content) > self._CHUNK_THRESHOLD_ONEDRIVE:
+                return await self._upload_large_onedrive(
+                    token, parent_id, filename, content, content_type
+                )
+
+            # Small-file path: single PUT with rename-on-conflict.
+            upload_url = (
+                f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/content"
+                "?@microsoft.graph.conflictBehavior=rename"
+            )
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.put(
                     upload_url,
@@ -184,6 +199,80 @@ class MatterFileStore:
             logger.warning("OneDrive storage attempt failed: %s", exc)
             return None
 
+    async def _upload_large_onedrive(
+        self,
+        token: str,
+        parent_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> str | None:
+        """Upload a large file to OneDrive using the resumable upload session API."""
+        try:
+            # Create upload session
+            session_url = f"{GRAPH_BASE}/me/drive/items/{parent_id}:/{filename}:/createUploadSession"
+            async with httpx.AsyncClient(timeout=30) as client:
+                session_resp = await client.post(
+                    session_url,
+                    json={
+                        "item": {
+                            "@microsoft.graph.conflictBehavior": "rename",
+                            "name": filename,
+                        }
+                    },
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if session_resp.status_code != 200:
+                    logger.warning(
+                        "OneDrive upload session creation failed: %s %s",
+                        session_resp.status_code,
+                        session_resp.text[:200],
+                    )
+                    return None
+
+                upload_url = session_resp.json().get("uploadUrl")
+                if not upload_url:
+                    return None
+
+            # Upload in chunks
+            total = len(content)
+            offset = 0
+            while offset < total:
+                end = min(offset + self._CHUNK_SIZE, total)
+                chunk = content[offset:end]
+                content_range = f"bytes {offset}-{end - 1}/{total}"
+
+                async with httpx.AsyncClient(timeout=120) as client:
+                    chunk_resp = await client.put(
+                        upload_url,
+                        content=chunk,
+                        headers={
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": content_range,
+                        },
+                    )
+                    if chunk_resp.status_code in (200, 201):
+                        data = chunk_resp.json()
+                        web_url = data.get("webUrl") or data.get(
+                            "@microsoft.graph.downloadUrl", ""
+                        )
+                        logger.info("Uploaded large file %s to OneDrive", filename)
+                        return web_url
+                    elif chunk_resp.status_code == 202:
+                        offset = end
+                        continue
+                    else:
+                        logger.warning(
+                            "OneDrive chunk upload failed: %s %s",
+                            chunk_resp.status_code,
+                            chunk_resp.text[:200],
+                        )
+                        return None
+            return None
+        except Exception as exc:
+            logger.warning("Large OneDrive upload failed: %s", exc)
+            return None
+
     async def _try_store_google_drive(
         self,
         db: AsyncSession,
@@ -195,7 +284,7 @@ class MatterFileStore:
         content_type: str,
         folder_id: str | None = None,
     ) -> str | None:
-        """Try to store in customer's Google Drive. Returns URL or None."""
+        """Try to store in customer's Google Drive. Uses resumable upload for files > 5 MiB."""
         try:
             token = await get_fresh_token(db, tenant_id, "google")
             if not token:
@@ -208,6 +297,22 @@ class MatterFileStore:
                     token, ["claritylegal-records", matter_slug, category]
                 )
 
+            # Check for existing file with same name to avoid duplicates.
+            existing = await self._find_gdrive_file(token, parent_id, filename)
+            if existing:
+                logger.info(
+                    "Google Drive file '%s' already exists (id=%s), skipping upload",
+                    filename,
+                    existing,
+                )
+                return f"https://drive.google.com/file/d/{existing}/view"
+
+            if len(content) > self._CHUNK_THRESHOLD_GOOGLE:
+                return await self._upload_large_google_drive(
+                    token, parent_id, filename, content, content_type
+                )
+
+            # Small-file path: single multipart upload.
             metadata = {"name": filename, "parents": [parent_id]}
             boundary = "legalapp_upload_boundary"
             body = (
@@ -245,6 +350,109 @@ class MatterFileStore:
                     return None
         except Exception as exc:
             logger.warning("Google Drive storage attempt failed: %s", exc)
+            return None
+
+    async def _find_gdrive_file(
+        self, token: str, parent_id: str, filename: str
+    ) -> str | None:
+        """Return the file ID if a file named ``filename`` already exists in
+        ``parent_id``, or None."""
+        try:
+            safe_name = filename.replace("'", "\\'")
+            query = (
+                f"name = '{safe_name}' "
+                f"and '{parent_id}' in parents and trashed = false"
+            )
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://www.googleapis.com/drive/v3/files",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={
+                        "q": query,
+                        "fields": "files(id)",
+                        "pageSize": 1,
+                    },
+                )
+                if resp.status_code == 200:
+                    files = resp.json().get("files", [])
+                    return files[0]["id"] if files else None
+        except Exception:
+            pass
+        return None
+
+    async def _upload_large_google_drive(
+        self,
+        token: str,
+        parent_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> str | None:
+        """Upload a large file to Google Drive using resumable upload."""
+        try:
+            # Initiate resumable upload session.
+            metadata = {"name": filename, "parents": [parent_id]}
+            async with httpx.AsyncClient(timeout=30) as client:
+                init_resp = await client.post(
+                    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+                    json=metadata,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                        "X-Upload-Content-Type": content_type,
+                        "X-Upload-Content-Length": str(len(content)),
+                    },
+                )
+                if init_resp.status_code != 200:
+                    logger.warning(
+                        "Google Drive resumable session init failed: %s",
+                        init_resp.status_code,
+                    )
+                    return None
+
+                upload_url = init_resp.headers.get("Location")
+                if not upload_url:
+                    # Some API versions return the URL in the response.
+                    upload_url = init_resp.headers.get("location")
+                if not upload_url:
+                    return None
+
+            # Upload in chunks.
+            total = len(content)
+            offset = 0
+            while offset < total:
+                end = min(offset + self._CHUNK_SIZE, total)
+                chunk = content[offset:end]
+                content_range = f"bytes {offset}-{end - 1}/{total}"
+
+                async with httpx.AsyncClient(timeout=120) as client:
+                    chunk_resp = await client.put(
+                        upload_url,
+                        content=chunk,
+                        headers={
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": content_range,
+                        },
+                    )
+                    if chunk_resp.status_code in (200, 201):
+                        data = chunk_resp.json()
+                        file_id = data.get("id", "")
+                        logger.info("Uploaded large file %s to Google Drive", filename)
+                        return f"https://drive.google.com/file/d/{file_id}/view"
+                    elif chunk_resp.status_code == 308:
+                        # 308 Resume Incomplete — continue.
+                        offset = end
+                        continue
+                    else:
+                        logger.warning(
+                            "Google Drive chunk upload failed: %s %s",
+                            chunk_resp.status_code,
+                            chunk_resp.text[:200],
+                        )
+                        return None
+            return None
+        except Exception as exc:
+            logger.warning("Large Google Drive upload failed: %s", exc)
             return None
 
     async def _try_store_sharepoint(

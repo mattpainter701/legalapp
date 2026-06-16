@@ -223,28 +223,36 @@ def _matter_type(value: str | None) -> str:
     return matter_type or "general"
 
 
+def _cloud_folder_status(status: str, message: str = "") -> dict:
+    """Return a metadata sub-object for the cloud_folder JSONB column."""
+    from datetime import datetime, timezone
+
+    return {
+        "_status": status,
+        "_status_message": message,
+        "_status_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 async def _provision_cloud_folders(
     matter_id: str, tenant_id: str, slug: str, cloud_root: str, matter_name: str = ""
 ) -> None:
     """Fire-and-forget: provision cloud folders for a newly created matter.
 
     Runs in a separate DB session so it does not block the create-matter response.
-    Failures are logged but do not affect the matter — the folder can be
-    provisioned later via the admin panel.
+    Writes ``_status`` metadata into ``matter.cloud_folder`` so the UI can surface
+    provisioning failures.
     """
     try:
         async with async_session_maker() as db:
             await set_tenant_context(db, tenant_id)
-            # Use matter name for the cloud folder (human-readable); append a short
-            # ID suffix for uniqueness so two matters with the same name don't collide.
-            folder_name = matter_name.strip() if matter_name else slug
-            # Sanitize: cloud providers allow most chars, but strip leading/trailing
-            # dots/spaces and collapse multiple spaces.
             import re
 
+            folder_name = matter_name.strip() if matter_name else slug
             folder_name = re.sub(r"\s+", " ", folder_name).strip(" .")
             if not folder_name:
                 folder_name = slug
+            folder_name = f"{folder_name} ({matter_id[:8]})"
             cloud_folder = await initialize_matter_folders(
                 db=db,
                 tenant_id=tenant_id,
@@ -253,18 +261,32 @@ async def _provision_cloud_folders(
                 folder_name=folder_name,
             )
             if cloud_folder:
+                cloud_folder.update(_cloud_folder_status("provisioned"))
                 result = await db.execute(select(Matter).where(Matter.id == matter_id))
                 matter = result.scalar_one_or_none()
                 if matter:
                     matter.cloud_folder = cloud_folder
                     await _share_matter_with_assignees(db, uuid.UUID(tenant_id), matter)
                     await db.commit()
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "Background cloud folder provisioning failed for matter %s",
             matter_id,
             exc_info=True,
         )
+        # Write failure status so the UI can surface it on the next request.
+        try:
+            async with async_session_maker() as db:
+                await set_tenant_context(db, tenant_id)
+                result = await db.execute(select(Matter).where(Matter.id == matter_id))
+                matter = result.scalar_one_or_none()
+                if matter:
+                    cf = matter.cloud_folder or {}
+                    cf.update(_cloud_folder_status("failed", str(exc)[:500]))
+                    matter.cloud_folder = cf
+                    await db.commit()
+        except Exception:
+            pass
 
 
 async def _compute_budget_utilization(

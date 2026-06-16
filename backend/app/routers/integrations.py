@@ -651,24 +651,40 @@ async def _onboarding_post_connect(
     db: AsyncSession, tenant_id: str, provider: str
 ) -> None:
     """After admin connects an integration during onboarding, advance the step
-    so the background directory sync can run without blocking OAuth redirect."""
+    so the background directory sync can run without blocking OAuth redirect.
+
+    Uses an atomic UPDATE … WHERE … RETURNING so that simultaneous connects
+    from two providers cannot race on the step counter.
+    """
     import logging
 
     _logger = logging.getLogger(__name__)
     try:
-        from sqlalchemy import select as _sel
+        from sqlalchemy import text as _text
 
-        from app.models.tenant import Tenant
-
-        tenant_result = await db.execute(_sel(Tenant).where(Tenant.id == tenant_id))
-        tenant = tenant_result.scalar_one_or_none()
-        if not tenant or tenant.onboarding_completed:
-            return
-
-        # Advance from step 1 (consent) to step 2 (syncing)
-        if tenant.onboarding_step < 2:
-            tenant.onboarding_step = 2
-            await db.commit()
+        # Atomically advance from step 1 (consent) to step 2 (syncing).
+        # The RETURNING clause gives us the pre-update step so we know
+        # whether this call was the one that advanced it.
+        result = await db.execute(
+            _text(
+                """
+                UPDATE tenants
+                   SET onboarding_step = 2
+                 WHERE id = :tid
+                   AND onboarding_completed = false
+                   AND onboarding_step  < 2
+                RETURNING onboarding_step AS old_step
+                """
+            ),
+            {"tid": tenant_id},
+        )
+        row = result.fetchone()
+        if row is not None:
+            _logger.info(
+                "Onboarding step advanced 1→2 (provider=%s, tenant=%s)",
+                provider,
+                tenant_id,
+            )
     except Exception as exc:
         _logger.warning("Onboarding post-connect hook failed: %s", exc)
 
