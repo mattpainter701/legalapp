@@ -265,7 +265,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
             ("FONTSIZE", (0, 0), (-1, -1), FONT_SIZE_BODY),
             # Grid
-            ("GRID", (0, 0), (-1, len(table_data) - 5), TABLE_GRID_COLOR),
+            ("GRID", (0, 0), (-1, len(table_data) - 5), 0.5, TABLE_GRID_COLOR),
             ("LINEBELOW", (0, 0), (-1, 0), 1.5, colors.black),
             # Alignment
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -345,7 +345,7 @@ def generate_invoice_pdf(invoice_response) -> bytes:
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), TABLE_HEADER_BG),
-                    ("GRID", (0, 0), (-1, len(pay_data) - 2), TABLE_GRID_COLOR),
+                    ("GRID", (0, 0), (-1, len(pay_data) - 2), 0.5, TABLE_GRID_COLOR),
                     (
                         "LINEABOVE",
                         (0, len(pay_data) - 1),

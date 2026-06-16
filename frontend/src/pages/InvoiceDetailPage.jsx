@@ -55,10 +55,15 @@ export default function InvoiceDetailPage() {
 
   const handleRecordPayment = async (e) => {
     e.preventDefault()
+    const amt = parseFloat(paymentForm.amount)
+    if (!amt || amt <= 0) {
+      alert('Please enter a valid payment amount.')
+      return
+    }
     try {
       await recordPayment({
         invoice_id: id,
-        amount: parseFloat(paymentForm.amount),
+        amount: amt,
         method: paymentForm.method,
         payment_date: paymentForm.payment_date,
         reference_number: paymentForm.reference_number || null,
@@ -141,7 +146,15 @@ export default function InvoiceDetailPage() {
             </button>
           )}
           <button
-            onClick={() => window.print()}
+            onClick={async () => {
+              try {
+                const blob = await exportInvoice(id, 'pdf')
+                const url = window.URL.createObjectURL(blob)
+                window.open(url, '_blank')
+              } catch (err) {
+                console.error('Print failed', err)
+              }
+            }}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
