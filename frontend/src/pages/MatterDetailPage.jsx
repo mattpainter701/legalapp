@@ -13,6 +13,7 @@ import {
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
   sendSignatureRequest, voidSignatureRequest,
   syncMatterCloudFolder, listTrustAccounts,
+  getContacts, getAdminUsers,
 } from '../api'
 import MatterDocumentsTab from '../components/MatterDocumentsTab'
 import MatterCorrespondenceTab from '../components/MatterCorrespondenceTab'
@@ -21,6 +22,7 @@ import MatterSmbSharesTab from '../components/MatterSmbSharesTab'
 import AddTaskModal from '../components/AddTaskModal'
 import ComposeEmailModal from '../components/ComposeEmailModal'
 import UserSearchInput from '../components/UserSearchInput'
+import ContactPicker from '../components/ContactPicker'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 function Icon({ d, size = 18, className = '' }) {
@@ -253,6 +255,14 @@ export default function MatterDetailPage() {
   const [timeEntries, setTimeEntries] = useState([])
   const [billingLoading, setBillingLoading] = useState(false)
 
+  // People section inline editing
+  const [editingPeople, setEditingPeople] = useState(false)
+  const [peopleData, setPeopleData] = useState({})
+  const [savingPeople, setSavingPeople] = useState(false)
+  const [peopleError, setPeopleError] = useState(null)
+  const [contactsList, setContactsList] = useState([])
+  const [usersList, setUsersList] = useState([])
+
   // Chat
   const [matterConvs, setMatterConvs] = useState([])
   const [convLoading, setConvLoading] = useState(false)
@@ -385,6 +395,46 @@ export default function MatterDetailPage() {
       setTimeline(Array.isArray(tl) ? tl : [])
     } catch { /* silent */ }
     finally { setAddingNote(false) }
+  }
+
+  const handleSavePeople = async () => {
+    setSavingPeople(true)
+    setPeopleError(null)
+    try {
+      const updated = await updateMatterV2(id, peopleData)
+      setMatter(updated)
+      setEditData(updated)
+      setEditingPeople(false)
+      getMatterBudgetV2(id).then(setBudget).catch(() => {})
+    } catch {
+      setPeopleError('Failed to save changes.')
+    } finally {
+      setSavingPeople(false)
+    }
+  }
+
+  const startEditingPeople = async () => {
+    setPeopleData({
+      client_contact_id: matter.client_contact_id || '',
+      attorney_of_record_id: matter.attorney_of_record_id || '',
+      partner_attorney_id: matter.partner_attorney_id || '',
+      budget_amount: matter.budget_amount || null,
+      budget_currency: matter.budget_currency || 'USD',
+      billing_method: matter.billing_method || 'hourly',
+      billing_cycle: matter.billing_cycle || 'monthly',
+      hourly_rate: matter.hourly_rate || null,
+    })
+    setPeopleError(null)
+    // Load contacts and users for pickers
+    getContacts({ limit: 200, active_only: true }).then(data => {
+      const list = Array.isArray(data) ? data : data.items || []
+      setContactsList(list)
+    }).catch(() => {})
+    getAdminUsers().then(data => {
+      const list = Array.isArray(data) ? data : data.users || []
+      setUsersList(list)
+    }).catch(() => {})
+    setEditingPeople(true)
   }
 
   const handleAddAssignment = async () => {
@@ -541,7 +591,7 @@ export default function MatterDetailPage() {
               </button>
             </>
           ) : (
-            <button onClick={() => { setActiveTab('settings'); setEditing(true) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
+            <button onClick={() => { setActiveTab('settings'); setEditing(true); getContacts({ limit: 200, active_only: true }).then(data => { const list = Array.isArray(data) ? data : data.items || []; setContactsList(list) }).catch(() => {}); getAdminUsers().then(data => { const list = Array.isArray(data) ? data : data.users || []; setUsersList(list) }).catch(() => {}) }} className="px-4 py-2 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-2">
               <Icon d={Icons.edit} size={15} /> Edit
             </button>
           )}
@@ -1505,6 +1555,57 @@ export default function MatterDetailPage() {
                     <label className={labelCls}>Case Number</label>
                     <input type="text" value={editData.case_number || ''} onChange={e => setEditData(p => ({ ...p, case_number: e.target.value }))} className={inputCls} />
                   </div>
+
+                  {/* People */}
+                  <hr className="border-brand-line" />
+                  <h3 className="font-serif font-bold text-sm text-brand-ink uppercase tracking-wide">People &amp; Billing</h3>
+
+                  <div>
+                    <label className={labelCls}>Client</label>
+                    <ContactPicker
+                      value={contactsList.find(c => c.id === editData.client_contact_id) || (editData.client_contact_id && matter.client_name ? { id: editData.client_contact_id, display_name: matter.client_name, entity_type: 'person', contact_type: 'client' } : null)}
+                      onChange={(contact) => setEditData(p => ({ ...p, client_contact_id: contact?.id || '' }))}
+                      placeholder="Search contacts…"
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Attorney of Record</label>
+                    <select value={editData.attorney_of_record_id || ''} onChange={e => setEditData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
+                      <option value="">— None —</option>
+                      {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Partner Attorney</label>
+                    <select value={editData.partner_attorney_id || ''} onChange={e => setEditData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
+                      <option value="">— None —</option>
+                      {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className={labelCls}>Billing Method</label>
+                      <select value={editData.billing_method || 'hourly'} onChange={e => setEditData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
+                        {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(m => <option key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Billing Cycle</label>
+                      <select value={editData.billing_cycle || 'monthly'} onChange={e => setEditData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
+                        {['weekly', 'biweekly', 'monthly', 'quarterly', 'on_completion'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className={labelCls}>
+                      Hourly Rate
+                      <span className="text-[10px] text-brand-muted normal-case font-normal ml-1">(matter override)</span>
+                    </label>
+                    <input type="number" step="0.01" min="0" value={editData.hourly_rate || ''} onChange={e => setEditData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
+                  </div>
+
+                  <hr className="border-brand-line" />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Budget Amount</label>
@@ -1557,45 +1658,148 @@ export default function MatterDetailPage() {
         )}
 
         <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
-          <h2 className="font-serif font-bold text-xl text-brand-ink mb-5">People</h2>
-          <dl>
-            <Field label="Client">
-              {matter.client_name && (
-                <span className="font-semibold text-brand-ink">{matter.client_name}</span>
-              )}
-            </Field>
-            <Field label="Attorney of Record">
-              {matter.attorney_of_record_name && (
-                <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>
-              )}
-            </Field>
-            <Field label="Partner Attorney">
-              {matter.partner_attorney_name && (
-                <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>
-              )}
-            </Field>
-            <Field label="Team">
-              {matter.assignments?.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5 mt-0.5">
-                  {matter.assignments.map(a => (
-                    <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
-                      {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
-                      {a.user_name}
-                      {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </Field>
-          </dl>
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="font-serif font-bold text-xl text-brand-ink">People</h2>
+            {editingPeople ? (
+              <div className="flex gap-2">
+                <button onClick={() => setEditingPeople(false)} className="px-3 py-1.5 bg-brand-surface text-brand-ink border border-brand-line text-xs font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-1.5">
+                  <Icon d={Icons.x} size={14} /> Cancel
+                </button>
+                <button onClick={handleSavePeople} disabled={savingPeople} className="px-3 py-1.5 bg-brand-ink text-white text-xs font-sans font-medium rounded-lg hover:bg-brand-ink-2 disabled:opacity-50 flex items-center gap-1.5">
+                  <Icon d={Icons.check} size={14} /> {savingPeople ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            ) : (
+              <button onClick={startEditingPeople} className="px-3 py-1.5 bg-brand-surface text-brand-ink border border-brand-line text-xs font-sans font-medium rounded-lg hover:bg-brand-bg-soft flex items-center gap-1.5">
+                <Icon d={Icons.edit} size={14} /> Edit
+              </button>
+            )}
+          </div>
 
-          <h2 className="font-serif font-bold text-xl text-brand-ink mb-5 mt-8">Billing</h2>
-          <dl>
-            <Field label="Billing Method">{dm.billing_method}</Field>
-            <Field label="Billing Cycle">{dm.billing_cycle}</Field>
-            {dm.hourly_rate && <Field label="Hourly Rate">${Number(dm.hourly_rate).toLocaleString()}</Field>}
-            {dm.budget_amount && <Field label="Budget">${Number(dm.budget_amount).toLocaleString()} {dm.budget_currency}</Field>}
-          </dl>
+          {editingPeople ? (
+            <div className="space-y-4">
+              <div>
+                <label className={labelCls}>Client</label>
+                <ContactPicker
+                  value={contactsList.find(c => c.id === peopleData.client_contact_id) || (peopleData.client_contact_id && matter.client_name ? { id: peopleData.client_contact_id, display_name: matter.client_name, entity_type: 'person', contact_type: 'client' } : null)}
+                  onChange={(contact) => setPeopleData(p => ({ ...p, client_contact_id: contact?.id || '' }))}
+                  placeholder="Search contacts…"
+                />
+                {!peopleData.client_contact_id && (
+                  <p className="text-[11px] text-brand-muted mt-1">Select the client for this matter. <a href="/contacts" className="text-brand-accent hover:underline">Create a contact</a> if needed.</p>
+                )}
+              </div>
+              <div>
+                <label className={labelCls}>Attorney of Record</label>
+                <select value={peopleData.attorney_of_record_id || ''} onChange={e => setPeopleData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
+                  <option value="">— None —</option>
+                  {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Partner Attorney</label>
+                <select value={peopleData.partner_attorney_id || ''} onChange={e => setPeopleData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
+                  <option value="">— None —</option>
+                  {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={labelCls}>Team</label>
+                {matter.assignments?.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mt-0.5">
+                    {matter.assignments.map(a => (
+                      <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
+                        {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
+                        {a.user_name}
+                        {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
+                      </span>
+                    ))}
+                  </div>
+                ) : <span className="text-[12px] text-brand-muted">Manage team assignments on the Team tab</span>}
+              </div>
+
+              <hr className="border-brand-line" />
+              <h3 className="font-serif font-bold text-base text-brand-ink">Billing</h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Billing Method</label>
+                  <select value={peopleData.billing_method || 'hourly'} onChange={e => setPeopleData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
+                    {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(m => <option key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Billing Cycle</label>
+                  <select value={peopleData.billing_cycle || 'monthly'} onChange={e => setPeopleData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
+                    {['weekly', 'biweekly', 'monthly', 'quarterly', 'on_completion'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Budget Amount</label>
+                  <input type="number" step="0.01" min="0" value={peopleData.budget_amount || ''} onChange={e => setPeopleData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
+                </div>
+                <div>
+                  <label className={labelCls}>Currency</label>
+                  <select value={peopleData.budget_currency || 'USD'} onChange={e => setPeopleData(p => ({ ...p, budget_currency: e.target.value }))} className={inputCls}>
+                    {['USD', 'EUR', 'GBP', 'CAD'].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>
+                  Hourly Rate
+                  <span className="text-[10px] text-brand-muted normal-case font-normal ml-1">(matter override; user rates set by admin)</span>
+                </label>
+                <input type="number" step="0.01" min="0" value={peopleData.hourly_rate || ''} onChange={e => setPeopleData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
+              </div>
+              {peopleError && <p className="text-brand-rose text-sm font-sans">{peopleError}</p>}
+            </div>
+          ) : (
+            <>
+              <dl>
+                <Field label="Client">
+                  {matter.client_name ? (
+                    <span className="font-semibold text-brand-ink">{matter.client_name}</span>
+                  ) : (
+                    <span className="text-brand-muted italic">Not assigned — click Edit to add</span>
+                  )}
+                </Field>
+                <Field label="Attorney of Record">
+                  {matter.attorney_of_record_name && (
+                    <span className="font-semibold text-brand-ink">{matter.attorney_of_record_name}</span>
+                  )}
+                </Field>
+                <Field label="Partner Attorney">
+                  {matter.partner_attorney_name && (
+                    <span className="font-semibold text-brand-ink">{matter.partner_attorney_name}</span>
+                  )}
+                </Field>
+                <Field label="Team">
+                  {matter.assignments?.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-0.5">
+                      {matter.assignments.map(a => (
+                        <span key={a.id} className={`inline-flex items-center gap-1 border rounded-lg px-2.5 py-1 text-[12px] font-sans ${a.is_active_working ? 'bg-brand-green/10 border-brand-green/30 text-brand-green' : 'bg-brand-bg-soft border-brand-line text-brand-ink-2'}`}>
+                          {a.is_active_working && <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block" />}
+                          {a.user_name}
+                          {a.is_primary && <span className="text-[10px] text-brand-accent font-semibold ml-0.5">●</span>}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </Field>
+              </dl>
+
+              <h2 className="font-serif font-bold text-xl text-brand-ink mb-5 mt-8">Billing</h2>
+              <dl>
+                <Field label="Billing Method">{dm.billing_method}</Field>
+                <Field label="Billing Cycle">{dm.billing_cycle}</Field>
+                {dm.hourly_rate ? <Field label="Hourly Rate">${Number(dm.hourly_rate).toLocaleString()}</Field> : matter.attorney_of_record_name && <Field label="Hourly Rate"><span className="text-brand-muted italic">Uses user default rate</span></Field>}
+                <Field label="Budget">{dm.budget_amount ? `$${Number(dm.budget_amount).toLocaleString()} ${dm.budget_currency}` : <span className="text-brand-muted italic">Not set</span>}</Field>
+              </dl>
+            </>
+          )}
         </div>
       </div>
 

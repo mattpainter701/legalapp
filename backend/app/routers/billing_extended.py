@@ -15,6 +15,7 @@ from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user, require_admin
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
+from app.models.tenant import TenantSettings
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
@@ -69,16 +70,33 @@ async def create_time_entry(
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid matter ID format")
 
-    matter = await db.execute(
+    matter_result = await db.execute(
         select(Matter).where(
             Matter.id == matter_uuid,
             Matter.tenant_id == user.tenant_id,
         )
     )
-    if not matter.scalar_one_or_none():
+    matter_obj = matter_result.scalar_one_or_none()
+    if not matter_obj:
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    hourly_rate = body.hourly_rate or user.default_billing_rate
+    # Rate resolution: explicit > matter override > user default > tenant default
+    hourly_rate = (
+        body.hourly_rate or matter_obj.hourly_rate or user.default_billing_rate
+    )
+    if not hourly_rate:
+        # Try tenant-level default as final fallback
+        ts_result = await db.execute(
+            select(TenantSettings).where(
+                TenantSettings.tenant_id == user.tenant_id,
+            )
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts and ts.custom_config:
+            billing_cfg = (ts.custom_config or {}).get("billing", {}) or {}
+            tenant_default = billing_cfg.get("default_hourly_rate")
+            if tenant_default:
+                hourly_rate = Decimal(str(tenant_default))
     if not hourly_rate:
         raise HTTPException(
             status_code=400,
