@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from app.models.contact import Contact, Lead
 from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
 from app.models.tenant import Tenant
+from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
 from app.services.intake_archive_import import (
@@ -312,5 +313,113 @@ async def test_assign_next_partner_wraps_practice_rotation(
     assert first.status_code == 200
     assert first.json()["assigned_to_user_id"] == str(partner_a.id)
     assert first.json()["assigned_to_name"] == "Ada Partner"
+    assert first.json()["task_id"]
     assert second.status_code == 200
     assert second.json()["assigned_to_user_id"] == str(partner_b.id)
+    first_task = await db_session.get(Task, uuid.UUID(first.json()["task_id"]))
+    assert first_task.assigned_to_user_id == partner_a.id
+    assert first_task.priority == "urgent"
+    assert first_task.task_type == "follow_up"
+    assert first_task.contact_id == contact_1.id
+
+
+@pytest.mark.asyncio
+async def test_assign_next_partner_falls_back_to_firmwide_general_rotation(
+    client, db_session, test_tenant, test_user
+):
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="general@testfirm.com",
+        full_name="General Partner",
+        role="admin",
+        is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Casey",
+        last_name="Caller",
+        phone="701-555-3030",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([partner, contact])
+    await db_session.flush()
+    lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        practice_area="criminal",
+        description="Needs criminal defense consult",
+        created_by_user_id=test_user.id,
+    )
+    rule = PartnerRotationState(
+        tenant_id=test_tenant.id,
+        practice_area="general",
+        eligible_user_ids=[str(partner.id)],
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([lead, rule])
+    await db_session.commit()
+
+    resp = await client.post(f"/api/intake/dashboard/leads/{lead.id}/assign-next")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assigned_to_user_id"] == str(partner.id)
+    assert data["practice_area"] == "general"
+    assert data["task_id"]
+    task = await db_session.get(Task, uuid.UUID(data["task_id"]))
+    assert task.assigned_to_user_id == partner.id
+    assert task.priority == "urgent"
+    assert task.external_ref == f"intake-dashboard:lead:{lead.id}:follow-up"
+
+
+@pytest.mark.asyncio
+async def test_prior_history_match_routes_lead_to_partner_task(
+    client, db_session, test_tenant
+):
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="jim@testfirm.com",
+        full_name="Jim Partner",
+        role="admin",
+        is_active=True,
+    )
+    legacy = LegacyCallRecord(
+        tenant_id=test_tenant.id,
+        source_system="legacy_csv",
+        source_row_id="prior-1",
+        caller_name="John Doe",
+        practice_area="criminal",
+        purpose="Worked with Jim before",
+        prior_attorney_name="Jim Partner",
+    )
+    db_session.add_all([partner, legacy])
+    await db_session.commit()
+
+    search = await client.get("/api/intake/dashboard/search", params={"q": "John Doe"})
+    assert search.status_code == 200
+    search_data = search.json()
+    assert search_data["recommended_attorney_name"] == "Jim Partner"
+    assert search_data["recommended_attorney_user_id"] == str(partner.id)
+
+    call = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "caller_name": "John Doe",
+            "practice_area": "criminal",
+            "purpose": "Needs criminal defense; worked with Jim before",
+            "outcome": "create_lead",
+            "qualified": True,
+            "assigned_to_user_id": search_data["recommended_attorney_user_id"],
+        },
+    )
+
+    assert call.status_code == 201
+    call_data = call.json()
+    assert call_data["task_id"]
+    lead = await db_session.get(Lead, uuid.UUID(call_data["lead_id"]))
+    task = await db_session.get(Task, uuid.UUID(call_data["task_id"]))
+    assert lead.assigned_to_user_id == partner.id
+    assert task.assigned_to_user_id == partner.id
+    assert task.priority == "urgent"

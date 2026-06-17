@@ -165,7 +165,9 @@ function RotationAdmin() {
         <RotateCcw size={18} className="text-brand-accent" />
         <h2 className="font-serif text-lg font-bold text-brand-ink">Partner Rotation</h2>
       </div>
-      <p className="mt-1 text-xs text-brand-muted">Admin setup for next-in-line assignment by practice area.</p>
+      <p className="mt-1 text-xs text-brand-muted">
+        Admin setup for next-in-line assignment. Use general as the firm-wide default when partners rotate regardless of practice area.
+      </p>
 
       <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr]">
         <select
@@ -250,23 +252,49 @@ export default function IntakeDashboardPage() {
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
 
+  const searchParams = () => {
+    const query = q.trim()
+    const phoneValue = phone.trim()
+    if (!query && !phoneValue) return null
+    return {
+      q: query || undefined,
+      phone: phoneValue || undefined,
+    }
+  }
+
   const runSearch = async (event) => {
     event?.preventDefault()
+    const params = searchParams()
+    if (!params) {
+      if (event) setMessage('Enter a caller name or phone context before searching.')
+      return null
+    }
     setMessage(null)
     setSearching(true)
     try {
-      const data = await searchIntakeDashboard({ q: q || undefined, phone: phone || undefined })
+      const data = await searchIntakeDashboard(params)
       setSearchData(data)
       setSelected(null)
       if (data.recommended_attorney_name) {
         setMessage(`Prior history found. Recommended attorney: ${data.recommended_attorney_name}.`)
       }
+      return data
     } catch (err) {
       setSearchData(null)
       setMessage(err?.response?.data?.detail || 'Search failed.')
+      return null
     } finally {
       setSearching(false)
     }
+  }
+
+  const refreshSearchSilently = async () => {
+    const params = searchParams()
+    if (!params) return null
+    const data = await searchIntakeDashboard(params)
+    setSearchData(data)
+    setSelected(null)
+    return data
   }
 
   const selectResult = (item) => {
@@ -285,7 +313,7 @@ export default function IntakeDashboardPage() {
     try {
       const result = await assignNextPartner(leadId)
       setMessage(`Assigned to ${result.assigned_to_name || 'next partner'}.`)
-      await runSearch()
+      await refreshSearchSilently()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Assignment failed.')
     }
@@ -305,20 +333,23 @@ export default function IntakeDashboardPage() {
         qualified: Boolean(form.qualified),
         existing_contact_id: selected?.contact_id || undefined,
         existing_lead_id: selected?.lead_id || undefined,
+        assigned_to_user_id: searchData?.recommended_attorney_user_id || undefined,
       }
       const result = await createIntakeDashboardCall(payload)
       let assignedText = ''
-      if (form.auto_assign && result.lead_id) {
+      if (result.task_id) {
+        assignedText = ' Urgent follow-up task created.'
+      } else if (form.auto_assign && result.lead_id) {
         try {
           const assignment = await assignNextPartner(result.lead_id)
-          assignedText = ` Assigned to ${assignment.assigned_to_name || 'next partner'}.`
+          assignedText = ` Assigned to ${assignment.assigned_to_name || 'next partner'} and urgent task created.`
         } catch (err) {
           assignedText = ` Assignment skipped: ${err?.response?.data?.detail || 'no matching rotation rule'}.`
         }
       }
       setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
       setForm((current) => ({ ...current, purpose: '', notes: '' }))
-      await runSearch()
+      await refreshSearchSilently()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Failed to log call.')
     }

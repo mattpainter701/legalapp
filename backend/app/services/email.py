@@ -519,6 +519,68 @@ class EmailService:
 
         return await self.send_email([to_email], subject, html_body, text_body)
 
+    async def send_task_assignment_alert(
+        self,
+        to_email: str,
+        task_title: str,
+        due_date: str,
+        priority: str = "medium",
+        task_type: str = "general",
+        description: Optional[str] = None,
+        assignee_name: Optional[str] = None,
+    ) -> bool:
+        """Send an immediate alert when a task is assigned."""
+        subject = f"New task assigned: {task_title}"
+        now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
+        assignee_row = (
+            f"<tr><td><strong>Assigned To</strong></td><td>{assignee_name}</td></tr>"
+            if assignee_name
+            else ""
+        )
+        description_row = (
+            f"<tr><td><strong>Details</strong></td><td>{description}</td></tr>"
+            if description
+            else ""
+        )
+        content = f"""
+        <div class="header">
+          <h1>Clarity Legal &mdash; Task Assigned</h1>
+          <p>A task has been assigned to you &bull; {now_str}</p>
+        </div>
+        <div class="body">
+          <p>The following task requires your attention:</p>
+          <table>
+            <thead><tr><th>Field</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Task</strong></td><td>{task_title}</td></tr>
+              <tr><td><strong>Priority</strong></td><td><strong>{priority}</strong></td></tr>
+              <tr><td><strong>Type</strong></td><td>{task_type}</td></tr>
+              <tr><td><strong>Due Date</strong></td><td>{due_date}</td></tr>
+              {assignee_row}
+              {description_row}
+            </tbody>
+          </table>
+          <p style="margin-top:20px; font-size:13px; color:#555;">
+            Open Clarity Legal to review and complete this task.
+          </p>
+        </div>
+        """
+        html_body = _BASE_HTML.format(content=content, timestamp=now_str)
+        text_lines = [
+            "New task assigned",
+            "",
+            f"Task: {task_title}",
+            f"Priority: {priority}",
+            f"Type: {task_type}",
+            f"Due: {due_date}",
+        ]
+        if assignee_name:
+            text_lines.append(f"Assigned to: {assignee_name}")
+        if description:
+            text_lines.extend(["", description])
+        text_body = "\n".join(text_lines)
+        return await self.send_email([to_email], subject, html_body, text_body)
+
     async def send_slack_webhook(
         self,
         message: str,

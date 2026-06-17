@@ -18,6 +18,7 @@ class IntakeSearchResult(BaseModel):
     normalized_phone: Optional[str] = None
     practice_area: Optional[str] = None
     prior_attorney_name: Optional[str] = None
+    prior_attorney_user_id: Optional[uuid.UUID] = None
     occurred_at: Optional[datetime] = None
     contact_id: Optional[uuid.UUID] = None
     lead_id: Optional[uuid.UUID] = None
@@ -34,6 +35,7 @@ class IntakeDashboardSearchResponse(BaseModel):
     history_found: bool
     identity_warning: Optional[str] = None
     recommended_attorney_name: Optional[str] = None
+    recommended_attorney_user_id: Optional[uuid.UUID] = None
     results: list[IntakeSearchResult]
 
 
@@ -63,6 +65,7 @@ class IntakeDashboardCallResponse(BaseModel):
     communication_id: uuid.UUID
     contact_id: Optional[uuid.UUID] = None
     lead_id: Optional[uuid.UUID] = None
+    task_id: Optional[uuid.UUID] = None
     created_lead: bool = False
     status: str
 
@@ -102,3 +105,4 @@ class AssignNextResponse(BaseModel):
     assigned_to_name: Optional[str] = None
     practice_area: str
     rotation_rule_id: uuid.UUID
+    task_id: Optional[uuid.UUID] = None
