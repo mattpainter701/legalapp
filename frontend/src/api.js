@@ -340,6 +340,25 @@ export const triggerUserSync = () =>
 export const retryCloudInit = () =>
   api.post('/integrations/cloud-init/retry').then((r) => r.data)
 
+// External imports
+export const uploadTabs3ImportBundle = ({ file, passphrase, accountingMode = 'tabs3_reference' }) => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('accounting_mode', accountingMode)
+  if (passphrase) form.append('passphrase', passphrase)
+  return api.post('/imports/tabs3/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data)
+}
+export const getExternalImportRun = (runId) =>
+  api.get(`/imports/${runId}`).then((r) => r.data)
+export const getExternalImportTables = (runId) =>
+  api.get(`/imports/${runId}/tables`).then((r) => r.data)
+export const getExternalImportRows = (runId, sourceTable, limit = 25) =>
+  api.get(`/imports/${runId}/tables/${sourceTable}/rows`, { params: { limit } }).then((r) => r.data)
+export const reconcileExternalImport = (runId) =>
+  api.get(`/imports/${runId}/reconcile`).then((r) => r.data)
+
 // ── Microsoft Teams ───────────────────────────────────────────────────────────
 export const getIntegrationStatus = () =>
   api.get('/integrations/status').then((r) => r.data)
@@ -810,6 +829,12 @@ export const getLLMRoutes = (key) =>
 export const saveLLMRoutes = (key, data) =>
   platformApi(key).put('/platform/llm/routes', data).then((r) => r.data)
 
+export const getLLMGatewayStatus = (key) =>
+  platformApi(key).get('/platform/llm/gateway/status').then((r) => r.data)
+
+export const reloadLLMRoutes = (key) =>
+  platformApi(key).post('/platform/llm/routes/reload').then((r) => r.data)
+
 export const testLLMRoute = (key, data) =>
   platformApi(key).post('/platform/llm/routes/test', data).then((r) => r.data)
 
@@ -941,6 +966,23 @@ export const updateLead = (id, data) =>
 
 export const convertLead = (id, data) =>
   api.post(`/intake/${id}/convert`, data).then(r => r.data)
+
+// ── Intake Dashboard ───────────────────────────────────────────────────────
+
+export const searchIntakeDashboard = (params = {}) =>
+  api.get('/intake/dashboard/search', { params }).then(r => r.data)
+
+export const createIntakeDashboardCall = (data) =>
+  api.post('/intake/dashboard/calls', data).then(r => r.data)
+
+export const assignNextPartner = (leadId) =>
+  api.post(`/intake/dashboard/leads/${leadId}/assign-next`).then(r => r.data)
+
+export const getRotationRules = () =>
+  api.get('/intake/dashboard/rotation-rules').then(r => r.data)
+
+export const updateRotationRules = (rules) =>
+  api.put('/intake/dashboard/rotation-rules', { rules }).then(r => r.data)
 
 // ── Matter Parties ──────────────────────────────────────────────────────────
 

@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -73,6 +75,78 @@ def test_model_catalog_capabilities_from_provider_metadata():
     assert set(model["capabilities"]).issuperset(
         {"vision", "instruction", "tool_use", "structured_output", "large_context", "rag"}
     )
+
+
+def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeypatch):
+    openrouter_key = LLMProviderKey(
+        id=uuid.uuid4(),
+        name="OpenRouter",
+        provider_id="openrouter",
+        encrypted_key="encrypted-openrouter",
+        key_hint="test",
+    )
+    opencode_key = LLMProviderKey(
+        id=uuid.uuid4(),
+        name="OpenCode",
+        provider_id="opencode-zen",
+        encrypted_key="encrypted-opencode",
+        key_hint="test",
+    )
+    monkeypatch.setattr(
+        platform_llm_router,
+        "decrypt_token",
+        lambda encrypted: f"plain-{encrypted}",
+    )
+
+    models, fallbacks, errors = platform_llm_router._build_litellm_reload_payload(
+        {
+            "standard": {
+                "key_id": str(openrouter_key.id),
+                "provider_id": "openrouter",
+                "model": "qwen/qwen3-235b-a22b:free",
+                "capacity": 80,
+                "alternates": [
+                    {
+                        "key_id": str(opencode_key.id),
+                        "provider_id": "opencode-zen",
+                        "model": "deepseek-v4-flash-free",
+                        "capacity": 20,
+                    }
+                ],
+                "fallbacks": [
+                    {
+                        "key_id": str(openrouter_key.id),
+                        "provider_id": "deepseek",
+                        "model": "deepseek-chat",
+                    }
+                ],
+            },
+            "premium": {},
+        },
+        {str(openrouter_key.id): openrouter_key, str(opencode_key.id): opencode_key},
+    )
+
+    assert [model["model_name"] for model in models] == [
+        "clarity-standard",
+        "clarity-standard",
+    ]
+    assert models[0]["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
+    assert models[0]["litellm_params"]["weight"] == 80
+    assert models[1]["litellm_params"]["model"] == "openai/deepseek-v4-flash-free"
+    assert fallbacks == []
+    assert errors == ["standard fallback 1: selected key belongs to openrouter, not deepseek"]
+
+
+@pytest.mark.asyncio
+async def test_litellm_reload_routes_reports_empty_config():
+    result = await platform_llm_router._reload_litellm_routes(
+        {"standard": {}, "premium": {}}, {}
+    )
+
+    assert result["litellm_updated"] is False
+    assert result["models_registered"] == 0
+    assert result["fallbacks_registered"] == 0
+    assert "No complete provider/key/model targets" in result["litellm_error"]
 
 
 @pytest.mark.asyncio

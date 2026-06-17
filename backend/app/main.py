@@ -35,6 +35,7 @@ from app.routers.firm import router as firm_branding_router
 from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
+from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.intake import router as intake_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
@@ -64,6 +65,7 @@ from app.routers.smb import router as smb_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
 from app.routers.platform_llm import router as platform_llm_router
+from app.routers.external_imports import router as external_imports_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -275,6 +277,7 @@ app.include_router(firm_branding_router)
 app.include_router(contacts_router)
 app.include_router(tasks_router)
 app.include_router(communications_router)
+app.include_router(intake_dashboard_router)
 app.include_router(intake_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
@@ -292,6 +295,7 @@ app.include_router(licensing_router)
 app.include_router(smb_router)
 app.include_router(portfolio_router)
 app.include_router(users_router)
+app.include_router(external_imports_router)
 
 
 # ─────────────────────────────────────────────────────

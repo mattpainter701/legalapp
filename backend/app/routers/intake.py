@@ -138,10 +138,13 @@ async def create_lead(
                 status_code=422,
                 detail="Either contact_id or contact must be provided",
             )
+        contact_data = payload.contact.model_dump(exclude_none=True)
+        if "contact_type" not in payload.contact.model_fields_set:
+            contact_data["contact_type"] = "prospect"
         contact = Contact(
             tenant_id=uid,
             created_by_user_id=user_id,
-            **payload.contact.model_dump(exclude_none=True),
+            **contact_data,
         )
         db.add(contact)
         await db.flush()
@@ -237,6 +240,9 @@ async def convert_lead_to_matter(
     db.add(matter)
     await db.flush()
 
+    contact = await _load_contact(db, lead.contact_id, tenant_id)
+    if contact.contact_type == "prospect":
+        contact.contact_type = "client"
     lead.status = "matter_opened"
     lead.matter_id = matter.id
 

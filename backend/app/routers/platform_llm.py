@@ -12,6 +12,8 @@ Endpoints:
   POST /api/platform/llm/provider-keys/{id}/fetch-models — list models from provider
   GET  /api/platform/llm/routes                       — current route config
   PUT  /api/platform/llm/routes                       — save routes (hot-reloads LiteLLM)
+  GET  /api/platform/llm/gateway/status               — LiteLLM reachability + alias status
+  POST /api/platform/llm/routes/reload                — reload saved routes into LiteLLM
   POST /api/platform/llm/routes/test                  — test a route with synthetic prompt
 """
 
@@ -516,6 +518,182 @@ async def _call_litellm_config_update(
     except Exception as exc:
         logger.warning("LiteLLM config update failed: %s", exc)
         return False, f"LiteLLM config update failed: {exc}"
+
+
+def _fallback_count(fallback_settings: list[dict]) -> int:
+    count = 0
+    for item in fallback_settings:
+        if not item:
+            continue
+        count += len(next(iter(item.values())))
+    return count
+
+
+def _build_litellm_reload_payload(
+    config: dict[str, Any],
+    keys_by_id: dict[str, LLMProviderKey],
+) -> tuple[list[dict], list[dict], list[str]]:
+    """Build LiteLLM model_list/fallbacks from saved route config."""
+    new_models: list[dict] = []
+    fallback_settings: list[dict] = []
+    errors: list[str] = []
+
+    def _add_model(alias: str, route_dict: dict, label: str) -> bool:
+        kid = route_dict.get("key_id")
+        model = route_dict.get("model", "")
+        pid = route_dict.get("provider_id", "")
+        if not kid or not model or not pid:
+            return False
+        key = keys_by_id.get(kid)
+        if not key:
+            errors.append(f"{label}: selected provider key no longer exists")
+            return False
+        if key.provider_id != pid:
+            errors.append(
+                f"{label}: selected key belongs to {key.provider_id}, not {pid}"
+            )
+            return False
+        try:
+            plaintext = decrypt_token(key.encrypted_key)
+        except Exception:
+            logger.warning("Failed to decrypt key %s for LiteLLM update", kid)
+            errors.append(f"{label}: key decryption failed")
+            return False
+        new_models.append(
+            _build_litellm_model_entry(
+                alias,
+                pid,
+                model,
+                plaintext,
+                capacity=route_dict.get("capacity"),
+            )
+        )
+        return True
+
+    for route_name in ("standard", "premium"):
+        route = config.get(route_name, {}) or {}
+        alias = f"clarity-{route_name}"
+
+        _add_model(alias, route, f"{route_name} primary")
+        for i, alternate in enumerate(route.get("alternates", []) or []):
+            _add_model(alias, alternate, f"{route_name} balanced target {i + 1}")
+
+        fallback_aliases: list[str] = []
+        for i, fallback in enumerate(route.get("fallbacks", []) or []):
+            fallback_alias = f"{alias}-fb-{i}"
+            if _add_model(fallback_alias, fallback, f"{route_name} fallback {i + 1}"):
+                fallback_aliases.append(fallback_alias)
+        if fallback_aliases:
+            fallback_settings.append({alias: fallback_aliases})
+
+    return new_models, fallback_settings, errors
+
+
+async def _reload_litellm_routes(
+    config: dict[str, Any],
+    keys_by_id: dict[str, LLMProviderKey],
+) -> dict[str, Any]:
+    new_models, fallback_settings, build_errors = _build_litellm_reload_payload(
+        config, keys_by_id
+    )
+    litellm_updated = False
+    litellm_error: str | None = None
+
+    if new_models:
+        litellm_updated, litellm_error = await _call_litellm_config_update(
+            new_models, fallback_settings
+        )
+    else:
+        litellm_error = "No complete provider/key/model targets were available to register"
+
+    return {
+        "litellm_updated": litellm_updated,
+        "litellm_error": litellm_error,
+        "models_registered": len(new_models),
+        "fallbacks_registered": _fallback_count(fallback_settings),
+        "build_errors": build_errors,
+        "app_aliases": {
+            "standard": settings.LITELLM_STANDARD_MODEL,
+            "premium": settings.LITELLM_PREMIUM_MODEL,
+        },
+    }
+
+
+async def _check_litellm_gateway() -> dict[str, Any]:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    base_url = (settings.LITELLM_BASE_URL or "").rstrip("/")
+    expected_aliases = [
+        alias
+        for alias in (settings.LITELLM_STANDARD_MODEL, settings.LITELLM_PREMIUM_MODEL)
+        if alias
+    ]
+    aliases = dict.fromkeys(expected_aliases, False)
+    status: dict[str, Any] = {
+        "status": "disabled" if not settings.LITELLM_ENABLED else "unknown",
+        "enabled": settings.LITELLM_ENABLED,
+        "base_url": base_url,
+        "api_key_configured": bool(settings.LITELLM_API_KEY),
+        "checked_at": checked_at,
+        "expected_aliases": expected_aliases,
+        "latency_ms": None,
+        "models_count": None,
+        "aliases": aliases,
+        "detail": None,
+    }
+    if not settings.LITELLM_ENABLED:
+        status["detail"] = "LITELLM_ENABLED is false"
+        return status
+    if not base_url:
+        status.update({"status": "degraded", "detail": "LITELLM_BASE_URL is empty"})
+        return status
+
+    headers = (
+        {"Authorization": f"Bearer {settings.LITELLM_API_KEY}"}
+        if settings.LITELLM_API_KEY
+        else {}
+    )
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            live_resp = await client.get(
+                f"{base_url}/health/liveliness", headers=headers
+            )
+            if live_resp.status_code == 404:
+                live_resp = await client.get(f"{base_url}/health", headers=headers)
+            live_resp.raise_for_status()
+            status["latency_ms"] = int((time.monotonic() - started) * 1000)
+            status["status"] = "online"
+
+            try:
+                models_resp = await client.get(f"{base_url}/models", headers=headers)
+                models_resp.raise_for_status()
+                payload = models_resp.json()
+                items = payload.get("data") if isinstance(payload, dict) else payload
+                if not isinstance(items, list):
+                    items = []
+                names = {
+                    str(item.get("id") or item.get("model_name") or item.get("model") or "")
+                    for item in items
+                    if isinstance(item, dict)
+                }
+                status["models_count"] = len(names)
+                status["aliases"] = {alias: alias in names for alias in aliases}
+                if aliases and not all(status["aliases"].values()):
+                    status["status"] = "degraded"
+                    missing = [
+                        alias
+                        for alias, present in status["aliases"].items()
+                        if not present
+                    ]
+                    status["detail"] = f"Missing alias registration: {', '.join(missing)}"
+            except Exception as model_exc:
+                status["status"] = "degraded"
+                status["models_error"] = str(model_exc)[:300]
+    except Exception as exc:
+        status["latency_ms"] = int((time.monotonic() - started) * 1000)
+        status["status"] = "offline"
+        status["detail"] = str(exc)[:300]
+    return status
 
 
 async def _fetch_models_from_provider(
@@ -1116,76 +1294,32 @@ async def save_routes(
         },
     )
 
-    # Build new LiteLLM model list and hot-reload
-    new_models: list[dict] = []
-    fallback_settings: list[dict] = []
-    litellm_updated = False
-    litellm_error: str | None = None
-
-    def _add_model(alias: str, route_dict: dict) -> None:
-        kid = route_dict.get("key_id")
-        model = route_dict.get("model", "")
-        pid = route_dict.get("provider_id", "")
-        if not kid or not model or not pid:
-            return
-        k = keys_by_id.get(kid)
-        if not k:
-            return
-        try:
-            plaintext = decrypt_token(k.encrypted_key)
-        except Exception:
-            logger.warning("Failed to decrypt key %s for LiteLLM update", kid)
-            return
-        new_models.append(
-            _build_litellm_model_entry(
-                alias,
-                pid,
-                model,
-                plaintext,
-                capacity=route_dict.get("capacity"),
-            )
-        )
-
-    standard_alias, standard_fallbacks = _route_aliases("standard", config["standard"])
-    premium_alias, premium_fallbacks = _route_aliases("premium", config["premium"])
-
-    _add_model(standard_alias, config["standard"])
-    for alternate in config["standard"].get("alternates", []):
-        _add_model(standard_alias, alternate)
-    for i, fb in enumerate(config["standard"].get("fallbacks", [])):
-        _add_model(f"{standard_alias}-fb-{i}", fb)
-
-    _add_model(premium_alias, config["premium"])
-    for alternate in config["premium"].get("alternates", []):
-        _add_model(premium_alias, alternate)
-    for i, fb in enumerate(config["premium"].get("fallbacks", [])):
-        _add_model(f"{premium_alias}-fb-{i}", fb)
-
-    if standard_fallbacks:
-        fallback_settings.append({standard_alias: standard_fallbacks})
-    if premium_fallbacks:
-        fallback_settings.append({premium_alias: premium_fallbacks})
-
-    if new_models:
-        litellm_updated, litellm_error = await _call_litellm_config_update(
-            new_models, fallback_settings
-        )
-    else:
-        litellm_error = "No complete provider/key/model targets were available to register"
-
+    reload_result = await _reload_litellm_routes(config, keys_by_id)
     await db.commit()
     return {
         "saved": True,
-        "litellm_updated": litellm_updated,
-        "litellm_error": litellm_error,
-        "models_registered": len(new_models),
-        "fallbacks_registered": sum(
-            len(item[next(iter(item))]) for item in fallback_settings
-        ),
-        "app_aliases": {
-            "standard": settings.LITELLM_STANDARD_MODEL,
-            "premium": settings.LITELLM_PREMIUM_MODEL,
-        },
+        **reload_result,
+        "gateway_status": await _check_litellm_gateway(),
+    }
+
+
+@router.get("/gateway/status")
+async def get_gateway_status(request: Request):
+    _require_platform_key(request)
+    return await _check_litellm_gateway()
+
+
+@router.post("/routes/reload")
+async def reload_routes(request: Request, db: AsyncSession = Depends(get_db)):
+    _require_platform_key(request)
+    config = await _get_route_config(db)
+    keys_result = await db.execute(select(LLMProviderKey))
+    keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
+    reload_result = await _reload_litellm_routes(config, keys_by_id)
+    return {
+        "reloaded": reload_result["litellm_updated"],
+        **reload_result,
+        "gateway_status": await _check_litellm_gateway(),
     }
 
 

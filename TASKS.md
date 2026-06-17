@@ -17,6 +17,113 @@
 
 ---
 
+## Sprint 15 — Tabs3 On-Prem Cutover (Phase 1)
+
+**Goal:** Make a first customer cutover from on-prem Tabs3 practical without requiring inbound access from Clarity Cloud. Phase 1 ships a repeatable **customer-side read-only export + Clarity web import** flow: export Tabs3 through vendor ODBC inside the customer's environment, upload the bundle to Clarity, stage every source row immutably, reconcile counts/balances, then promote approved records into Clarity's canonical matters/contacts/billing/trust models. Full-history retention is required, but only launch-critical operational records need to become first-class Clarity records on day one.
+
+**Architecture decision:** Clarity Cloud does **not** connect directly to Tabs3. Tabs3 is on-prem FairCom/c-tree storage exposed through read-only ODBC; the export tool must run on the Tabs3 server or a customer Windows workstation with the Tabs3 ODBC driver/DSN. No direct `.dat`/`.idx` parsing and no writeback to Tabs3 in Phase 1. Sources: `docs/tabs3-practicemaster-discovery.md`, `docs/tabs3-odbc-schema.md`, `docs/tabs3-odbc-schema.json`.
+
+**Cutover default:** hybrid. Use Tabs3 as read-only source/reference during transition, but create new work and invoices in Clarity after approved import. Tenant accounting mode must support `clarity_native`, `qbo`, and `tabs3_reference`; Phase 1 only needs the setting/model surface and reconciliation behavior, not a full accounting rules engine.
+
+### M1 — Export Package From Customer Environment (P0)
+
+#### 1501. Tabs3 export runner foundation (P0, MEDIUM) — IN PROGRESS
+Build a Windows-run export utility that reads Tabs3 through vendor-supported ODBC and emits an uploadable bundle.
+- [x] Create `tools/tabs3_export/` or `scripts/tabs3_export/` with a documented Python runner and Windows-friendly wrapper (`.ps1` or `.bat`) — runner added at `scripts/tabs3_export/export_tabs3.py`; wrapper still optional
+- [x] Connection config supports DSN name, optional username/password, output directory, selected table groups, date/window filters, and dry-run/schema-only mode
+- [x] Validate 32-bit ODBC availability up front and print actionable setup errors when the Tabs3 ODBC driver/DSN is missing
+- [x] Enumerate actual ODBC tables/columns at runtime and compare against `docs/tabs3-odbc-schema.json`; export should warn on missing/new columns but continue when safe
+- [x] Output encrypted or at least password-protected ZIP bundle containing NDJSON/CSV table files plus `manifest.json`
+- [x] Manifest includes source system, export timestamp, table list, row counts, per-table checksums, schema hash, export version, and redaction flag
+- [x] Never write to Tabs3; all SQL is `SELECT` only; no direct reads from `.dat`/`.idx`
+- [ ] Acceptance: schema-only dry run succeeds without exporting client rows; sample lookup-table export creates a manifest and checksums
+
+#### 1502. Phase 1 Tabs3 table groups and batching (P0, MEDIUM) — IN PROGRESS
+Define the exact first export surface and make large tables safe to export incrementally.
+- [x] Table group `core`: `CLIENT`, `CONTACT`, `BILLTO`, `EMPLOYEE`, `CLIENTNOTE`, `CLIENTCUSTOM`
+- [x] Table group `billing`: `FEE`, `COST`, `PAYMENT`, `FUND`, `LEDGER`, `LEDGALLOC`, `ARCHIVE`, `STMTDET`, `STMTDETALLOC`, `STMTTRAK`
+- [x] Table group `rates_codes`: `CLIENTRATE`, `COSTRATE`, `TCODE`, `TASKBILLCODE`, `TASKBUDGET`, `BILLFREQ`, `CATEGORY`
+- [x] Table group `trust`: `TRUSTREQUEST` plus Trust Accounting `CLIENT`, `BANK`, `COMBINEDTRANS`, `CONTACT`, `RECON` when available/licensed
+- [x] Table group `practicemaster_optional`: `CMCLIENT`, `CMRELATE`, `CMRELLNK`, `CMFEE`, `CMCOST`, `CMJRNL`, `CMCAL`, `CMDOCMGT`, `CMDOCVSN`, `CMAUDIT`, `CMXREF`
+- [x] Implement streaming export for large tables, especially `ARCHIVE` and `LEDGER`; avoid loading full tables into memory
+- [x] Include per-table row limit and `where` clause/date-window options for rehearsal exports
+- [ ] Acceptance: a rehearsal can export only `core` and first N rows per high-volume table; full export can resume or rerun cleanly
+
+#### 1503. Customer operator runbook (P0, SMALL) — COMPLETED
+Create the instructions a non-developer can follow on the customer server/workstation.
+- [x] Document prerequisites: Windows host, Tabs3 ODBC license/driver/DSN, read-only credentials if required, disk space, low-activity export window
+- [x] Include ODBC setup checks and how to run schema-only, rehearsal, and full exports
+- [x] Explain what data is exported, where the bundle lands, how to securely transfer/upload it, and how to delete local export files after import
+- [x] Add risk warnings: ODBC may expose secure/restricted clients; export should be handled as confidential legal/accounting data
+- [x] Acceptance: runbook maps exactly to the runner CLI flags and expected output files
+
+### M2 — Cloud Import Staging And Canonical Mapping (P0)
+
+#### 1504. Legacy import spine: raw staging and idempotent links (P0, LARGE) — IN PROGRESS
+Add provider-neutral import infrastructure so Tabs3 is not a one-off migration hack.
+- [x] Migration: `external_system_connections` with provider (`tabs3`), display name, status, source metadata, accounting mode, last import timestamps, and tenant RLS
+- [x] Migration: `external_import_runs` with connection ID, run status, manifest JSON, row counts, checksum summary, errors, approval/promoted timestamps, created_by, and tenant RLS
+- [x] Migration: `external_raw_rows` with run ID, provider table, source primary key/hash, row JSON, row checksum, source timestamps where present, and tenant RLS
+- [x] Migration: `external_record_links` mapping provider/table/source key to Clarity model/table/record ID, import run ID, confidence/status, and tenant RLS
+- [x] Model registration in `models/__init__.py`; schemas use Pydantic v2 `from_attributes`
+- [x] Ingestion is idempotent at staging; canonical promotion idempotency is ready through `external_record_links` but promotion is not yet implemented
+- [ ] Acceptance: unit tests verify RLS scoping, row checksum uniqueness, and source-key-to-record links
+
+#### 1505. Tabs3 bundle upload and validation API (P0, MEDIUM) — IN PROGRESS
+Let admins upload an export bundle safely before any canonical import happens.
+- [x] Admin-only endpoint `POST /api/imports/tabs3/upload` accepts ZIP bundle, validates manifest/checksums/schema version, and creates a pending import run
+- [x] Store raw rows in `external_raw_rows` before any mapping or promotion
+- [x] Reject malformed bundles, checksum mismatches, unsupported export versions, and unexpected table names with actionable error messages
+- [x] Provide `GET /api/imports/{run_id}` and `GET /api/imports/{run_id}/tables` for status, counts, validation errors, and staged-table previews
+- [ ] Add file-size, row-count, and timeout guardrails; large imports should process asynchronously with resumable run status — file-size guardrail exists, async processing still pending
+- [ ] Acceptance: corrupted bundle fails without writing canonical data; valid rehearsal bundle stages rows and exposes table counts
+
+#### 1506. Tabs3 canonical mapping and promotion rules (P0, LARGE) — PENDING
+Promote approved staged rows into Clarity records with conservative defaults and full source provenance.
+- [ ] Map Tabs3 `CONTACT`/PracticeMaster `CMRELATE` to `contacts`, preserving all extra phones/addresses/category data in tags/notes or source snapshot rather than dropping it
+- [ ] Map Tabs3 `CLIENT`/`CMCLIENT` to `matters` plus linked client contact; preserve `CLIENT_ID` as external reference and matter slug seed
+- [ ] Map responsible/timekeeper data from `EMPLOYEE`/`CMEMPL` to existing users when email/name/initials match; otherwise create unmapped-timekeeper warnings, not fake users
+- [ ] Map `FEE`/`CMFEE` to `time_entries`; map `COST`/`CMCOST` to `expenses`; preserve transaction code, phase/task, source, billed status, QB fields, and original sequence numbers
+- [ ] Map `PAYMENT`, `LEDGER`, `ARCHIVE`, `FUND`, and trust tables into payments/trust/opening-balance records only where semantics are clear; ambiguous rows remain staged with reconciliation warnings
+- [ ] Map `CLIENTNOTE`/`CMJRNL` notes to `matter_notes` or `matter_events` based on record type; preserve original author/date where available
+- [ ] PracticeMaster calendar/task rows map to `tasks` or `scheduled_events` only when dates and matter links are unambiguous
+- [ ] Promotion must be previewable and reversible at the run level before go-live; do not hard-delete promoted records on rollback, mark/import-link them for cleanup
+- [ ] Acceptance: fixture import creates contacts, matters, time, expenses, notes, and links without duplicates on rerun
+
+### M3 — Reconciliation, Admin UX, And Go-Live Readiness (P0)
+
+#### 1507. Import reconciliation reports (P0, MEDIUM) — PENDING
+Before promotion, show whether the staged Tabs3 data balances against Clarity targets.
+- [ ] Reconcile active/open client and matter counts
+- [ ] Reconcile unbilled fees/time, unbilled costs, payments, client funds/trust balances, AR/open ledger balances, and archived transaction totals
+- [ ] Show unmapped clients, contacts, bill-to records, timekeepers, billing codes, trust rows, and ambiguous ledger/archive rows
+- [ ] Export reconciliation results as CSV/PDF for customer sign-off
+- [ ] Add pass/fail thresholds configurable per run; default is no promotion if core counts/checksums fail
+- [ ] Acceptance: seeded fixture totals match expected reports; intentionally bad fixture surfaces mismatches and blocks approval
+
+#### 1508. Admin import UI for upload, review, approval, and promotion (P0, MEDIUM) — IN PROGRESS
+Add a web workflow so the import is operable by an admin without developer intervention.
+- [x] New Admin/Integrations panel section: "Tabs3 Import"
+- [x] Upload bundle, see validation progress, table counts, warnings, and reconciliation summary
+- [ ] Preview staged rows by table and sample mapped Clarity records before approval
+- [ ] Require explicit admin approval with confirmation text before promotion
+- [ ] Show promotion progress, created/updated/skipped counts, and downloadable error report
+- [x] Surface accounting mode choice: `clarity_native`, `qbo`, or `tabs3_reference`
+- [ ] Acceptance: admin can upload a valid rehearsal bundle, inspect counts/warnings, approve promotion, and see linked created records
+
+#### 1509. Phase 1 tests and rehearsal checklist (P0, MEDIUM) — IN PROGRESS
+Make the first customer migration repeatable instead of bespoke.
+- [ ] Export runner tests for manifest creation, checksum generation, schema drift handling, row limits, and large-table streaming
+- [x] Backend tests for upload validation, staging, encrypted bundles, and checksum failure added in `tests/test_external_imports.py`; execution blocked locally by unavailable Postgres test DB
+- [ ] Mapping fixture tests covering at least one row each for `CLIENT`, `CONTACT`, `BILLTO`, `EMPLOYEE`, `FEE`, `COST`, `PAYMENT`, `FUND`, `LEDGER`, `ARCHIVE`, `CLIENTNOTE`
+- [ ] Manual rehearsal checklist: schema-only export, redacted sample export, full export, upload, validation, reconciliation, promotion, post-import spot checks
+- [ ] Post-import spot checks: random 10 active matters, 10 contacts, 10 ledger/payment histories, 5 trust/client fund balances, 5 timekeeper mappings
+- [ ] Acceptance: documented rehearsal can be run end-to-end in staging before touching production tenant data
+
+**Out of scope for Phase 1:** always-on Windows sync service, writeback to Tabs3, direct Clarity Cloud connection into the customer LAN, full QuickBooks Desktop migration, and complete normalization of every historical archive/ledger field into first-class Clarity billing models. Full history is retained in raw/staged rows even when not normalized.
+
+---
+
 ## Sprint 14 — Microsoft Teams Integration & Custom Apps
 
 **Goal:** Let firms manage and collaborate with their users via Microsoft Teams, gated to tenants with an active Microsoft 365 integration. Build incrementally from matter↔channel linking + outbound notifications (shipped) up to a full Teams app — one **shared published** Clarity Legal Teams app (single Azure AD registration + single manifest) that each tenant admin-consents/installs into their own M365 tenant; all per-tenant state stays in our DB keyed by `tenant_id`. Design rationale + auth split in the plan; new migrations start at **053**. Cross-cutting: reuse the existing Microsoft `TenantCredential` token vault (`get_fresh_token`, `refresh_microsoft_token`), tenant RLS on all new tables, scope-gated admin endpoints, best-effort dispatch that never blocks requests/jobs.

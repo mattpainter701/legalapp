@@ -36,6 +36,7 @@ from app.services.llm_routing import (
     get_platform_llm_config,
     upsert_platform_llm_config,
 )
+from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
 
 settings = get_settings()
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -80,6 +81,8 @@ class TenantUpdate(BaseModel):
     standard_llm_model: Optional[str] = None
     premium_llm_provider: Optional[str] = None
     premium_llm_model: Optional[str] = None
+    enabled_modules: Optional[list[str]] = None
+    default_module: Optional[str] = None
 
 
 class PlatformLLMConfigUpdate(BaseModel):
@@ -118,6 +121,21 @@ def _validate_provider(provider: str | None, field: str = "provider") -> None:
 
 def _field_was_sent(model: BaseModel, field: str) -> bool:
     return field in getattr(model, "model_fields_set", set())
+
+
+def _validate_modules(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    modules = []
+    for value in values:
+        module = normalize_module_name(value)
+        if not module:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown module '{value}'. Valid modules: {sorted(KNOWN_MODULES)}",
+            )
+        modules.append(module)
+    return modules
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -275,6 +293,10 @@ async def get_tenant_detail(
             "premium_provider": ts.premium_llm_provider if ts else None,
             "premium_model": ts.premium_llm_model if ts else None,
         },
+        "module_config": {
+            "enabled_modules": (ts.custom_config or {}).get("enabled_modules") if ts else None,
+            "default_module": (ts.custom_config or {}).get("default_module") if ts else None,
+        },
     }
 
 
@@ -306,6 +328,38 @@ async def update_tenant(
         if body.seat_count < 0:
             raise HTTPException(status_code=400, detail="seat_count must be >= 0")
         tenant.flat_seat_count = body.seat_count
+
+    module_config_sent = _field_was_sent(body, "enabled_modules") or _field_was_sent(
+        body, "default_module"
+    )
+    if module_config_sent:
+        enabled_modules = _validate_modules(body.enabled_modules)
+        default_module = normalize_module_name(body.default_module)
+        if _field_was_sent(body, "default_module") and not default_module:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown default_module '{body.default_module}'. Valid modules: {sorted(KNOWN_MODULES)}",
+            )
+        if enabled_modules is not None and default_module and default_module not in enabled_modules:
+            raise HTTPException(
+                status_code=400,
+                detail="default_module must be included in enabled_modules",
+            )
+
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts is None:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+            await db.flush()
+        custom_config = dict(ts.custom_config or {})
+        if enabled_modules is not None:
+            custom_config["enabled_modules"] = enabled_modules
+        if default_module is not None:
+            custom_config["default_module"] = default_module
+        ts.custom_config = custom_config
 
     standard_provider_sent = _field_was_sent(
         body, "standard_llm_provider"

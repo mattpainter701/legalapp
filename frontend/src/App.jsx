@@ -27,6 +27,7 @@ import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TasksPage from './pages/TasksPage'
 import IntakePage from './pages/IntakePage'
+import IntakeDashboardPage from './pages/IntakeDashboardPage'
 import ReportsPage from './pages/ReportsPage'
 import TrustAccountingPage from './pages/TrustAccountingPage'
 import TrustAccountDetail from './components/TrustAccountDetail'
@@ -110,7 +111,14 @@ export function useAuth() {
 // Route guards
 // ---------------------------------------------------------------------------
 
-function ProtectedRoute({ children, adminOnly = false }) {
+function canAccessModule(user, module) {
+  if (!module) return true
+  const enabled = user?.enabled_modules
+  if (!Array.isArray(enabled) || enabled.length === 0) return true
+  return enabled.includes(module)
+}
+
+function ProtectedRoute({ children, adminOnly = false, module = null }) {
   const { user, loading } = useAuth()
 
   if (loading) {
@@ -126,15 +134,19 @@ function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (adminOnly && user.role !== 'admin') {
-    return <Navigate to="/matters" replace />
+    return <Navigate to={user.default_route || '/matters'} replace />
+  }
+
+  if (!canAccessModule(user, module)) {
+    return <Navigate to={user.default_route || '/intake/dashboard'} replace />
   }
 
   return children
 }
 
-function ShellRoute({ children, title, adminOnly = false }) {
+function ShellRoute({ children, title, adminOnly = false, module = null }) {
   return (
-    <ProtectedRoute adminOnly={adminOnly}>
+    <ProtectedRoute adminOnly={adminOnly} module={module}>
       <AppShell title={title}>
         {children}
       </AppShell>
@@ -153,7 +165,7 @@ function RootRedirect() {
     )
   }
 
-  return user ? <Navigate to="/matters" replace /> : <HomePage />
+  return user ? <Navigate to={user.default_route || '/matters'} replace /> : <HomePage />
 }
 
 function RedirectMatterId() {
@@ -183,19 +195,19 @@ export default function App() {
         {/* Authenticated pages wrapped in AppShell */}
         <Route
           path="/chat"
-          element={<ShellRoute title="Chat"><ChatPage /></ShellRoute>}
+          element={<ShellRoute title="Chat" module="chat"><ChatPage /></ShellRoute>}
         />
         <Route
           path="/matters"
-          element={<ShellRoute title="My Matters"><MatterPortfolioPage /></ShellRoute>}
+          element={<ShellRoute title="My Matters" module="matters"><MatterPortfolioPage /></ShellRoute>}
         />
         <Route
           path="/matters/:id"
-          element={<ShellRoute title="Matter Details"><MatterDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Matter Details" module="matters"><MatterDetailPage /></ShellRoute>}
         />
         <Route
           path="/calendar"
-          element={<ShellRoute title="Calendar"><CalendarPage /></ShellRoute>}
+          element={<ShellRoute title="Calendar" module="calendar"><CalendarPage /></ShellRoute>}
         />
         <Route
           path="/teams"
@@ -207,63 +219,67 @@ export default function App() {
         />
         <Route
           path="/communications"
-          element={<ShellRoute title="Communications"><CommunicationsPage /></ShellRoute>}
+          element={<ShellRoute title="Communications" module="communications"><CommunicationsPage /></ShellRoute>}
         />
         <Route
           path="/time-tracking"
-          element={<ShellRoute title="Time Tracking"><TimeTrackingPage /></ShellRoute>}
+          element={<ShellRoute title="Time Tracking" module="time-tracking"><TimeTrackingPage /></ShellRoute>}
         />
         <Route
           path="/invoices"
-          element={<ShellRoute title="Invoices"><InvoicesPage /></ShellRoute>}
+          element={<ShellRoute title="Invoices" module="invoices"><InvoicesPage /></ShellRoute>}
         />
         <Route
           path="/invoices/:id"
-          element={<ShellRoute title="Invoice"><InvoiceDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Invoice" module="invoices"><InvoiceDetailPage /></ShellRoute>}
         />
         <Route
           path="/reports"
-          element={<ShellRoute title="Reports"><ReportsPage /></ShellRoute>}
+          element={<ShellRoute title="Reports" module="reports"><ReportsPage /></ShellRoute>}
         />
         <Route
           path="/trust"
-          element={<ShellRoute title="Trust Accounting"><TrustAccountingPage /></ShellRoute>}
+          element={<ShellRoute title="Trust Accounting" module="trust"><TrustAccountingPage /></ShellRoute>}
         />
         <Route
           path="/trust/:id"
-          element={<ShellRoute title="Trust Account"><TrustAccountDetail /></ShellRoute>}
+          element={<ShellRoute title="Trust Account" module="trust"><TrustAccountDetail /></ShellRoute>}
         />
         <Route
           path="/templates"
-          element={<ShellRoute title="Templates"><TemplatesPage /></ShellRoute>}
+          element={<ShellRoute title="Templates" module="templates"><TemplatesPage /></ShellRoute>}
         />
         <Route
           path="/billing"
-          element={<ShellRoute title="Billing"><BillingPage /></ShellRoute>}
+          element={<ShellRoute title="Billing" module="billing"><BillingPage /></ShellRoute>}
         />
         <Route
           path="/contacts"
-          element={<ShellRoute title="Contacts"><ContactsPage /></ShellRoute>}
+          element={<ShellRoute title="Contacts" module="contacts"><ContactsPage /></ShellRoute>}
         />
         <Route
           path="/contacts/:id"
-          element={<ShellRoute title="Contact"><ContactDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Contact" module="contacts"><ContactDetailPage /></ShellRoute>}
         />
         <Route
           path="/tasks"
-          element={<ShellRoute title="Tasks"><TasksPage /></ShellRoute>}
+          element={<ShellRoute title="Tasks" module="matters"><TasksPage /></ShellRoute>}
         />
         <Route
           path="/intake"
-          element={<ShellRoute title="Intake"><IntakePage /></ShellRoute>}
+          element={<ShellRoute title="Intake" module="intake"><IntakePage /></ShellRoute>}
+        />
+        <Route
+          path="/intake/dashboard"
+          element={<ShellRoute title="Intake Dashboard" module="intake-dashboard"><IntakeDashboardPage /></ShellRoute>}
         />
         <Route
           path="/plugins"
-          element={<ShellRoute title="Add-on Modules"><PluginsPage /></ShellRoute>}
+          element={<ShellRoute title="Add-on Modules" module="plugins"><PluginsPage /></ShellRoute>}
         />
         <Route
           path="/plugins/:pluginName"
-          element={<ShellRoute title="Plugin"><PluginPage /></ShellRoute>}
+          element={<ShellRoute title="Plugin" module="plugins"><PluginPage /></ShellRoute>}
         />
         <Route
           path="/profile"
@@ -273,45 +289,45 @@ export default function App() {
         {/* Plugin sub-routes */}
         <Route
           path="/plugins/commercial/renewals"
-          element={<ShellRoute title="Renewal Tracker"><RenewalTrackerPage /></ShellRoute>}
+          element={<ShellRoute title="Renewal Tracker" module="plugins"><RenewalTrackerPage /></ShellRoute>}
         />
         <Route
           path="/plugins/trust-estate/estates"
-          element={<ShellRoute title="Trust & Estate"><EstatePortfolioPage /></ShellRoute>}
+          element={<ShellRoute title="Trust & Estate" module="plugins"><EstatePortfolioPage /></ShellRoute>}
         />
         <Route
           path="/plugins/trust-estate/estates/:id"
-          element={<ShellRoute title="Estate"><EstateDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Estate" module="plugins"><EstateDetailPage /></ShellRoute>}
         />
         <Route
           path="/plugins/domestic/cases"
-          element={<ShellRoute title="Domestic Relations"><DomesticPortfolioPage /></ShellRoute>}
+          element={<ShellRoute title="Domestic Relations" module="plugins"><DomesticPortfolioPage /></ShellRoute>}
         />
         <Route
           path="/plugins/domestic/cases/:id"
-          element={<ShellRoute title="Domestic Case"><DomesticDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Domestic Case" module="plugins"><DomesticDetailPage /></ShellRoute>}
         />
         <Route
           path="/plugins/mediation/cases"
-          element={<ShellRoute title="Mediation Cases"><MediationPortfolioPage /></ShellRoute>}
+          element={<ShellRoute title="Mediation Cases" module="plugins"><MediationPortfolioPage /></ShellRoute>}
         />
         <Route
           path="/plugins/mediation/cases/:id"
-          element={<ShellRoute title="Mediation Case"><MediationDetailPage /></ShellRoute>}
+          element={<ShellRoute title="Mediation Case" module="plugins"><MediationDetailPage /></ShellRoute>}
         />
 
         {/* Admin routes */}
         <Route
           path="/admin"
-          element={<ShellRoute title="Administration" adminOnly><AdminPage /></ShellRoute>}
+          element={<ShellRoute title="Administration" adminOnly module="admin"><AdminPage /></ShellRoute>}
         />
         <Route
           path="/mcp"
-          element={<ShellRoute title="MCP" adminOnly><MCPPage /></ShellRoute>}
+          element={<ShellRoute title="MCP" adminOnly module="mcp"><MCPPage /></ShellRoute>}
         />
         <Route
           path="/onboarding"
-          element={<ShellRoute title="Onboarding" adminOnly><OnboardingWizard /></ShellRoute>}
+          element={<ShellRoute title="Onboarding" adminOnly module="onboarding"><OnboardingWizard /></ShellRoute>}
         />
 
         {/* Legacy redirects */}

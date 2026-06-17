@@ -13,8 +13,10 @@ from app.routers.trust_accounting import router as trust_accounting_router
 from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
+from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.intake import router as intake_router
 from app.routers.smb import router as smb_router
+from app.routers.external_imports import router as external_imports_router
 
 __all__ = [
     "auth_router",
@@ -32,6 +34,8 @@ __all__ = [
     "contacts_router",
     "tasks_router",
     "communications_router",
+    "intake_dashboard_router",
     "intake_router",
     "smb_router",
+    "external_imports_router",
 ]

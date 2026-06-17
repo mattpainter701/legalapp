@@ -1,0 +1,2 @@
+pyodbc==5.2.0
+cryptography==44.0.2

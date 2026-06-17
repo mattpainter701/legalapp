@@ -3,50 +3,51 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  CreditCard, Mail, Shield, Server, Rocket,
+  CreditCard, Mail, Shield, Server, Rocket, PhoneCall,
 } from 'lucide-react'
 
 const NAV_GROUPS = [
   {
     items: [
-      { path: '/matters', label: 'My Matters', icon: Briefcase, primary: true },
-      { path: '/chat',    label: 'Assistant',  icon: MessageSquare },
+      { path: '/matters', label: 'My Matters', icon: Briefcase, primary: true, module: 'matters' },
+      { path: '/chat',    label: 'Assistant',  icon: MessageSquare, module: 'chat' },
     ],
   },
   {
     label: 'Workspace',
     items: [
-      { path: '/calendar',       label: 'Calendar',       icon: CalendarDays },
-      { path: '/tasks',          label: 'Tasks',          icon: CheckSquare },
-      { path: '/communications', label: 'Communications', icon: Mail },
-      { path: '/contacts',       label: 'Contacts',       icon: Users },
-      { path: '/intake',         label: 'Intake',         icon: ClipboardList },
-      { path: '/templates',      label: 'Templates',      icon: FileSignature },
+      { path: '/calendar',       label: 'Calendar',       icon: CalendarDays, module: 'calendar' },
+      { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'matters' },
+      { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
+      { path: '/contacts',       label: 'Contacts',       icon: Users, module: 'contacts' },
+      { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
+      { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
+      { path: '/templates',      label: 'Templates',      icon: FileSignature, module: 'templates' },
     ],
   },
   {
     label: 'Billing & Trust',
     items: [
-      { path: '/time-tracking', label: 'Time Tracking',    icon: Clock },
-      { path: '/invoices',      label: 'Invoices',         icon: Receipt },
-      { path: '/billing',       label: 'Billing',          icon: CreditCard },
-      { path: '/trust',         label: 'Trust Accounting', icon: Landmark },
-      { path: '/reports',       label: 'Reports',          icon: BarChart2 },
+      { path: '/time-tracking', label: 'Time Tracking',    icon: Clock, module: 'time-tracking' },
+      { path: '/invoices',      label: 'Invoices',         icon: Receipt, module: 'invoices' },
+      { path: '/billing',       label: 'Billing',          icon: CreditCard, module: 'billing' },
+      { path: '/trust',         label: 'Trust Accounting', icon: Landmark, module: 'trust' },
+      { path: '/reports',       label: 'Reports',          icon: BarChart2, module: 'reports' },
     ],
   },
   {
     label: 'Firm',
     items: [
-      { path: '/plugins', label: 'Add-on Modules', icon: Blocks },
+      { path: '/plugins', label: 'Add-on Modules', icon: Blocks, module: 'plugins' },
     ],
   },
   {
     label: 'Administration',
     adminOnly: true,
     items: [
-      { path: '/admin',      label: 'Administration', icon: Shield },
-      { path: '/mcp',        label: 'MCP Servers',    icon: Server },
-      { path: '/onboarding', label: 'Onboarding',     icon: Rocket },
+      { path: '/admin',      label: 'Administration', icon: Shield, module: 'admin' },
+      { path: '/mcp',        label: 'MCP Servers',    icon: Server, module: 'mcp' },
+      { path: '/onboarding', label: 'Onboarding',     icon: Rocket, module: 'onboarding' },
     ],
   },
 ]
@@ -60,7 +61,10 @@ export default function Sidebar({
   const navigate = useNavigate()
   const { pathname } = useLocation()
 
-  const isActive = (path) => pathname === path || pathname.startsWith(path + '/')
+  const isActive = (path) => {
+    if (path === '/intake') return pathname === '/intake'
+    return pathname === path || pathname.startsWith(path + '/')
+  }
 
   const handleNavAndClose = (path) => {
     navigate(path)
@@ -69,7 +73,14 @@ export default function Sidebar({
 
   const visibleGroups = NAV_GROUPS.filter(
     (g) => !g.adminOnly || user?.role === 'admin'
-  )
+  ).map((group) => {
+    const enabled = user?.enabled_modules
+    const items = group.items.filter((item) => {
+      if (!item.module || !Array.isArray(enabled) || enabled.length === 0) return true
+      return enabled.includes(item.module)
+    })
+    return { ...group, items }
+  }).filter((group) => group.items.length > 0)
 
   return (
     <>

@@ -50,5 +50,7 @@ class UserInfo(BaseModel):
     is_active: bool
     created_at: datetime
     billing_tier: str
+    enabled_modules: list[str] = []
+    default_route: str = "/matters"
 
     model_config = {"from_attributes": True}

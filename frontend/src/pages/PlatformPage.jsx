@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, testLLMRoute } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -1379,11 +1379,112 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   )
 }
 
+function LiteLLMGatewayPanel({ status, checking, reloading, onCheck, onReload }) {
+  const current = status?.status || 'unknown'
+  const style = {
+    online: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
+    degraded: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+    offline: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+    disabled: 'bg-brand-bg text-brand-muted border-brand-line',
+    unknown: 'bg-brand-bg text-brand-muted border-brand-line',
+  }[current] || 'bg-brand-bg text-brand-muted border-brand-line'
+  const StatusIcon = current === 'online' ? CheckCircle : current === 'offline' ? XCircle : current === 'degraded' ? AlertTriangle : Server
+  const aliases = Object.entries(status?.aliases || {})
+  const checkedAt = status?.checked_at ? new Date(status.checked_at).toLocaleTimeString() : null
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Server size={16} className="text-brand-muted" />
+            <h2 className="font-serif font-bold text-brand-ink">LiteLLM Gateway</h2>
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-sans capitalize ${style}`}>
+              <StatusIcon size={11} />
+              {current}
+            </span>
+            {checkedAt && <span className="text-[11px] text-brand-muted font-sans">Checked {checkedAt}</span>}
+          </div>
+          <p className="text-xs text-brand-muted font-mono mt-1 break-all">{status?.base_url || 'No LiteLLM base URL configured'}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onCheck}
+            disabled={checking}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={12} className={checking ? 'animate-spin' : ''} />
+            Check Status
+          </button>
+          <button
+            type="button"
+            onClick={onReload}
+            disabled={reloading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium bg-brand-ink text-white rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
+          >
+            <RefreshCw size={12} className={reloading ? 'animate-spin' : ''} />
+            Reload LiteLLM
+          </button>
+        </div>
+      </div>
+
+      <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 gap-3 border-b border-brand-line">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">API key</p>
+          <p className="text-sm text-brand-ink font-sans">{status?.api_key_configured ? 'Configured' : 'Missing'}</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Latency</p>
+          <p className="text-sm text-brand-ink font-sans">{status?.latency_ms != null ? `${status.latency_ms}ms` : '—'}</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Models</p>
+          <p className="text-sm text-brand-ink font-sans">{status?.models_count ?? '—'}</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-brand-muted font-sans">Enabled</p>
+          <p className="text-sm text-brand-ink font-sans">{status?.enabled ? 'Yes' : 'No'}</p>
+        </div>
+      </div>
+
+      <div className="px-5 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {aliases.length === 0 && (
+            <span className="text-xs text-brand-muted font-sans">No aliases reported yet.</span>
+          )}
+          {aliases.map(([alias, present]) => (
+            <span
+              key={alias}
+              className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-mono ${
+                present
+                  ? 'bg-brand-accent/10 text-brand-accent border-brand-accent/20'
+                  : 'bg-brand-amber/10 text-brand-amber border-brand-amber/20'
+              }`}
+            >
+              {present ? <CheckCircle size={11} /> : <AlertTriangle size={11} />}
+              {alias}
+            </span>
+          ))}
+        </div>
+        {(status?.detail || status?.models_error) && (
+          <p className="text-xs text-brand-muted font-sans max-w-3xl">
+            {status.detail || status.models_error}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AIRoutingTab({ platformKey, onAuthError }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
   const [catalog, setCatalog] = useState(null)
+  const [gatewayStatus, setGatewayStatus] = useState(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
+  const [checkingGateway, setCheckingGateway] = useState(false)
+  const [reloadingRoutes, setReloadingRoutes] = useState(false)
   const [standard, setStandard] = useState(emptyRoute)
   const [premium, setPremium] = useState(emptyRoute)
   const [saving, setSaving] = useState(false)
@@ -1395,15 +1496,17 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setLoading(true)
     setLoadError(null)
     try {
-      const [keysData, presetsData, routesData, catalogData] = await Promise.all([
+      const [keysData, presetsData, routesData, catalogData, gatewayData] = await Promise.all([
         getLLMProviderKeys(platformKey),
         getLLMProviderPresets(platformKey),
         getLLMRoutes(platformKey),
         getLLMModelCatalog(platformKey),
+        getLLMGatewayStatus(platformKey),
       ])
       setKeys(keysData.keys || [])
       setPresets(presetsData.providers || [])
       setCatalog(catalogData)
+      setGatewayStatus(gatewayData)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
       setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [] })
@@ -1423,6 +1526,14 @@ function AIRoutingTab({ platformKey, onAuthError }) {
 
   const validationIssues = [...routeIssues(standard, keys), ...routeIssues(premium, keys)]
   const configuredCount = [standard, premium].filter(isCompleteTarget).length
+
+  const reloadSummary = (data, successPrefix = 'LiteLLM reloaded') => {
+    const firstBuildError = data.build_errors?.[0]
+    if (data.litellm_updated) {
+      return `${successPrefix}: ${data.models_registered || 0} model(s), ${data.fallbacks_registered || 0} fallback(s)`
+    }
+    return `LiteLLM reload failed: ${data.litellm_error || firstBuildError || 'No complete route targets were available'}`
+  }
 
   const replaceKeys = (nextKeys) => {
     setKeys(nextKeys)
@@ -1452,6 +1563,33 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     } finally { setRefreshingCatalog(false) }
   }
 
+  const handleCheckGateway = async () => {
+    setCheckingGateway(true)
+    try {
+      const data = await getLLMGatewayStatus(platformKey)
+      setGatewayStatus(data)
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'LiteLLM status check failed' })
+    } finally { setCheckingGateway(false) }
+  }
+
+  const handleReloadRoutes = async () => {
+    setReloadingRoutes(true)
+    setSaveResult(null)
+    try {
+      const data = await reloadLLMRoutes(platformKey)
+      if (data.gateway_status) setGatewayStatus(data.gateway_status)
+      setSaveResult({
+        ok: Boolean(data.litellm_updated),
+        message: reloadSummary(data),
+      })
+    } catch (e) {
+      if (e?.response?.status === 403) onAuthError?.()
+      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'LiteLLM reload failed' })
+    } finally { setReloadingRoutes(false) }
+  }
+
   const applyModel = (routeName, placement, model) => {
     const setter = routeName === 'standard' ? setStandard : setPremium
     const target = modelTarget(model)
@@ -1478,13 +1616,15 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setSaveResult(null)
     try {
       const data = await saveLLMRoutes(platformKey, { standard, premium })
+      if (data.gateway_status) setGatewayStatus(data.gateway_status)
       setSaveResult({
-        ok: true,
+        ok: Boolean(data.litellm_updated),
         litellm_updated: data.litellm_updated,
         litellm_error: data.litellm_error || null,
         models_registered: data.models_registered,
         fallbacks_registered: data.fallbacks_registered || 0,
         app_aliases: data.app_aliases || null,
+        message: reloadSummary(data, 'Saved and reloaded LiteLLM'),
       })
     } catch (e) {
       setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
@@ -1535,6 +1675,14 @@ function AIRoutingTab({ platformKey, onAuthError }) {
           </button>
         </div>
       </div>
+
+      <LiteLLMGatewayPanel
+        status={gatewayStatus}
+        checking={checkingGateway}
+        reloading={reloadingRoutes}
+        onCheck={handleCheckGateway}
+        onReload={handleReloadRoutes}
+      />
 
       <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
 

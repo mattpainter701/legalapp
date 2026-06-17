@@ -42,7 +42,7 @@ class Contact(Base):
     entity_type: Mapped[str] = mapped_column(
         String(50), default="person", server_default="person"
     )
-    # "client" | "opposing_party" | "witness" | "expert" | "vendor" | "referral" | "other"
+    # "prospect" | "client" | "opposing_party" | "witness" | "expert" | "vendor" | "referral" | "other"
     contact_type: Mapped[str] = mapped_column(
         String(50), default="client", server_default="client"
     )

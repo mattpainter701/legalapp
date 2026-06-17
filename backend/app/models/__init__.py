@@ -46,6 +46,7 @@ from app.models.teams_channel_link import TeamsChannelLink
 from app.models.teams_notification_setting import TeamsNotificationSetting
 from app.models.error_log import ErrorLog
 from app.models.contact import Contact, Lead
+from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
 from app.models.client_portal import ClientPortalInvite
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.task import Task
@@ -71,6 +72,12 @@ from app.models.trust_accounting import (
     TrustTransaction,
     TrustBankAccount,
     TrustReconciliation,
+)
+from app.models.external_import import (
+    ExternalSystemConnection,
+    ExternalImportRun,
+    ExternalRawRow,
+    ExternalRecordLink,
 )
 
 __all__ = [
@@ -127,6 +134,8 @@ __all__ = [
     "ErrorLog",
     "Contact",
     "Lead",
+    "LegacyCallRecord",
+    "PartnerRotationState",
     "ClientPortalInvite",
     "SignatureRequest",
     "SignatureSigner",
@@ -146,4 +155,8 @@ __all__ = [
     "TrustTransaction",
     "TrustBankAccount",
     "TrustReconciliation",
+    "ExternalSystemConnection",
+    "ExternalImportRun",
+    "ExternalRawRow",
+    "ExternalRecordLink",
 ]

@@ -56,8 +56,8 @@ export default function LoginPage() {
     setError(null)
     try {
       const result = await login({ email, password })
-      await authLogin(result.access_token)
-      navigate('/matters', { replace: true })
+      const userObj = await authLogin(result.access_token)
+      navigate(userObj?.default_route || '/matters', { replace: true })
     } catch (err) {
       const detail = err?.response?.data?.detail
       setError(detail || 'Invalid email or password.')

@@ -23,19 +23,21 @@ export default function AuthCallback() {
     exchangeOAuthCode(code)
       .then((result) => login(result.access_token))
       .then((userObj) => {
+        const defaultRoute = userObj?.default_route || '/matters'
+        const enabledModules = userObj?.enabled_modules || []
         // If admin and onboarding not complete, redirect to wizard
-        if (userObj?.role === 'admin') {
+        if (userObj?.role === 'admin' && enabledModules.includes('onboarding')) {
           getOnboardingStatus()
             .then((s) => {
               if (!s.onboarding_completed) {
                 navigate('/onboarding', { replace: true })
               } else {
-                navigate('/matters', { replace: true })
+                navigate(defaultRoute, { replace: true })
               }
             })
-            .catch(() => navigate('/matters', { replace: true }))
+            .catch(() => navigate(defaultRoute, { replace: true }))
         } else {
-          navigate('/matters', { replace: true })
+          navigate(defaultRoute, { replace: true })
         }
       })
       .catch(() => {

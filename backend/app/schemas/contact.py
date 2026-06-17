@@ -43,6 +43,7 @@ class ContactCreate(BaseModel):
     @classmethod
     def validate_contact_type(cls, v: str) -> str:
         allowed = {
+            "prospect",
             "client",
             "opposing_party",
             "witness",
