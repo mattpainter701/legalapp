@@ -18,6 +18,7 @@ Endpoints:
 import asyncio
 import hmac
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -183,6 +184,30 @@ def _capacity(value: Any) -> int:
     return max(1, min(parsed, 1000))
 
 
+def _tokens_per_second(output_tokens: int | None, elapsed_ms: int | None) -> float | None:
+    if not output_tokens or not elapsed_ms or elapsed_ms <= 0:
+        return None
+    return round(output_tokens / (elapsed_ms / 1000), 2)
+
+
+def _usage_payload(
+    *,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    elapsed_ms: int | None = None,
+) -> dict[str, Any]:
+    prompt = int(prompt_tokens or 0)
+    completion = int(completion_tokens or 0)
+    total = int(total_tokens or (prompt + completion))
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+        "tokens_per_second": _tokens_per_second(completion, elapsed_ms),
+    }
+
+
 def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     mid = (model_id or "").lower()
     if ":free" in mid or mid.endswith("-free"):
@@ -208,6 +233,10 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     caps: set[str] = set()
     model_id = (item.get("id") or "").lower()
     description = (item.get("description") or "").lower()
+    supported_parameters = item.get("supported_parameters") or []
+    if not isinstance(supported_parameters, list):
+        supported_parameters = []
+    supported = {str(param).lower() for param in supported_parameters}
 
     # 1. Architecture modality (OpenRouter)
     architecture = item.get("architecture") or {}
@@ -215,13 +244,25 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
         modality = (architecture.get("modality") or "").lower()
         if "image" in modality:
             caps.add("vision")
+        for key in ("input_modalities", "output_modalities"):
+            values = architecture.get(key) or []
+            if isinstance(values, list) and any(
+                "image" in str(value).lower() for value in values
+            ):
+                caps.add("vision")
 
     # 2. Model ID patterns (works for all providers)
     if any(kw in model_id for kw in ("vision", "/vl", "-vl", "multimodal", "vl-")):
         caps.add("vision")
-    if "instruct" in model_id:
+    if any(
+        kw in model_id
+        for kw in ("instruct", "-it", "_it", "/it", "chat", "assistant")
+    ):
         caps.add("instruction")
-    if any(kw in model_id for kw in ("deepseek-reasoner", "reasoner", "reasoning")):
+    if any(
+        kw in model_id
+        for kw in ("deepseek-reasoner", "reasoner", "reasoning", "thinking", "o1", "o3")
+    ):
         caps.add("reasoning")
     if any(
         kw in model_id
@@ -236,7 +277,21 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     ):
         caps.add("tool_use")
 
-    # 3. Description keywords (OpenRouter provides rich descriptions)
+    # 3. Provider-declared supported parameters
+    if supported.intersection(
+        {"tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"}
+    ):
+        caps.add("tool_use")
+    if supported.intersection(
+        {"response_format", "structured_outputs", "json_schema", "json_object"}
+    ):
+        caps.add("structured_output")
+    if supported.intersection({"reasoning", "include_reasoning"}):
+        caps.add("reasoning")
+    if supported.intersection({"web_search_options"}):
+        caps.add("research")
+
+    # 4. Description keywords (OpenRouter provides rich descriptions)
     if any(
         kw in description
         for kw in (
@@ -316,7 +371,7 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     ):
         caps.add("structured_output")
 
-    # 4. Context length tiers
+    # 5. Context length tiers
     ctx = (
         item.get("context_length")
         or item.get("context_window")
@@ -326,8 +381,10 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     if isinstance(ctx, (int, float)) and ctx >= 1_000_000:
         caps.add("ultra_context")
         caps.add("large_context")
+        caps.add("rag")
     elif isinstance(ctx, (int, float)) and ctx >= 100_000:
         caps.add("large_context")
+        caps.add("rag")
 
     return sorted(caps)
 
@@ -364,6 +421,9 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         "max_completion_tokens": top_provider.get("max_completion_tokens")
         if isinstance(top_provider, dict)
         else None,
+        "supported_parameters": item.get("supported_parameters")
+        if isinstance(item.get("supported_parameters"), list)
+        else [],
         "capabilities": _derive_capabilities(item, provider_id),
     }
 
@@ -430,10 +490,10 @@ def _build_litellm_model_entry(
 
 async def _call_litellm_config_update(
     new_model_list: list[dict], fallbacks: list[dict]
-) -> bool:
+) -> tuple[bool, str | None]:
     """Hot-reload LiteLLM router via /config/update with the updated model list."""
     if not settings.LITELLM_BASE_URL or not settings.LITELLM_API_KEY:
-        return False
+        return False, "LiteLLM base URL or API key is not configured"
     payload: dict[str, Any] = {"model_list": new_model_list}
     if fallbacks:
         payload["router_settings"] = {"fallbacks": fallbacks}
@@ -445,16 +505,17 @@ async def _call_litellm_config_update(
                 json=payload,
             )
             if resp.status_code in (200, 204):
-                return True
+                return True, None
+            detail = resp.text[:300]
             logger.warning(
                 "LiteLLM /config/update returned %s: %s",
                 resp.status_code,
-                resp.text[:200],
+                detail[:200],
             )
-            return False
+            return False, f"LiteLLM /config/update returned {resp.status_code}: {detail}"
     except Exception as exc:
         logger.warning("LiteLLM config update failed: %s", exc)
-        return False
+        return False, f"LiteLLM config update failed: {exc}"
 
 
 async def _fetch_models_from_provider(
@@ -1059,6 +1120,7 @@ async def save_routes(
     new_models: list[dict] = []
     fallback_settings: list[dict] = []
     litellm_updated = False
+    litellm_error: str | None = None
 
     def _add_model(alias: str, route_dict: dict) -> None:
         kid = route_dict.get("key_id")
@@ -1105,14 +1167,17 @@ async def save_routes(
         fallback_settings.append({premium_alias: premium_fallbacks})
 
     if new_models:
-        litellm_updated = await _call_litellm_config_update(
+        litellm_updated, litellm_error = await _call_litellm_config_update(
             new_models, fallback_settings
         )
+    else:
+        litellm_error = "No complete provider/key/model targets were available to register"
 
     await db.commit()
     return {
         "saved": True,
         "litellm_updated": litellm_updated,
+        "litellm_error": litellm_error,
         "models_registered": len(new_models),
         "fallbacks_registered": sum(
             len(item[next(iter(item))]) for item in fallback_settings
@@ -1130,6 +1195,7 @@ async def test_route(
     body: RouteTestRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    server_start = time.monotonic()
     _require_platform_key(request)
 
     result = await db.execute(
@@ -1159,10 +1225,35 @@ async def test_route(
     except Exception:
         raise HTTPException(status_code=500, detail="Key decryption failed")
 
-    # Test the selected provider directly; route saves separately register LiteLLM aliases.
-    import time
+    def _timing_response(
+        *,
+        ok: bool,
+        provider_latency_ms: int,
+        model_used: str | None = None,
+        response_preview: str | None = None,
+        usage: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        server_elapsed_ms = int((time.monotonic() - server_start) * 1000)
+        payload: dict[str, Any] = {
+            "ok": ok,
+            "latency_ms": provider_latency_ms,
+            "provider_latency_ms": provider_latency_ms,
+            "server_elapsed_ms": server_elapsed_ms,
+            "server_overhead_ms": max(0, server_elapsed_ms - provider_latency_ms),
+        }
+        if model_used:
+            payload["model_used"] = model_used
+        if response_preview is not None:
+            payload["response_preview"] = response_preview
+        if usage:
+            payload.update(usage)
+        if error:
+            payload["error"] = error
+        return payload
 
-    start = time.monotonic()
+    # Test the selected provider directly; route saves separately register LiteLLM aliases.
+    provider_start = time.monotonic()
     try:
         mode = preset.get("litellm_mode", "openai_compatible")
         if mode == "anthropic":
@@ -1185,19 +1276,25 @@ async def test_route(
                 )
                 resp.raise_for_status()
                 payload = resp.json()
-            elapsed_ms = int((time.monotonic() - start) * 1000)
+            elapsed_ms = int((time.monotonic() - provider_start) * 1000)
             parts = payload.get("content") or []
             text = " ".join(
                 part.get("text", "")
                 for part in parts
                 if isinstance(part, dict) and part.get("type") == "text"
             ).strip()
-            return {
-                "ok": True,
-                "latency_ms": elapsed_ms,
-                "model_used": payload.get("model") or body.model,
-                "response_preview": text[:120],
-            }
+            usage = payload.get("usage") or {}
+            return _timing_response(
+                ok=True,
+                provider_latency_ms=elapsed_ms,
+                model_used=payload.get("model") or body.model,
+                response_preview=text[:120],
+                usage=_usage_payload(
+                    prompt_tokens=usage.get("input_tokens"),
+                    completion_tokens=usage.get("output_tokens"),
+                    elapsed_ms=elapsed_ms,
+                ),
+            )
 
         from openai import AsyncOpenAI
 
@@ -1208,19 +1305,26 @@ async def test_route(
             max_tokens=10,
             temperature=0,
         )
-        elapsed_ms = int((time.monotonic() - start) * 1000)
+        elapsed_ms = int((time.monotonic() - provider_start) * 1000)
         text = (resp.choices[0].message.content or "").strip()
         model_used = resp.model or body.model
-        return {
-            "ok": True,
-            "latency_ms": elapsed_ms,
-            "model_used": model_used,
-            "response_preview": text[:120],
-        }
+        usage = resp.usage
+        return _timing_response(
+            ok=True,
+            provider_latency_ms=elapsed_ms,
+            model_used=model_used,
+            response_preview=text[:120],
+            usage=_usage_payload(
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                total_tokens=getattr(usage, "total_tokens", None),
+                elapsed_ms=elapsed_ms,
+            ),
+        )
     except Exception as exc:
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        return {
-            "ok": False,
-            "latency_ms": elapsed_ms,
-            "error": str(exc)[:300],
-        }
+        elapsed_ms = int((time.monotonic() - provider_start) * 1000)
+        return _timing_response(
+            ok=False,
+            provider_latency_ms=elapsed_ms,
+            error=str(exc)[:300],
+        )

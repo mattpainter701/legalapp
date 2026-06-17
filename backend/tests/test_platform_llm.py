@@ -56,6 +56,25 @@ def test_provider_route_builder_litellm_model_prefixes():
     assert "api_base" not in anthropic["litellm_params"]
 
 
+def test_model_catalog_capabilities_from_provider_metadata():
+    model = platform_llm_router._normalize_model_item(
+        {
+            "id": "google/gemma-4-26b-a4b-it:free",
+            "description": "Instruction-tuned multimodal model with structured output.",
+            "context_length": 262144,
+            "architecture": {"modality": "text+image->text"},
+            "supported_parameters": ["tools", "response_format"],
+            "pricing": {"prompt": "0", "completion": "0"},
+        },
+        "openrouter",
+    )
+
+    assert model["is_free"] is True
+    assert set(model["capabilities"]).issuperset(
+        {"vision", "instruction", "tool_use", "structured_output", "large_context", "rag"}
+    )
+
+
 @pytest.mark.asyncio
 async def test_provider_route_builder_rejects_mismatched_key_provider(
     client: AsyncClient, db_session

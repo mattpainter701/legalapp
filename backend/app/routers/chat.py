@@ -118,18 +118,17 @@ def _join_context_sections(*sections: str | None) -> str:
 def _auto_tier(query: str, user_requested_premium: bool) -> bool:
     """Determine whether to use the premium tier based on query complexity.
 
-    - Simple queries (definitions, math, small talk) → standard (even if user
-      requested premium — saves cost).
+    - Explicit premium requests stay premium.
     - Complex queries (drafting, analysis, multi-hop) → premium (even if user
       didn't request it — better quality for hard questions).
-    - Everything else → respect user's choice.
+    - Everything else → standard.
     """
+    if user_requested_premium:
+        return True
     complexity = classify_query_complexity(query)
     if complexity == "complex":
         return True  # auto-upgrade to premium
-    if complexity == "simple":
-        return False  # auto-downgrade to standard (save cost)
-    return user_requested_premium
+    return False
 
 
 async def _build_attachment_context(
@@ -680,6 +679,7 @@ async def send_message(
         for m in recent_messages
         if str(m.id) != str(user_msg.id)
     ][-10:]
+    llm_messages = history_messages + [{"role": "user", "content": body.content}]
 
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
@@ -826,7 +826,7 @@ async def send_message(
     else:
         try:
             response_text, tokens_in, tokens_out = await llm_service.complete(
-                messages=history_messages,
+                messages=llm_messages,
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
@@ -872,8 +872,7 @@ async def send_message(
 
     if needs_retry:
         # Retry once with an explicit instruction
-        retry_messages = history_messages + [
-            {"role": "user", "content": body.content},
+        retry_messages = llm_messages + [
             {
                 "role": "assistant",
                 "content": "I need to revise my response to focus on legal analysis.",
@@ -1118,6 +1117,7 @@ async def stream_message(
         for m in recent_messages
         if str(m.id) != str(user_msg.id)
     ][-10:]
+    llm_messages = history_messages + [{"role": "user", "content": body.content}]
 
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
@@ -1239,7 +1239,7 @@ async def stream_message(
             # Stream tokens from the LLM
             accumulated_text = ""
             async for token in llm_service.stream_complete(
-                messages=history_messages,
+                messages=llm_messages,
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
@@ -1261,8 +1261,7 @@ async def stream_message(
 
             if needs_retry:
                 # Clear and retry with explicit instruction
-                retry_messages = history_messages + [
-                    {"role": "user", "content": body.content},
+                retry_messages = llm_messages + [
                     {
                         "role": "assistant",
                         "content": "I need to revise my response to focus on legal analysis.",

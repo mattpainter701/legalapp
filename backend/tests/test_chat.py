@@ -7,7 +7,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.routers.chat import _join_context_sections
+from app.routers.chat import _auto_tier, _join_context_sections
 from app.models.document import Chunk, Document
 from app.models.tenant import TenantSettings
 from app.services.llm_routing import resolve_llm_route
@@ -54,6 +54,11 @@ def test_join_context_sections_omits_empty_sections():
         _join_context_sections("Attachment context", "Matter context", "RAG context")
         == "Attachment context\n\nMatter context\n\nRAG context"
     )
+
+
+def test_auto_tier_respects_manual_premium_for_simple_queries():
+    assert _auto_tier("2+2=?", user_requested_premium=True) is True
+    assert _auto_tier("2+2=?", user_requested_premium=False) is False
 
 
 @pytest.mark.asyncio
@@ -122,6 +127,11 @@ async def test_send_message_returns_assistant(
     assert msg["role"] == "assistant"
     assert len(msg["content"]) > 0
     assert "sources" in msg
+    llm_messages = mock_llm.call_args.kwargs["messages"]
+    assert llm_messages[-1] == {
+        "role": "user",
+        "content": "What is the standard for preliminary injunctions?",
+    }
 
 
 @pytest.mark.asyncio

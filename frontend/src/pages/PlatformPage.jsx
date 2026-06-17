@@ -751,11 +751,16 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
     if (!ready) return
     setTesting(true)
     setTestResult(null)
+    const startedAt = performance.now()
     try {
       const data = await testLLMRoute(platformKey, { key_id: route.key_id, provider_id: route.provider_id, model: route.model, route: routeKey })
-      setTestResult(data)
+      setTestResult({ ...data, client_roundtrip_ms: Math.round(performance.now() - startedAt) })
     } catch (e) {
-      setTestResult({ ok: false, error: e?.response?.data?.detail || 'Test failed' })
+      setTestResult({
+        ok: false,
+        error: e?.response?.data?.detail || 'Test failed',
+        client_roundtrip_ms: Math.round(performance.now() - startedAt),
+      })
     } finally { setTesting(false) }
   }
 
@@ -798,11 +803,21 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
           {issues.map((issue) => <p key={issue} className="text-brand-rose">{issue}</p>)}
           {modelsError && <p className="text-brand-muted">{modelsError}</p>}
           {testResult && (
-            <p className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
-              {testResult.ok
-                ? `Test OK in ${testResult.latency_ms}ms with ${testResult.model_used}: ${testResult.response_preview}`
-                : `Test failed: ${testResult.error}`}
-            </p>
+            <div className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
+              <p>
+                {testResult.ok
+                  ? `Test OK with ${testResult.model_used}: ${testResult.response_preview}`
+                  : `Test failed: ${testResult.error}`}
+              </p>
+              <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
+                {testResult.client_roundtrip_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Browser {testResult.client_roundtrip_ms}ms</span>}
+                {testResult.server_elapsed_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Server {testResult.server_elapsed_ms}ms</span>}
+                {testResult.provider_latency_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Provider {testResult.provider_latency_ms}ms</span>}
+                {testResult.server_overhead_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Overhead {testResult.server_overhead_ms}ms</span>}
+                {testResult.tokens_per_second != null && <span className="rounded border border-brand-line px-2 py-0.5">{testResult.tokens_per_second} tok/s</span>}
+                {testResult.completion_tokens != null && <span className="rounded border border-brand-line px-2 py-0.5">{testResult.completion_tokens} out / {testResult.prompt_tokens || 0} in</span>}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -1108,17 +1123,34 @@ const CAPABILITY_LABELS = {
   structured_output: { label: 'Structured', color: 'bg-pink-100 text-pink-700 border-pink-200/60' },
 }
 
-function ApplyRouteDropdown({ routeName, model, onApply }) {
+function ApplyRouteMenu({ model, onApply }) {
   const [open, setOpen] = useState(false)
-  const isStandard = routeName === 'standard'
+  const canApply = Boolean(model.key_id && model.provider_id && model.id)
 
-  const placements = [
-    { key: 'primary', label: 'Primary' },
-    { key: 'alternate', label: 'Balanced' },
-    { key: 'fallback', label: 'Fallback' },
+  const routeGroups = [
+    {
+      routeName: 'standard',
+      label: 'Standard',
+      description: 'Normal chat, summaries, and routine work',
+      actions: [
+        { placement: 'primary', label: 'Set as primary' },
+        { placement: 'alternate', label: 'Add balanced target' },
+        { placement: 'fallback', label: 'Add fallback' },
+      ],
+    },
+    {
+      routeName: 'premium',
+      label: 'Premium',
+      description: 'Higher-quality drafting and harder analysis',
+      actions: [
+        { placement: 'primary', label: 'Set as primary' },
+        { placement: 'alternate', label: 'Add balanced target' },
+        { placement: 'fallback', label: 'Add fallback' },
+      ],
+    },
   ]
 
-  const handleSelect = (placement) => {
+  const handleSelect = (routeName, placement) => {
     onApply(routeName, placement, model)
     setOpen(false)
   }
@@ -1126,28 +1158,36 @@ function ApplyRouteDropdown({ routeName, model, onApply }) {
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1 px-3 py-1.5 text-xs font-sans font-medium border rounded-lg transition-colors ${
-          isStandard
-            ? 'border-brand-line text-brand-ink hover:bg-brand-bg'
-            : 'bg-brand-ink text-white hover:bg-brand-ink-2 border-transparent'
-        }`}
+        disabled={!canApply}
+        title={canApply ? 'Apply this model to a LiteLLM route' : 'This catalog row is missing provider or key metadata'}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
-        {isStandard ? 'Standard' : 'Premium'}
+        Apply
         <ChevronDown size={11} />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-20 bg-brand-surface border border-brand-line rounded-lg shadow-lg py-1 min-w-[120px]">
-            {placements.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => handleSelect(key)}
-                className="w-full text-left px-3 py-2 text-xs font-sans text-brand-ink hover:bg-brand-bg transition-colors"
-              >
-                {label}
-              </button>
+          <div className="absolute right-0 top-full mt-1 z-20 w-72 bg-brand-surface border border-brand-line rounded-lg shadow-lg py-2">
+            {routeGroups.map((group, groupIndex) => (
+              <div key={group.routeName} className={groupIndex > 0 ? 'border-t border-brand-line pt-2 mt-2' : ''}>
+                <div className="px-3 pb-1">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-brand-ink font-sans">{group.label}</p>
+                  <p className="text-[11px] text-brand-muted font-sans">{group.description}</p>
+                </div>
+                {group.actions.map(({ placement, label }) => (
+                  <button
+                    key={`${group.routeName}-${placement}`}
+                    type="button"
+                    onClick={() => handleSelect(group.routeName, placement)}
+                    className="w-full text-left px-3 py-2 text-xs font-sans text-brand-ink hover:bg-brand-bg transition-colors"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </>
@@ -1163,15 +1203,26 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [showAll, setShowAll] = useState(false)
   const models = catalog?.models || []
 
-  const fullFiltered = models.filter((model) => {
+  const baseFiltered = models.filter((model) => {
     const q = query.trim().toLowerCase()
     const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
     const matchesFilter =
       filter === 'all' ||
       (filter === 'free' && model.is_free) ||
       (filter === 'new' && model.is_new)
+    return matchesQuery && matchesFilter
+  })
+
+  const capabilityCounts = baseFiltered.reduce((counts, model) => {
+    ;(model.capabilities || []).forEach((capability) => {
+      counts[capability] = (counts[capability] || 0) + 1
+    })
+    return counts
+  }, {})
+
+  const fullFiltered = baseFiltered.filter((model) => {
     const matchesCap = !capFilter || (model.capabilities || []).includes(capFilter)
-    return matchesQuery && matchesFilter && matchesCap
+    return matchesCap
   })
 
   const filtered = showAll ? fullFiltered : fullFiltered.slice(0, 60)
@@ -1231,19 +1282,29 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
 
       <div className="px-5 py-2 border-b border-brand-line flex flex-wrap items-center gap-1.5">
         <span className="text-[10px] uppercase tracking-wider text-brand-muted font-sans mr-1">Filter by capability:</span>
-        {Object.entries(CAPABILITY_LABELS).map(([key, { label }]) => (
-          <button
-            key={key}
-            onClick={() => setCapFilter(capFilter === key ? null : key)}
-            className={`text-[10px] font-sans px-2 py-0.5 rounded-full border transition-colors ${
-              capFilter === key
-                ? 'bg-brand-ink text-white border-brand-ink'
-                : 'text-brand-muted border-brand-line/60 hover:text-brand-ink hover:bg-brand-bg'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+        {Object.entries(CAPABILITY_LABELS).map(([key, { label }]) => {
+          const count = capabilityCounts[key] || 0
+          const disabled = count === 0 && capFilter !== key
+          return (
+            <button
+              key={key}
+              onClick={() => {
+                if (!disabled) setCapFilter(capFilter === key ? null : key)
+              }}
+              disabled={disabled}
+              title={disabled ? 'No models in the current result set advertise this capability' : `${count} matching model${count === 1 ? '' : 's'}`}
+              className={`text-[10px] font-sans px-2 py-0.5 rounded-full border transition-colors ${
+                capFilter === key
+                  ? 'bg-brand-ink text-white border-brand-ink'
+                  : disabled
+                    ? 'text-brand-muted/40 border-brand-line/40 cursor-not-allowed'
+                    : 'text-brand-muted border-brand-line/60 hover:text-brand-ink hover:bg-brand-bg'
+              }`}
+            >
+              {label} <span className="opacity-70">{count}</span>
+            </button>
+          )
+        })}
         {capFilter && (
           <button onClick={() => setCapFilter(null)} className="text-[10px] text-brand-muted hover:text-brand-rose font-sans ml-1">
             ✕ clear
@@ -1290,8 +1351,7 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <ApplyRouteDropdown routeName="standard" model={model} onApply={onApply} />
-                <ApplyRouteDropdown routeName="premium" model={model} onApply={onApply} />
+                <ApplyRouteMenu model={model} onApply={onApply} />
               </div>
             </div>
           )
@@ -1400,7 +1460,13 @@ function AIRoutingTab({ platformKey, onAuthError }) {
       if (placement === 'alternate') return { ...prev, alternates: [...(prev.alternates || []), target] }
       return { ...prev, fallbacks: [...(prev.fallbacks || []), target] }
     })
-    setSaveResult(null)
+    const routeLabel = routeName === 'standard' ? 'Standard' : 'Premium'
+    const placementLabel = placement === 'alternate' ? 'balanced target' : placement
+    setSaveResult({
+      ok: true,
+      pending: true,
+      message: `Applied ${model.id} to ${routeLabel} ${placementLabel}. Save Routes to reload LiteLLM.`,
+    })
   }
 
   const handleSave = async () => {
@@ -1415,6 +1481,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
       setSaveResult({
         ok: true,
         litellm_updated: data.litellm_updated,
+        litellm_error: data.litellm_error || null,
         models_registered: data.models_registered,
         fallbacks_registered: data.fallbacks_registered || 0,
         app_aliases: data.app_aliases || null,
@@ -1452,10 +1519,10 @@ function AIRoutingTab({ platformKey, onAuthError }) {
         </div>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {saveResult && (
-            <span className={`text-xs font-sans ${saveResult.ok ? 'text-brand-accent' : 'text-brand-rose'}`}>
-              {saveResult.ok
-                ? `Saved - ${saveResult.app_aliases?.standard || 'clarity-standard'} / ${saveResult.app_aliases?.premium || 'clarity-premium'}${saveResult.litellm_updated ? `, ${saveResult.models_registered} model(s), ${saveResult.fallbacks_registered} fallback(s)` : ', DB only; LiteLLM not reloaded'}`
-                : saveResult.error}
+            <span className={`text-xs font-sans ${saveResult.ok ? (saveResult.pending ? 'text-brand-amber' : 'text-brand-accent') : 'text-brand-rose'}`}>
+              {saveResult.message || (saveResult.ok
+                ? `Saved - ${saveResult.app_aliases?.standard || 'clarity-standard'} / ${saveResult.app_aliases?.premium || 'clarity-premium'}${saveResult.litellm_updated ? `, ${saveResult.models_registered} model(s), ${saveResult.fallbacks_registered} fallback(s) reloaded` : `, DB only; LiteLLM not reloaded${saveResult.litellm_error ? ` (${saveResult.litellm_error})` : ''}`}`
+                : saveResult.error)}
             </span>
           )}
           <button
