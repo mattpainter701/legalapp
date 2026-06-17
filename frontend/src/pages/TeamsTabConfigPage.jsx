@@ -68,10 +68,11 @@ export default function TeamsTabConfigPage() {
       setFlash({ type: 'success', text: 'Teams tab configured.' })
       const teamsSdk = window.microsoftTeams
       if (teamsSdk?.pages?.config?.setConfig) {
+        const teamsUrl = `${window.location.origin}/teams`
         await teamsSdk.pages.config.setConfig({
           entityId: matterId,
-          contentUrl: 'https://legalapp.perevagagroup.com/teams',
-          websiteUrl: 'https://legalapp.perevagagroup.com/teams',
+          contentUrl: teamsUrl,
+          websiteUrl: teamsUrl,
           suggestedDisplayName: 'Clarity Legal',
         })
       }

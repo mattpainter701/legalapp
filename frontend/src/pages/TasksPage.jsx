@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getTasks, createTask, updateTask, deleteTask, getOverdueTasks, sendTaskReminder } from '../api'
-import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell } from 'lucide-react'
+import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import { useAuth } from '../App'
+import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
 const PRIORITY_COLORS = {
   urgent: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
@@ -114,7 +115,11 @@ function CreateTaskModal({ onClose, onCreate }) {
             <textarea value={form.description} onChange={e => set('description', e.target.value)} rows={2}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
-          {error && <p className="text-sm text-brand-rose">{error}</p>}
+          {error && (
+            <AlertBanner type="error" title="Task was not created">
+              {error}
+            </AlertBanner>
+          )}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>
             <button type="submit" disabled={loading}
@@ -128,20 +133,36 @@ function CreateTaskModal({ onClose, onCreate }) {
   )
 }
 
-function TaskRow({ task, onComplete, onDelete, onRemind }) {
+function TaskRow({
+  task,
+  onComplete,
+  onDeleteRequest,
+  onConfirmDelete,
+  onCancelDelete,
+  pendingDeleteId,
+  deletingId,
+  onRemind,
+  onActionError,
+}) {
   const label = dueDateLabel(task.due_date)
   const isOverdue = task.due_date && new Date(task.due_date + 'T00:00:00') < new Date() && task.status !== 'completed'
+  const isConfirmingDelete = pendingDeleteId === task.id
+  const isDeleting = deletingId === task.id
   const [remindSent, setRemindSent] = useState(false)
   const [reminding, setReminding] = useState(false)
+  const [remindFailed, setRemindFailed] = useState(false)
 
   const handleRemind = async () => {
     setReminding(true)
+    setRemindFailed(false)
     try {
       await onRemind(task.id)
       setRemindSent(true)
       setTimeout(() => setRemindSent(false), 3000)
-    } catch {
-      // silently ignore — parent may show a toast
+    } catch (e) {
+      setRemindFailed(true)
+      onActionError?.(e?.response?.data?.detail || 'Reminder email could not be sent.')
+      setTimeout(() => setRemindFailed(false), 3000)
     } finally {
       setReminding(false)
     }
@@ -178,6 +199,8 @@ function TaskRow({ task, onComplete, onDelete, onRemind }) {
         <span className="text-[11px] text-brand-muted uppercase hidden group-hover:inline">{task.task_type?.replace('_', ' ')}</span>
         {remindSent ? (
           <span className="text-[11px] text-brand-green font-semibold">Sent!</span>
+        ) : remindFailed ? (
+          <span className="text-[11px] text-brand-rose font-semibold">Not sent</span>
         ) : (
           <button
             onClick={handleRemind}
@@ -188,12 +211,34 @@ function TaskRow({ task, onComplete, onDelete, onRemind }) {
             <Bell size={13} />
           </button>
         )}
-        <button
-          onClick={() => onDelete(task.id)}
-          className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
-        >
-          <Trash2 size={13} />
-        </button>
+        {isConfirmingDelete ? (
+          <div className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1">
+            <span className="text-[11px] font-semibold text-red-700">Delete?</span>
+            <button
+              type="button"
+              onClick={() => onCancelDelete(task.id)}
+              aria-label="Cancel delete"
+              className="rounded p-0.5 text-red-700 hover:bg-red-100"
+            >
+              <X size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfirmDelete(task.id)}
+              disabled={isDeleting}
+              className="rounded bg-red-700 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+            >
+              {isDeleting ? 'Deleting' : 'Delete'}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => onDeleteRequest(task.id)}
+            className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -217,13 +262,17 @@ export default function TasksPage() {
   const [overdue, setOverdue] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [actionError, setActionError] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
   const [filterStatus, setFilterStatus] = useState('')
   const [filterPriority, setFilterPriority] = useState('')
   const [filterType, setFilterType] = useState('')
+  const [pendingDeleteId, setPendingDeleteId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const params = { limit: 200 }
       if (filterStatus) params.status = filterStatus
@@ -248,18 +297,36 @@ export default function TasksPage() {
 
   const handleComplete = async (task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    setActionError(null)
     try {
       await updateTask(task.id, { status: newStatus })
       loadTasks()
-    } catch {}
+    } catch (e) {
+      setActionError(e?.response?.data?.detail || 'Task status could not be updated.')
+    }
   }
 
-  const handleDelete = async (taskId) => {
-    if (!confirm('Delete this task?')) return
+  const handleDeleteRequest = (taskId) => {
+    setActionError(null)
+    setPendingDeleteId(taskId)
+  }
+
+  const handleCancelDelete = (taskId) => {
+    setPendingDeleteId((current) => (current === taskId ? null : current))
+  }
+
+  const handleConfirmDelete = async (taskId) => {
+    setDeletingId(taskId)
+    setActionError(null)
     try {
       await deleteTask(taskId)
-      loadTasks()
-    } catch {}
+      setPendingDeleteId(null)
+      await loadTasks()
+    } catch (e) {
+      setActionError(e?.response?.data?.detail || 'Task could not be deleted.')
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   const handleRemind = async (taskId) => {
@@ -280,6 +347,17 @@ export default function TasksPage() {
   const completedTasks = tasks.filter(t => t.status === 'completed')
 
   const totalActive = overdue.length + todayTasks.length + upcomingTasks.length + noDueTasks.length
+  const hasFilters = Boolean(filterStatus || filterPriority || filterType)
+  const taskRowActions = {
+    onComplete: handleComplete,
+    onDeleteRequest: handleDeleteRequest,
+    onConfirmDelete: handleConfirmDelete,
+    onCancelDelete: handleCancelDelete,
+    pendingDeleteId,
+    deletingId,
+    onRemind: handleRemind,
+    onActionError: setActionError,
+  }
 
   return (
     <div className="min-h-screen bg-brand-bg">
@@ -327,15 +405,45 @@ export default function TasksPage() {
           </select>
         </div>
 
+        {actionError && (
+          <AlertBanner
+            type="error"
+            title="Action failed"
+            onDismiss={() => setActionError(null)}
+            className="mb-4"
+          >
+            {actionError}
+          </AlertBanner>
+        )}
+
         {loading ? (
-          <div className="text-center py-16 text-brand-muted">Loading…</div>
+          <Spinner />
         ) : error ? (
-          <div className="text-center py-16 text-brand-rose">{error}</div>
+          <AlertBanner
+            type="error"
+            title="Tasks could not be loaded"
+            actionLabel="Retry"
+            onAction={loadTasks}
+          >
+            {error}
+          </AlertBanner>
         ) : totalActive === 0 && completedTasks.length === 0 ? (
-          <div className="text-center py-16">
-            <CheckSquare size={40} className="mx-auto text-brand-line mb-4" />
-            <p className="text-brand-muted">No tasks yet. Create your first task or deadline.</p>
-          </div>
+          <EmptyState
+            icon={CheckSquare}
+            title={hasFilters ? 'No tasks match these filters' : 'No tasks yet'}
+            actionLabel="New Task"
+            onAction={() => setShowCreate(true)}
+            secondaryActionLabel={hasFilters ? 'Clear Filters' : undefined}
+            onSecondaryAction={() => {
+              setFilterStatus('')
+              setFilterPriority('')
+              setFilterType('')
+            }}
+          >
+            {hasFilters
+              ? 'Try clearing status, priority, or type filters to see more work.'
+              : 'Create tasks and deadlines to track follow-ups, filings, hearings, reviews, and reminders.'}
+          </EmptyState>
         ) : (
           <div className="space-y-4">
             {/* Overdue */}
@@ -344,7 +452,7 @@ export default function TasksPage() {
                 <SectionHeader title="Overdue" count={overdue.length} icon={AlertCircle} color="!bg-brand-rose/5" />
                 {overdue.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
+                    <TaskRow task={t} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -356,7 +464,7 @@ export default function TasksPage() {
                 <SectionHeader title="Due Today" count={todayTasks.length} icon={Calendar} />
                 {todayTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
+                    <TaskRow task={t} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -368,7 +476,7 @@ export default function TasksPage() {
                 <SectionHeader title="Upcoming" count={upcomingTasks.length} icon={Calendar} />
                 {upcomingTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
+                    <TaskRow task={t} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -380,7 +488,7 @@ export default function TasksPage() {
                 <SectionHeader title="No Due Date" count={noDueTasks.length} />
                 {noDueTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
+                    <TaskRow task={t} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -395,7 +503,7 @@ export default function TasksPage() {
                 </summary>
                 {completedTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : 'border-t border-brand-line/50'}>
-                    <TaskRow task={t} onComplete={handleComplete} onDelete={handleDelete} onRemind={handleRemind} />
+                    <TaskRow task={t} {...taskRowActions} />
                   </div>
                 ))}
               </details>

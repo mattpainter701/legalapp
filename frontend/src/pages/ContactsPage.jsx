@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getContacts, createContact } from '../api'
 import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail } from 'lucide-react'
 import { useAuth } from '../App'
+import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
 const CONTACT_TYPES = ['client', 'opposing_party', 'witness', 'expert', 'vendor', 'referral', 'other']
 const TYPE_COLORS = {
@@ -129,7 +130,11 @@ function CreateContactModal({ onClose, onCreate }) {
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
 
-          {error && <p className="text-sm text-brand-rose">{error}</p>}
+          {error && (
+            <AlertBanner type="error" title="Contact was not created">
+              {error}
+            </AlertBanner>
+          )}
 
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose}
@@ -156,6 +161,7 @@ export default function ContactsPage() {
   const [filterType, setFilterType] = useState('')
   const [filterEntity, setFilterEntity] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const hasFilters = Boolean(q || filterType || filterEntity)
 
   const loadContacts = useCallback(async () => {
     setLoading(true)
@@ -226,14 +232,33 @@ export default function ContactsPage() {
 
         {/* List */}
         {loading ? (
-          <div className="text-center py-16 text-brand-muted">Loading…</div>
+          <Spinner />
         ) : error ? (
-          <div className="text-center py-16 text-brand-rose">{error}</div>
+          <AlertBanner
+            type="error"
+            title="Contacts could not be loaded"
+            actionLabel="Retry"
+            onAction={loadContacts}
+          >
+            {error}
+          </AlertBanner>
         ) : contacts.length === 0 ? (
-          <div className="text-center py-16">
-            <Users size={40} className="mx-auto text-brand-line mb-4" />
-            <p className="text-brand-muted">No contacts yet. Add your first client or party.</p>
-          </div>
+          <EmptyState
+            icon={Users}
+            title={hasFilters ? 'No contacts match these filters' : 'No contacts yet'}
+            actionLabel="New Contact"
+            onAction={() => setShowCreate(true)}
+            secondaryActionLabel={hasFilters ? 'Clear Filters' : undefined}
+            onSecondaryAction={() => {
+              setQ('')
+              setFilterType('')
+              setFilterEntity('')
+            }}
+          >
+            {hasFilters
+              ? 'Try a broader search or clear the role and entity filters.'
+              : 'Add clients, parties, witnesses, experts, vendors, and referral sources in one directory.'}
+          </EmptyState>
         ) : (
           <div className="bg-white rounded-xl border border-brand-line overflow-hidden">
             {contacts.map((c, i) => (

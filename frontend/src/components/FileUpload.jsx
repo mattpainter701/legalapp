@@ -26,10 +26,18 @@ function FileStatusIcon({ status }) {
   return <FileText size={16} className="text-brand-muted" />
 }
 
-export default function FileUpload({ onUploadComplete, showCloudIntegration = true }) {
+export default function FileUpload({
+  onUploadComplete,
+  showCloudIntegration = false,
+  cloudFiles = [],
+  isCloudLoading = false,
+  cloudError = null,
+  onCloudImport,
+}) {
   const [uploads, setUploads] = useState([])
   const [activeTab, setActiveTab] = useState('local')
   const [showCloudModal, setShowCloudModal] = useState(false)
+  const cloudIntegrationAvailable = showCloudIntegration && typeof onCloudImport === 'function'
 
   const updateUpload = (id, patch) => {
     setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)))
@@ -97,12 +105,11 @@ export default function FileUpload({ onUploadComplete, showCloudIntegration = tr
     ])
 
     try {
-      // TODO: Implement cloud file import API call
-      // const doc = await importFromDrive(file)
-      updateUpload(localId, { status: 'processing' })
-      setTimeout(() => {
-        updateUpload(localId, { status: 'indexed' })
-      }, 2000)
+      const doc = await onCloudImport(file)
+      updateUpload(localId, { status: doc?.status || 'processing', docId: doc?.id })
+      if (onUploadComplete && doc) {
+        onUploadComplete(doc)
+      }
     } catch (err) {
       updateUpload(localId, {
         status: 'error',
@@ -114,7 +121,7 @@ export default function FileUpload({ onUploadComplete, showCloudIntegration = tr
   return (
     <div>
       {/* Tabs */}
-      {showCloudIntegration && (
+      {cloudIntegrationAvailable && (
         <div className="flex gap-1 mb-3">
           <button
             onClick={() => setActiveTab('local')}
@@ -198,7 +205,7 @@ export default function FileUpload({ onUploadComplete, showCloudIntegration = tr
       )}
 
       {/* Cloud drives tab */}
-      {showCloudIntegration && activeTab === 'cloud' && (
+      {cloudIntegrationAvailable && activeTab === 'cloud' && (
         <div className="text-center p-6 bg-brand-surface border border-brand-line rounded-lg">
           <Cloud className="w-10 h-10 mx-auto text-brand-muted mb-3 opacity-50" />
           <p className="text-sm text-brand-ink-2 mb-3">
@@ -215,11 +222,12 @@ export default function FileUpload({ onUploadComplete, showCloudIntegration = tr
 
       {/* Cloud import modal */}
       <ConnectedFilesModal
-        isOpen={showCloudModal}
+        isOpen={cloudIntegrationAvailable && showCloudModal}
         onClose={() => setShowCloudModal(false)}
         onImportFile={handleCloudImport}
-        files={[]} // Will be populated from API
-        isLoading={false}
+        files={cloudFiles}
+        isLoading={isCloudLoading}
+        error={cloudError}
       />
     </div>
   )

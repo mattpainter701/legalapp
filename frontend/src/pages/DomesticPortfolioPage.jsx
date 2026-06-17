@@ -88,7 +88,9 @@ export default function DomesticPortfolioPage() {
     getDomesticCases()
       .then((data) => setCases(Array.isArray(data) ? data : data.cases || []))
       .catch((err) => {
-        setError(err?.response?.status === 404 ? '404' : err?.message || 'Failed to load cases.')
+        setError(err?.response?.status === 404
+          ? 'Domestic Relations data could not be loaded. Confirm the API route is deployed.'
+          : err?.message || 'Failed to load cases.')
         console.error(err)
       })
       .finally(() => setLoading(false))
@@ -111,7 +113,7 @@ export default function DomesticPortfolioPage() {
     return (
       <div className="flex items-center justify-center h-screen bg-brand-bg">
         <div className="text-brand-rose font-sans">
-          {error.includes('404') ? 'Domestic Relations module is not yet available.' : error}
+          {error}
         </div>
       </div>
     )

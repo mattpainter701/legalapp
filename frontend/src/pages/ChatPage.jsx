@@ -7,11 +7,12 @@ import Messages from '../components/Messages'
 import ChatRail from '../components/chat/ChatRail'
 import {
   getConversation,
-  sendMessage,
   streamMessage,
   createConversation,
+  updateConversation,
   uploadChatAttachment,
 } from '../api'
+import { AlertBanner } from '../components/ui'
 
 export default function ChatPage() {
   const navigate = useNavigate()
@@ -27,7 +28,16 @@ export default function ChatPage() {
   const [activeConvTitle, setActiveConvTitle] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState([])
   const [railOpen, setRailOpen] = useState(false)
+  const [notice, setNotice] = useState(null)
   const fileInputRef = useRef(null)
+
+  const showErrorNotice = useCallback((title, fallback, err) => {
+    setNotice({
+      type: 'error',
+      title,
+      message: err?.response?.data?.detail || err?.message || fallback,
+    })
+  }, [])
 
   const handleUploadClick = () => {
     fileInputRef.current?.click()
@@ -57,6 +67,7 @@ export default function ChatPage() {
         convId = conv.id
       } catch (err) {
         console.error('Failed to create conversation', err)
+        showErrorNotice('Conversation could not be created', 'Start a new conversation and try again.', err)
         return
       }
     }
@@ -67,6 +78,7 @@ export default function ChatPage() {
         setPendingAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }])
       } catch (err) {
         console.error('Upload failed:', err)
+        showErrorNotice('Attachment upload failed', `${file.name} could not be uploaded.`, err)
       }
     }
   }
@@ -80,10 +92,11 @@ export default function ChatPage() {
       setActiveConvTitle(data.conversation?.title || 'Untitled')
     } catch (err) {
       console.error('Failed to load conversation', err)
+      showErrorNotice('Conversation could not be loaded', 'Select another conversation or retry.', err)
     } finally {
       setIsLoadingMessages(false)
     }
-  }, [setActiveConvId])
+  }, [setActiveConvId, showErrorNotice])
 
   // Load first conversation on mount, or from URL param
   useEffect(() => {
@@ -115,10 +128,12 @@ export default function ChatPage() {
       setActiveConvId(conv.id)
       setMessages([])
       setActiveConvTitle(conv.title || 'New Conversation')
+      setNotice(null)
     } catch (err) {
       console.error('Failed to create conversation', err)
+      showErrorNotice('Conversation could not be created', 'Please try again.', err)
     }
-  }, [setConversations, setActiveConvId])
+  }, [setConversations, setActiveConvId, showErrorNotice])
 
   const handleConversationDeleted = useCallback(
     (id) => {
@@ -166,6 +181,7 @@ export default function ChatPage() {
         await new Promise(r => setTimeout(r, 150))
       } catch (err) {
         console.error('Failed to create conversation', err)
+        showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
         return
       }
     }
@@ -225,6 +241,11 @@ export default function ChatPage() {
               : msg
           )
         )
+        setNotice({
+          type: 'error',
+          title: 'Response could not be completed',
+          message: streamError || 'The assistant stopped before finishing the response.',
+        })
       }
 
       setConversations((prev) =>
@@ -234,6 +255,7 @@ export default function ChatPage() {
       )
     } catch (err) {
       console.error('Failed to send message', err)
+      showErrorNotice('Message could not be sent', 'Please try again.', err)
       setMessages((prev) => [
         ...prev,
         {
@@ -247,9 +269,18 @@ export default function ChatPage() {
     } finally {
       setIsSending(false)
     }
-  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId])
+  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, showErrorNotice])
 
   const handleExportConversation = () => {
+    if (messages.length === 0) {
+      setNotice({
+        type: 'info',
+        title: 'Nothing to export',
+        message: 'Start or select a conversation before exporting.',
+      })
+      return
+    }
+
     const content = messages
       .map((msg) => `**${msg.role === 'user' ? 'You' : 'Clarity Legal'}:**\n\n${msg.content}`)
       .join('\n\n---\n\n')
@@ -263,9 +294,17 @@ export default function ChatPage() {
     document.body.removeChild(element)
   }
 
-  const handleSearchMessages = () => {
-    console.log('Search messages')
-  }
+  const handleRenameConversation = useCallback(async (title) => {
+    if (!activeConvId) {
+      throw new Error('Select a conversation before renaming it.')
+    }
+    const updated = await updateConversation(activeConvId, { title })
+    setActiveConvTitle(updated.title || title)
+    setConversations((prev) =>
+      prev.map((conv) => (conv.id === updated.id ? { ...conv, ...updated } : conv))
+    )
+    return updated
+  }, [activeConvId, setConversations])
 
   const activeRef = (() => {
     const idx = conversations.findIndex((c) => c.id === activeConvId)
@@ -318,9 +357,22 @@ export default function ChatPage() {
             setIncludePublic={setIncludePublic}
             user={null}
             onExportConversation={handleExportConversation}
-            onSearchMessages={handleSearchMessages}
+            onRenameConversation={handleRenameConversation}
+            onRenameError={(message) => setNotice({ type: 'error', title: 'Rename failed', message })}
             onOpenSidebar={() => setRailOpen(true)}
           />
+
+          {notice && (
+            <div className="px-4 pt-4 md:px-6">
+              <AlertBanner
+                type={notice.type}
+                title={notice.title}
+                onDismiss={() => setNotice(null)}
+              >
+                {notice.message}
+              </AlertBanner>
+            </div>
+          )}
 
           <Messages
             messages={messages}

@@ -31,6 +31,7 @@ from app.models.plugin import Matter as MatterModel
 from app.schemas.chat import (
     ChatAttachmentResponse,
     ConversationCreate,
+    ConversationUpdate,
     ConversationResponse,
     ConversationDetail,
     MessageCreate,
@@ -41,6 +42,7 @@ from app.services.embeddings import EmbeddingService
 from app.services.rag import hybrid_rag_query
 from app.services.llm import LLMService
 from app.services.llm_routing import (
+    classify_query_complexity,
     resolve_llm_route,
 )
 from app.services.billing import calculate_cost
@@ -418,6 +420,49 @@ async def get_conversation(
         conversation=_conversation_to_response(conv, len(messages)),
         messages=[_message_to_response(m) for m in messages],
     )
+
+
+@router.patch("/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(
+    conversation_id: str,
+    body: ConversationUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update conversation metadata for the current user."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == user.tenant_id,
+        )
+    )
+    conv = result.scalar_one_or_none()
+
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if conv.user_id != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Conversation title is required")
+    if len(title) > 500:
+        raise HTTPException(
+            status_code=400, detail="Conversation title must be 500 characters or less"
+        )
+
+    conv.title = title
+    await db.commit()
+    await db.refresh(conv)
+
+    count_result = await db.execute(
+        select(func.count(Message.id)).where(Message.conversation_id == conv.id)
+    )
+    return _conversation_to_response(conv, count_result.scalar() or 0)
 
 
 @router.post(

@@ -72,7 +72,9 @@ export default function MediationPortfolioPage() {
     getMediationCases()
       .then((data) => setCases(Array.isArray(data) ? data : data.cases || data.mediations || []))
       .catch((err) => {
-        setError(err?.response?.status === 404 ? '404' : 'Failed to load mediation cases.')
+        setError(err?.response?.status === 404
+          ? 'Mediation data could not be loaded. Confirm the API route is deployed.'
+          : 'Failed to load mediation cases.')
         console.error(err)
       })
       .finally(() => setLoading(false))
@@ -119,7 +121,7 @@ export default function MediationPortfolioPage() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-brand-bg">
-        <div className="text-brand-rose font-sans">{error.includes('404') ? 'Mediation module is not yet available.' : error}</div>
+        <div className="text-brand-rose font-sans">{error}</div>
       </div>
     )
   }

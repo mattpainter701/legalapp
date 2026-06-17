@@ -1,6 +1,7 @@
 from app.schemas.auth import TokenResponse, UserInfo
 from app.schemas.chat import (
     ConversationCreate,
+    ConversationUpdate,
     ConversationResponse,
     MessageCreate,
     SourceCitation,
@@ -39,6 +40,7 @@ __all__ = [
     "TokenResponse",
     "UserInfo",
     "ConversationCreate",
+    "ConversationUpdate",
     "ConversationResponse",
     "MessageCreate",
     "SourceCitation",

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
+import { AlertBanner, EmptyState, Spinner } from '../components/ui'
 
 function Icon({ d, size = 16, className = '' }) {
   return (
@@ -441,15 +442,18 @@ export default function MatterPortfolioPage() {
           </div>
 
           {myLoading ? (
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 flex justify-center">
-              <div className="w-6 h-6 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+            <div className="bg-brand-surface border border-brand-line rounded-xl">
+              <Spinner />
             </div>
           ) : myMatters.length === 0 ? (
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-10 text-center">
-              <Icon d={Icons.briefcase} size={32} className="mx-auto text-brand-line-2 mb-3" />
-              <p className="font-serif font-bold text-brand-ink mb-1">No matters assigned to you</p>
-              <p className="text-brand-muted text-sm font-sans">Matters you're assigned to will appear here.</p>
-            </div>
+            <EmptyState
+              visual={<Icon d={Icons.briefcase} size={22} />}
+              title="No assigned matters"
+              actionLabel="Open New Matter"
+              onAction={() => setShowCreate(true)}
+            >
+              Matters assigned to you will appear here with deadlines, risk level, and active-work status.
+            </EmptyState>
           ) : viewMode === 'board' ? (
             /* Board view */
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -536,9 +540,15 @@ export default function MatterPortfolioPage() {
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 mb-6 text-red-700 text-sm font-sans">
+          <AlertBanner
+            type="error"
+            title="Matters could not be loaded"
+            actionLabel="Retry"
+            onAction={loadMatters}
+            className="mb-6"
+          >
             {error}
-          </div>
+          </AlertBanner>
         )}
 
         {/* Stats */}
@@ -606,21 +616,25 @@ export default function MatterPortfolioPage() {
 
         {/* Table */}
         {loading ? (
-          <div className="flex justify-center py-24">
-            <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
-          </div>
+          <Spinner />
         ) : filtered.length === 0 ? (
-          <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm">
-            <Icon d={Icons.briefcase} size={48} className="mx-auto text-brand-line-2 mb-4" />
-            <h3 className="text-lg font-serif font-bold text-brand-ink mb-2">No matters found</h3>
-            <p className="text-brand-ink-2 font-sans text-sm mb-6">Adjust filters or open your first matter.</p>
-            <button
-              onClick={() => setShowCreate(true)}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm"
-            >
-              <Icon d={Icons.plus} size={15} /> Open First Matter
-            </button>
-          </div>
+          <EmptyState
+            visual={<Icon d={Icons.briefcase} size={24} />}
+            title={search || statusFilter !== 'all' || practiceFilter !== 'all' ? 'No matters match these filters' : 'No matters yet'}
+            actionLabel="Open New Matter"
+            onAction={() => setShowCreate(true)}
+            secondaryActionLabel={search || statusFilter !== 'all' || practiceFilter !== 'all' ? 'Clear Filters' : undefined}
+            onSecondaryAction={() => {
+              setSearch('')
+              setStatusFilter('all')
+              setPracticeFilter('all')
+            }}
+            className="py-14"
+          >
+            {search || statusFilter !== 'all' || practiceFilter !== 'all'
+              ? 'Try clearing filters or searching by client, attorney, practice area, or matter name.'
+              : 'Create the first matter to begin tracking status, risk, deadlines, and cloud folders.'}
+          </EmptyState>
         ) : (
           <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">

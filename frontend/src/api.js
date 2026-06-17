@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 export const API_BASE_URL = BASE_URL
 
 const api = axios.create({
@@ -41,10 +41,34 @@ let refreshPromise = null
 // Paths for which a 401 must NOT trigger a refresh attempt (would loop / is terminal).
 const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']
 
-const redirectToLogin = () => {
+const clearAuthState = () => {
   localStorage.removeItem('token')
   localStorage.removeItem('user')
-  window.location.href = '/login'
+}
+
+const redirectToLogin = () => {
+  clearAuthState()
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login'
+  }
+}
+
+const addBearerFallback = (headers = {}) => {
+  const token = localStorage.getItem('token')
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
+}
+
+const refreshAuthSession = async () => {
+  if (!refreshPromise) {
+    refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
+      const freshToken = refreshResponse?.data?.access_token
+      if (freshToken) localStorage.setItem('token', freshToken)
+      return refreshResponse
+    }).finally(() => {
+      refreshPromise = null
+    })
+  }
+  return refreshPromise
 }
 
 api.interceptors.response.use(
@@ -55,24 +79,20 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
     const url = config.url || ''
-    if (config._retried || NO_REFRESH_PATHS.some((p) => url.includes(p))) {
-      // Already retried once, or this IS an auth endpoint — give up.
+    if (config._retried) {
+      // Already retried once; give up and return the user to login.
       redirectToLogin()
+      return Promise.reject(error)
+    }
+    if (NO_REFRESH_PATHS.some((p) => url.includes(p))) {
+      // Auth endpoint failures should surface to the current form instead of
+      // forcing a reload that clears the page-level error message.
+      clearAuthState()
       return Promise.reject(error)
     }
 
     try {
-      // Single-flight: the first 401 starts the refresh; others await it.
-      if (!refreshPromise) {
-        refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
-          const freshToken = refreshResponse?.data?.access_token
-          if (freshToken) localStorage.setItem('token', freshToken)
-          return refreshResponse
-        }).finally(() => {
-          refreshPromise = null
-        })
-      }
-      await refreshPromise
+      await refreshAuthSession()
     } catch (refreshError) {
       redirectToLogin()
       return Promise.reject(refreshError)
@@ -136,6 +156,9 @@ export const createConversation = (data) =>
 export const getConversation = (id) =>
   api.get(`/conversations/${id}`).then((r) => r.data)
 
+export const updateConversation = (id, data) =>
+  api.patch(`/conversations/${id}`, data).then((r) => r.data)
+
 export const sendMessage = (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) =>
   api
     .post(`/conversations/${conversationId}/messages`, {
@@ -147,23 +170,31 @@ export const sendMessage = (conversationId, content, includePublic = true, usePr
     .then((r) => r.data)
 
 export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) {
-  const response = await fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
+  const body = JSON.stringify({
+    content,
+    include_public: includePublic,
+    use_premium_llm: usePremium,
+    attachment_ids: attachmentIds,
+  })
+  const request = () => fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      content,
-      include_public: includePublic,
-      use_premium_llm: usePremium,
-      attachment_ids: attachmentIds,
-    }),
+    headers: addBearerFallback({ 'Content-Type': 'application/json' }),
+    body,
   })
+  let response = await request()
+  if (response.status === 401) {
+    try {
+      await refreshAuthSession()
+      response = await request()
+    } catch {
+      redirectToLogin()
+    }
+  }
 
   if (!response.ok) {
     if (response.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      redirectToLogin()
     }
     // 504 Gateway Timeout is common on cold starts — surface a clear message
     if (response.status === 504) {
@@ -942,7 +973,7 @@ export const deleteMatterDocument = (matterId, docId) =>
   api.delete(`/matters/${matterId}/documents/${docId}`).then(r => r.data)
 
 export const getMatterDocumentDownloadUrl = (matterId, docId) =>
-  `/api/matters/${matterId}/documents/${docId}/download`
+  `${API_BASE_URL}/matters/${matterId}/documents/${docId}/download`
 
 export const getMatterCloudFolder = (matterId) =>
   api.get(`/matters/${matterId}/cloud-folder`).then(r => r.data)

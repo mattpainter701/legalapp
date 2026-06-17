@@ -593,7 +593,7 @@ export default function HomePage() {
             <span className="font-serif font-bold text-[15px]">Clarity Legal</span>
           </div>
           <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Secure. Private. Accurate.</p>
-          <p className="text-brand-muted font-sans text-[12.5px]">© {new Date().getFullYear()} Clarity Legal — demo</p>
+          <p className="text-brand-muted font-sans text-[12.5px]">© {new Date().getFullYear()} Clarity Legal</p>
         </div>
       </footer>
     </div>

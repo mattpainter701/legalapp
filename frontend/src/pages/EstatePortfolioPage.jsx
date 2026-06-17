@@ -87,11 +87,9 @@ export default function EstatePortfolioPage() {
       .then((data) => setEstates(Array.isArray(data) ? data : data.estates || []))
       .catch((err) => {
         const status = err?.response?.status
-        if (status === 404) {
-          setError('404')
-        } else {
-          setError(err?.message || 'Failed to load estates.')
-        }
+        setError(status === 404
+          ? 'Trust & Estate data could not be loaded. Confirm the API route is deployed.'
+          : err?.message || 'Failed to load estates.')
         console.error(err)
       })
       .finally(() => setLoading(false))
@@ -116,7 +114,7 @@ export default function EstatePortfolioPage() {
     return (
       <div className="flex items-center justify-center h-screen bg-brand-bg">
         <div className="text-brand-rose font-sans">
-          {error.includes('404') ? 'Trust & Estate module is not yet available.' : error}
+          {error}
         </div>
       </div>
     )

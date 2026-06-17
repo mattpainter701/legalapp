@@ -6,6 +6,7 @@ import time as _time
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
+from html import escape
 from typing import Optional
 
 import bcrypt
@@ -33,6 +34,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserInfo,
 )
+from app.services.email import email_service
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -1007,7 +1009,39 @@ async def forgot_password(
         _fallback_reset_tokens[token] = (user.email, _time.time())
 
     if settings.EMAIL_ENABLED:
-        # TODO: send reset email with FRONTEND_URL/reset-password?token=<token>
+        reset_url = (
+            f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?"
+            f"token={urllib.parse.quote(token)}"
+        )
+        safe_reset_url = escape(reset_url, quote=True)
+        html_body = f"""
+        <div style="font-family: Arial, Helvetica, sans-serif; color: #1f2937; line-height: 1.5;">
+          <h2 style="margin: 0 0 16px;">Reset your Clarity Legal password</h2>
+          <p>Use the secure link below to choose a new password. This link expires in 30 minutes.</p>
+          <p style="margin: 24px 0;">
+            <a href="{safe_reset_url}"
+               style="background:#0f2d5e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:6px;font-weight:bold;display:inline-block;">
+              Reset password
+            </a>
+          </p>
+          <p style="font-size:12px;color:#6b7280;">If the button does not work, copy and paste this URL into your browser:<br>{safe_reset_url}</p>
+          <p style="font-size:12px;color:#6b7280;">If you did not request this, you can ignore this message.</p>
+        </div>
+        """
+        text_body = (
+            "Reset your Clarity Legal password\n\n"
+            "Use this link within 30 minutes:\n"
+            f"{reset_url}\n\n"
+            "If you did not request this, you can ignore this message."
+        )
+        sent = await email_service.send_email(
+            [user.email],
+            "Reset your Clarity Legal password",
+            html_body,
+            text_body,
+        )
+        if not sent:
+            logger.error("Password reset email failed for user_id=%s", user.id)
         return {"message": "If that email exists, a reset link has been sent."}
     else:
         return {

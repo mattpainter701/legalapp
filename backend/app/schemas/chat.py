@@ -8,6 +8,10 @@ class ConversationCreate(BaseModel):
     matter_id: Optional[str] = None
 
 
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = None
+
+
 class ConversationResponse(BaseModel):
     id: str
     title: str

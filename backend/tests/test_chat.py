@@ -86,6 +86,25 @@ async def test_get_conversation(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_update_conversation_title(client: AsyncClient):
+    conv = (await client.post("/api/conversations", json={"title": "Draft"})).json()
+
+    resp = await client.patch(
+        f"/api/conversations/{conv['id']}",
+        json={"title": "Renamed matter research"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Renamed matter research"
+    assert data["message_count"] == 0
+
+    detail_resp = await client.get(f"/api/conversations/{conv['id']}")
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["conversation"]["title"] == "Renamed matter research"
+
+
+@pytest.mark.asyncio
 async def test_send_message_returns_assistant(
     client: AsyncClient, mock_llm, mock_embeddings
 ):

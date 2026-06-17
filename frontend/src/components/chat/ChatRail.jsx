@@ -1,8 +1,7 @@
 import React, { useState, useMemo } from 'react'
-import { Plus, Search, X, ChevronRight } from 'lucide-react'
+import { Plus, Search, X } from 'lucide-react'
 import { useAppShell } from '../AppShell'
 import FileUpload from '../FileUpload'
-import IntegrationPanel from '../IntegrationPanel'
 import ConversationItem from './ConversationItem'
 import DocumentItem from './DocumentItem'
 
@@ -25,7 +24,6 @@ export default function ChatRail({
   const handleDeleteConversation = onDeleteConversation || onConversationDeleted
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [showIntegrations, setShowIntegrations] = useState(false)
   const [pinnedConvIds, setPinnedConvIds] = useState(() => {
     try { return JSON.parse(localStorage.getItem('pinnedConvIds') || '[]') }
     catch { return [] }
@@ -158,39 +156,6 @@ export default function ChatRail({
           <div className="px-4">
             <FileUpload onUploadComplete={onDocumentUploaded} />
           </div>
-        </div>
-
-        <div className="w-full h-px bg-brand-line my-2" />
-
-        {/* Cloud Integrations — collapsible */}
-        <div className="py-2">
-          <button
-            onClick={() => setShowIntegrations((v) => !v)}
-            className="w-full px-4 py-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted hover:text-brand-ink transition-colors"
-          >
-            <span>Cloud Integrations</span>
-            <ChevronRight
-              size={14}
-              className={`transition-transform duration-200 ${showIntegrations ? 'rotate-90' : ''}`}
-            />
-          </button>
-          {showIntegrations && (
-            <div className="px-4 pb-4">
-              <IntegrationPanel
-                integrationStatus={{
-                  google_drive: { connected: false, fileCount: 0 },
-                  onedrive: { connected: false, fileCount: 0 },
-                  sharepoint: { connected: false, fileCount: 0 },
-                }}
-                onConnect={(serviceId) => {
-                  console.log('Connect to:', serviceId)
-                }}
-                onDisconnect={(serviceId) => {
-                  console.log('Disconnect from:', serviceId)
-                }}
-              />
-            </div>
-          )}
         </div>
       </div>
     </div>

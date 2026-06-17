@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ShieldCheck, Download, Search, MoreVertical, PanelLeft } from 'lucide-react'
 
@@ -12,20 +12,55 @@ export default function ChatHeader({
   user,
   onExportConversation,
   onSearchMessages,
+  onRenameConversation,
+  onRenameError,
   onOpenSidebar,
 }) {
   const navigate = useNavigate()
   const [showMenu, setShowMenu] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editedTitle, setEditedTitle] = useState(activeConvTitle)
+  const [savingTitle, setSavingTitle] = useState(false)
 
-  const handleTitleEdit = () => {
-    if (isEditing && editedTitle !== activeConvTitle) {
-      // Call API to update title (will add later)
-      console.log('Update title to:', editedTitle)
+  useEffect(() => {
+    setEditedTitle(activeConvTitle)
+    setIsEditing(false)
+  }, [activeConvTitle])
+
+  const handleTitleEdit = async () => {
+    if (savingTitle) return
+    if (!isEditing) {
+      if (activeConvTitle && onRenameConversation) setIsEditing(true)
+      return
     }
-    setIsEditing(!isEditing)
+
+    const nextTitle = editedTitle.trim()
+    if (!nextTitle) {
+      setEditedTitle(activeConvTitle)
+      setIsEditing(false)
+      onRenameError?.('Conversation title cannot be blank.')
+      return
+    }
+    if (nextTitle === activeConvTitle) {
+      setEditedTitle(activeConvTitle)
+      setIsEditing(false)
+      return
+    }
+
+    setSavingTitle(true)
+    try {
+      await onRenameConversation(nextTitle)
+      setIsEditing(false)
+    } catch (e) {
+      onRenameError?.(e?.response?.data?.detail || e?.message || 'Conversation title could not be saved.')
+      setEditedTitle(activeConvTitle)
+      setIsEditing(false)
+    } finally {
+      setSavingTitle(false)
+    }
   }
+
+  const canEditTitle = Boolean(activeConvTitle && onRenameConversation)
 
   return (
     <div className="h-16 bg-brand-surface border-b border-brand-line px-4 md:px-6 flex items-center justify-between flex-shrink-0 z-20">
@@ -58,14 +93,17 @@ export default function ChatHeader({
                 setIsEditing(false)
               }
             }}
-            className="font-serif text-xl text-brand-ink font-semibold bg-brand-bg border border-brand-accent px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-accent"
+            disabled={savingTitle}
+            className="font-serif text-xl text-brand-ink font-semibold bg-brand-bg border border-brand-accent px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-accent disabled:opacity-60"
             autoFocus
           />
         ) : (
           <h1
-            className="font-serif text-xl text-brand-ink font-semibold truncate cursor-pointer hover:text-brand-accent hover:bg-brand-line/20 px-1 py-0.5 rounded transition-all"
-            onClick={() => setIsEditing(true)}
-            title="Click to edit title"
+            className={`font-serif text-xl text-brand-ink font-semibold truncate px-1 py-0.5 rounded transition-all ${
+              canEditTitle ? 'cursor-pointer hover:text-brand-accent hover:bg-brand-line/20' : ''
+            }`}
+            onClick={handleTitleEdit}
+            title={canEditTitle ? 'Click to edit title' : undefined}
           >
             {activeConvTitle || 'Select a conversation'}
           </h1>
@@ -141,21 +179,23 @@ export default function ChatHeader({
           </button>
           {showMenu && (
             <div className="absolute right-0 mt-2 w-48 bg-brand-surface border border-brand-line shadow-lg z-30 rounded-lg overflow-hidden animate-scale-in">
-              <button
-                onClick={() => {
-                  onSearchMessages?.()
-                  setShowMenu(false)
-                }}
-                className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors"
-              >
-                <Search size={14} /> Search messages
-              </button>
+              {onSearchMessages && (
+                <button
+                  onClick={() => {
+                    onSearchMessages()
+                    setShowMenu(false)
+                  }}
+                  className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors"
+                >
+                  <Search size={14} /> Search messages
+                </button>
+              )}
               <button
                 onClick={() => {
                   onExportConversation?.()
                   setShowMenu(false)
                 }}
-                className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors border-t border-brand-line"
+                className={`w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors ${onSearchMessages ? 'border-t border-brand-line' : ''}`}
               >
                 <Download size={14} /> Export conversation
               </button>
