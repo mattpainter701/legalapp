@@ -6,6 +6,7 @@ Optional fallback: Slack webhook via SLACK_WEBHOOK_URL
 """
 
 import logging
+from html import escape
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -528,20 +529,24 @@ class EmailService:
         task_type: str = "general",
         description: Optional[str] = None,
         assignee_name: Optional[str] = None,
+        created_by_name: Optional[str] = None,
+        created_at: Optional[str] = None,
+        customer_name: Optional[str] = None,
+        matter_name: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> bool:
         """Send an immediate alert when a task is assigned."""
         subject = f"New task assigned: {task_title}"
         now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
-        assignee_row = (
-            f"<tr><td><strong>Assigned To</strong></td><td>{assignee_name}</td></tr>"
-            if assignee_name
-            else ""
-        )
-        description_row = (
-            f"<tr><td><strong>Details</strong></td><td>{description}</td></tr>"
-            if description
-            else ""
-        )
+
+        def row(label: str, value: Optional[str], *, strong: bool = False) -> str:
+            if not value:
+                return ""
+            safe_value = escape(value).replace("\n", "<br>")
+            if strong:
+                safe_value = f"<strong>{safe_value}</strong>"
+            return f"<tr><td><strong>{escape(label)}</strong></td><td>{safe_value}</td></tr>"
+
         content = f"""
         <div class="header">
           <h1>Clarity Legal &mdash; Task Assigned</h1>
@@ -552,12 +557,18 @@ class EmailService:
           <table>
             <thead><tr><th>Field</th><th>Details</th></tr></thead>
             <tbody>
-              <tr><td><strong>Task</strong></td><td>{task_title}</td></tr>
-              <tr><td><strong>Priority</strong></td><td><strong>{priority}</strong></td></tr>
-              <tr><td><strong>Type</strong></td><td>{task_type}</td></tr>
-              <tr><td><strong>Due Date</strong></td><td>{due_date}</td></tr>
-              {assignee_row}
-              {description_row}
+              {row("Task", task_title)}
+              {row("Priority", priority, strong=True)}
+              {row("Type", task_type)}
+              {row("Assigned To", assignee_name)}
+              {row("Created By", created_by_name)}
+              {row("Created At", created_at)}
+              {row("Alert Sent", now_str)}
+              {row("Due", due_date)}
+              {row("Customer", customer_name)}
+              {row("Matter", matter_name)}
+              {row("Source", source)}
+              {row("Reason / Description", description)}
             </tbody>
           </table>
           <p style="margin-top:20px; font-size:13px; color:#555;">
@@ -573,11 +584,22 @@ class EmailService:
             f"Priority: {priority}",
             f"Type: {task_type}",
             f"Due: {due_date}",
+            f"Alert sent: {now_str}",
         ]
         if assignee_name:
             text_lines.append(f"Assigned to: {assignee_name}")
+        if created_by_name:
+            text_lines.append(f"Created by: {created_by_name}")
+        if created_at:
+            text_lines.append(f"Created at: {created_at}")
+        if customer_name:
+            text_lines.append(f"Customer: {customer_name}")
+        if matter_name:
+            text_lines.append(f"Matter: {matter_name}")
+        if source:
+            text_lines.append(f"Source: {source}")
         if description:
-            text_lines.extend(["", description])
+            text_lines.extend(["", "Reason / Description:", description])
         text_body = "\n".join(text_lines)
         return await self.send_email([to_email], subject, html_body, text_body)
 

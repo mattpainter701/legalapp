@@ -4,6 +4,8 @@
 
 ### Fixed
 - **Intake dashboard call logging feedback:** prevented successful call logging from immediately triggering an empty dashboard search, which caused a misleading `422` and made the first call log appear to do nothing. Assigned intake leads now also create/update an urgent partner follow-up task and send the standard task assignment alert.
+- **Task assignment alerts:** expanded task-assignment notifications into ticket-style alerts with assignee, creator, created/alert time, due time, customer/matter context, source, and reason/description fields.
+- **Intake dashboard recent callers:** added a preloaded recent-caller panel with 10/20/50 limits so reception can quickly pick up repeat callbacks without searching from scratch.
 - **Chat/assistant not falling back to general reasoning or indicating confidence tags (v2):** Second pass on `SYSTEM_PROMPT_TEMPLATE` in `app/services/llm.py`. Added negative examples (WRONG vs RIGHT), explicit "do NOT explain your reasoning process" rule, "greet in 1-2 words then answer" simplification, and a direct "if user types 2+2, reply 4" non-legal-query example. The free-tier models were reading the old prompt as rules to explain rather than follow.
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 

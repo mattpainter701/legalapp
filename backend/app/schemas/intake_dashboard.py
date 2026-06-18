@@ -39,6 +39,26 @@ class IntakeDashboardSearchResponse(BaseModel):
     results: list[IntakeSearchResult]
 
 
+class RecentIntakeCaller(BaseModel):
+    id: uuid.UUID
+    caller_name: str
+    phone: Optional[str] = None
+    normalized_phone: Optional[str] = None
+    practice_area: Optional[str] = None
+    purpose: Optional[str] = None
+    notes: Optional[str] = None
+    contact_id: Optional[uuid.UUID] = None
+    lead_id: Optional[uuid.UUID] = None
+    created_by_user_id: Optional[uuid.UUID] = None
+    created_by_name: Optional[str] = None
+    occurred_at: datetime
+
+
+class RecentIntakeCallersResponse(BaseModel):
+    limit: int
+    callers: list[RecentIntakeCaller]
+
+
 class IntakeDashboardCallCreate(BaseModel):
     caller_name: Optional[str] = Field(None, max_length=500)
     phone: Optional[str] = Field(None, max_length=100)

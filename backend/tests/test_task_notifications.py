@@ -4,8 +4,10 @@ from datetime import date
 
 import pytest
 
+from app.models.contact import Contact
 from app.models.task import Task
 from app.models.user import User
+from app.services.email import EmailService
 from app.services import task_notifications
 
 
@@ -13,7 +15,7 @@ from app.services import task_notifications
 async def test_notify_task_created_pushes_calendar_and_assignment_email(
     db_session, test_tenant
 ):
-    user = User(
+    assignee = User(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
         email="partner@testfirm.com",
@@ -21,7 +23,24 @@ async def test_notify_task_created_pushes_calendar_and_assignment_email(
         role="admin",
         is_active=True,
     )
-    db_session.add(user)
+    creator = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="reception@testfirm.com",
+        full_name="Reception User",
+        role="staff",
+        is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Jane",
+        last_name="Doe",
+        phone="701-555-2222",
+        created_by_user_id=creator.id,
+    )
+    db_session.add_all([assignee, creator])
+    await db_session.flush()
+    db_session.add(contact)
     await db_session.flush()
 
     task = Task(
@@ -31,8 +50,9 @@ async def test_notify_task_created_pushes_calendar_and_assignment_email(
         task_type="follow_up",
         priority="urgent",
         due_date=date.today(),
-        assigned_to_user_id=user.id,
-        created_by_user_id=user.id,
+        assigned_to_user_id=assignee.id,
+        created_by_user_id=creator.id,
+        contact_id=contact.id,
         source="intake_dashboard",
     )
     db_session.add(task)
@@ -79,5 +99,64 @@ async def test_notify_task_created_pushes_calendar_and_assignment_email(
     assert email_calls[0]["to_email"] == "partner@testfirm.com"
     assert email_calls[0]["priority"] == "urgent"
     assert email_calls[0]["task_type"] == "follow_up"
+    assert email_calls[0]["assignee_name"] == "Partner User"
+    assert email_calls[0]["created_by_name"] == "Reception User"
+    assert email_calls[0]["customer_name"] == "Jane Doe"
+    assert email_calls[0]["source"] == "intake_dashboard"
+    assert email_calls[0]["description"] == "Call Jane Doe back."
     assert len(calendar_calls) == 2
-    assert {call["user_id"] for call in calendar_calls} == {str(user.id)}
+    assert {call["user_id"] for call in calendar_calls} == {str(assignee.id)}
+
+
+@pytest.mark.asyncio
+async def test_task_assignment_email_includes_ticket_fields_and_escapes_html():
+    service = EmailService()
+    sent = []
+
+    async def fake_send_email(to_emails, subject, html_body, text_body):
+        sent.append(
+            {
+                "to_emails": to_emails,
+                "subject": subject,
+                "html_body": html_body,
+                "text_body": text_body,
+            }
+        )
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "send_email", fake_send_email)
+    try:
+        ok = await service.send_task_assignment_alert(
+            to_email="partner@testfirm.com",
+            task_title="Urgent intake follow-up: Jane <Doe>",
+            due_date="2026-06-17 15:30",
+            priority="urgent",
+            task_type="follow_up",
+            description="Caller needs divorce help.\n<script>alert(1)</script>",
+            assignee_name="Partner User",
+            created_by_name="Reception User",
+            created_at="June 17, 2026 15:01 UTC",
+            customer_name="Jane Doe",
+            matter_name="Jane Doe Intake",
+            source="intake_dashboard",
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert ok is True
+    assert len(sent) == 1
+    html = sent[0]["html_body"]
+    text = sent[0]["text_body"]
+    assert "Created By" in html
+    assert "Reception User" in html
+    assert "Assigned To" in html
+    assert "Partner User" in html
+    assert "Customer" in html
+    assert "Jane Doe" in html
+    assert "Reason / Description" in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "Created by: Reception User" in text
+    assert "Customer: Jane Doe" in text
+    assert "Reason / Description:" in text

@@ -9,6 +9,8 @@ from typing import Coroutine
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.contact import Contact
+from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.user import User
 from app.services import google_calendar, microsoft_calendar
@@ -37,6 +39,27 @@ def _fire_and_log(coro: Coroutine, *, task_id: str, action: str) -> None:
 def task_calendar_user_id(task: Task) -> str | None:
     user_id = task.assigned_to_user_id or task.created_by_user_id
     return str(user_id) if user_id else None
+
+
+def _user_label(user: User | None) -> str | None:
+    if not user:
+        return None
+    return user.full_name or user.email
+
+
+def _format_task_created_at(task: Task) -> str:
+    if not task.created_at:
+        return "Unknown"
+    return task.created_at.strftime("%B %d, %Y %H:%M UTC")
+
+
+def _format_task_due(task: Task) -> str:
+    if not task.due_date:
+        return "No due date"
+    due = task.due_date.isoformat()
+    if task.due_time:
+        due = f"{due} {task.due_time.strftime('%H:%M')}"
+    return due
 
 
 def push_task_to_calendars(task: Task, tenant_id: str) -> None:
@@ -90,20 +113,60 @@ async def send_task_assignment_alert(db: AsyncSession, task: Task) -> bool:
     if not task.assigned_to_user_id:
         return False
     assignee = (
-        await db.execute(select(User).where(User.id == task.assigned_to_user_id))
+        await db.execute(
+            select(User).where(
+                User.id == task.assigned_to_user_id,
+                User.tenant_id == task.tenant_id,
+            )
+        )
     ).scalar_one_or_none()
     if not assignee or not assignee.email:
         logger.info("Task %s assignment alert skipped: assignee has no email", task.id)
         return False
+    creator = None
+    if task.created_by_user_id:
+        creator = (
+            await db.execute(
+                select(User).where(
+                    User.id == task.created_by_user_id,
+                    User.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    contact = None
+    if task.contact_id:
+        contact = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.id == task.contact_id,
+                    Contact.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    matter = None
+    if task.matter_id:
+        matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == task.matter_id,
+                    Matter.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
 
     return await email_service.send_task_assignment_alert(
         to_email=assignee.email,
         task_title=task.title,
-        due_date=task.due_date.isoformat() if task.due_date else "No due date",
+        due_date=_format_task_due(task),
         priority=task.priority,
         task_type=task.task_type,
         description=task.description,
         assignee_name=assignee.full_name or assignee.email,
+        created_by_name=_user_label(creator),
+        created_at=_format_task_created_at(task),
+        customer_name=contact.display_name if contact else None,
+        matter_name=matter.matter_name if matter else None,
+        source=task.source,
     )
 
 

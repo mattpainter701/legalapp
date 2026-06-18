@@ -13,6 +13,7 @@ import {
 import {
   assignNextPartner,
   createIntakeDashboardCall,
+  getRecentIntakeDashboardCallers,
   getRotationRules,
   searchIntakeDashboard,
   searchUsers,
@@ -232,10 +233,73 @@ function RotationAdmin() {
   )
 }
 
+function RecentCallersPanel({ callers, limit, loading, onLimitChange, onSelect }) {
+  return (
+    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <PhoneCall size={18} className="text-brand-accent" />
+          <h2 className="font-serif text-lg font-bold text-brand-ink">Recent Callers</h2>
+        </div>
+        <select
+          value={limit}
+          onChange={(event) => onLimitChange(Number(event.target.value))}
+          className="rounded-xl border border-brand-line bg-white px-2 py-1 text-xs font-semibold text-brand-ink"
+        >
+          {[10, 20, 50].map((value) => (
+            <option key={value} value={value}>Last {value}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          Loading recent calls...
+        </div>
+      ) : callers.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          No recent dashboard calls yet.
+        </div>
+      ) : (
+        <div className="grid gap-2 lg:grid-cols-2">
+          {callers.map((caller) => (
+            <button
+              key={caller.id}
+              type="button"
+              onClick={() => onSelect(caller)}
+              className="rounded-2xl border border-brand-line bg-brand-bg-soft p-3 text-left transition hover:border-brand-accent/60 hover:bg-white"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
+                  <p className="mt-0.5 truncate text-xs text-brand-muted">
+                    {caller.purpose || caller.practice_area || 'Call logged'}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
+                  {caller.occurred_at ? new Date(caller.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-brand-muted">
+                {caller.phone && <span>{caller.phone}</span>}
+                {caller.practice_area && <span>{caller.practice_area}</span>}
+                {caller.created_by_name && <span>by {caller.created_by_name}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function IntakeDashboardPage() {
   const { user } = useAuth()
   const [q, setQ] = useState('')
   const [phone, setPhone] = useState('')
+  const [recentLimit, setRecentLimit] = useState(20)
+  const [recentCallers, setRecentCallers] = useState([])
+  const [recentLoading, setRecentLoading] = useState(false)
   const [searchData, setSearchData] = useState(null)
   const [searching, setSearching] = useState(false)
   const [selected, setSelected] = useState(null)
@@ -251,6 +315,20 @@ export default function IntakeDashboardPage() {
   })
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+
+  const loadRecentCallers = useCallback(async (limitValue = recentLimit) => {
+    setRecentLoading(true)
+    try {
+      const data = await getRecentIntakeDashboardCallers({ limit: limitValue })
+      setRecentCallers(data.callers || [])
+    } catch {
+      setRecentCallers([])
+    } finally {
+      setRecentLoading(false)
+    }
+  }, [recentLimit])
+
+  useEffect(() => { loadRecentCallers(recentLimit) }, [loadRecentCallers, recentLimit])
 
   const searchParams = () => {
     const query = q.trim()
@@ -297,6 +375,30 @@ export default function IntakeDashboardPage() {
     return data
   }
 
+  const runSearchFor = async ({ query, phoneValue }) => {
+    const params = {
+      q: query?.trim() || undefined,
+      phone: phoneValue?.trim() || undefined,
+    }
+    if (!params.q && !params.phone) return null
+    setSearching(true)
+    try {
+      const data = await searchIntakeDashboard(params)
+      setSearchData(data)
+      setSelected(null)
+      if (data.recommended_attorney_name) {
+        setMessage(`Prior history found. Recommended attorney: ${data.recommended_attorney_name}.`)
+      }
+      return data
+    } catch (err) {
+      setSearchData(null)
+      setMessage(err?.response?.data?.detail || 'Search failed.')
+      return null
+    } finally {
+      setSearching(false)
+    }
+  }
+
   const selectResult = (item) => {
     setSelected(item)
     setForm((current) => ({
@@ -306,6 +408,22 @@ export default function IntakeDashboardPage() {
       purpose: item.subtitle || current.purpose,
     }))
     if (item.phone) setPhone(item.phone)
+  }
+
+  const selectRecentCaller = async (caller) => {
+    const nextName = caller.caller_name || ''
+    const nextPhone = caller.phone || ''
+    setQ(nextName)
+    setPhone(nextPhone)
+    setForm((current) => ({
+      ...current,
+      caller_name: nextName || current.caller_name,
+      practice_area: caller.practice_area || current.practice_area,
+      purpose: caller.purpose || current.purpose,
+      notes: caller.notes || current.notes,
+    }))
+    setMessage(nextPhone && !nextName ? 'Recent caller selected. Verify identity before relying on phone-only history.' : null)
+    await runSearchFor({ query: nextName, phoneValue: nextPhone })
   }
 
   const assignLead = async (leadId) => {
@@ -350,6 +468,7 @@ export default function IntakeDashboardPage() {
       setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
       setForm((current) => ({ ...current, purpose: '', notes: '' }))
       await refreshSearchSilently()
+      await loadRecentCallers()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Failed to log call.')
     }
@@ -391,6 +510,14 @@ export default function IntakeDashboardPage() {
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
           <div className="space-y-5">
+            <RecentCallersPanel
+              callers={recentCallers}
+              limit={recentLimit}
+              loading={recentLoading}
+              onLimitChange={setRecentLimit}
+              onSelect={selectRecentCaller}
+            />
+
             <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
               <form onSubmit={runSearch} className="grid gap-3 md:grid-cols-[1fr_220px_auto]">
                 <div className="relative">

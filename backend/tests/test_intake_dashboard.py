@@ -1,8 +1,10 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
 
+from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
 from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
 from app.models.tenant import Tenant
@@ -249,6 +251,101 @@ async def test_dashboard_call_can_create_qualified_lead_and_log_call(
     assert lead.status == "qualified"
     assert lead.practice_area == "divorce"
     assert contact.display_name == "Jane Doe"
+
+
+@pytest.mark.asyncio
+async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
+    client, db_session, test_tenant, test_user
+):
+    older = datetime.now(timezone.utc) - timedelta(hours=2)
+    newer = datetime.now(timezone.utc) - timedelta(minutes=5)
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Jane",
+        last_name="Doe",
+        phone="701-555-2222",
+        created_by_user_id=test_user.id,
+    )
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other Firm",
+        domain="other-recent.example",
+        billing_tier="payg",
+        is_active=True,
+    )
+    db_session.add_all([contact, other_tenant])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Older Caller",
+                summary="Older call reason",
+                body="Older call reason\nPractice area: divorce\nNotes: left message",
+                participants={
+                    "caller_name": "Older Caller",
+                    "phone": "701-555-1111",
+                    "normalized_phone": "7015551111",
+                },
+                created_by_user_id=test_user.id,
+                occurred_at=older,
+            ),
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Jane Doe",
+                summary="Needs divorce attorney",
+                body="Needs divorce attorney\nPractice area: divorce\nNotes: urgent",
+                participants={
+                    "caller_name": "Jane Doe",
+                    "phone": "701-555-2222",
+                    "normalized_phone": "7015552222",
+                },
+                contact_id=contact.id,
+                created_by_user_id=test_user.id,
+                occurred_at=newer,
+            ),
+            CommunicationLog(
+                tenant_id=other_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Other Tenant",
+                summary="Should not leak",
+                participants={"caller_name": "Other Tenant"},
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["limit"] == 10
+    assert [item["caller_name"] for item in data["callers"]] == [
+        "Jane Doe",
+        "Older Caller",
+    ]
+    latest = data["callers"][0]
+    assert latest["phone"] == "701-555-2222"
+    assert latest["normalized_phone"] == "7015552222"
+    assert latest["practice_area"] == "divorce"
+    assert latest["purpose"] == "Needs divorce attorney"
+    assert latest["notes"] == "urgent"
+    assert latest["contact_id"] == str(contact.id)
+    assert latest["created_by_name"] == (test_user.full_name or test_user.email)
+
+    invalid = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 25}
+    )
+    assert invalid.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -972,6 +972,9 @@ export const convertLead = (id, data) =>
 export const searchIntakeDashboard = (params = {}) =>
   api.get('/intake/dashboard/search', { params }).then(r => r.data)
 
+export const getRecentIntakeDashboardCallers = (params = {}) =>
+  api.get('/intake/dashboard/recent-callers', { params }).then(r => r.data)
+
 export const createIntakeDashboardCall = (data) =>
   api.post('/intake/dashboard/calls', data).then(r => r.data)
 

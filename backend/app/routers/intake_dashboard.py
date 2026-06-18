@@ -24,6 +24,8 @@ from app.schemas.intake_dashboard import (
     IntakeDashboardCallResponse,
     IntakeDashboardSearchResponse,
     IntakeSearchResult,
+    RecentIntakeCaller,
+    RecentIntakeCallersResponse,
     RotationRuleListResponse,
     RotationRuleResponse,
     RotationRuleUpsertRequest,
@@ -113,6 +115,10 @@ async def _user_name(db: AsyncSession, user_id: uuid.UUID | None) -> str | None:
         return None
     result = await db.execute(select(User).where(User.id == user_id))
     row = result.scalar_one_or_none()
+    return _user_name_from_row(row)
+
+
+def _user_name_from_row(row: User | None) -> str | None:
     return row.full_name or row.email if row else None
 
 
@@ -207,6 +213,88 @@ async def _upsert_lead_assignment_task(
 def _result_sort_key(item: IntakeSearchResult) -> tuple[int, int]:
     type_rank = {"matter": 0, "lead": 1, "contact": 2, "legacy_call": 3}
     return (-item.score, type_rank.get(item.result_type, 9))
+
+
+def _log_participant(log: CommunicationLog, key: str) -> str | None:
+    participants = log.participants or {}
+    value = participants.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _log_field_from_body(log: CommunicationLog, prefix: str) -> str | None:
+    body = log.body or ""
+    marker = f"{prefix}:"
+    for line in body.splitlines():
+        if line.startswith(marker):
+            value = line[len(marker) :].strip()
+            return value or None
+    return None
+
+
+def _log_caller_name(log: CommunicationLog, contact: Contact | None) -> str:
+    return (
+        _log_participant(log, "caller_name")
+        or (contact.display_name if contact else None)
+        or log.subject.removeprefix("Inbound call:").strip()
+        or "Unknown caller"
+    )
+
+
+@router.get("/recent-callers", response_model=RecentIntakeCallersResponse)
+async def recent_callers(
+    limit: int = 20,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+    if limit not in {10, 20, 50}:
+        raise HTTPException(status_code=422, detail="Limit must be 10, 20, or 50")
+
+    rows = (
+        await db.execute(
+            select(CommunicationLog, Contact, User)
+            .outerjoin(
+                Contact,
+                (Contact.id == CommunicationLog.contact_id)
+                & (Contact.tenant_id == tenant_id),
+            )
+            .outerjoin(
+                User,
+                (User.id == CommunicationLog.created_by_user_id)
+                & (User.tenant_id == tenant_id),
+            )
+            .where(
+                CommunicationLog.tenant_id == tenant_id,
+                CommunicationLog.channel == "call",
+                CommunicationLog.direction == "inbound",
+            )
+            .order_by(CommunicationLog.occurred_at.desc())
+            .limit(limit)
+        )
+    ).all()
+
+    callers = []
+    for log, contact, creator in rows:
+        callers.append(
+            RecentIntakeCaller(
+                id=log.id,
+                caller_name=_log_caller_name(log, contact),
+                phone=_log_participant(log, "phone") or (contact.phone if contact else None),
+                normalized_phone=_log_participant(log, "normalized_phone"),
+                practice_area=_log_field_from_body(log, "Practice area"),
+                purpose=log.summary,
+                notes=_log_field_from_body(log, "Notes"),
+                contact_id=log.contact_id,
+                lead_id=None,
+                created_by_user_id=log.created_by_user_id,
+                created_by_name=_user_name_from_row(creator),
+                occurred_at=log.occurred_at,
+            )
+        )
+    return RecentIntakeCallersResponse(limit=limit, callers=callers)
 
 
 @router.get("/search", response_model=IntakeDashboardSearchResponse)
