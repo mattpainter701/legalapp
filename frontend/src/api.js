@@ -366,6 +366,8 @@ export const getTeamsTeams = () =>
   api.get('/integrations/teams/teams').then((r) => r.data)
 export const getTeamsChannels = (teamId) =>
   api.get(`/integrations/teams/teams/${teamId}/channels`).then((r) => r.data)
+export const createTeamsChannel = (data) =>
+  api.post('/integrations/teams/channels', data).then((r) => r.data)
 export const getTeamsLinks = () =>
   api.get('/integrations/teams/links').then((r) => r.data)
 export const createTeamsLink = (data) =>
@@ -974,6 +976,9 @@ export const searchIntakeDashboard = (params = {}) =>
 
 export const getRecentIntakeDashboardCallers = (params = {}) =>
   api.get('/intake/dashboard/recent-callers', { params }).then(r => r.data)
+
+export const getIntakeAssignmentAvailability = (params = {}) =>
+  api.get('/intake/dashboard/assignment-availability', { params }).then(r => r.data)
 
 export const createIntakeDashboardCall = (data) =>
   api.post('/intake/dashboard/calls', data).then(r => r.data)

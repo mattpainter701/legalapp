@@ -20,7 +20,7 @@ from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
-from app.services.teams import TEAMS_REQUIRED_SCOPES
+from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
 from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import encrypt_token
 
@@ -129,7 +129,7 @@ def _admin_scopes(teams: bool) -> str:
     cloud-only tenants are never forced into broader consent.
     """
     if teams:
-        return MICROSOFT_ADMIN_SCOPES + " " + TEAMS_REQUIRED_SCOPES
+        return MICROSOFT_ADMIN_SCOPES + " " + TEAMS_CONNECT_SCOPES
     return MICROSOFT_ADMIN_SCOPES
 
 

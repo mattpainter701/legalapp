@@ -20,6 +20,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.schemas.intake_dashboard import (
     AssignNextResponse,
+    AssignmentAvailabilityResponse,
     IntakeDashboardCallCreate,
     IntakeDashboardCallResponse,
     IntakeDashboardSearchResponse,
@@ -242,6 +243,126 @@ def _log_caller_name(log: CommunicationLog, contact: Contact | None) -> str:
     )
 
 
+async def _recent_lead_for_log(
+    db: AsyncSession, tenant_id: uuid.UUID, log: CommunicationLog
+) -> Lead | None:
+    if not log.contact_id:
+        return None
+    return (
+        await db.execute(
+            select(Lead)
+            .where(
+                Lead.tenant_id == tenant_id,
+                Lead.contact_id == log.contact_id,
+            )
+            .order_by(Lead.updated_at.desc(), Lead.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _assignment_task_for_lead(
+    db: AsyncSession, tenant_id: uuid.UUID, lead: Lead | None
+) -> Task | None:
+    if not lead:
+        return None
+    return (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.tenant_id == tenant_id,
+                Task.external_ref == f"intake-dashboard:lead:{lead.id}:follow-up",
+            )
+            .order_by(Task.updated_at.desc(), Task.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _rotation_rule_with_active_users(
+    db: AsyncSession, tenant_id: uuid.UUID, practice_area: str
+) -> tuple[PartnerRotationState | None, list[uuid.UUID], dict[uuid.UUID, User]]:
+    practice_key = _practice_key(practice_area)
+    rule = (
+        await db.execute(
+            select(PartnerRotationState).where(
+                PartnerRotationState.tenant_id == tenant_id,
+                PartnerRotationState.practice_area == practice_key,
+                PartnerRotationState.is_enabled.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if not rule and practice_key != "general":
+        rule = (
+            await db.execute(
+                select(PartnerRotationState).where(
+                    PartnerRotationState.tenant_id == tenant_id,
+                    PartnerRotationState.practice_area == "general",
+                    PartnerRotationState.is_enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+    if not rule:
+        return None, [], {}
+
+    eligible_ids = [uuid.UUID(str(value)) for value in (rule.eligible_user_ids or [])]
+    if not eligible_ids:
+        return rule, [], {}
+
+    active_users = (
+        await db.execute(
+            select(User).where(
+                User.tenant_id == tenant_id,
+                User.id.in_(eligible_ids),
+                User.is_active.is_(True),
+            )
+        )
+    ).scalars().all()
+    active_by_id = {user.id: user for user in active_users}
+    ordered = [uid for uid in eligible_ids if uid in active_by_id]
+    return rule, ordered, active_by_id
+
+
+@router.get("/assignment-availability", response_model=AssignmentAvailabilityResponse)
+async def assignment_availability(
+    practice_area: str = "general",
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+    practice_key = _practice_key(practice_area)
+    rule, ordered, _active_by_id = await _rotation_rule_with_active_users(
+        db, tenant_id, practice_key
+    )
+    if not rule:
+        return AssignmentAvailabilityResponse(
+            practice_area=practice_key,
+            can_assign=False,
+            reason="No practice-specific or firm-wide rotation rule",
+        )
+    if not rule.eligible_user_ids:
+        return AssignmentAvailabilityResponse(
+            practice_area=practice_key,
+            can_assign=False,
+            reason="Rotation rule has no eligible users",
+            rule_practice_area=rule.practice_area,
+        )
+    if not ordered:
+        return AssignmentAvailabilityResponse(
+            practice_area=practice_key,
+            can_assign=False,
+            reason="Rotation rule has no active eligible users",
+            rule_practice_area=rule.practice_area,
+        )
+    return AssignmentAvailabilityResponse(
+        practice_area=practice_key,
+        can_assign=True,
+        rule_practice_area=rule.practice_area,
+        eligible_count=len(ordered),
+    )
+
+
 @router.get("/recent-callers", response_model=RecentIntakeCallersResponse)
 async def recent_callers(
     limit: int = 20,
@@ -278,6 +399,13 @@ async def recent_callers(
 
     callers = []
     for log, contact, creator in rows:
+        lead = await _recent_lead_for_log(db, tenant_id, log)
+        task = await _assignment_task_for_lead(db, tenant_id, lead)
+        assigned_to_user_id = None
+        if task and task.assigned_to_user_id:
+            assigned_to_user_id = task.assigned_to_user_id
+        elif lead and lead.assigned_to_user_id:
+            assigned_to_user_id = lead.assigned_to_user_id
         callers.append(
             RecentIntakeCaller(
                 id=log.id,
@@ -288,7 +416,15 @@ async def recent_callers(
                 purpose=log.summary,
                 notes=_log_field_from_body(log, "Notes"),
                 contact_id=log.contact_id,
-                lead_id=None,
+                lead_id=lead.id if lead else None,
+                lead_status=lead.status if lead else None,
+                assigned_to_user_id=assigned_to_user_id,
+                assigned_to_name=await _user_name(db, assigned_to_user_id),
+                task_id=task.id if task else None,
+                task_status=task.status if task else None,
+                task_priority=task.priority if task else None,
+                task_due_date=task.due_date if task else None,
+                task_completed_at=task.completed_at if task else None,
                 created_by_user_id=log.created_by_user_id,
                 created_by_name=_user_name_from_row(creator),
                 occurred_at=log.occurred_at,
@@ -706,46 +842,17 @@ async def assign_next_partner(
         raise HTTPException(status_code=404, detail="Lead not found")
 
     practice_area = _practice_key(lead.practice_area)
-    rule = (
-        await db.execute(
-            select(PartnerRotationState).where(
-                PartnerRotationState.tenant_id == tenant_id,
-                PartnerRotationState.practice_area == practice_area,
-                PartnerRotationState.is_enabled.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if not rule and practice_area != "general":
-        rule = (
-            await db.execute(
-                select(PartnerRotationState).where(
-                    PartnerRotationState.tenant_id == tenant_id,
-                    PartnerRotationState.practice_area == "general",
-                    PartnerRotationState.is_enabled.is_(True),
-                )
-            )
-        ).scalar_one_or_none()
+    rule, ordered, active_by_id = await _rotation_rule_with_active_users(
+        db, tenant_id, practice_area
+    )
     if not rule:
         raise HTTPException(
             status_code=404,
             detail="No practice-specific or firm-wide rotation rule",
         )
 
-    eligible_ids = [uuid.UUID(str(value)) for value in (rule.eligible_user_ids or [])]
-    if not eligible_ids:
+    if not rule.eligible_user_ids:
         raise HTTPException(status_code=422, detail="Rotation rule has no eligible users")
-
-    active_users = (
-        await db.execute(
-            select(User).where(
-                User.tenant_id == tenant_id,
-                User.id.in_(eligible_ids),
-                User.is_active.is_(True),
-            )
-        )
-    ).scalars().all()
-    active_by_id = {user.id: user for user in active_users}
-    ordered = [uid for uid in eligible_ids if uid in active_by_id]
     if not ordered:
         raise HTTPException(status_code=422, detail="Rotation rule has no active eligible users")
 

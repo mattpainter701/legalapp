@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  CreditCard, Mail, Shield, Server, Rocket, PhoneCall,
+  Mail, Shield, Server, Rocket, PhoneCall,
 } from 'lucide-react'
 
 const NAV_GROUPS = [
@@ -26,11 +26,10 @@ const NAV_GROUPS = [
     ],
   },
   {
-    label: 'Billing & Trust',
+    label: 'Accounting',
     items: [
       { path: '/time-tracking', label: 'Time Tracking',    icon: Clock, module: 'time-tracking' },
       { path: '/invoices',      label: 'Invoices',         icon: Receipt, module: 'invoices' },
-      { path: '/billing',       label: 'Billing',          icon: CreditCard, module: 'billing' },
       { path: '/trust',         label: 'Trust Accounting', icon: Landmark, module: 'trust' },
       { path: '/reports',       label: 'Reports',          icon: BarChart2, module: 'reports' },
     ],

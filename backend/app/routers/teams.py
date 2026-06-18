@@ -18,6 +18,7 @@ from app.models.plugin import Matter
 from app.models.teams_channel_link import TeamsChannelLink
 from app.models.teams_notification_setting import TeamsNotificationSetting
 from app.schemas.teams import (
+    ChannelCreateRequest,
     ChannelLinkCreate,
     ChannelLinkResponse,
     ChannelSummary,
@@ -85,6 +86,28 @@ async def list_team_channels(
     except teams_service.TeamsIntegrationError as exc:
         raise _integration_error(exc) from exc
     return [ChannelSummary(**c) for c in channels]
+
+
+@router.post("/channels", response_model=ChannelSummary, status_code=201)
+async def create_team_channel(
+    payload: ChannelCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user, tenant_id = await require_teams_enabled(request, db)
+    try:
+        channel = await teams_service.create_channel(
+            tenant_id,
+            payload.team_id,
+            payload.display_name,
+            description=payload.description,
+            user_id=str(user.id),
+        )
+    except teams_service.TeamsIntegrationError as exc:
+        raise _integration_error(exc) from exc
+    if not channel.get("id"):
+        raise HTTPException(status_code=502, detail="teams_channel_create_failed")
+    return ChannelSummary(**channel)
 
 
 # ── Matter ↔ channel links ───────────────────────────────────────────────

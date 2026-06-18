@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import {
   getAdminUsers,
   deactivateUser,
@@ -23,6 +23,7 @@ import IntegrationsPanel from '../components/IntegrationsPanel'
 import TeamsPanel from '../components/TeamsPanel'
 import QBOPanel from '../components/QBOPanel'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
+import BillingPage from './BillingPage'
 import { Spinner, Toggle } from '../components/ui'
 import { ArrowLeft, UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
 
@@ -45,6 +46,21 @@ function StatCard({ label, value, sub }) {
     </div>
   )
 }
+
+const ADMIN_TABS = [
+  { id: 'users', label: 'Users' },
+  { id: 'licensing', label: 'Licensing' },
+  { id: 'billing', label: 'Subscription' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'tenant', label: 'Tenant' },
+  { id: 'prompts', label: 'Prompts' },
+  { id: 'cloud-search', label: 'Cloud Search' },
+  { id: 'smb', label: 'File Shares' },
+  { id: 'integrations', label: 'Integrations' },
+  { id: 'teams', label: 'Teams' },
+  { id: 'qbo', label: 'QuickBooks' },
+  { id: 'settings', label: 'Settings' },
+]
 
 // ── Invite Modal ──────────────────────────────────────────────────────────────
 
@@ -1056,8 +1072,11 @@ function SettingsTab() {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('users')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialTab = searchParams.get('tab')
+  const [activeTab, setActiveTab] = useState(
+    ADMIN_TABS.some((t) => t.id === initialTab) ? initialTab : 'users'
+  )
   const [billingTier, setBillingTier] = useState('payg')
   const [tabsCollapsed, setTabsCollapsed] = useState(false)
 
@@ -1068,19 +1087,21 @@ export default function AdminPage() {
       .catch(() => {})
   }, [])
 
-  const tabs = [
-    { id: 'users', label: 'Users' },
-    { id: 'licensing', label: 'Licensing' },
-    { id: 'usage', label: 'Usage' },
-    { id: 'tenant', label: 'Tenant' },
-    { id: 'prompts', label: 'Prompts' },
-    { id: 'cloud-search', label: 'Cloud Search' },
-    { id: 'smb', label: 'File Shares' },
-    { id: 'integrations', label: 'Integrations' },
-    { id: 'teams', label: 'Teams' },
-    { id: 'qbo', label: 'QuickBooks' },
-    { id: 'settings', label: 'Settings' },
-  ]
+  const tabs = ADMIN_TABS
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab && ADMIN_TABS.some((t) => t.id === tab) && tab !== activeTab) {
+      setActiveTab(tab)
+    } else if (tab && !ADMIN_TABS.some((t) => t.id === tab)) {
+      setActiveTab('users')
+    }
+  }, [searchParams, activeTab])
+
+  const selectTab = (tab) => {
+    setActiveTab(tab)
+    setSearchParams(tab === 'users' ? {} : { tab })
+  }
 
   return (
     <div className="">
@@ -1111,7 +1132,7 @@ export default function AdminPage() {
                 <span className="text-sm font-sans font-semibold text-brand-ink">{tabs.find(t => t.id === activeTab)?.label || 'Admin'}</span>
                 <select
                   value={activeTab}
-                  onChange={(e) => setActiveTab(e.target.value)}
+                  onChange={(e) => selectTab(e.target.value)}
                   className="text-xs font-sans px-2 py-1.5 border border-brand-line rounded-lg bg-brand-surface text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent ml-auto"
                 >
                   {tabs.map(t => (
@@ -1127,7 +1148,7 @@ export default function AdminPage() {
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => selectTab(tab.id)}
                     className={`pb-4 text-[13px] md:text-[14px] font-sans font-medium border-b-2 transition-all whitespace-nowrap flex-shrink-0 ${
                       activeTab === tab.id
                         ? 'border-brand-accent text-brand-ink'
@@ -1146,6 +1167,7 @@ export default function AdminPage() {
         <div className="animate-in fade-in duration-300">
           {activeTab === 'users' && <UsersTab billingTier={billingTier} />}
           {activeTab === 'licensing' && <LicensingPanel />}
+          {activeTab === 'billing' && <BillingPage embedded />}
           {activeTab === 'usage' && <UsageTab />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}

@@ -16,6 +16,12 @@ class ChannelSummary(BaseModel):
     membership_type: Optional[str] = None
 
 
+class ChannelCreateRequest(BaseModel):
+    team_id: str
+    display_name: str
+    description: Optional[str] = None
+
+
 class ChannelLinkCreate(BaseModel):
     matter_id: str
     team_id: str

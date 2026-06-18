@@ -16,7 +16,7 @@ function TierBadge({ tier }) {
   )
 }
 
-export default function BillingPage() {
+export default function BillingPage({ embedded = false }) {
   useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -63,7 +63,7 @@ export default function BillingPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-brand-bg">
+      <div className={`flex items-center justify-center bg-brand-bg ${embedded ? 'py-16' : 'h-screen'}`}>
         <div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
       </div>
     )
@@ -71,21 +71,23 @@ export default function BillingPage() {
 
   return (
     <div className="">
-      <div className="max-w-2xl mx-auto px-4 py-12">
+      <div className={`${embedded ? 'max-w-3xl' : 'max-w-2xl mx-auto px-4 py-12'}`}>
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-brand-ink font-serif">Billing</h1>
+            <h1 className="text-2xl font-bold text-brand-ink font-serif">Subscription Billing</h1>
             <p className="text-sm text-brand-muted mt-1 font-sans">
-              Manage your subscription and payment method
+              Manage the firm's Clarity Legal subscription and payment method.
             </p>
           </div>
-          <button
-            onClick={() => navigate(-1)}
-            className="text-sm text-brand-muted hover:text-brand-ink font-sans"
-          >
-            ← Back
-          </button>
+          {!embedded && (
+            <button
+              onClick={() => navigate(-1)}
+              className="text-sm text-brand-muted hover:text-brand-ink font-sans"
+            >
+              ← Back
+            </button>
+          )}
         </div>
 
         {successMsg && (

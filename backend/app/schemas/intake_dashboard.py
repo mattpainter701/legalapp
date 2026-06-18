@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -49,6 +49,14 @@ class RecentIntakeCaller(BaseModel):
     notes: Optional[str] = None
     contact_id: Optional[uuid.UUID] = None
     lead_id: Optional[uuid.UUID] = None
+    lead_status: Optional[str] = None
+    assigned_to_user_id: Optional[uuid.UUID] = None
+    assigned_to_name: Optional[str] = None
+    task_id: Optional[uuid.UUID] = None
+    task_status: Optional[str] = None
+    task_priority: Optional[str] = None
+    task_due_date: Optional[date] = None
+    task_completed_at: Optional[datetime] = None
     created_by_user_id: Optional[uuid.UUID] = None
     created_by_name: Optional[str] = None
     occurred_at: datetime
@@ -57,6 +65,14 @@ class RecentIntakeCaller(BaseModel):
 class RecentIntakeCallersResponse(BaseModel):
     limit: int
     callers: list[RecentIntakeCaller]
+
+
+class AssignmentAvailabilityResponse(BaseModel):
+    practice_area: str
+    can_assign: bool
+    reason: Optional[str] = None
+    rule_practice_area: Optional[str] = None
+    eligible_count: int = 0
 
 
 class IntakeDashboardCallCreate(BaseModel):

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -259,6 +259,14 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
 ):
     older = datetime.now(timezone.utc) - timedelta(hours=2)
     newer = datetime.now(timezone.utc) - timedelta(minutes=5)
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="partner@testfirm.com",
+        full_name="Partner User",
+        role="admin",
+        is_active=True,
+    )
     contact = Contact(
         tenant_id=test_tenant.id,
         first_name="Jane",
@@ -273,7 +281,18 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
         billing_tier="payg",
         is_active=True,
     )
-    db_session.add_all([contact, other_tenant])
+    db_session.add_all([partner, contact, other_tenant])
+    await db_session.flush()
+    lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="qualified",
+        practice_area="divorce",
+        description="Needs divorce attorney",
+        assigned_to_user_id=partner.id,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(lead)
     await db_session.flush()
     db_session.add_all(
         [
@@ -310,6 +329,21 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
                 created_by_user_id=test_user.id,
                 occurred_at=newer,
             ),
+            Task(
+                tenant_id=test_tenant.id,
+                title="Urgent intake follow-up: Jane Doe",
+                description="Call Jane Doe back.",
+                task_type="follow_up",
+                status="completed",
+                priority="urgent",
+                due_date=date.today(),
+                completed_at=datetime.now(timezone.utc),
+                contact_id=contact.id,
+                assigned_to_user_id=partner.id,
+                created_by_user_id=test_user.id,
+                source="intake_dashboard",
+                external_ref=f"intake-dashboard:lead:{lead.id}:follow-up",
+            ),
             CommunicationLog(
                 tenant_id=other_tenant.id,
                 direction="inbound",
@@ -340,12 +374,62 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
     assert latest["purpose"] == "Needs divorce attorney"
     assert latest["notes"] == "urgent"
     assert latest["contact_id"] == str(contact.id)
+    assert latest["lead_id"] == str(lead.id)
+    assert latest["lead_status"] == "qualified"
+    assert latest["assigned_to_user_id"] == str(partner.id)
+    assert latest["assigned_to_name"] == "Partner User"
+    assert latest["task_status"] == "completed"
+    assert latest["task_priority"] == "urgent"
+    assert latest["task_due_date"] == date.today().isoformat()
+    assert latest["task_completed_at"]
     assert latest["created_by_name"] == (test_user.full_name or test_user.email)
 
     invalid = await client.get(
         "/api/intake/dashboard/recent-callers", params={"limit": 25}
     )
     assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_assignment_availability_reports_missing_and_general_rotation(
+    client, db_session, test_tenant, test_user
+):
+    missing = await client.get(
+        "/api/intake/dashboard/assignment-availability",
+        params={"practice_area": "criminal"},
+    )
+    assert missing.status_code == 200
+    missing_data = missing.json()
+    assert missing_data["practice_area"] == "criminal"
+    assert missing_data["can_assign"] is False
+    assert missing_data["reason"] == "No practice-specific or firm-wide rotation rule"
+
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="general-rotation@testfirm.com",
+        full_name="General Rotation Partner",
+        role="admin",
+        is_active=True,
+    )
+    rule = PartnerRotationState(
+        tenant_id=test_tenant.id,
+        practice_area="general",
+        eligible_user_ids=[str(partner.id)],
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([partner, rule])
+    await db_session.commit()
+
+    available = await client.get(
+        "/api/intake/dashboard/assignment-availability",
+        params={"practice_area": "criminal"},
+    )
+    assert available.status_code == 200
+    data = available.json()
+    assert data["can_assign"] is True
+    assert data["rule_practice_area"] == "general"
+    assert data["eligible_count"] == 1
 
 
 @pytest.mark.asyncio

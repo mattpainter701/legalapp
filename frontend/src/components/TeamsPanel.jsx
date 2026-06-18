@@ -4,11 +4,12 @@ import {
   getIntegrationStatus,
   getTeamsTeams,
   getTeamsChannels,
+  createTeamsChannel,
   getTeamsLinks,
   createTeamsLink,
   deleteTeamsLink,
   sendTeamsTestMessage,
-  getMatters,
+  getMattersV2,
 } from '../api'
 
 export default function TeamsPanel() {
@@ -24,6 +25,7 @@ export default function TeamsPanel() {
   const [selTeam, setSelTeam] = useState('')
   const [selChannel, setSelChannel] = useState('')
   const [selMatter, setSelMatter] = useState('')
+  const [newChannelName, setNewChannelName] = useState('')
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
@@ -38,8 +40,10 @@ export default function TeamsPanel() {
       setTeams(t)
       setLinks(l)
       try {
-        setMatters(await getMatters())
-      } catch {
+        const data = await getMattersV2({ page_size: 200 })
+        setMatters(Array.isArray(data) ? data : (data.items || []))
+      } catch (e) {
+        showFlash(e?.response?.data?.detail || 'Failed to load matters.', 'error')
         setMatters([])
       }
     } catch {
@@ -73,6 +77,12 @@ export default function TeamsPanel() {
 
   const teamName = (id) => teams.find((t) => t.id === id)?.display_name || ''
   const channelName = (id) => channels.find((c) => c.id === id)?.display_name || ''
+  const selectedMatter = matters.find((m) => m.id === selMatter)
+  const matterLabel = (matter) => matter?.matter_name || matter?.name || matter?.slug || ''
+  const defaultChannelName = () => {
+    const base = matterLabel(selectedMatter) || 'Matter'
+    return base.replace(/[~#%&*{}+/\\:<>?|"]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 50)
+  }
 
   const handleLink = async () => {
     if (!selTeam || !selChannel || !selMatter) return
@@ -89,6 +99,41 @@ export default function TeamsPanel() {
       showFlash('Matter linked to channel.')
     } catch (e) {
       showFlash(e?.response?.data?.detail || 'Failed to link.', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCreateChannel = async () => {
+    if (!selTeam) {
+      showFlash('Pick a team first.', 'error')
+      return
+    }
+    const displayName = (newChannelName || defaultChannelName()).trim()
+    if (!displayName) {
+      showFlash('Enter a channel name or select a matter.', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      const channel = await createTeamsChannel({
+        team_id: selTeam,
+        display_name: displayName,
+        description: selectedMatter
+          ? `Clarity Legal matter channel for ${matterLabel(selectedMatter)}`
+          : 'Clarity Legal matter channel',
+      })
+      const nextChannels = [...channels.filter((c) => c.id !== channel.id), channel]
+      setChannels(nextChannels)
+      setSelChannel(channel.id)
+      setNewChannelName('')
+      showFlash(`Created channel ${channel.display_name || displayName}.`)
+    } catch (e) {
+      const detail = e?.response?.data?.detail
+      const message = typeof detail === 'string'
+        ? detail
+        : detail?.message || 'Failed to create channel. Reconnect Teams if Channel.Create consent is missing.'
+      showFlash(message, 'error')
     } finally {
       setBusy(false)
     }
@@ -200,16 +245,39 @@ export default function TeamsPanel() {
           </select>
           <select
             value={selMatter}
-            onChange={(e) => setSelMatter(e.target.value)}
+            onChange={(e) => {
+              const matterId = e.target.value
+              setSelMatter(matterId)
+              const matter = matters.find((m) => m.id === matterId)
+              if (matter && !newChannelName) {
+                setNewChannelName((matter.matter_name || matter.name || matter.slug || '').slice(0, 50))
+              }
+            }}
             className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
           >
-            <option value="">Select matter…</option>
+            <option value="">{matters.length ? 'Select matter…' : 'No matters found'}</option>
             {matters.map((m) => (
               <option key={m.id} value={m.id}>{m.matter_name || m.name || m.slug}</option>
             ))}
           </select>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+          <input
+            value={newChannelName}
+            onChange={(e) => setNewChannelName(e.target.value.slice(0, 50))}
+            placeholder={selectedMatter ? `New channel: ${defaultChannelName()}` : 'New channel name'}
+            disabled={!selTeam}
+            className="px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+          />
+          <button
+            onClick={handleCreateChannel}
+            disabled={busy || !selTeam || (!newChannelName.trim() && !selectedMatter)}
+            className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+          >
+            Create channel
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleLink}
             disabled={busy || !selTeam || !selChannel || !selMatter}
@@ -224,6 +292,11 @@ export default function TeamsPanel() {
           >
             Send test message
           </button>
+          {matters.length === 0 && (
+            <span className="text-xs text-brand-ink-2">
+              No canonical matters loaded. Create or import a matter before linking Teams.
+            </span>
+          )}
         </div>
       </div>
 

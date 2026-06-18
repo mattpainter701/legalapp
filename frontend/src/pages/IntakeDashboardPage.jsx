@@ -13,6 +13,7 @@ import {
 import {
   assignNextPartner,
   createIntakeDashboardCall,
+  getIntakeAssignmentAvailability,
   getRecentIntakeDashboardCallers,
   getRotationRules,
   searchIntakeDashboard,
@@ -233,7 +234,15 @@ function RotationAdmin() {
   )
 }
 
-function RecentCallersPanel({ callers, limit, loading, onLimitChange, onSelect }) {
+function RecentCallersPanel({ callers, limit, loading, selectedCaller, onLimitChange, onSelect }) {
+  const statusLabel = (caller) => {
+    if (caller.task_status === 'completed') return 'Responded'
+    if (caller.task_status) return `Task ${caller.task_status.replaceAll('_', ' ')}`
+    if (caller.assigned_to_name) return 'Routed'
+    if (caller.lead_id) return 'Lead open'
+    return 'Logged'
+  }
+
   return (
     <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -267,7 +276,9 @@ function RecentCallersPanel({ callers, limit, loading, onLimitChange, onSelect }
               key={caller.id}
               type="button"
               onClick={() => onSelect(caller)}
-              className="rounded-2xl border border-brand-line bg-brand-bg-soft p-3 text-left transition hover:border-brand-accent/60 hover:bg-white"
+              className={`rounded-2xl border p-3 text-left transition hover:border-brand-accent/60 hover:bg-white ${
+                selectedCaller?.id === caller.id ? 'border-brand-accent bg-white shadow-sm' : 'border-brand-line bg-brand-bg-soft'
+              }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -284,9 +295,77 @@ function RecentCallersPanel({ callers, limit, loading, onLimitChange, onSelect }
                 {caller.phone && <span>{caller.phone}</span>}
                 {caller.practice_area && <span>{caller.practice_area}</span>}
                 {caller.created_by_name && <span>by {caller.created_by_name}</span>}
+                <span className="font-bold text-brand-ink">{statusLabel(caller)}</span>
               </div>
             </button>
           ))}
+        </div>
+      )}
+
+      {selectedCaller && (
+        <div className="mt-4 rounded-2xl border border-brand-line bg-white p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-brand-muted">Selected call</p>
+              <h3 className="mt-1 font-serif text-lg font-bold text-brand-ink">{selectedCaller.caller_name}</h3>
+            </div>
+            <span className="rounded-full bg-brand-bg-soft px-3 py-1 text-[11px] font-bold text-brand-ink">
+              {statusLabel(selectedCaller)}
+            </span>
+          </div>
+          <dl className="mt-4 grid gap-3 text-xs md:grid-cols-2">
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Called</dt>
+              <dd className="mt-1 text-brand-ink">
+                {selectedCaller.occurred_at ? new Date(selectedCaller.occurred_at).toLocaleString() : 'Unknown'}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Logged By</dt>
+              <dd className="mt-1 text-brand-ink">{selectedCaller.created_by_name || 'Unknown'}</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Phone</dt>
+              <dd className="mt-1 text-brand-ink">{selectedCaller.phone || 'Not captured'}</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Practice</dt>
+              <dd className="mt-1 text-brand-ink">{selectedCaller.practice_area || 'Not set'}</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Routed To</dt>
+              <dd className="mt-1 text-brand-ink">{selectedCaller.assigned_to_name || 'Not assigned'}</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Lead Status</dt>
+              <dd className="mt-1 text-brand-ink">{selectedCaller.lead_status || 'No lead'}</dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Task Status</dt>
+              <dd className="mt-1 text-brand-ink">
+                {selectedCaller.task_status || 'No follow-up task'}
+                {selectedCaller.task_priority ? ` (${selectedCaller.task_priority})` : ''}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Task Due / Done</dt>
+              <dd className="mt-1 text-brand-ink">
+                {selectedCaller.task_completed_at
+                  ? `Completed ${new Date(selectedCaller.task_completed_at).toLocaleString()}`
+                  : selectedCaller.task_due_date || 'Not scheduled'}
+              </dd>
+            </div>
+            <div className="md:col-span-2">
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Customer Reason</dt>
+              <dd className="mt-1 whitespace-pre-wrap text-brand-ink">{selectedCaller.purpose || 'No reason captured'}</dd>
+            </div>
+            {selectedCaller.notes && (
+              <div className="md:col-span-2">
+                <dt className="font-black uppercase tracking-widest text-brand-muted">Internal Notes</dt>
+                <dd className="mt-1 whitespace-pre-wrap text-brand-ink">{selectedCaller.notes}</dd>
+              </div>
+            )}
+          </dl>
         </div>
       )}
     </section>
@@ -300,6 +379,9 @@ export default function IntakeDashboardPage() {
   const [recentLimit, setRecentLimit] = useState(20)
   const [recentCallers, setRecentCallers] = useState([])
   const [recentLoading, setRecentLoading] = useState(false)
+  const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
+  const [assignmentAvailability, setAssignmentAvailability] = useState(null)
+  const [assignmentChecking, setAssignmentChecking] = useState(false)
   const [searchData, setSearchData] = useState(null)
   const [searching, setSearching] = useState(false)
   const [selected, setSelected] = useState(null)
@@ -323,12 +405,37 @@ export default function IntakeDashboardPage() {
       setRecentCallers(data.callers || [])
     } catch {
       setRecentCallers([])
+      setSelectedRecentCaller(null)
     } finally {
       setRecentLoading(false)
     }
   }, [recentLimit])
 
   useEffect(() => { loadRecentCallers(recentLimit) }, [loadRecentCallers, recentLimit])
+
+  useEffect(() => {
+    if (form.outcome !== 'create_lead') {
+      setAssignmentAvailability(null)
+      return
+    }
+    let cancelled = false
+    setAssignmentChecking(true)
+    getIntakeAssignmentAvailability({ practice_area: form.practice_area || 'general' })
+      .then((data) => {
+        if (cancelled) return
+        setAssignmentAvailability(data)
+        if (!data.can_assign) {
+          setForm((current) => ({ ...current, auto_assign: false }))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAssignmentAvailability(null)
+      })
+      .finally(() => {
+        if (!cancelled) setAssignmentChecking(false)
+      })
+    return () => { cancelled = true }
+  }, [form.outcome, form.practice_area])
 
   const searchParams = () => {
     const query = q.trim()
@@ -359,7 +466,7 @@ export default function IntakeDashboardPage() {
       return data
     } catch (err) {
       setSearchData(null)
-      setMessage(err?.response?.data?.detail || 'Search failed.')
+      setMessage(err?.response?.status === 401 ? 'Session expired. Sign in again before searching history.' : (err?.response?.data?.detail || 'Search failed.'))
       return null
     } finally {
       setSearching(false)
@@ -369,10 +476,14 @@ export default function IntakeDashboardPage() {
   const refreshSearchSilently = async () => {
     const params = searchParams()
     if (!params) return null
-    const data = await searchIntakeDashboard(params)
-    setSearchData(data)
-    setSelected(null)
-    return data
+    try {
+      const data = await searchIntakeDashboard(params)
+      setSearchData(data)
+      setSelected(null)
+      return data
+    } catch {
+      return null
+    }
   }
 
   const runSearchFor = async ({ query, phoneValue }) => {
@@ -392,7 +503,7 @@ export default function IntakeDashboardPage() {
       return data
     } catch (err) {
       setSearchData(null)
-      setMessage(err?.response?.data?.detail || 'Search failed.')
+      setMessage(err?.response?.status === 401 ? 'Session expired. Sign in again before searching history.' : (err?.response?.data?.detail || 'Search failed.'))
       return null
     } finally {
       setSearching(false)
@@ -411,6 +522,7 @@ export default function IntakeDashboardPage() {
   }
 
   const selectRecentCaller = async (caller) => {
+    setSelectedRecentCaller(caller)
     const nextName = caller.caller_name || ''
     const nextPhone = caller.phone || ''
     setQ(nextName)
@@ -458,11 +570,15 @@ export default function IntakeDashboardPage() {
       if (result.task_id) {
         assignedText = ' Urgent follow-up task created.'
       } else if (form.auto_assign && result.lead_id) {
-        try {
-          const assignment = await assignNextPartner(result.lead_id)
-          assignedText = ` Assigned to ${assignment.assigned_to_name || 'next partner'} and urgent task created.`
-        } catch (err) {
-          assignedText = ` Assignment skipped: ${err?.response?.data?.detail || 'no matching rotation rule'}.`
+        if (assignmentAvailability && !assignmentAvailability.can_assign) {
+          assignedText = ` Assignment skipped: ${assignmentAvailability.reason || 'no matching rotation rule'}.`
+        } else {
+          try {
+            const assignment = await assignNextPartner(result.lead_id)
+            assignedText = ` Assigned to ${assignment.assigned_to_name || 'next partner'} and urgent task created.`
+          } catch (err) {
+            assignedText = ` Assignment skipped: ${err?.response?.data?.detail || 'no matching rotation rule'}.`
+          }
         }
       }
       setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
@@ -514,6 +630,7 @@ export default function IntakeDashboardPage() {
               callers={recentCallers}
               limit={recentLimit}
               loading={recentLoading}
+              selectedCaller={selectedRecentCaller}
               onLimitChange={setRecentLimit}
               onSelect={selectRecentCaller}
             />
@@ -670,10 +787,22 @@ export default function IntakeDashboardPage() {
                     type="checkbox"
                     checked={form.auto_assign}
                     onChange={(e) => set('auto_assign', e.target.checked)}
-                    disabled={form.outcome !== 'create_lead'}
+                    disabled={form.outcome !== 'create_lead' || assignmentChecking || assignmentAvailability?.can_assign === false}
                   />
                   Assign next partner after lead creation
                 </label>
+
+                {form.outcome === 'create_lead' && assignmentAvailability?.can_assign === false && (
+                  <div className="rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                    Auto-assignment is off for {form.practice_area}: {assignmentAvailability.reason}. Create or enable a general rotation rule to avoid manual routing.
+                  </div>
+                )}
+
+                {form.outcome === 'create_lead' && assignmentAvailability?.can_assign === true && (
+                  <div className="rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                    Auto-assignment ready via {assignmentAvailability.rule_practice_area} rotation ({assignmentAvailability.eligible_count} eligible).
+                  </div>
+                )}
 
                 {selected && (
                   <div className="rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs text-brand-ink">

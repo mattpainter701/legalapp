@@ -34,6 +34,8 @@ TEAMS_REQUIRED_SCOPES = (
     "Team.ReadBasic.All "
     "TeamsActivity.Send"
 )
+TEAMS_CHANNEL_CREATE_SCOPE = "Channel.Create"
+TEAMS_CONNECT_SCOPES = f"{TEAMS_REQUIRED_SCOPES} {TEAMS_CHANNEL_CREATE_SCOPE}"
 
 
 class TeamsIntegrationError(RuntimeError):
@@ -244,6 +246,53 @@ async def list_channels(
         for c in resp.json().get("value", [])
         if c.get("id")
     ]
+
+
+async def create_channel(
+    tenant_id: str,
+    team_id: str,
+    display_name: str,
+    *,
+    description: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a standard channel in a team using Microsoft Graph."""
+    name = display_name.strip()
+    if not name:
+        raise TeamsIntegrationError("Channel name is required")
+    token = await _get_token(tenant_id, user_id)
+    body = {
+        "displayName": name[:50],
+        "description": description or f"Clarity Legal matter channel: {name[:50]}",
+        "membershipType": "standard",
+    }
+    resp = await _graph_request(
+        "POST",
+        f"/teams/{team_id}/channels",
+        token=token,
+        json_body=body,
+    )
+    if not resp or resp.status_code not in (200, 201):
+        if resp is not None:
+            logger.warning(
+                "create_channel failed for tenant %s team %s: %s %s",
+                tenant_id,
+                team_id,
+                resp.status_code,
+                resp.text[:500],
+            )
+            raise TeamsIntegrationError(
+                f"Microsoft Graph could not create the channel ({resp.status_code}). "
+                "Reconnect Teams if Channel.Create consent is missing."
+            )
+        raise TeamsIntegrationError("Microsoft Graph did not return a channel response")
+
+    payload = resp.json()
+    return {
+        "id": payload.get("id"),
+        "display_name": payload.get("displayName") or name[:50],
+        "membership_type": payload.get("membershipType") or "standard",
+    }
 
 
 async def send_channel_message(

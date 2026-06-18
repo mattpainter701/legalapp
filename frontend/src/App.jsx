@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { Routes, Route, Navigate, useParams } from 'react-router-dom'
+import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import LoginPage from './pages/LoginPage'
 import HomePage from './pages/HomePage'
@@ -20,7 +20,6 @@ import DomesticPortfolioPage from './pages/DomesticPortfolioPage'
 import DomesticDetailPage from './pages/DomesticDetailPage'
 import MediationPortfolioPage from './pages/MediationPortfolioPage'
 import MediationDetailPage from './pages/MediationDetailPage'
-import BillingPage from './pages/BillingPage'
 import MCPPage from './pages/MCPPage'
 import PlatformPage from './pages/PlatformPage'
 import ContactsPage from './pages/ContactsPage'
@@ -173,6 +172,12 @@ function RedirectMatterId() {
   return <Navigate to={`/matters/${id}`} replace />
 }
 
+function LegacyBillingRedirect() {
+  const [searchParams] = useSearchParams()
+  const success = searchParams.get('success')
+  return <Navigate to={`/admin?tab=billing${success ? '&success=1' : ''}`} replace />
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -251,7 +256,7 @@ export default function App() {
         />
         <Route
           path="/billing"
-          element={<ShellRoute title="Billing" module="billing"><BillingPage /></ShellRoute>}
+          element={<ProtectedRoute adminOnly><LegacyBillingRedirect /></ProtectedRoute>}
         />
         <Route
           path="/contacts"

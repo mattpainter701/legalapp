@@ -5,6 +5,11 @@ import { Landmark, Plus, X, Loader2, Building2, ShieldCheck } from 'lucide-react
 
 const money = (v) => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+const matterOptionLabel = (matter) => {
+  const name = matter?.matter_name || matter?.name || matter?.title || matter?.slug || matter?.id
+  return matter?.case_number ? `${name} (${matter.case_number})` : name
+}
+
 export default function TrustAccountingPage() {
   const navigate = useNavigate()
   const [accounts, setAccounts] = useState([])
@@ -51,7 +56,7 @@ export default function TrustAccountingPage() {
     setCreateError(null)
     try {
       const data = await getMattersV2({ page_size: 200 })
-      setMatters(data.items || [])
+      setMatters(Array.isArray(data) ? data : (data.items || []))
     } catch {
       setMatters([])
     }
@@ -233,7 +238,7 @@ export default function TrustAccountingPage() {
                 >
                   <option value="">Select a matter…</option>
                   {matters.map(m => (
-                    <option key={m.id} value={m.id}>{m.title || m.name || m.case_number || m.id}</option>
+                    <option key={m.id} value={m.id}>{matterOptionLabel(m)}</option>
                   ))}
                 </select>
               </div>

@@ -205,6 +205,44 @@ class TestLinkCRUD:
 
 
 @pytest.mark.asyncio
+class TestChannels:
+    async def test_create_channel(
+        self, client, ms_connected, monkeypatch
+    ):
+        from app.services import teams as teams_service
+
+        captured = {}
+
+        async def fake_create(tenant_id, team_id, display_name, *, description=None, user_id=None):
+            captured["team_id"] = team_id
+            captured["display_name"] = display_name
+            captured["description"] = description
+            captured["user_id"] = user_id
+            return {
+                "id": "chan-created",
+                "display_name": display_name,
+                "membership_type": "standard",
+            }
+
+        monkeypatch.setattr(teams_service, "create_channel", fake_create)
+
+        resp = await client.post(
+            "/api/integrations/teams/channels",
+            json={
+                "team_id": "team-1",
+                "display_name": "Acme v Globex",
+                "description": "Matter channel",
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["id"] == "chan-created"
+        assert resp.json()["display_name"] == "Acme v Globex"
+        assert captured["team_id"] == "team-1"
+        assert captured["description"] == "Matter channel"
+
+
+@pytest.mark.asyncio
 async def test_get_token_falls_back_when_user_token_lacks_teams_scopes(
     db_session, test_tenant, test_user, ms_connected, monkeypatch
 ):
