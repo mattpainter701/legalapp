@@ -2,7 +2,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ShieldCheck, BadgeCheck, Scale, Lock, Landmark, Building2, UserCircle,
-  Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight, Check,
+  Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
   Gavel, FileText, FileSearch, CalendarClock, Plug, FolderInput, Mic, MonitorSmartphone,
   Sparkles,
 } from 'lucide-react'
@@ -439,8 +439,8 @@ export default function HomePage() {
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Pricing</span>
             <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">Pricing that fits how you work.</h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-              Per-user seats for your firm, billed straight from your directory — plus
-              pay-as-you-go credits when you query Clarity from your own tools.
+              Start with a single licensed module or run the full matter platform.
+              Add premium model usage, MCP credits, and practice modules only when needed.
             </p>
           </div>
           <div className="grid lg:grid-cols-2 gap-8 items-stretch max-w-5xl mx-auto">
@@ -472,43 +472,46 @@ export default function HomePage() {
             {/* Price card */}
             <div className="bg-brand-surface border-[1.5px] border-brand-ink rounded-2xl p-8 shadow-lg flex flex-col">
               <div className="flex items-center justify-between">
-                <h3 className="font-serif font-bold text-[22px]">Clarity Legal</h3>
+                <h3 className="font-serif font-bold text-[22px]">Clarity Legal Plans</h3>
                 <span className="px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold text-brand-muted bg-brand-bg-soft border border-brand-line">per user</span>
               </div>
               <div className="mt-5 flex items-baseline gap-1.5">
-                <span className="font-serif text-[52px] leading-none">$89</span>
-                <span className="text-[15px] text-brand-muted font-sans">/ user / month</span>
+                <span className="font-serif text-[52px] leading-none">$5</span>
+                <span className="text-[15px] text-brand-muted font-sans">/ user / month starter</span>
               </div>
-              <p className="text-brand-muted font-sans text-[13.5px] mt-2">Billed annually · 14-day trial, no card required</p>
+              <p className="text-brand-muted font-sans text-[13.5px] mt-2">Billed through Stripe · module access stays tenant-scoped</p>
               <hr className="border-brand-line my-6" />
-              <ul className="space-y-2.5">
+              <div className="space-y-3">
                 {[
-                  'Standard AI models included — unlimited',
-                  'Legal-safe research & drafting chat',
-                  'Every practice-area skill included',
-                  'Microsoft 365, Google Docs & file shares',
-                  'Voice transcription & encrypted storage',
-                  'Role-aware client & party access',
-                  'Audit log & court-ready reports',
-                ].map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-[14px] font-sans text-brand-ink-2">
-                    <Check size={16} className="text-brand-accent shrink-0 mt-0.5" /> {f}
-                  </li>
+                  { name: 'Caller Intake Tracker', price: '$5/user/mo', body: 'Reception desk call tracking, lead notes, partner association, history search, and CSV export.' },
+                  { name: 'Standard Matter Management', price: 'full platform', body: 'Matter workflows, contacts, tasks, documents, billing/invoicing, standard chat models, and cloud integrations. Includes caller intake.' },
+                  { name: 'Premium', price: 'metered', body: 'Standard plus card-backed premium model/API usage and user-level model access controls.' },
+                  { name: 'Practice modules', price: 'from $20/user/mo', body: 'Add-on workflows such as trust accounting, mediation, and specialty practice modules.' },
+                ].map((plan) => (
+                  <div key={plan.name} className="rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-serif font-bold text-[16px] text-brand-ink">{plan.name}</p>
+                      <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-sans font-bold text-brand-accent-2 border border-brand-line">
+                        {plan.price}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[13px] font-sans leading-relaxed text-brand-ink-2">{plan.body}</p>
+                  </div>
                 ))}
-              </ul>
+              </div>
               <div className="mt-5 flex items-start gap-2.5 rounded-xl bg-brand-bg-soft border border-brand-line px-4 py-3">
                 <Sparkles size={16} className="text-brand-gold shrink-0 mt-0.5" />
                 <p className="text-[13px] font-sans text-brand-ink-2 leading-relaxed">
-                  <span className="font-semibold text-brand-ink">Premium models, pay as you go.</span>{' '}
-                  Switch any user to premium frontier models from the admin panel. Usage is metered
-                  and added to one monthly invoice — a card on file is required.
+                  <span className="font-semibold text-brand-ink">Module independence by design.</span>{' '}
+                  Intake-only firms can log into just the call tracker. Standard and premium firms see
+                  the broader workflows their tenant has licensed.
                 </p>
               </div>
               <button onClick={goLogin} className="w-full mt-7 py-3 rounded-xl font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
                 Start free trial
               </button>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
-                Trust &amp; Estate and Mediation modules optional. Need SSO, an SLA, or invoiced billing?{' '}
+                Need SSO, an SLA, or invoiced billing?{' '}
                 <button onClick={goLogin} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</button>.
               </p>
             </div>

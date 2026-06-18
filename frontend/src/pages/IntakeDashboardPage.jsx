@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowRight,
   ClipboardList,
+  Download,
   History,
   PhoneCall,
   RotateCcw,
@@ -13,11 +14,13 @@ import {
 import {
   assignNextPartner,
   createIntakeDashboardCall,
+  downloadIntakeDashboardCallsCsv,
   getIntakeAssignmentAvailability,
   getRecentIntakeDashboardCallers,
   getRotationRules,
   searchIntakeDashboard,
   searchUsers,
+  triggerBlobDownload,
   updateRotationRules,
 } from '../api'
 import { useAuth } from '../App'
@@ -234,7 +237,20 @@ function RotationAdmin() {
   )
 }
 
-function RecentCallersPanel({ callers, limit, loading, selectedCaller, onLimitChange, onSelect }) {
+function RecentCallersPanel({
+  callers,
+  limit,
+  loading,
+  selectedCaller,
+  exportStart,
+  exportEnd,
+  exporting,
+  onExportStartChange,
+  onExportEndChange,
+  onExport,
+  onLimitChange,
+  onSelect,
+}) {
   const statusLabel = (caller) => {
     if (caller.task_status === 'completed') return 'Responded'
     if (caller.task_status) return `Task ${caller.task_status.replaceAll('_', ' ')}`
@@ -259,6 +275,43 @@ function RecentCallersPanel({ callers, limit, loading, selectedCaller, onLimitCh
             <option key={value} value={value}>Last {value}</option>
           ))}
         </select>
+      </div>
+
+      <div className="mb-4 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div className="grid flex-1 gap-2 sm:grid-cols-2">
+            <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
+              Export From
+              <input
+                type="date"
+                value={exportStart}
+                onChange={(event) => onExportStartChange(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
+              />
+            </label>
+            <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
+              Export To
+              <input
+                type="date"
+                value={exportEnd}
+                onChange={(event) => onExportEndChange(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={onExport}
+            disabled={exporting}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-ink px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+          >
+            <Download size={15} />
+            {exporting ? 'Exporting...' : 'Export CSV'}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-brand-muted">
+          Leave dates blank to export all tracked calls for finance/Tabs3 partner association.
+        </p>
       </div>
 
       {loading ? (
@@ -380,6 +433,9 @@ export default function IntakeDashboardPage() {
   const [recentCallers, setRecentCallers] = useState([])
   const [recentLoading, setRecentLoading] = useState(false)
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
+  const [exportStart, setExportStart] = useState('')
+  const [exportEnd, setExportEnd] = useState('')
+  const [exporting, setExporting] = useState(false)
   const [assignmentAvailability, setAssignmentAvailability] = useState(null)
   const [assignmentChecking, setAssignmentChecking] = useState(false)
   const [searchData, setSearchData] = useState(null)
@@ -549,6 +605,24 @@ export default function IntakeDashboardPage() {
     }
   }
 
+  const exportCalls = async () => {
+    setMessage(null)
+    setExporting(true)
+    try {
+      const params = {
+        ...(exportStart ? { start: exportStart } : {}),
+        ...(exportEnd ? { end: exportEnd } : {}),
+      }
+      const blob = await downloadIntakeDashboardCallsCsv(params)
+      const rangeLabel = !exportStart && !exportEnd ? 'all' : `${exportStart || 'start'}_to_${exportEnd || 'end'}`
+      triggerBlobDownload(blob, `intake-calls-${rangeLabel}.csv`)
+    } catch (err) {
+      setMessage(err?.response?.data?.detail || 'Failed to export intake calls.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const submitCall = async (event) => {
     event.preventDefault()
     setMessage(null)
@@ -631,6 +705,12 @@ export default function IntakeDashboardPage() {
               limit={recentLimit}
               loading={recentLoading}
               selectedCaller={selectedRecentCaller}
+              exportStart={exportStart}
+              exportEnd={exportEnd}
+              exporting={exporting}
+              onExportStartChange={setExportStart}
+              onExportEndChange={setExportEnd}
+              onExport={exportCalls}
               onLimitChange={setRecentLimit}
               onSelect={selectRecentCaller}
             />

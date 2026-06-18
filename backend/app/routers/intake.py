@@ -234,8 +234,12 @@ async def convert_lead_to_matter(
         jurisdiction=payload.jurisdiction,
         counterparty=payload.counterparty,
         client_contact_id=lead.contact_id,
-        status="active",
-        description=getattr(payload, "description", None),
+        attorney_of_record_id=payload.attorney_of_record_id,
+        status=payload.status or "active",
+        description=payload.description,
+        budget_amount=payload.budget_amount,
+        billing_method=payload.billing_method or "hourly",
+        hourly_rate=payload.hourly_rate,
     )
     db.add(matter)
     await db.flush()

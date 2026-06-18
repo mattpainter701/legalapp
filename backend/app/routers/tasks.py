@@ -13,6 +13,7 @@ Tasks router — deadline and task management.
 import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
+from app.models.contact import Contact, Lead
 from app.models.task import Task
 from app.models.user import User
 from app.services.email import email_service
@@ -29,7 +31,14 @@ from app.services.task_notifications import (
     remove_task_from_calendars,
     task_calendar_user_id,
 )
-from app.schemas.task import TaskCreate, TaskListResponse, TaskResponse, TaskUpdate
+from app.schemas.task import (
+    IntakeTaskQualifyRequest,
+    IntakeTaskQualifyResponse,
+    TaskCreate,
+    TaskListResponse,
+    TaskResponse,
+    TaskUpdate,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -42,6 +51,49 @@ _CALENDAR_RELEVANT_FIELDS = {
     "status",
     "assigned_to_user_id",
 }
+
+
+def _lead_id_from_intake_task(task: Task) -> uuid.UUID:
+    prefix = "intake-dashboard:lead:"
+    suffix = ":follow-up"
+    ref = task.external_ref or ""
+    if not ref.startswith(prefix) or not ref.endswith(suffix):
+        raise HTTPException(
+            status_code=422,
+            detail="Task is not an intake follow-up task",
+        )
+    raw = ref[len(prefix) : -len(suffix)]
+    try:
+        return uuid.UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Intake task has an invalid lead reference",
+        ) from exc
+
+
+def _append_section(existing: str | None, heading: str, body: str | None) -> str | None:
+    text = (body or "").strip()
+    if not text:
+        return existing
+    base = (existing or "").strip()
+    section = f"{heading}\n{text}"
+    return f"{base}\n\n{section}" if base else section
+
+
+async def _load_task_or_404(
+    db: AsyncSession, task_id: uuid.UUID, tenant_id: uuid.UUID
+) -> Task:
+    result = await db.execute(
+        select(Task).where(
+            Task.id == task_id,
+            Task.tenant_id == tenant_id,
+        )
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
 
 
 @router.get("/overdue", response_model=TaskListResponse)
@@ -197,6 +249,180 @@ async def create_task(
     await notify_task_created(db, task, tenant_id)
 
     return TaskResponse.model_validate(task)
+
+
+@router.post("/{task_id}/qualify-intake", response_model=IntakeTaskQualifyResponse)
+async def qualify_intake_task(
+    task_id: uuid.UUID,
+    payload: IntakeTaskQualifyRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Promote a receptionist intake follow-up into an attorney intake task.
+
+    This is the partner decision point: the receptionist's call assignment task is
+    completed, the lead moves to qualified, and the assigned attorney receives a
+    separate urgent intake task carrying the receptionist and partner notes.
+    """
+
+    tenant_id = str(current_user.tenant_id)
+    tenant_uuid = uuid.UUID(tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    partner_task = await _load_task_or_404(db, task_id, tenant_uuid)
+    lead_id = _lead_id_from_intake_task(partner_task)
+    if (
+        partner_task.assigned_to_user_id
+        and partner_task.assigned_to_user_id != current_user.id
+        and current_user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the assigned partner or an admin can qualify this intake task",
+        )
+
+    attorney = (
+        await db.execute(
+            select(User).where(
+                User.id == payload.assigned_to_user_id,
+                User.tenant_id == tenant_uuid,
+                User.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if not attorney:
+        raise HTTPException(status_code=404, detail="Assigned attorney not found")
+
+    lead = (
+        await db.execute(
+            select(Lead).where(
+                Lead.id == lead_id,
+                Lead.tenant_id == tenant_uuid,
+            )
+        )
+    ).scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if lead.status == "matter_opened":
+        raise HTTPException(status_code=409, detail="Lead already converted to matter")
+
+    contact = (
+        await db.execute(
+            select(Contact).where(
+                Contact.id == lead.contact_id,
+                Contact.tenant_id == tenant_uuid,
+            )
+        )
+    ).scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Lead contact not found")
+
+    lead.status = "qualified"
+    lead.assigned_to_user_id = attorney.id
+    if payload.estimated_value is not None:
+        lead.estimated_value = Decimal(str(payload.estimated_value))
+    lead.description = _append_section(
+        lead.description,
+        "Partner qualification notes:",
+        payload.partner_notes,
+    )
+    lead.description = _append_section(
+        lead.description,
+        "Qualified case description:",
+        payload.case_description,
+    )
+
+    caller = contact.display_name
+    phone = contact.phone or contact.secondary_phone
+    attorney_external_ref = f"intake-dashboard:lead:{lead.id}:attorney-intake"
+    description_bits = [
+        "Qualified intake assigned by partner.",
+        f"Client/prospect: {caller}",
+        f"Callback number: {phone}" if phone else "",
+        f"Practice area: {lead.practice_area}" if lead.practice_area else "",
+        "",
+        "Receptionist call/task notes:",
+        partner_task.description or "",
+        "",
+        "Partner notes:",
+        (payload.partner_notes or "").strip(),
+        "",
+        "Case description:",
+        (payload.case_description or lead.description or "").strip(),
+    ]
+    attorney_description = "\n".join(bit for bit in description_bits if bit is not None)
+
+    previous_calendar_user_id = None
+    attorney_task = (
+        await db.execute(
+            select(Task).where(
+                Task.tenant_id == tenant_uuid,
+                Task.external_ref == attorney_external_ref,
+            )
+        )
+    ).scalar_one_or_none()
+    created_attorney_task = attorney_task is None
+    assignment_changed = False
+    if attorney_task is None:
+        attorney_task = Task(
+            tenant_id=tenant_uuid,
+            title=f"Qualified intake: {caller}",
+            description=attorney_description,
+            task_type="intake",
+            status="pending",
+            priority="urgent",
+            due_date=date.today(),
+            contact_id=lead.contact_id,
+            assigned_to_user_id=attorney.id,
+            created_by_user_id=current_user.id,
+            source="intake_dashboard",
+            external_ref=attorney_external_ref,
+        )
+        db.add(attorney_task)
+        await db.flush()
+    else:
+        previous_calendar_user_id = task_calendar_user_id(attorney_task)
+        assignment_changed = attorney_task.assigned_to_user_id != attorney.id
+        attorney_task.title = f"Qualified intake: {caller}"
+        attorney_task.description = attorney_description
+        attorney_task.task_type = "intake"
+        attorney_task.status = (
+            "pending" if attorney_task.status == "cancelled" else attorney_task.status
+        )
+        attorney_task.priority = "urgent"
+        attorney_task.due_date = attorney_task.due_date or date.today()
+        attorney_task.contact_id = lead.contact_id
+        attorney_task.assigned_to_user_id = attorney.id
+
+    if partner_task.status != "completed":
+        partner_task.status = "completed"
+        partner_task.completed_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(partner_task)
+    await db.refresh(attorney_task)
+    await db.refresh(lead)
+
+    if created_attorney_task:
+        await notify_task_created(db, attorney_task, tenant_id)
+    else:
+        await notify_task_updated(
+            db,
+            attorney_task,
+            tenant_id,
+            calendar_changed=True,
+            assignment_changed=assignment_changed,
+            previous_calendar_user_id=previous_calendar_user_id,
+        )
+
+    return IntakeTaskQualifyResponse(
+        lead_id=lead.id,
+        contact_id=lead.contact_id,
+        partner_task_id=partner_task.id,
+        attorney_task_id=attorney_task.id,
+        assigned_to_user_id=attorney.id,
+        lead_status=lead.status,
+    )
 
 
 @router.get("/{task_id}", response_model=TaskResponse)

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +38,29 @@ from app.services.intake_archive_import import normalize_phone
 from app.services.task_notifications import notify_task_created
 
 router = APIRouter(prefix="/api/intake/dashboard", tags=["intake-dashboard"])
+
+INTAKE_CALL_EXPORT_FIELDS = [
+    "call_date",
+    "caller_name",
+    "phone",
+    "normalized_phone",
+    "practice_area",
+    "purpose",
+    "notes",
+    "outcome",
+    "lead_status",
+    "tabs3_partner_name",
+    "tabs3_partner_user_id",
+    "assigned_to_name",
+    "assigned_to_user_id",
+    "task_status",
+    "task_completed_at",
+    "logged_by_name",
+    "logged_by_user_id",
+    "contact_id",
+    "lead_id",
+    "communication_id",
+]
 
 
 def _practice_key(value: str | None) -> str:
@@ -121,6 +147,27 @@ async def _user_name(db: AsyncSession, user_id: uuid.UUID | None) -> str | None:
 
 def _user_name_from_row(row: User | None) -> str | None:
     return row.full_name or row.email if row else None
+
+
+def _csv_response(rows: list[dict], filename: str) -> StreamingResponse:
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=INTAKE_CALL_EXPORT_FIELDS)
+    writer.writeheader()
+    writer.writerows(rows)
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _iso_datetime(value: datetime | None) -> str:
+    if not value:
+        return ""
+    if value.tzinfo:
+        return value.astimezone(timezone.utc).isoformat()
+    return value.replace(tzinfo=timezone.utc).isoformat()
 
 
 async def _resolve_user_by_name(
@@ -431,6 +478,144 @@ async def recent_callers(
             )
         )
     return RecentIntakeCallersResponse(limit=limit, callers=callers)
+
+
+@router.get("/calls/export")
+async def export_call_records(
+    start: date | None = Query(None, description="Inclusive start date"),
+    end: date | None = Query(None, description="Inclusive end date"),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+    if start and end and start > end:
+        raise HTTPException(status_code=422, detail="start must be before or equal to end")
+
+    filters = [
+        CommunicationLog.tenant_id == tenant_id,
+        CommunicationLog.channel == "call",
+        CommunicationLog.direction == "inbound",
+    ]
+    if start:
+        filters.append(
+            CommunicationLog.occurred_at >= datetime.combine(start, time.min, tzinfo=timezone.utc)
+        )
+    if end:
+        filters.append(
+            CommunicationLog.occurred_at <= datetime.combine(end, time.max, tzinfo=timezone.utc)
+        )
+
+    log_rows = (
+        await db.execute(
+            select(CommunicationLog, Contact, User)
+            .outerjoin(
+                Contact,
+                (Contact.id == CommunicationLog.contact_id)
+                & (Contact.tenant_id == tenant_id),
+            )
+            .outerjoin(
+                User,
+                (User.id == CommunicationLog.created_by_user_id)
+                & (User.tenant_id == tenant_id),
+            )
+            .where(*filters)
+            .order_by(CommunicationLog.occurred_at.desc())
+        )
+    ).all()
+
+    contact_ids = [log.contact_id for log, _contact, _creator in log_rows if log.contact_id]
+    lead_by_contact_id: dict[uuid.UUID, Lead] = {}
+    if contact_ids:
+        leads = (
+            await db.execute(
+                select(Lead)
+                .where(Lead.tenant_id == tenant_id, Lead.contact_id.in_(contact_ids))
+                .order_by(Lead.updated_at.desc(), Lead.created_at.desc())
+            )
+        ).scalars().all()
+        for lead in leads:
+            lead_by_contact_id.setdefault(lead.contact_id, lead)
+
+    task_by_lead_id: dict[uuid.UUID, Task] = {}
+    if lead_by_contact_id:
+        ref_to_lead_id = {
+            f"intake-dashboard:lead:{lead.id}:follow-up": lead.id
+            for lead in lead_by_contact_id.values()
+        }
+        tasks = (
+            await db.execute(
+                select(Task)
+                .where(
+                    Task.tenant_id == tenant_id,
+                    Task.external_ref.in_(list(ref_to_lead_id.keys())),
+                )
+                .order_by(Task.updated_at.desc(), Task.created_at.desc())
+            )
+        ).scalars().all()
+        for task in tasks:
+            lead_id = ref_to_lead_id.get(task.external_ref)
+            if lead_id:
+                task_by_lead_id.setdefault(lead_id, task)
+
+    user_ids = {
+        log.created_by_user_id for log, _contact, _creator in log_rows if log.created_by_user_id
+    }
+    for lead in lead_by_contact_id.values():
+        if lead.assigned_to_user_id:
+            user_ids.add(lead.assigned_to_user_id)
+    for task in task_by_lead_id.values():
+        if task.assigned_to_user_id:
+            user_ids.add(task.assigned_to_user_id)
+    users_by_id: dict[uuid.UUID, User] = {}
+    if user_ids:
+        users_by_id = {
+            user.id: user
+            for user in (
+                await db.execute(
+                    select(User).where(User.tenant_id == tenant_id, User.id.in_(user_ids))
+                )
+            ).scalars().all()
+        }
+
+    export_rows = []
+    for log, contact, creator in log_rows:
+        lead = lead_by_contact_id.get(log.contact_id) if log.contact_id else None
+        task = task_by_lead_id.get(lead.id) if lead else None
+        assigned_to_user_id = None
+        if task and task.assigned_to_user_id:
+            assigned_to_user_id = task.assigned_to_user_id
+        elif lead and lead.assigned_to_user_id:
+            assigned_to_user_id = lead.assigned_to_user_id
+        assigned_to_name = _user_name_from_row(users_by_id.get(assigned_to_user_id))
+        logged_by = _user_name_from_row(users_by_id.get(log.created_by_user_id) or creator)
+        export_rows.append(
+            {
+                "call_date": _iso_datetime(log.occurred_at),
+                "caller_name": _log_caller_name(log, contact),
+                "phone": _log_participant(log, "phone") or (contact.phone if contact else ""),
+                "normalized_phone": _log_participant(log, "normalized_phone") or "",
+                "practice_area": _log_field_from_body(log, "Practice area") or "",
+                "purpose": log.summary or "",
+                "notes": _log_field_from_body(log, "Notes") or "",
+                "outcome": "lead" if lead else "log_only",
+                "lead_status": lead.status if lead else "",
+                "tabs3_partner_name": assigned_to_name or "",
+                "tabs3_partner_user_id": str(assigned_to_user_id) if assigned_to_user_id else "",
+                "assigned_to_name": assigned_to_name or "",
+                "assigned_to_user_id": str(assigned_to_user_id) if assigned_to_user_id else "",
+                "task_status": task.status if task else "",
+                "task_completed_at": _iso_datetime(task.completed_at) if task else "",
+                "logged_by_name": logged_by or "",
+                "logged_by_user_id": str(log.created_by_user_id) if log.created_by_user_id else "",
+                "contact_id": str(log.contact_id) if log.contact_id else "",
+                "lead_id": str(lead.id) if lead else "",
+                "communication_id": str(log.id),
+            }
+        )
+
+    range_label = "all" if not start and not end else f"{start or 'start'}_to_{end or 'end'}"
+    return _csv_response(export_rows, f"intake-calls-{range_label}.csv")
 
 
 @router.get("/search", response_model=IntakeDashboardSearchResponse)

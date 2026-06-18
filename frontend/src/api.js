@@ -910,6 +910,9 @@ export const getUpcomingTasks = (params = {}) =>
 export const sendTaskReminder = (taskId) =>
   api.post(`/tasks/${taskId}/remind`).then(r => r.data)
 
+export const qualifyIntakeTask = (taskId, data) =>
+  api.post(`/tasks/${taskId}/qualify-intake`, data).then(r => r.data)
+
 // ── Communications ─────────────────────────────────────────────────────────
 
 export const getCommunications = (params = {}) =>
@@ -976,6 +979,9 @@ export const searchIntakeDashboard = (params = {}) =>
 
 export const getRecentIntakeDashboardCallers = (params = {}) =>
   api.get('/intake/dashboard/recent-callers', { params }).then(r => r.data)
+
+export const downloadIntakeDashboardCallsCsv = (params = {}) =>
+  api.get('/intake/dashboard/calls/export', { params, responseType: 'blob' }).then(r => r.data)
 
 export const getIntakeAssignmentAvailability = (params = {}) =>
   api.get('/intake/dashboard/assignment-availability', { params }).then(r => r.data)

@@ -16,6 +16,16 @@ does not connect directly to the customer's LAN or Tabs3 server.
 python -m pip install -r scripts\tabs3_export\requirements.txt
 ```
 
+## DSN Discovery
+
+Run this first on the customer host to confirm which ODBC data sources are
+visible to the Python interpreter. If the Tabs3 DSN is only visible to 32-bit
+ODBC, this command must also be run with 32-bit Python.
+
+```powershell
+python scripts\tabs3_export\export_tabs3.py --list-dsns
+```
+
 ## Schema-Only Check
 
 Run this first. It validates the DSN and table metadata without exporting client

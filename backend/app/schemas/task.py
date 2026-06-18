@@ -30,6 +30,7 @@ class TaskCreate(BaseModel):
             "deposition",
             "call",
             "follow_up",
+            "intake",
             "review",
             "general",
         }
@@ -67,6 +68,22 @@ class TaskUpdate(BaseModel):
         if v not in allowed:
             raise ValueError(f"status must be one of {allowed}")
         return v
+
+
+class IntakeTaskQualifyRequest(BaseModel):
+    assigned_to_user_id: uuid.UUID
+    partner_notes: Optional[str] = None
+    case_description: Optional[str] = None
+    estimated_value: Optional[float] = None
+
+
+class IntakeTaskQualifyResponse(BaseModel):
+    lead_id: uuid.UUID
+    contact_id: uuid.UUID
+    partner_task_id: uuid.UUID
+    attorney_task_id: uuid.UUID
+    assigned_to_user_id: uuid.UUID
+    lead_status: str
 
 
 class TaskResponse(BaseModel):

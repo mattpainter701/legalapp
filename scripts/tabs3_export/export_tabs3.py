@@ -179,6 +179,20 @@ def _connect(args: argparse.Namespace):
     return pyodbc.connect(";".join(parts), readonly=True, autocommit=True)
 
 
+def list_odbc_sources() -> None:
+    if pyodbc is None:
+        raise SystemExit(
+            "pyodbc is not installed. Run: python -m pip install -r scripts/tabs3_export/requirements.txt"
+        )
+    sources = pyodbc.dataSources()
+    if not sources:
+        print("No ODBC data sources visible to this Python interpreter.")
+        return
+    print("ODBC data sources visible to this Python interpreter:")
+    for name, driver in sorted(sources.items()):
+        print(f"  {name}: {driver}")
+
+
 def _table_columns(cursor, table: str) -> list[str]:
     rows = list(cursor.columns(table=table))
     columns = [row.column_name for row in rows]
@@ -364,7 +378,8 @@ def export(args: argparse.Namespace) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export Tabs3 ODBC data for Clarity import")
-    parser.add_argument("--dsn", required=True, help="Tabs3 ODBC DSN name")
+    parser.add_argument("--list-dsns", action="store_true", help="List visible ODBC DSNs and exit")
+    parser.add_argument("--dsn", help="Tabs3 ODBC DSN name")
     parser.add_argument("--user", help="ODBC username if required")
     parser.add_argument("--password", help="ODBC password if required")
     parser.add_argument("--output-dir", default=".", help="Directory for the export bundle")
@@ -391,6 +406,11 @@ def main() -> int:
         help="Allow an unencrypted ZIP. Use only for local rehearsal or redacted data.",
     )
     args = parser.parse_args()
+    if args.list_dsns:
+        list_odbc_sources()
+        return 0
+    if not args.dsn:
+        parser.error("--dsn is required unless --list-dsns is used")
     bundle = export(args)
     print(bundle)
     return 0

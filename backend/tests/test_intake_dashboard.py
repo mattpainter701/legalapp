@@ -1,4 +1,6 @@
 import uuid
+import csv
+import io
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -391,6 +393,143 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
 
 
 @pytest.mark.asyncio
+async def test_export_call_records_filters_dates_and_tenant_scopes(
+    client, db_session, test_tenant, test_user
+):
+    older = datetime(2026, 1, 5, 10, 0, tzinfo=timezone.utc)
+    in_range = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="finance-partner@testfirm.com",
+        full_name="Finance Partner",
+        role="admin",
+        is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Jane",
+        last_name="Doe",
+        phone="701-555-2222",
+        created_by_user_id=test_user.id,
+    )
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other Export Firm",
+        domain="other-export.example",
+        billing_tier="payg",
+        is_active=True,
+    )
+    db_session.add_all([partner, contact, other_tenant])
+    await db_session.flush()
+    lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="qualified",
+        practice_area="divorce",
+        description="Needs divorce attorney",
+        assigned_to_user_id=partner.id,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    completed_at = datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Older Caller",
+                summary="Older call reason",
+                body="Older call reason\nPractice area: criminal\nNotes: old note",
+                participants={"caller_name": "Older Caller", "phone": "701-555-1111"},
+                created_by_user_id=test_user.id,
+                occurred_at=older,
+            ),
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Jane Doe",
+                summary="Needs divorce attorney",
+                body="Needs divorce attorney\nPractice area: divorce\nNotes: finance export note",
+                participants={
+                    "caller_name": "Jane Doe",
+                    "phone": "701-555-2222",
+                    "normalized_phone": "7015552222",
+                },
+                contact_id=contact.id,
+                created_by_user_id=test_user.id,
+                occurred_at=in_range,
+            ),
+            Task(
+                tenant_id=test_tenant.id,
+                title="Urgent intake follow-up: Jane Doe",
+                description="Call Jane Doe back.",
+                task_type="follow_up",
+                status="completed",
+                priority="urgent",
+                due_date=date(2026, 1, 15),
+                completed_at=completed_at,
+                contact_id=contact.id,
+                assigned_to_user_id=partner.id,
+                created_by_user_id=test_user.id,
+                source="intake_dashboard",
+                external_ref=f"intake-dashboard:lead:{lead.id}:follow-up",
+            ),
+            CommunicationLog(
+                tenant_id=other_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Other Tenant",
+                summary="Should not export",
+                participants={"caller_name": "Other Tenant"},
+                occurred_at=in_range,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    all_resp = await client.get("/api/intake/dashboard/calls/export")
+    assert all_resp.status_code == 200
+    assert all_resp.headers["content-type"].startswith("text/csv")
+    assert "intake-calls-all.csv" in all_resp.headers["content-disposition"]
+    all_rows = list(csv.DictReader(io.StringIO(all_resp.text)))
+    assert [row["caller_name"] for row in all_rows] == ["Jane Doe", "Older Caller"]
+    assert "Other Tenant" not in {row["caller_name"] for row in all_rows}
+
+    range_resp = await client.get(
+        "/api/intake/dashboard/calls/export",
+        params={"start": "2026-01-10", "end": "2026-01-20"},
+    )
+    assert range_resp.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(range_resp.text)))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["caller_name"] == "Jane Doe"
+    assert row["practice_area"] == "divorce"
+    assert row["notes"] == "finance export note"
+    assert row["outcome"] == "lead"
+    assert row["lead_status"] == "qualified"
+    assert row["tabs3_partner_name"] == "Finance Partner"
+    assert row["assigned_to_name"] == "Finance Partner"
+    assert row["task_status"] == "completed"
+    assert row["task_completed_at"].startswith("2026-01-15T13:00:00")
+    assert row["lead_id"] == str(lead.id)
+    assert row["contact_id"] == str(contact.id)
+
+    invalid = await client.get(
+        "/api/intake/dashboard/calls/export",
+        params={"start": "2026-02-01", "end": "2026-01-01"},
+    )
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_assignment_availability_reports_missing_and_general_rotation(
     client, db_session, test_tenant, test_user
 ):
@@ -604,3 +743,121 @@ async def test_prior_history_match_routes_lead_to_partner_task(
     assert lead.assigned_to_user_id == partner.id
     assert task.assigned_to_user_id == partner.id
     assert task.priority == "urgent"
+
+
+@pytest.mark.asyncio
+async def test_partner_task_qualifies_lead_and_assigns_attorney_intake(
+    client, db_session, test_tenant, test_user
+):
+    attorney = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="assigned-attorney@testfirm.com",
+        full_name="Assigned Attorney",
+        role="user",
+        is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        first_name="Jane",
+        last_name="Qualified",
+        phone="701-555-8181",
+        created_by_user_id=test_user.id,
+    )
+    db_session.add_all([attorney, contact])
+    await db_session.flush()
+    lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="new",
+        practice_area="family",
+        description="Receptionist said caller needs divorce help.",
+        assigned_to_user_id=test_user.id,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    partner_task = Task(
+        tenant_id=test_tenant.id,
+        title="Urgent intake follow-up: Jane Qualified",
+        description=(
+            "Urgent intake follow-up generated by the local intake dashboard.\n"
+            "Caller: Jane Qualified\n"
+            "Phone: 701-555-8181\n"
+            "Lead description: Needs divorce help"
+        ),
+        task_type="follow_up",
+        status="pending",
+        priority="urgent",
+        due_date=date.today(),
+        contact_id=contact.id,
+        assigned_to_user_id=test_user.id,
+        created_by_user_id=test_user.id,
+        source="intake_dashboard",
+        external_ref=f"intake-dashboard:lead:{lead.id}:follow-up",
+    )
+    db_session.add(partner_task)
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/tasks/{partner_task.id}/qualify-intake",
+        json={
+            "assigned_to_user_id": str(attorney.id),
+            "partner_notes": "Good fit. Schedule consult and collect retainer.",
+            "case_description": "Divorce with custody and property issues.",
+            "estimated_value": 5000,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["lead_id"] == str(lead.id)
+    assert data["contact_id"] == str(contact.id)
+    assert data["partner_task_id"] == str(partner_task.id)
+    assert data["assigned_to_user_id"] == str(attorney.id)
+    assert data["lead_status"] == "qualified"
+
+    await db_session.refresh(lead)
+    await db_session.refresh(partner_task)
+    attorney_task = await db_session.get(Task, uuid.UUID(data["attorney_task_id"]))
+    assert lead.status == "qualified"
+    assert lead.assigned_to_user_id == attorney.id
+    assert lead.estimated_value == 5000
+    assert "Partner qualification notes" in lead.description
+    assert partner_task.status == "completed"
+    assert partner_task.completed_at is not None
+    assert attorney_task.task_type == "intake"
+    assert attorney_task.priority == "urgent"
+    assert attorney_task.assigned_to_user_id == attorney.id
+    assert attorney_task.contact_id == contact.id
+    assert attorney_task.external_ref == f"intake-dashboard:lead:{lead.id}:attorney-intake"
+    assert "Receptionist call/task notes" in attorney_task.description
+    assert "Good fit" in attorney_task.description
+
+    convert = await client.post(
+        f"/api/intake/{lead.id}/convert",
+        json={
+            "matter_name": "Jane Qualified Divorce",
+            "matter_type": "family",
+            "role": "Petitioner",
+            "jurisdiction": "ND",
+            "counterparty": "John Qualified",
+            "description": attorney_task.description,
+            "status": "waiting_fee_agreement",
+            "attorney_of_record_id": str(attorney.id),
+            "budget_amount": 5000,
+            "billing_method": "flat_fee",
+        },
+    )
+
+    assert convert.status_code == 200
+    matter = await db_session.get(Matter, uuid.UUID(convert.json()["matter_id"]))
+    await db_session.refresh(contact)
+    await db_session.refresh(lead)
+    assert matter.status == "waiting_fee_agreement"
+    assert matter.client_contact_id == contact.id
+    assert matter.attorney_of_record_id == attorney.id
+    assert matter.budget_amount == 5000
+    assert matter.billing_method == "flat_fee"
+    assert contact.contact_type == "client"
+    assert lead.status == "matter_opened"

@@ -180,3 +180,9 @@ class LeadConvertRequest(BaseModel):
     role: str = "Plaintiff"
     jurisdiction: str
     counterparty: str = ""
+    description: Optional[str] = None
+    status: str = "active"
+    attorney_of_record_id: Optional[uuid.UUID] = None
+    budget_amount: Optional[Decimal] = None
+    billing_method: Optional[str] = None
+    hourly_rate: Optional[Decimal] = None
