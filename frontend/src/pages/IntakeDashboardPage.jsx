@@ -38,6 +38,7 @@ const RESULT_LABELS = {
   contact: 'Current contact',
   lead: 'Active lead',
   matter: 'Matter history',
+  call_log: 'Call log',
   legacy_call: 'Legacy call',
 }
 
@@ -242,12 +243,6 @@ function RecentCallersPanel({
   limit,
   loading,
   selectedCaller,
-  exportStart,
-  exportEnd,
-  exporting,
-  onExportStartChange,
-  onExportEndChange,
-  onExport,
   onLimitChange,
   onSelect,
 }) {
@@ -275,43 +270,6 @@ function RecentCallersPanel({
             <option key={value} value={value}>Last {value}</option>
           ))}
         </select>
-      </div>
-
-      <div className="mb-4 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div className="grid flex-1 gap-2 sm:grid-cols-2">
-            <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
-              Export From
-              <input
-                type="date"
-                value={exportStart}
-                onChange={(event) => onExportStartChange(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
-              />
-            </label>
-            <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
-              Export To
-              <input
-                type="date"
-                value={exportEnd}
-                onChange={(event) => onExportEndChange(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            onClick={onExport}
-            disabled={exporting}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-ink px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-          >
-            <Download size={15} />
-            {exporting ? 'Exporting...' : 'Export CSV'}
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-brand-muted">
-          Leave dates blank to export all tracked calls for finance/Tabs3 partner association.
-        </p>
       </div>
 
       {loading ? (
@@ -421,6 +379,58 @@ function RecentCallersPanel({
           </dl>
         </div>
       )}
+    </section>
+  )
+}
+
+function IntakeExportPanel({
+  exportStart,
+  exportEnd,
+  exporting,
+  onExportStartChange,
+  onExportEndChange,
+  onExport,
+}) {
+  return (
+    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-2">
+        <Download size={18} className="text-brand-accent" />
+        <h2 className="font-serif text-lg font-bold text-brand-ink">Export Call Records</h2>
+      </div>
+      <p className="mt-1 text-xs text-brand-muted">
+        Leave dates blank to export all tracked calls for finance/Tabs3 partner association.
+      </p>
+      <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-end">
+        <div className="grid flex-1 gap-2 sm:grid-cols-2">
+          <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
+            Export From
+            <input
+              type="date"
+              value={exportStart}
+              onChange={(event) => onExportStartChange(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
+            />
+          </label>
+          <label className="text-[11px] font-black uppercase tracking-widest text-brand-muted">
+            Export To
+            <input
+              type="date"
+              value={exportEnd}
+              onChange={(event) => onExportEndChange(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm font-normal tracking-normal text-brand-ink"
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={exporting}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-ink px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+        >
+          <Download size={15} />
+          {exporting ? 'Exporting...' : 'Export CSV'}
+        </button>
+      </div>
     </section>
   )
 }
@@ -705,12 +715,6 @@ export default function IntakeDashboardPage() {
               limit={recentLimit}
               loading={recentLoading}
               selectedCaller={selectedRecentCaller}
-              exportStart={exportStart}
-              exportEnd={exportEnd}
-              exporting={exporting}
-              onExportStartChange={setExportStart}
-              onExportEndChange={setExportEnd}
-              onExport={exportCalls}
               onLimitChange={setRecentLimit}
               onSelect={selectRecentCaller}
             />
@@ -770,6 +774,15 @@ export default function IntakeDashboardPage() {
                 </div>
               )}
             </section>
+
+            <IntakeExportPanel
+              exportStart={exportStart}
+              exportEnd={exportEnd}
+              exporting={exporting}
+              onExportStartChange={setExportStart}
+              onExportEndChange={setExportEnd}
+              onExport={exportCalls}
+            />
           </div>
 
           <aside className="space-y-5">

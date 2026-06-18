@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
@@ -71,11 +71,41 @@ def _phone_digits_expr(column):
     return func.regexp_replace(func.coalesce(column, ""), "[^0-9]", "", "g")
 
 
+def _json_text_expr(column, key: str):
+    return func.coalesce(column[key].astext, "")
+
+
 def _contact_title(contact: Contact) -> str:
     return contact.display_name
 
 
-def _contact_name_matches(contact: Contact, query: str) -> bool:
+def _query_tokens(query: str | None) -> list[str]:
+    if not query:
+        return []
+    return [token.strip().lower() for token in query.split() if token.strip()]
+
+
+def _text_search_condition(fields: list, query: str | None):
+    tokens = _query_tokens(query)
+    if not tokens:
+        return None
+    whole = f"%{query.strip()}%"
+    whole_match = or_(*(field.ilike(whole) for field in fields))
+    token_match = and_(
+        *(or_(*(field.ilike(f"%{token}%") for field in fields)) for token in tokens)
+    )
+    return or_(whole_match, token_match)
+
+
+def _text_matches(value: str, query: str | None) -> bool:
+    tokens = _query_tokens(query)
+    if not tokens:
+        return False
+    haystack = value.lower()
+    return query.lower() in haystack or all(token in haystack for token in tokens)
+
+
+def _contact_name_matches(contact: Contact, query: str | None) -> bool:
     if not query:
         return False
     haystack = " ".join(
@@ -88,8 +118,8 @@ def _contact_name_matches(contact: Contact, query: str) -> bool:
             contact.display_name,
         ]
         if value
-    ).lower()
-    return query.lower() in haystack
+    )
+    return _text_matches(haystack, query)
 
 
 def _phone_matches(*values: str | None, normalized_phone: str | None) -> bool:
@@ -99,6 +129,26 @@ def _phone_matches(*values: str | None, normalized_phone: str | None) -> bool:
     if len(normalized_phone) == 10:
         candidates.add(f"1{normalized_phone}")
     return any(normalize_phone(value) in candidates for value in values if value)
+
+
+def _phone_fragment_matches(*values: str | None, phone_fragment: str | None) -> bool:
+    if not phone_fragment:
+        return False
+    return any(phone_fragment in (normalize_phone(value) or "") for value in values if value)
+
+
+def _phone_search_conditions(fields: list, phone_digits: str | None) -> list:
+    if not phone_digits:
+        return []
+    candidates = [phone_digits]
+    if len(phone_digits) == 10:
+        candidates.append(f"1{phone_digits}")
+    conditions = []
+    for field in fields:
+        digits_expr = _phone_digits_expr(field)
+        conditions.append(digits_expr.in_(candidates))
+        conditions.append(digits_expr.like(f"%{phone_digits}%"))
+    return conditions
 
 
 def _match_metadata(*, name_match: bool, phone_match: bool, extra: dict | None = None) -> dict:
@@ -259,7 +309,7 @@ async def _upsert_lead_assignment_task(
 
 
 def _result_sort_key(item: IntakeSearchResult) -> tuple[int, int]:
-    type_rank = {"matter": 0, "lead": 1, "contact": 2, "legacy_call": 3}
+    type_rank = {"matter": 0, "lead": 1, "contact": 2, "call_log": 3, "legacy_call": 4}
     return (-item.score, type_rank.get(item.result_type, 9))
 
 
@@ -634,48 +684,46 @@ async def search_dashboard(
         raise HTTPException(status_code=422, detail="Provide q or phone")
 
     results: list[IntakeSearchResult] = []
-    name_pattern = f"%{query}%" if query else None
+    query_phone_digits = normalize_phone(query)
+    phone_digits = normalized_phone or query_phone_digits
     phone_pattern = f"%{phone.strip()}%" if phone else None
 
     contact_filters = [Contact.tenant_id == tenant_id, Contact.is_active.is_(True)]
     contact_matchers = []
-    if name_pattern:
-        contact_matchers.extend(
-            [
-                Contact.first_name.ilike(name_pattern),
-                Contact.last_name.ilike(name_pattern),
-                Contact.organization_name.ilike(name_pattern),
-                Contact.email.ilike(name_pattern),
-            ]
-        )
-    if normalized_phone:
-        normalized_candidates = [normalized_phone]
-        if len(normalized_phone) == 10:
-            normalized_candidates.append(f"1{normalized_phone}")
-        contact_matchers.extend(
-            [
-                _phone_digits_expr(Contact.phone).in_(normalized_candidates),
-                _phone_digits_expr(Contact.secondary_phone).in_(normalized_candidates),
-            ]
-        )
-    elif phone_pattern:
+    contact_text_condition = _text_search_condition(
+        [
+            Contact.first_name,
+            Contact.last_name,
+            Contact.organization_name,
+            Contact.email,
+        ],
+        query,
+    )
+    if contact_text_condition is not None:
+        contact_matchers.append(contact_text_condition)
+    contact_matchers.extend(_phone_search_conditions([Contact.phone, Contact.secondary_phone], phone_digits))
+    if phone_pattern and not phone_digits:
         contact_matchers.extend(
             [Contact.phone.ilike(phone_pattern), Contact.secondary_phone.ilike(phone_pattern)]
         )
-    contact_stmt = (
-        select(Contact)
-        .where(*contact_filters, or_(*contact_matchers))
-        .order_by(Contact.updated_at.desc())
-        .limit(limit)
-    )
     if contact_matchers:
+        contact_stmt = (
+            select(Contact)
+            .where(*contact_filters, or_(*contact_matchers))
+            .order_by(Contact.updated_at.desc())
+            .limit(limit)
+        )
         contacts = (await db.execute(contact_stmt)).scalars().all()
         for contact in contacts:
             name_match = _contact_name_matches(contact, query)
             phone_match = _phone_matches(
                 contact.phone,
                 contact.secondary_phone,
-                normalized_phone=normalized_phone,
+                normalized_phone=phone_digits,
+            ) or _phone_fragment_matches(
+                contact.phone,
+                contact.secondary_phone,
+                phone_fragment=phone_digits,
             )
             score = _identity_score(
                 name_match=name_match,
@@ -703,24 +751,13 @@ async def search_dashboard(
             )
 
     lead_matchers = []
-    if name_pattern:
-        lead_matchers.extend(
-            [
-                Contact.first_name.ilike(name_pattern),
-                Contact.last_name.ilike(name_pattern),
-                Contact.organization_name.ilike(name_pattern),
-            ]
-        )
-    if normalized_phone:
-        normalized_candidates = [normalized_phone]
-        if len(normalized_phone) == 10:
-            normalized_candidates.append(f"1{normalized_phone}")
-        lead_matchers.extend(
-            [
-                _phone_digits_expr(Contact.phone).in_(normalized_candidates),
-                _phone_digits_expr(Contact.secondary_phone).in_(normalized_candidates),
-            ]
-        )
+    lead_text_condition = _text_search_condition(
+        [Contact.first_name, Contact.last_name, Contact.organization_name],
+        query,
+    )
+    if lead_text_condition is not None:
+        lead_matchers.append(lead_text_condition)
+    lead_matchers.extend(_phone_search_conditions([Contact.phone, Contact.secondary_phone], phone_digits))
     if lead_matchers:
         lead_rows = (
             await db.execute(
@@ -740,7 +777,11 @@ async def search_dashboard(
             phone_match = _phone_matches(
                 contact.phone,
                 contact.secondary_phone,
-                normalized_phone=normalized_phone,
+                normalized_phone=phone_digits,
+            ) or _phone_fragment_matches(
+                contact.phone,
+                contact.secondary_phone,
+                phone_fragment=phone_digits,
             )
             score = _identity_score(
                 name_match=name_match,
@@ -776,14 +817,12 @@ async def search_dashboard(
             )
 
     matter_matchers = []
-    if name_pattern:
-        matter_matchers.extend(
-            [
-                Matter.matter_name.ilike(name_pattern),
-                Matter.counterparty.ilike(name_pattern),
-                Matter.case_number.ilike(name_pattern),
-            ]
-        )
+    matter_text_condition = _text_search_condition(
+        [Matter.matter_name, Matter.counterparty, Matter.case_number],
+        query,
+    )
+    if matter_text_condition is not None:
+        matter_matchers.append(matter_text_condition)
     if matter_matchers:
         matters = (
             await db.execute(
@@ -817,10 +856,19 @@ async def search_dashboard(
             )
 
     legacy_matchers = []
-    if name_pattern:
-        legacy_matchers.append(LegacyCallRecord.caller_name.ilike(name_pattern))
-    if normalized_phone:
-        legacy_matchers.append(LegacyCallRecord.normalized_phone == normalized_phone)
+    legacy_text_condition = _text_search_condition(
+        [
+            LegacyCallRecord.caller_name,
+            LegacyCallRecord.purpose,
+            LegacyCallRecord.notes,
+            LegacyCallRecord.prior_attorney_name,
+        ],
+        query,
+    )
+    if legacy_text_condition is not None:
+        legacy_matchers.append(legacy_text_condition)
+    if phone_digits:
+        legacy_matchers.append(LegacyCallRecord.normalized_phone.like(f"%{phone_digits}%"))
     if legacy_matchers:
         legacy_rows = (
             await db.execute(
@@ -831,8 +879,22 @@ async def search_dashboard(
             )
         ).scalars().all()
         for row in legacy_rows:
-            name_match = bool(query and row.caller_name and query.lower() in row.caller_name.lower())
-            phone_match = bool(normalized_phone and row.normalized_phone == normalized_phone)
+            name_match = _text_matches(
+                " ".join(
+                    value
+                    for value in [
+                        row.caller_name,
+                        row.purpose,
+                        row.notes,
+                        row.prior_attorney_name,
+                    ]
+                    if value
+                ),
+                query,
+            )
+            phone_match = bool(
+                phone_digits and row.normalized_phone and phone_digits in row.normalized_phone
+            )
             score = _identity_score(
                 name_match=name_match,
                 phone_match=phone_match,
@@ -863,6 +925,101 @@ async def search_dashboard(
                 )
             )
 
+    log_matchers = []
+    caller_name_expr = _json_text_expr(CommunicationLog.participants, "caller_name")
+    caller_phone_expr = _json_text_expr(CommunicationLog.participants, "phone")
+    normalized_log_phone_expr = _json_text_expr(CommunicationLog.participants, "normalized_phone")
+    log_text_condition = _text_search_condition(
+        [
+            CommunicationLog.subject,
+            CommunicationLog.summary,
+            CommunicationLog.body,
+            caller_name_expr,
+        ],
+        query,
+    )
+    if log_text_condition is not None:
+        log_matchers.append(log_text_condition)
+    if phone_digits:
+        log_matchers.extend(
+            [
+                _phone_digits_expr(caller_phone_expr).like(f"%{phone_digits}%"),
+                normalized_log_phone_expr.like(f"%{phone_digits}%"),
+            ]
+        )
+    if log_matchers:
+        log_rows = (
+            await db.execute(
+                select(CommunicationLog, Contact)
+                .outerjoin(
+                    Contact,
+                    (Contact.id == CommunicationLog.contact_id)
+                    & (Contact.tenant_id == tenant_id),
+                )
+                .where(
+                    CommunicationLog.tenant_id == tenant_id,
+                    CommunicationLog.channel == "call",
+                    CommunicationLog.direction == "inbound",
+                    or_(*log_matchers),
+                )
+                .order_by(CommunicationLog.occurred_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        for log, contact in log_rows:
+            caller_name = _log_caller_name(log, contact)
+            log_phone = _log_participant(log, "phone") or (contact.phone if contact else None)
+            log_normalized_phone = _log_participant(log, "normalized_phone") or normalize_phone(log_phone)
+            name_match = _text_matches(
+                " ".join(
+                    value
+                    for value in [
+                        caller_name,
+                        log.subject,
+                        log.summary,
+                        log.body,
+                    ]
+                    if value
+                ),
+                query,
+            )
+            phone_match = bool(
+                phone_digits
+                and (
+                    _phone_fragment_matches(log_phone, phone_fragment=phone_digits)
+                    or (log_normalized_phone and phone_digits in log_normalized_phone)
+                )
+            )
+            score = _identity_score(
+                name_match=name_match,
+                phone_match=phone_match,
+                name_score=62,
+                phone_only_score=42,
+                combined_score=78,
+            )
+            results.append(
+                IntakeSearchResult(
+                    id=str(log.id),
+                    result_type="call_log",
+                    title=caller_name,
+                    subtitle=log.summary,
+                    phone=log_phone,
+                    normalized_phone=log_normalized_phone,
+                    practice_area=_log_field_from_body(log, "Practice area"),
+                    contact_id=log.contact_id,
+                    occurred_at=log.occurred_at,
+                    score=score,
+                    metadata=_match_metadata(
+                        name_match=name_match,
+                        phone_match=phone_match,
+                        extra={
+                            "status": log.status,
+                            "notes": _log_field_from_body(log, "Notes"),
+                        },
+                    ),
+                )
+            )
+
     deduped: dict[tuple[str, str], IntakeSearchResult] = {}
     for item in sorted(results, key=_result_sort_key):
         deduped.setdefault((item.result_type, item.id), item)
@@ -878,12 +1035,12 @@ async def search_dashboard(
     return IntakeDashboardSearchResponse(
         query=query or None,
         phone=phone,
-        normalized_phone=normalized_phone,
+        normalized_phone=phone_digits,
         history_found=bool(ordered),
         identity_warning=(
             "Phone numbers are caller context only. Shared numbers such as jail, court, "
             "or family phones should not be treated as caller identity without a name/history match."
-            if normalized_phone
+            if phone_digits
             else None
         ),
         recommended_attorney_name=(

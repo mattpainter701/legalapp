@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class IntakeSearchResult(BaseModel):
     id: str
-    result_type: Literal["contact", "lead", "matter", "legacy_call"]
+    result_type: Literal["contact", "lead", "matter", "legacy_call", "call_log"]
     title: str
     subtitle: Optional[str] = None
     phone: Optional[str] = None

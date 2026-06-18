@@ -227,6 +227,63 @@ async def test_dashboard_search_returns_current_and_legacy_history_tenant_scoped
 
 
 @pytest.mark.asyncio
+async def test_dashboard_search_finds_log_only_callers_by_partial_name_and_phone(
+    client, db_session, test_tenant, test_user
+):
+    db_session.add(
+        CommunicationLog(
+            tenant_id=test_tenant.id,
+            direction="inbound",
+            channel="call",
+            status="logged",
+            subject="Inbound call: Jan Patterson",
+            summary="Bad husband",
+            body="Bad husband\nPractice area: divorce\nNotes: sounded crazy",
+            participants={
+                "caller_name": "Jan Patterson",
+                "phone": "(701) 555-3333",
+                "normalized_phone": "7015553333",
+            },
+            created_by_user_id=test_user.id,
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    full_name = await client.get(
+        "/api/intake/dashboard/search",
+        params={"q": "jan patterson"},
+    )
+    assert full_name.status_code == 200
+    full_name_results = full_name.json()["results"]
+    assert any(
+        item["result_type"] == "call_log" and item["title"] == "Jan Patterson"
+        for item in full_name_results
+    )
+
+    partial_name = await client.get(
+        "/api/intake/dashboard/search",
+        params={"q": "patt"},
+    )
+    assert partial_name.status_code == 200
+    assert any(
+        item["result_type"] == "call_log" and item["title"] == "Jan Patterson"
+        for item in partial_name.json()["results"]
+    )
+
+    partial_phone = await client.get(
+        "/api/intake/dashboard/search",
+        params={"q": "5553"},
+    )
+    assert partial_phone.status_code == 200
+    assert partial_phone.json()["normalized_phone"] == "5553"
+    assert any(
+        item["result_type"] == "call_log" and item["phone"] == "(701) 555-3333"
+        for item in partial_phone.json()["results"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_dashboard_call_can_create_qualified_lead_and_log_call(
     client, db_session, test_tenant
 ):

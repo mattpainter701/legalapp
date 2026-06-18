@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Intake dashboard search coverage:** history search now finds log-only callers, split first/last names, partial name fragments, and partial phone digits so receptionist-only calls such as "Jan Patterson" surface before being promoted to leads.
 - **Partner-to-attorney intake workflow:** intake follow-up tasks now let a partner qualify a caller, assign the qualified intake to an attorney, complete the partner follow-up, carry receptionist plus partner notes into the attorney’s urgent intake task, and let the attorney open a linked matter in `waiting_fee_agreement` status from that task.
 - **Intake dashboard call logging feedback:** prevented successful call logging from immediately triggering an empty dashboard search, which caused a misleading `422` and made the first call log appear to do nothing. Assigned intake leads now also create/update an urgent partner follow-up task and send the standard task assignment alert.
 - **Task assignment alerts:** expanded task-assignment notifications into ticket-style alerts with assignee, creator, created/alert time, due time, customer/matter context, source, and reason/description fields.
