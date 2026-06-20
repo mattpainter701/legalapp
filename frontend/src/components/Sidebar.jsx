@@ -42,11 +42,11 @@ const NAV_GROUPS = [
   },
   {
     label: 'Administration',
-    adminOnly: true,
+    financeOnly: true,
     items: [
       { path: '/admin',      label: 'Administration', icon: Shield, module: 'admin' },
-      { path: '/mcp',        label: 'MCP Servers',    icon: Server, module: 'mcp' },
-      { path: '/onboarding', label: 'Onboarding',     icon: Rocket, module: 'onboarding' },
+      { path: '/mcp',        label: 'MCP Servers',    icon: Server, module: 'mcp', adminOnly: true },
+      { path: '/onboarding', label: 'Onboarding',     icon: Rocket, module: 'onboarding', adminOnly: true },
     ],
   },
 ]
@@ -70,11 +70,13 @@ export default function Sidebar({
     onClose?.()
   }
 
+  const hasFinanceAccess = user?.role === 'admin' || user?.role === 'accountant'
   const visibleGroups = NAV_GROUPS.filter(
-    (g) => !g.adminOnly || user?.role === 'admin'
+    (g) => (!g.adminOnly || user?.role === 'admin') && (!g.financeOnly || hasFinanceAccess)
   ).map((group) => {
     const enabled = user?.enabled_modules
     const items = group.items.filter((item) => {
+      if (item.adminOnly && user?.role !== 'admin') return false
       if (!item.module || !Array.isArray(enabled) || enabled.length === 0) return true
       return enabled.includes(item.module)
     })

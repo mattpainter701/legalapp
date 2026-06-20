@@ -131,6 +131,14 @@ def _auto_tier(query: str, user_requested_premium: bool) -> bool:
     return False
 
 
+def _premium_for_user(user, query: str, user_requested_premium: bool) -> bool:
+    """Apply per-user premium assignment after route classification."""
+    return bool(
+        getattr(user, "premium_ai_enabled", False)
+        and _auto_tier(query, user_requested_premium)
+    )
+
+
 async def _build_attachment_context(
     db: AsyncSession,
     user,
@@ -737,7 +745,7 @@ async def send_message(
         resolve_llm_route(
             db,
             user.tenant_id,
-            use_premium=_auto_tier(body.content, body.use_premium_llm),
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             requested_provider=body.provider,
         ),
         cache_manager.get_cached_rag_results(
@@ -830,7 +838,7 @@ async def send_message(
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
-                use_premium=_auto_tier(body.content, body.use_premium_llm),
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 provider=route.provider,
                 model=route.model,
                 user_name=user_first_name,
@@ -883,7 +891,7 @@ async def send_message(
             tenant_name=tenant_name,
             context=context_str,
             memory_context=memory_context,
-            use_premium=_auto_tier(body.content, body.use_premium_llm),
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
@@ -1175,7 +1183,7 @@ async def stream_message(
         resolve_llm_route(
             db,
             user.tenant_id,
-            use_premium=_auto_tier(body.content, body.use_premium_llm),
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             requested_provider=body.provider,
         ),
         cache_manager.get_cached_rag_results(
@@ -1243,7 +1251,7 @@ async def stream_message(
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
-                use_premium=_auto_tier(body.content, body.use_premium_llm),
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
@@ -1272,7 +1280,7 @@ async def stream_message(
                     messages=retry_messages,
                     tenant_name=tenant_name,
                     context=context_str,
-                    use_premium=_auto_tier(body.content, body.use_premium_llm),
+                    use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,

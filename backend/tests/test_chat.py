@@ -221,9 +221,11 @@ async def test_premium_message_uses_tenant_premium_route(
     client: AsyncClient,
     db_session,
     test_tenant,
+    test_user,
     mock_llm,
     mock_embeddings,
 ):
+    test_user.premium_ai_enabled = True
     db_session.add(
         TenantSettings(
             tenant_id=test_tenant.id,

@@ -8,8 +8,9 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, set_tenant_context
-from app.middleware.tenant import require_admin
+from app.services.access_control import require_finance_admin
 from app.models.tenant import Tenant
+from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.models.conversation import UsageRecord
 
@@ -21,6 +22,7 @@ class UserLicenseRow(BaseModel):
     email: str
     full_name: str | None = None
     license_active: bool
+    premium_ai_enabled: bool = False
     role: str
     tokens_used: int = 0
     cost_usd: float = 0.0
@@ -45,6 +47,10 @@ class ToggleLicenseRequest(BaseModel):
     license_active: bool
 
 
+class TogglePremiumRequest(BaseModel):
+    premium_ai_enabled: bool
+
+
 class UpdateSeatsRequest(BaseModel):
     flat_seat_count: int
 
@@ -55,8 +61,8 @@ async def get_licensing_info(
     db: AsyncSession = Depends(get_db),
 ):
     """Get licensing overview: seat counts, per-user license status, and usage."""
-    await require_admin(request, db)
-    tenant_id = request.state.tenant_id
+    actor = await require_finance_admin(request, db)
+    tenant_id = actor.tenant_id
     await set_tenant_context(db, tenant_id)
 
     # Tenant
@@ -81,7 +87,9 @@ async def get_licensing_info(
     licensed = (
         await db.scalar(
             select(func.count(User.id)).where(
-                User.tenant_id == tenant_id, User.license_active.is_(True)
+                User.tenant_id == tenant_id,
+                User.is_active.is_(True),
+                User.license_active.is_(True),
             )
         )
         or 0
@@ -123,6 +131,7 @@ async def get_licensing_info(
                 email=u.email,
                 full_name=u.full_name,
                 license_active=u.license_active,
+                premium_ai_enabled=u.premium_ai_enabled,
                 role=u.role,
                 tokens_used=tokens,
                 cost_usd=cost,
@@ -160,8 +169,8 @@ async def toggle_user_license(
     db: AsyncSession = Depends(get_db),
 ):
     """Toggle whether a user consumes a license seat."""
-    await require_admin(request, db)
-    tenant_id = request.state.tenant_id
+    actor = await require_finance_admin(request, db)
+    tenant_id = actor.tenant_id
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
@@ -171,10 +180,8 @@ async def toggle_user_license(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # If deactivating license, check if they granted integrations
+    warning = None
     if not body.license_active:
-        from app.models.tenant_credential import TenantCredential
-
         cred_result = await db.execute(
             select(TenantCredential).where(
                 TenantCredential.granted_by_user_id == user.id,
@@ -182,17 +189,54 @@ async def toggle_user_license(
             )
         )
         if cred_result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=400,
-                detail="This user granted org-wide OAuth consent. Deactivating their license may break integrations. Re-authorize with another admin first.",
+            warning = (
+                "This user granted org-wide OAuth consent. Their account remains "
+                "active for integrations, but they no longer consume a standard seat."
             )
 
     user.license_active = body.license_active
+    if not user.license_active:
+        user.premium_ai_enabled = False
     await db.commit()
     return {
         "status": "ok",
         "user_id": str(user.id),
         "license_active": user.license_active,
+        "premium_ai_enabled": user.premium_ai_enabled,
+        "warning": warning,
+    }
+
+
+@router.put("/users/{user_id}/premium")
+async def toggle_user_premium(
+    user_id: str,
+    body: TogglePremiumRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle whether a licensed user can use separately metered premium AI."""
+    actor = await require_finance_admin(request, db)
+    tenant_id = actor.tenant_id
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.premium_ai_enabled and not user.license_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Premium AI requires an active standard license.",
+        )
+
+    user.premium_ai_enabled = body.premium_ai_enabled
+    await db.commit()
+    return {
+        "status": "ok",
+        "user_id": str(user.id),
+        "premium_ai_enabled": user.premium_ai_enabled,
     }
 
 
@@ -203,8 +247,8 @@ async def update_seat_count(
     db: AsyncSession = Depends(get_db),
 ):
     """Update flat_seat_count for the tenant."""
-    await require_admin(request, db)
-    tenant_id = request.state.tenant_id
+    actor = await require_finance_admin(request, db)
+    tenant_id = actor.tenant_id
     await set_tenant_context(db, tenant_id)
 
     if body.flat_seat_count < 0:
@@ -224,7 +268,9 @@ async def update_seat_count(
     licensed = (
         await db.scalar(
             select(func.count(User.id)).where(
-                User.tenant_id == tenant_id, User.license_active.is_(True)
+                User.tenant_id == tenant_id,
+                User.is_active.is_(True),
+                User.license_active.is_(True),
             )
         )
         or 0

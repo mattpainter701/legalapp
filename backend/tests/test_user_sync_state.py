@@ -108,8 +108,8 @@ async def test_ms_sync_creates_free_tier_user_and_records_state(
             select(User).where(User.email == "new.hire@testfirm.com")
         )
     ).scalar_one()
-    # Regression B: synced users land on free tier
-    assert user.license_active is False
+    # Directory sync imports all active cloud users as billable by default.
+    assert user.license_active is True
 
     cred = (
         await db_session.execute(
@@ -221,7 +221,7 @@ async def test_ms_sync_skips_disabled_directory_users(db_session, test_tenant):
             select(User).where(User.email == "active@testfirm.com")
         )
     ).scalar_one()
-    assert active.license_active is False
+    assert active.license_active is True
 
     disabled = (
         await db_session.execute(
@@ -282,7 +282,7 @@ async def test_google_sync_avoids_directory_query_filter_and_skips_suspended(
             select(User).where(User.email == "active@testfirm.com")
         )
     ).scalar_one()
-    assert active.license_active is False
+    assert active.license_active is True
 
     suspended = (
         await db_session.execute(

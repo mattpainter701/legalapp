@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Admin licensing and add-on controls:** license toggles now allow unlicensing integration grantors without failing the request, premium AI access is managed separately per licensed user, and add-on purchase/trial/disable actions refresh the current module list and show confirmation feedback.
 - **Intake dashboard search coverage:** history search now finds log-only callers, split first/last names, partial name fragments, and partial phone digits so receptionist-only calls such as "Jan Patterson" surface before being promoted to leads.
 - **Partner-to-attorney intake workflow:** intake follow-up tasks now let a partner qualify a caller, assign the qualified intake to an attorney, complete the partner follow-up, carry receptionist plus partner notes into the attorney’s urgent intake task, and let the attorney open a linked matter in `waiting_fee_agreement` status from that task.
 - **Intake dashboard call logging feedback:** prevented successful call logging from immediately triggering an empty dashboard search, which caused a misleading `422` and made the first call log appear to do nothing. Assigned intake leads now also create/update an urgent partner follow-up task and send the standard task assignment alert.
@@ -17,6 +18,8 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Added
+- **Accountant finance role and restricted licensing modes:** added an `accountant` role for billing/licensing/subscription/reporting access, premium-AI assignment on users, backend enforcement for unlicensed users, and intake-only module resolution so call-intake tenants land on the intake dashboard plus add-on modules only.
+- **General intake task routing:** receptionist call capture now supports partner rotation by default, no-task logging, or a general staff task assigned to any active tenant user with preset/custom task labels; recent callers and CSV exports show these staff task assignments.
 - **Standalone caller-intake packaging:** intake-only tenants can use the dashboard as a self-contained licensed product, and the intake dashboard now exports tenant-scoped call records to CSV with optional date range filters for finance/Tabs3 partner-association reconciliation without promoting every caller into CRM/matters.
 - **Clause-level legal chunking:** New `app/utils/legal_chunker.py` replaces fixed 500-token chunking with structure-aware splitting that respects legal document anatomy (sections, articles, numbered clauses). Each chunk carries `section_path` (e.g. "Article I > Section 1.01 > (a)") and `clause_type` (definition/obligation/remedy/governing_law/recital/general) metadata for clause-type-aware retrieval. Migration `060_chunk_metadata_fts` adds the columns + a GIN-indexed `tsvector` column for PostgreSQL full-text search.
 - **Hybrid retrieval (dense + FTS + RRF fusion):** `app/services/rag.py` now runs pgvector cosine similarity and PostgreSQL FTS in parallel, fusing results via Reciprocal Rank Fusion (0.6 dense / 0.4 FTS weight). FTS matches on exact identifiers (section numbers, defined terms, dates) that dense embeddings miss. Context headers now include `section_path`, `clause_type`, and keyword-match indicators.
@@ -24,6 +27,7 @@
 - **Free model speed vetting + auto-cooldown:** `record_model_latency()` tracks per-model time-to-first-token in a ring buffer. Models exceeding 15s latency or with >50% slow samples enter a 5-minute cooldown. Wired into `llm.py` `complete()` and `stream_complete()` for both success and error paths.
 
 ### Changed
+- **Directory user sync licensing default:** new active Microsoft 365/Google directory users are now imported as standard licensed users by default, while existing users keep their current license flag so admins can exclude service accounts manually.
 - **LiteLLM gateway timeout tuning:** `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, `allowed_fails` 2→1, per-model `timeout` values (15s free, 20-30s paid). Slow free models fail over faster instead of holding connections.
 - **Chat endpoint pre-work parallelized:** Both `/messages` and `/messages/stream` now run matter context, attachment context, memory context, LLM route resolution, and RAG cache check via `asyncio.gather` instead of sequentially. Pooled IOLTA bank accounts with three-way reconciliation and saved snapshots.
   - Migration `054_trust_ledger`: `trust_bank_accounts` (pooled, RLS), `trust_accounts.bank_account_id` FK, `trust_reconciliations` (persisted snapshots, RLS).

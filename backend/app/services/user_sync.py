@@ -139,7 +139,7 @@ class UserSyncService:
                         oauth_provider="microsoft",
                         oauth_subject=ms_user.get("id"),
                         is_active=True,
-                        license_active=False,
+                        license_active=True,
                     )
                     db.add(new_user)
                     created += 1
@@ -273,7 +273,7 @@ class UserSyncService:
                         oauth_provider="google",
                         oauth_subject=g_user.get("id"),
                         is_active=True,
-                        license_active=False,
+                        license_active=True,
                     )
                     db.add(new_user)
                     created += 1

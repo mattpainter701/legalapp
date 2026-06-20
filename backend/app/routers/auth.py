@@ -1236,7 +1236,9 @@ async def get_me(
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
-    enabled_modules, default_route = await resolve_enabled_modules(db, user.tenant_id)
+    enabled_modules, default_route = await resolve_enabled_modules(
+        db, user.tenant_id, user=user
+    )
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -1244,6 +1246,8 @@ async def get_me(
         full_name=user.full_name,
         role=user.role,
         is_active=user.is_active,
+        license_active=user.license_active,
+        premium_ai_enabled=user.premium_ai_enabled,
         created_at=user.created_at,
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
         enabled_modules=enabled_modules,

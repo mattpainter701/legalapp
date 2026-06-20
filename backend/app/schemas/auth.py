@@ -48,6 +48,8 @@ class UserInfo(BaseModel):
     full_name: Optional[str] = None
     role: str
     is_active: bool
+    license_active: bool = True
+    premium_ai_enabled: bool = False
     created_at: datetime
     billing_tier: str
     enabled_modules: list[str] = []

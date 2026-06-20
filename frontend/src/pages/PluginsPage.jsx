@@ -127,12 +127,13 @@ function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate }) {
 // ── Page component ───────────────────────────────────────────────────────────
 export default function PluginsPage() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, refreshUser } = useAuth()
   const [plugins, setPlugins] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [savingPlugin, setSavingPlugin] = useState(null)
   const [activeTab, setActiveTab] = useState('purchased')
+  const [notice, setNotice] = useState(null)
 
   const loadPlugins = () => {
     setLoading(true)
@@ -156,7 +157,10 @@ export default function PluginsPage() {
     setError(null)
     try {
       await updatePluginEntitlement(pluginId, { status, source: 'admin' })
+      await refreshUser?.()
       await loadPlugins()
+      setNotice(`${status === 'disabled' ? 'Disabled' : status === 'trial' ? 'Trial started for' : 'Purchased'} ${pluginId}.`)
+      setTimeout(() => setNotice(null), 4000)
     } catch (err) {
       setError(err?.response?.data?.detail || 'Failed to update plugin entitlement.')
     } finally {
@@ -221,6 +225,11 @@ export default function PluginsPage() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-8 text-red-700 text-sm font-sans text-center">
             {error}
+          </div>
+        )}
+        {notice && (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 mb-8 text-green-700 text-sm font-sans text-center">
+            {notice}
           </div>
         )}
 

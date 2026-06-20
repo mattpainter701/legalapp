@@ -1234,6 +1234,7 @@ async def cold_start_interview(
     context["setup_step"] = current_step
     context["tenant_name"] = user.tenant.name if user.tenant else "Legal"
 
+    use_premium = bool(body.use_premium and user.premium_ai_enabled)
     result_data = await plugin_executor.execute(
         db=db,
         plugin=plugin,
@@ -1242,7 +1243,7 @@ async def cold_start_interview(
         tenant_id=str(user.tenant_id),
         user_id=str(user.id),
         context=context,
-        use_premium=body.use_premium,
+        use_premium=use_premium,
     )
 
     # Advance the setup step and persist partial profile
@@ -1268,7 +1269,7 @@ async def cold_start_interview(
     # Record usage
     model_used = result_data.get("model_used") or (
         settings.LITELLM_PREMIUM_MODEL
-        if body.use_premium
+        if use_premium
         else settings.LITELLM_STANDARD_MODEL
     )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)
@@ -1377,6 +1378,7 @@ async def execute_skill(
             else f"--- Cloud Search Results ---\n\n{cloud_context}"
         )
 
+    use_premium = bool(body.use_premium and user.premium_ai_enabled)
     result_data = await plugin_executor.execute(
         db=db,
         plugin=plugin,
@@ -1385,13 +1387,13 @@ async def execute_skill(
         tenant_id=str(user.tenant_id),
         user_id=str(user.id),
         context=context,
-        use_premium=body.use_premium,
+        use_premium=use_premium,
     )
 
     # Record usage
     model_used = result_data.get("model_used") or (
         settings.LITELLM_PREMIUM_MODEL
-        if body.use_premium
+        if use_premium
         else settings.LITELLM_STANDARD_MODEL
     )
     tokens_in_val = result_data.get("tokens_in", result_data.get("tokens_used", 0) // 2)

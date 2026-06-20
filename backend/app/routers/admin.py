@@ -41,6 +41,7 @@ from app.schemas.admin import (
     ErrorResolveResponse,
 )
 from app.services.llm_routing import VALID_LLM_PROVIDERS
+from app.services.access_control import normalize_role
 
 settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -1324,8 +1325,9 @@ async def get_permissions_audit(
 
 
 class UserPatchRequest(_PydanticBase):
-    role: Optional[str] = None  # "admin" | "user"
+    role: Optional[str] = None  # "admin" | "accountant" | "user"
     full_name: Optional[str] = None
+    premium_ai_enabled: Optional[bool] = None
     payg_monthly_budget: Optional[float] = (
         None  # None = clear cap; pass -1 to leave unchanged
     )
@@ -1363,14 +1365,24 @@ async def patch_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     if body.role is not None:
-        if body.role not in ("admin", "user"):
+        normalized_role = normalize_role(body.role)
+        if normalized_role != body.role.strip().lower():
             raise HTTPException(
-                status_code=400, detail="role must be 'admin' or 'user'"
+                status_code=400,
+                detail="role must be 'admin', 'accountant', or 'user'",
             )
-        user.role = body.role
+        user.role = normalized_role
 
     if body.full_name is not None:
         user.full_name = body.full_name
+
+    if body.premium_ai_enabled is not None:
+        if body.premium_ai_enabled and not user.license_active:
+            raise HTTPException(
+                status_code=400,
+                detail="Premium AI requires an active standard license.",
+            )
+        user.premium_ai_enabled = body.premium_ai_enabled
 
     if body.payg_monthly_budget is not None:
         user.payg_monthly_budget = (
@@ -1452,7 +1464,7 @@ async def invite_user(
         tenant_id=admin.tenant_id,
         email=body.email,
         full_name=body.full_name,
-        role=body.role if body.role in ("admin", "user") else "user",
+        role=normalize_role(body.role),
         is_active=False,
         license_active=True,
         # Store invite token temporarily in password_hash field (hashed prefix)

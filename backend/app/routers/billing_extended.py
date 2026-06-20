@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
-from app.middleware.tenant import get_current_user, require_admin
+from app.middleware.tenant import get_current_user
+from app.services.access_control import require_finance_admin
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
@@ -440,7 +441,7 @@ async def generate_invoice(
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
     """Generate an invoice from unbilled time entries and expenses for a matter. Admin only."""
-    user = await require_admin(request, db)
+    user = await require_finance_admin(request, db)
     tenant_id = str(user.tenant_id)
 
     # Verify matter
@@ -746,7 +747,7 @@ async def update_invoice(
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceResponse:
     """Update invoice fields or transition status. Admin only."""
-    user = await require_admin(request, db)
+    user = await require_finance_admin(request, db)
 
     result = await db.execute(
         select(Invoice).where(
@@ -802,7 +803,7 @@ async def create_payment(
     db: AsyncSession = Depends(get_db),
 ) -> PaymentResponse:
     """Record a payment against an invoice. Admin only."""
-    user = await require_admin(request, db)
+    user = await require_finance_admin(request, db)
 
     # Verify invoice exists and belongs to tenant
     inv_result = await db.execute(
@@ -970,7 +971,7 @@ async def export_invoice(
     db: AsyncSession = Depends(get_db),
 ):
     """Export an invoice in the requested format (csv, ledes1998b). Admin only."""
-    user = await require_admin(request, db)
+    user = await require_finance_admin(request, db)
     inv = await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
     if body.format == "csv":

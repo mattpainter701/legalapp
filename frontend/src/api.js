@@ -325,6 +325,8 @@ export const getLicensingInfo = () =>
   api.get('/admin/licensing').then((r) => r.data)
 export const toggleUserLicense = (userId, licenseActive) =>
   api.put(`/admin/users/${userId}/license`, { license_active: licenseActive }).then((r) => r.data)
+export const toggleUserPremium = (userId, premiumEnabled) =>
+  api.put(`/admin/users/${userId}/premium`, { premium_ai_enabled: premiumEnabled }).then((r) => r.data)
 export const updateSeatCount = (count) =>
   api.put('/admin/licensing/seats', { flat_seat_count: count }).then((r) => r.data)
 

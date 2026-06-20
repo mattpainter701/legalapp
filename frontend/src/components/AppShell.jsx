@@ -28,6 +28,11 @@ export default function AppShell({ children, title }) {
   const [conversations, setConversations] = useState([])
   const [documents, setDocuments] = useState([])
   const [activeConvId, setActiveConvId] = useState(null)
+  const enabledModules = Array.isArray(user?.enabled_modules) ? user.enabled_modules : []
+  const canSeeModule = useCallback((module) => (
+    enabledModules.length === 0 || enabledModules.includes(module)
+  ), [enabledModules])
+  const hasFinanceAccess = user?.role === 'admin' || user?.role === 'accountant'
 
   const isActiveRoute = useCallback((path) => (
     pathname === path || pathname.startsWith(path + '/')
@@ -158,19 +163,21 @@ export default function AppShell({ children, title }) {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <button
-                onClick={() => handleShellNavigate('/matters')}
-                title="My Matters"
-                aria-current={isActiveRoute('/matters') ? 'page' : undefined}
-                className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-semibold uppercase tracking-wider rounded-lg border transition-colors ${
-                  isActiveRoute('/matters')
-                    ? 'bg-brand-ink text-white border-brand-ink'
-                    : 'bg-brand-surface text-brand-ink border-brand-line hover:bg-brand-bg-soft hover:border-brand-line-2'
-                }`}
-              >
-                <Briefcase size={13} /> My Matters
-              </button>
-              {user?.role === 'admin' && (
+              {canSeeModule('matters') && (
+                <button
+                  onClick={() => handleShellNavigate('/matters')}
+                  title="My Matters"
+                  aria-current={isActiveRoute('/matters') ? 'page' : undefined}
+                  className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-semibold uppercase tracking-wider rounded-lg border transition-colors ${
+                    isActiveRoute('/matters')
+                      ? 'bg-brand-ink text-white border-brand-ink'
+                      : 'bg-brand-surface text-brand-ink border-brand-line hover:bg-brand-bg-soft hover:border-brand-line-2'
+                  }`}
+                >
+                  <Briefcase size={13} /> My Matters
+                </button>
+              )}
+              {hasFinanceAccess && canSeeModule('admin') && (
                 <button
                   onClick={() => navigate('/admin')}
                   title="Administration"
@@ -193,7 +200,12 @@ export default function AppShell({ children, title }) {
           </main>
 
           <nav className="md:hidden h-16 bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
-            {MOBILE_NAV_ITEMS.map(({ path, label, icon: Icon }) => {
+            {MOBILE_NAV_ITEMS.filter(({ path }) => {
+              if (path === '/matters' || path === '/tasks') return canSeeModule('matters')
+              if (path === '/chat') return canSeeModule('chat')
+              if (path === '/calendar') return canSeeModule('calendar')
+              return true
+            }).map(({ path, label, icon: Icon }) => {
               const active = isActiveRoute(path)
               return (
                 <button

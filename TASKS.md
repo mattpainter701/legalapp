@@ -325,12 +325,20 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 
 ### M4 — Platform hardening (P1)
 
-#### 1309. Role-Based Access Control & Module Visibility (P1, LARGE) — PENDING
+#### 1309. Role-Based Access Control & Module Visibility (P1, LARGE) — IN PROGRESS
 - [ ] Migration `051_rbac`: `roles` table (user|admin|accounting|partner|attorney|secretary|paralegal + custom subroles), `role_permissions` (module→action mapping), `user_roles` (many-to-many), tenant-level role definitions
 - [ ] Backend: `require_role("invoicing")` / `require_role("admin")` dependency replacing ad-hoc checks; per-role middleware; `routers/admin/roles.py` CRUD for role definitions + permission matrix
 - [ ] Admin page: role editor UI — define roles, assign permissions per module (billing, matters, documents, calendar, chat, plugins, admin), assign users to roles
 - [ ] Custom subroles: firm can clone a base role and toggle individual permissions → saved as tenant-scoped custom role
 - [ ] Module visibility gating: admin can disable unpurchased addon modules per tenant; sidebar/route hide disabled modules; `TenantSettings.modules` JSON list of enabled modules; dev override flag to see all modules regardless
+- [x] Licensing model refactor: standard license is the required full-platform seat; premium AI is a separate per-user PAYG add-on billed from monthly LLM usage and must not replace the standard seat
+- [x] Directory sync licensing policy: Microsoft 365/Google sync imports all active cloud users, defaults them to licensed/seat-billable when tenant policy says so, and lets admins unlicense service accounts or other excluded users
+- [x] Unlicensed-user experience: active but unlicensed users can authenticate only into a restricted basic portal with add-on/demo visibility and no matter/chat/core workspace access
+- [x] Add-on module purchasing: admin purchase/trial/disable actions must update tenant entitlements, refresh visible modules/routes, and surface billing/subscription state instead of appearing inert
+- [ ] Per-user add-on assignment: tenant-purchased add-ons can be assigned to licensed users; assigned users see add-on functions, while all users can still view the add-on modules sales/demo page
+- [x] Premium AI assignment: admins can enable premium model access per licensed user; premium usage is metered separately from standard seats with margin-ready cost reporting
+- [x] Accountant role: can view and manage billing, invoicing, subscription/licensing, time entry, and financial reporting without full admin access to all tenant configuration
+- [x] Intake-only plan: support tenants subscribed only to call intake at $5/user/month; users land on the intake dashboard/widget plus add-on modules page, with chat/matters/core practice pages hidden
 - [ ] Invoicing lock (DONE — hotfix): `generate_invoice`, `update_invoice`, `create_payment`, `export_invoice` gated to `require_admin` in `billing_extended.py`
 
 ---

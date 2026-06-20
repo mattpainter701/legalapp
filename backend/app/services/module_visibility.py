@@ -35,6 +35,14 @@ MODULE_ROUTES = {
 FULL_PLATFORM_MODULES = tuple(MODULE_ROUTES.keys())
 KNOWN_MODULES = set(FULL_PLATFORM_MODULES) | {FULL_PLATFORM_MODULE}
 PURCHASED_STATUSES = {"purchased", "included", "trial"}
+BASIC_PORTAL_MODULES = ["plugins"]
+INTAKE_ONLY_MODULES = ["intake-dashboard", "plugins"]
+
+
+def _with_finance_admin(modules: list[str], user=None) -> list[str]:
+    if user is not None and getattr(user, "role", None) in {"admin", "accountant"}:
+        modules = [*modules, "admin"]
+    return sorted(set(modules), key=lambda item: list(FULL_PLATFORM_MODULES).index(item))
 
 
 def normalize_module_name(value: str | None) -> str | None:
@@ -52,23 +60,32 @@ def _expand_modules(modules: list[str]) -> list[str]:
             normalized.append(module)
     if FULL_PLATFORM_MODULE in normalized:
         return list(FULL_PLATFORM_MODULES)
+    if "plugins" not in normalized:
+        normalized.append("plugins")
     return sorted(set(normalized), key=lambda item: list(FULL_PLATFORM_MODULES).index(item))
 
 
 async def resolve_enabled_modules(
-    db: AsyncSession, tenant_id: uuid.UUID
+    db: AsyncSession, tenant_id: uuid.UUID, user=None
 ) -> tuple[list[str], str]:
     """Return enabled module ids and default route.
 
     Backward compatibility: tenants with no explicit module config and no known
     module entitlements receive the full platform.
     """
+    if user is not None and not getattr(user, "license_active", True):
+        return BASIC_PORTAL_MODULES, MODULE_ROUTES["plugins"]
+
     settings_result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
     tenant_settings = settings_result.scalar_one_or_none()
     custom_config = tenant_settings.custom_config if tenant_settings else None
     custom_config = custom_config or {}
+
+    if custom_config.get("plan") == "intake-only":
+        enabled = _with_finance_admin(INTAKE_ONLY_MODULES, user)
+        return enabled, MODULE_ROUTES["intake-dashboard"]
 
     configured_modules = custom_config.get("enabled_modules")
     if isinstance(configured_modules, list):
@@ -89,6 +106,7 @@ async def resolve_enabled_modules(
 
     if not enabled:
         enabled = ["intake-dashboard"]
+    enabled = _with_finance_admin(enabled, user)
 
     configured_default = normalize_module_name(custom_config.get("default_module"))
     default_module = configured_default if configured_default in enabled else enabled[0]

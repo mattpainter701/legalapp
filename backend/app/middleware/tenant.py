@@ -25,6 +25,22 @@ SKIP_PREFIXES = (
     "/api/auth/",
 )
 
+LICENSE_EXEMPT_PREFIXES = (
+    "/auth/",
+    "/api/auth/",
+    "/portal/",
+    "/api/portal/",
+)
+
+
+def _is_license_exempt(request: Request) -> bool:
+    path = request.url.path
+    if any(path.startswith(prefix) for prefix in LICENSE_EXEMPT_PREFIXES):
+        return True
+    if request.method == "GET" and path.rstrip("/") == "/api/plugins":
+        return True
+    return False
+
 
 class TenantMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -132,6 +148,8 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
+    if not user.license_active and not _is_license_exempt(request):
+        raise HTTPException(status_code=403, detail="Standard license required")
 
     return user
 

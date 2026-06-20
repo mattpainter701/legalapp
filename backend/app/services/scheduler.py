@@ -98,7 +98,7 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "user-sync",
         "display_name": "Directory User Sync",
-        "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new users land on the free tier.",
+        "description": "Pulls directory users from connected Google/Microsoft tenants nightly; new active users are licensed by default.",
         "schedule": "Daily at 2:00 AM ET",
     },
     {
@@ -1389,8 +1389,8 @@ class LegalScheduler:
         """Sync directory users for every tenant with active credentials.
 
         Per-tenant/per-provider failures are isolated so one bad token cannot
-        abort the whole run. Synced users land on the free tier (license_active
-        is left to the UserSyncService default of False for new users).
+        abort the whole run. New synced users are licensed by default, and
+        existing user license flags are never overwritten by sync.
         """
         logger.info("[user-sync] Starting run")
         from app.services.user_sync import user_sync as user_sync_svc

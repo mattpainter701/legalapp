@@ -94,7 +94,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout: logoutUser, loading }}>
+    <AuthContext.Provider value={{ user, token, login, logout: logoutUser, refreshUser: fetchUser, loading }}>
       {children}
     </AuthContext.Provider>
   )
@@ -117,7 +117,11 @@ function canAccessModule(user, module) {
   return enabled.includes(module)
 }
 
-function ProtectedRoute({ children, adminOnly = false, module = null }) {
+function hasFinanceAccess(user) {
+  return user?.role === 'admin' || user?.role === 'accountant'
+}
+
+function ProtectedRoute({ children, adminOnly = false, financeOnly = false, module = null }) {
   const { user, loading } = useAuth()
 
   if (loading) {
@@ -136,6 +140,10 @@ function ProtectedRoute({ children, adminOnly = false, module = null }) {
     return <Navigate to={user.default_route || '/matters'} replace />
   }
 
+  if (financeOnly && !hasFinanceAccess(user)) {
+    return <Navigate to={user.default_route || '/matters'} replace />
+  }
+
   if (!canAccessModule(user, module)) {
     return <Navigate to={user.default_route || '/intake/dashboard'} replace />
   }
@@ -143,9 +151,9 @@ function ProtectedRoute({ children, adminOnly = false, module = null }) {
   return children
 }
 
-function ShellRoute({ children, title, adminOnly = false, module = null }) {
+function ShellRoute({ children, title, adminOnly = false, financeOnly = false, module = null }) {
   return (
-    <ProtectedRoute adminOnly={adminOnly} module={module}>
+    <ProtectedRoute adminOnly={adminOnly} financeOnly={financeOnly} module={module}>
       <AppShell title={title}>
         {children}
       </AppShell>
@@ -256,7 +264,7 @@ export default function App() {
         />
         <Route
           path="/billing"
-          element={<ProtectedRoute adminOnly><LegacyBillingRedirect /></ProtectedRoute>}
+          element={<ProtectedRoute financeOnly><LegacyBillingRedirect /></ProtectedRoute>}
         />
         <Route
           path="/contacts"
@@ -324,7 +332,7 @@ export default function App() {
         {/* Admin routes */}
         <Route
           path="/admin"
-          element={<ShellRoute title="Administration" adminOnly module="admin"><AdminPage /></ShellRoute>}
+          element={<ShellRoute title="Administration" financeOnly module="admin"><AdminPage /></ShellRoute>}
         />
         <Route
           path="/mcp"

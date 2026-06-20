@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useAuth } from '../App'
 import {
   getAdminUsers,
   deactivateUser,
@@ -61,6 +62,10 @@ const ADMIN_TABS = [
   { id: 'qbo', label: 'QuickBooks' },
   { id: 'settings', label: 'Settings' },
 ]
+
+const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
+  ['licensing', 'billing', 'usage', 'qbo'].includes(tab.id)
+)
 
 // ── Invite Modal ──────────────────────────────────────────────────────────────
 
@@ -132,6 +137,7 @@ function InviteModal({ onClose, onSuccess }) {
               className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
             >
               <option value="user">User</option>
+              <option value="accountant">Accountant</option>
               <option value="admin">Admin</option>
             </select>
           </div>
@@ -400,7 +406,8 @@ function UsersTab({ billingTier }) {
   }
 
   const handleRoleToggle = async (u) => {
-    const newRole = u.role === 'admin' ? 'user' : 'admin'
+    const roleCycle = { user: 'accountant', accountant: 'admin', admin: 'user' }
+    const newRole = roleCycle[u.role] || 'user'
     if (!window.confirm(`Change ${u.email} to ${newRole}?`)) return
     setChangingRole(u.id)
     try {
@@ -497,7 +504,11 @@ function UsersTab({ billingTier }) {
                     <button
                       onClick={() => !isInactive && handleRoleToggle(u)}
                       disabled={changingRole === u.id || isInactive}
-                      title={isInactive ? undefined : `Click to switch to ${u.role === 'admin' ? 'user' : 'admin'}`}
+                      title={isInactive ? undefined : `Click to switch to ${
+                        (u.role === 'user' && 'accountant') ||
+                        (u.role === 'accountant' && 'admin') ||
+                        'user'
+                      }`}
                       className={`inline-flex px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide transition-colors ${
                         isInactive
                           ? 'cursor-default'
@@ -505,7 +516,9 @@ function UsersTab({ billingTier }) {
                       } ${
                         u.role === 'admin'
                           ? 'bg-brand-ink/10 text-brand-ink border border-brand-ink/20'
-                          : 'bg-brand-line/50 text-brand-muted border border-brand-line'
+                          : u.role === 'accountant'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-brand-line/50 text-brand-muted border border-brand-line'
                       }`}
                     >
                       {changingRole === u.id ? '…' : u.role}
@@ -1072,10 +1085,13 @@ function SettingsTab() {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTab = searchParams.get('tab')
+  const tabs = user?.role === 'accountant' ? ACCOUNTANT_TABS : ADMIN_TABS
+  const defaultTab = tabs[0]?.id || 'licensing'
   const [activeTab, setActiveTab] = useState(
-    ADMIN_TABS.some((t) => t.id === initialTab) ? initialTab : 'users'
+    tabs.some((t) => t.id === initialTab) ? initialTab : defaultTab
   )
   const [billingTier, setBillingTier] = useState('payg')
   const [tabsCollapsed, setTabsCollapsed] = useState(false)
@@ -1087,16 +1103,18 @@ export default function AdminPage() {
       .catch(() => {})
   }, [])
 
-  const tabs = ADMIN_TABS
-
   useEffect(() => {
     const tab = searchParams.get('tab')
-    if (tab && ADMIN_TABS.some((t) => t.id === tab) && tab !== activeTab) {
+    if (tab && tabs.some((t) => t.id === tab) && tab !== activeTab) {
       setActiveTab(tab)
-    } else if (tab && !ADMIN_TABS.some((t) => t.id === tab)) {
-      setActiveTab('users')
+    } else if (!tabs.some((t) => t.id === activeTab)) {
+      setActiveTab(defaultTab)
+      setSearchParams(defaultTab === 'users' ? {} : { tab: defaultTab })
+    } else if (tab && !tabs.some((t) => t.id === tab)) {
+      setActiveTab(defaultTab)
+      setSearchParams(defaultTab === 'users' ? {} : { tab: defaultTab })
     }
-  }, [searchParams, activeTab])
+  }, [searchParams, activeTab, tabs, defaultTab, setSearchParams])
 
   const selectTab = (tab) => {
     setActiveTab(tab)

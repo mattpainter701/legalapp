@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getLicensingInfo, toggleUserLicense, updateSeatCount } from '../api'
+import { getLicensingInfo, toggleUserLicense, toggleUserPremium, updateSeatCount } from '../api'
 
 export default function LicensingPanel() {
   const [data, setData] = useState(null)
@@ -27,10 +27,24 @@ export default function LicensingPanel() {
 
   const handleToggleLicense = async (userId, current) => {
     try {
-      await toggleUserLicense(userId, !current)
+      const result = await toggleUserLicense(userId, !current)
+      if (result.warning) {
+        setWarning(result.warning)
+        setTimeout(() => setWarning(null), 8000)
+      }
       await loadData()
     } catch (err) {
       setWarning(err?.response?.data?.detail || 'Failed to update license.')
+      setTimeout(() => setWarning(null), 5000)
+    }
+  }
+
+  const handleTogglePremium = async (userId, current) => {
+    try {
+      await toggleUserPremium(userId, !current)
+      await loadData()
+    } catch (err) {
+      setWarning(err?.response?.data?.detail || 'Failed to update premium AI access.')
       setTimeout(() => setWarning(null), 5000)
     }
   }
@@ -172,7 +186,8 @@ export default function LicensingPanel() {
                 {billing_tier === 'payg' && (
                   <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Budget cap</th>
                 )}
-                <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">License</th>
+                <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Standard</th>
+                <th className="px-5 py-2.5 text-brand-ink-2 font-sans text-xs font-medium">Premium AI</th>
               </tr>
             </thead>
             <tbody>
@@ -188,7 +203,11 @@ export default function LicensingPanel() {
                     </td>
                     <td className="px-5 py-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${
-                        u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
+                        u.role === 'admin'
+                          ? 'bg-purple-100 text-purple-700'
+                          : u.role === 'accountant'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-gray-100 text-gray-600'
                       }`}>
                         {u.role}
                       </span>
@@ -237,12 +256,28 @@ export default function LicensingPanel() {
                         />
                       </button>
                     </td>
+                    <td className="px-5 py-3">
+                      <button
+                        onClick={() => handleTogglePremium(u.user_id, u.premium_ai_enabled)}
+                        disabled={!u.license_active}
+                        title={!u.license_active ? 'Premium AI requires a standard license' : undefined}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none disabled:opacity-40 ${
+                          u.premium_ai_enabled ? 'bg-brand-ink' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            u.premium_ai_enabled ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </td>
                   </tr>
                 )
               })}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={billing_tier === 'payg' ? 5 : 4} className="px-5 py-6 text-center text-brand-ink-2 font-sans text-sm">
+                  <td colSpan={billing_tier === 'payg' ? 6 : 5} className="px-5 py-6 text-center text-brand-ink-2 font-sans text-sm">
                     No users found.
                   </td>
                 </tr>

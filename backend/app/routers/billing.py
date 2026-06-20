@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
-from app.middleware.tenant import get_current_user
+from app.services.access_control import require_finance_admin
 from app.models.tenant import Tenant
 
 settings = get_settings()
@@ -45,7 +45,7 @@ async def billing_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Return current billing tier and masked Stripe IDs for the tenant."""
-    user = await get_current_user(request, db)
+    user = await require_finance_admin(request, db)
     result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     tenant = result.scalar_one_or_none()
     if not tenant:
@@ -78,7 +78,7 @@ async def create_checkout_session(
     if not settings.STRIPE_PRICE_ID:
         raise HTTPException(status_code=501, detail="STRIPE_PRICE_ID not configured")
 
-    user = await get_current_user(request, db)
+    user = await require_finance_admin(request, db)
     result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     tenant = result.scalar_one_or_none()
     if not tenant:
@@ -129,7 +129,7 @@ async def create_portal_session(
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(status_code=501, detail="Stripe not configured")
 
-    user = await get_current_user(request, db)
+    user = await require_finance_admin(request, db)
     result = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     tenant = result.scalar_one_or_none()
     if not tenant:

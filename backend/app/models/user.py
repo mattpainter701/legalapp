@@ -50,6 +50,9 @@ class User(Base):
     license_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    premium_ai_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     # Billing (added in migration 026)
     default_billing_rate: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2), nullable=True
