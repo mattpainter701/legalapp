@@ -71,6 +71,7 @@ services:
     restart: unless-stopped
     environment:
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
+      STORE_MODEL_IN_DB: "True"
     deploy:
       resources:
         limits:

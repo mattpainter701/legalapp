@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Platform AI routing save/reload:** enabled LiteLLM DB-backed model storage in compose (`STORE_MODEL_IN_DB=True`) so operator route changes can hot-reload through `/config/update` instead of returning a 500.
 - **Platform AI routing load:** stopped auto-fetching provider model lists for saved routes on page load; the AI Routing page now uses the cached catalog by default and only probes provider `/models` endpoints when an operator explicitly clicks a model refresh button.
 - **Chat legal footer:** the "Prepared for ... Attorney review recommended" footer is now conditional for legal analysis/drafting/advice-like responses instead of being required on every chat message.
 - **Admin integrations clarity:** moved optional Zoom meeting setup into its own Admin tab so missing Zoom OAuth credentials no longer make regular Microsoft/Google integrations look unhealthy.

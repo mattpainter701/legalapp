@@ -423,6 +423,7 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [x] Model catalog/load balancing: live provider model refresh across stored keys, free/new model tags, direct model-to-route actions, and additional balanced primary deployments under the same LiteLLM alias
 - [x] Regression fix: AI Routing load no longer auto-probes provider `/models` endpoints for saved route keys; provider model fetches now happen only from explicit Models/Refresh actions, while route editors use the cached catalog by default
 - [x] Regression fix: chat footer guidance now appends the "Prepared for..." attorney-review line only for legal-analysis/legal-drafting responses, not every ordinary chat response
+- [x] Regression fix: LiteLLM route save/reload now runs with `STORE_MODEL_IN_DB=True` in compose so `/config/update` can persist UI-managed model changes
 
 Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_key.py`, `backend/migrations/versions/045_llm_provider_keys.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
 

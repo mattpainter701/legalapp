@@ -11,6 +11,8 @@ Set these in the deployment environment. Do not commit real values.
 - `LITELLM_API_KEY`: LiteLLM master key used by LegalApp to call the gateway.
 - `LITELLM_DB_PASSWORD`: password for the dedicated `litellm-postgres` container.
 - `LITELLM_DATABASE_URL`: synchronous Postgres URL for LiteLLM spend/log tables.
+- `STORE_MODEL_IN_DB=True`: required for operator-console route saves and
+  reloads through LiteLLM `/config/update`.
 - Provider keys used by `litellm_config.yaml`, such as `DEEPSEEK_API_KEY` and
   `OPENROUTER_API_KEY`.
 
