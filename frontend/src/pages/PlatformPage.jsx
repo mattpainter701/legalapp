@@ -743,8 +743,6 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
   useEffect(() => {
     setModels([])
     setModelsError(null)
-    if (route.key_id) handleFetchModels()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.key_id])
 
   const handleTest = async () => {
@@ -1496,13 +1494,11 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setLoading(true)
     setLoadError(null)
     try {
-      const [keysData, presetsData, routesData, catalogData, gatewayData] = await Promise.all([
-        getLLMProviderKeys(platformKey),
-        getLLMProviderPresets(platformKey),
-        getLLMRoutes(platformKey),
-        getLLMModelCatalog(platformKey),
-        getLLMGatewayStatus(platformKey),
-      ])
+      const keysData = await getLLMProviderKeys(platformKey)
+      const presetsData = await getLLMProviderPresets(platformKey)
+      const routesData = await getLLMRoutes(platformKey)
+      const catalogData = await getLLMModelCatalog(platformKey)
+      const gatewayData = await getLLMGatewayStatus(platformKey)
       setKeys(keysData.keys || [])
       setPresets(presetsData.providers || [])
       setCatalog(catalogData)

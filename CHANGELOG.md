@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- **Platform AI routing load:** stopped auto-fetching provider model lists for saved routes on page load; the AI Routing page now uses the cached catalog by default and only probes provider `/models` endpoints when an operator explicitly clicks a model refresh button.
+- **Chat legal footer:** the "Prepared for ... Attorney review recommended" footer is now conditional for legal analysis/drafting/advice-like responses instead of being required on every chat message.
+- **Admin integrations clarity:** moved optional Zoom meeting setup into its own Admin tab so missing Zoom OAuth credentials no longer make regular Microsoft/Google integrations look unhealthy.
+- **Admin users active toggle:** restored the friendlier Active switch in the Users table for enabling/disabling user accounts while preserving the OAuth-grantor safety confirmation.
 - **Admin licensing and add-on controls:** license toggles now allow unlicensing integration grantors without failing the request, premium AI access is managed separately per licensed user, and add-on purchase/trial/disable actions refresh the current module list and show confirmation feedback.
 - **Intake dashboard search coverage:** history search now finds log-only callers, split first/last names, partial name fragments, and partial phone digits so receptionist-only calls such as "Jan Patterson" surface before being promoted to leads.
 - **Partner-to-attorney intake workflow:** intake follow-up tasks now let a partner qualify a caller, assign the qualified intake to an attorney, complete the partner follow-up, carry receptionist plus partner notes into the attorney’s urgent intake task, and let the attorney open a linked matter in `waiting_fee_agreement` status from that task.

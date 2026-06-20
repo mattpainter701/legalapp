@@ -22,6 +22,7 @@ import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsPanel from '../components/IntegrationsPanel'
 import TeamsPanel from '../components/TeamsPanel'
+import ZoomPanel from '../components/ZoomPanel'
 import QBOPanel from '../components/QBOPanel'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import BillingPage from './BillingPage'
@@ -59,6 +60,7 @@ const ADMIN_TABS = [
   { id: 'smb', label: 'File Shares' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'teams', label: 'Teams' },
+  { id: 'zoom', label: 'Zoom' },
   { id: 'qbo', label: 'QuickBooks' },
   { id: 'settings', label: 'Settings' },
 ]
@@ -379,14 +381,23 @@ function UsersTab({ billingTier }) {
     setTimeout(() => setSuccessMsg(null), 4000)
   }
 
-  const handleDeactivate = async (u) => {
-    if (!window.confirm(`Deactivate ${u.email}? They will lose access immediately.`)) return
+  const handleDeactivate = async (u, force = false) => {
     setDeactivating(u.id)
     try {
-      await deactivateUser(u.id)
+      await deactivateUser(u.id, force)
+      flash(`${u.email} set inactive.`)
       loadUsers()
     } catch (e) {
-      setError(e?.response?.data?.detail || 'Failed to deactivate user')
+      const detail = e?.response?.data?.detail || 'Failed to update user status'
+      if (!force && detail.includes('org-wide OAuth consent')) {
+        const proceed = window.confirm(`${detail} Turn this user inactive anyway?`)
+        if (proceed) {
+          setDeactivating(null)
+          await handleDeactivate(u, true)
+          return
+        }
+      }
+      setError(detail)
     } finally {
       setDeactivating(null)
     }
@@ -396,12 +407,20 @@ function UsersTab({ billingTier }) {
     setReactivating(u.id)
     try {
       await reactivateUser(u.id)
-      flash(`${u.email} reactivated.`)
+      flash(`${u.email} set active.`)
       loadUsers()
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to reactivate user')
     } finally {
       setReactivating(null)
+    }
+  }
+
+  const handleActiveToggle = (u) => {
+    if (u.is_active === false) {
+      handleReactivate(u)
+    } else {
+      handleDeactivate(u)
     }
   }
 
@@ -483,8 +502,7 @@ function UsersTab({ billingTier }) {
               {billingTier === 'payg' && (
                 <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Budget cap</th>
               )}
-              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Status</th>
-              <th className="px-6 py-4" />
+              <th className="text-left px-6 py-4 font-semibold text-brand-ink font-sans text-xs uppercase tracking-wider">Active</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-brand-line">
@@ -551,42 +569,36 @@ function UsersTab({ billingTier }) {
                     />
                   )}
                   <td className="px-6 py-4">
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold uppercase tracking-wider ${
-                        !isInactive
-                          ? 'bg-brand-green/10 text-brand-green border border-brand-green/20'
-                          : 'bg-brand-rose/10 text-brand-rose border border-brand-rose/20'
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${!isInactive ? 'bg-brand-green' : 'bg-brand-rose'}`} />
-                      {!isInactive ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    {isInactive ? (
+                    <div className="inline-flex items-center gap-3">
                       <button
-                        className="text-xs text-brand-green hover:text-brand-green/80 font-sans font-medium transition-colors disabled:opacity-40"
-                        disabled={reactivating === u.id}
-                        onClick={() => handleReactivate(u)}
+                        type="button"
+                        onClick={() => handleActiveToggle(u)}
+                        disabled={deactivating === u.id || reactivating === u.id}
+                        aria-pressed={!isInactive}
+                        aria-label={`${u.email} is ${isInactive ? 'inactive' : 'active'}`}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-ink/20 disabled:opacity-50 ${
+                          !isInactive ? 'bg-brand-green' : 'bg-gray-300'
+                        }`}
                       >
-                        {reactivating === u.id ? 'Reactivating…' : 'Reactivate'}
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            !isInactive ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
                       </button>
-                    ) : (
-                      <button
-                        className="text-xs text-brand-rose hover:text-brand-rose/80 font-sans font-medium transition-colors disabled:opacity-40"
-                        disabled={deactivating === u.id}
-                        onClick={() => handleDeactivate(u)}
-                      >
-                        {deactivating === u.id ? 'Deactivating…' : 'Deactivate'}
-                      </button>
-                    )}
+                      <span className={`text-xs font-sans font-medium ${!isInactive ? 'text-brand-green' : 'text-brand-muted'}`}>
+                        {deactivating === u.id || reactivating === u.id
+                          ? 'Saving...'
+                          : !isInactive ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
                   </td>
                 </tr>
               )
             })}
             {displayUsers.length === 0 && (
               <tr>
-                <td colSpan={billingTier === 'payg' ? 8 : 7} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
+                <td colSpan={billingTier === 'payg' ? 7 : 6} className="px-6 py-12 text-center text-brand-muted font-sans text-sm">
                   No users found.
                 </td>
               </tr>
@@ -1194,6 +1206,7 @@ export default function AdminPage() {
           {activeTab === 'smb' && <SmbAdminPage />}
           {activeTab === 'integrations' && <IntegrationsPanel />}
           {activeTab === 'teams' && <TeamsPanel />}
+          {activeTab === 'zoom' && <ZoomPanel />}
           {activeTab === 'qbo' && <QBOPanel />}
         </div>
       </div>

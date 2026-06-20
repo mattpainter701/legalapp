@@ -43,6 +43,17 @@ const SCOPE_LABELS_GOOGLE = {
   'https://www.googleapis.com/auth/calendar': 'Read & write Google Calendar',
 }
 
+const CORE_READINESS_ENV_KEYS = new Set([
+  'FRONTEND_URL',
+  'BACKEND_URL',
+  'MICROSOFT_CLIENT_ID',
+  'MICROSOFT_CLIENT_SECRET',
+  'MICROSOFT_TENANT_ID',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'TEAMS_APP_ID',
+])
+
 function Tabs3ImportPanel() {
   const [file, setFile] = useState(null)
   const [passphrase, setPassphrase] = useState('')
@@ -466,13 +477,17 @@ export default function IntegrationsPanel() {
 function ReadinessCard({ readiness }) {
   if (!readiness) return null
   const envEntries = Object.entries(readiness.env || {})
-  const redirects = readiness.expected_redirect_uris || {}
+    .filter(([key]) => CORE_READINESS_ENV_KEYS.has(key))
+  const redirects = Object.fromEntries(
+    Object.entries(readiness.expected_redirect_uris || {})
+      .filter(([provider]) => provider !== 'zoom')
+  )
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
-      <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Integration Readiness</h3>
+      <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Cloud Integration Readiness</h3>
       <p className="text-brand-ink-2 font-sans text-xs mb-4">
-        Redacted setup status for OAuth apps, callbacks, and tenant credentials.
+        Redacted setup status for Microsoft, Google, Teams, and cloud document callbacks.
       </p>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div>

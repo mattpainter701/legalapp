@@ -325,7 +325,7 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 
 ### M4 — Platform hardening (P1)
 
-#### 1309. Role-Based Access Control & Module Visibility (P1, LARGE) — IN PROGRESS
+#### 1309. Role-Based Access Control & Module Visibility (P1, LARGE)
 - [ ] Migration `051_rbac`: `roles` table (user|admin|accounting|partner|attorney|secretary|paralegal + custom subroles), `role_permissions` (module→action mapping), `user_roles` (many-to-many), tenant-level role definitions
 - [ ] Backend: `require_role("invoicing")` / `require_role("admin")` dependency replacing ad-hoc checks; per-role middleware; `routers/admin/roles.py` CRUD for role definitions + permission matrix
 - [ ] Admin page: role editor UI — define roles, assign permissions per module (billing, matters, documents, calendar, chat, plugins, admin), assign users to roles
@@ -339,6 +339,8 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [x] Premium AI assignment: admins can enable premium model access per licensed user; premium usage is metered separately from standard seats with margin-ready cost reporting
 - [x] Accountant role: can view and manage billing, invoicing, subscription/licensing, time entry, and financial reporting without full admin access to all tenant configuration
 - [x] Intake-only plan: support tenants subscribed only to call intake at $5/user/month; users land on the intake dashboard/widget plus add-on modules page, with chat/matters/core practice pages hidden
+- [x] Users admin polish: restore the friendly Active toggle for enabling/disabling users instead of exposing deactivate/reactivate as the primary table action
+- [x] Integration admin polish: move optional Zoom meeting setup into its own Admin tab so core Microsoft/Google readiness stays clean when Zoom is not configured
 - [ ] Invoicing lock (DONE — hotfix): `generate_invoice`, `update_invoice`, `create_payment`, `export_invoice` gated to `require_admin` in `billing_extended.py`
 
 ---
@@ -419,6 +421,8 @@ Generalize the mediation portal (`mediation_portal.py`, `MediationInvite`, `Port
 - [x] Follow-up hardening: route readiness/validation UI, provider/key mismatch rejection, malformed key ID 400s, blank fallback pruning, LiteLLM fallback mapping update payload, and Anthropic native prefix/test support
 - [x] Follow-up UX cleanup: remove legacy global provider picker, show app alias → LiteLLM alias → upstream provider/model/key flow, simplify tenant overrides to aliases, surface 403/model-fetch errors, and sync app aliases on route save
 - [x] Model catalog/load balancing: live provider model refresh across stored keys, free/new model tags, direct model-to-route actions, and additional balanced primary deployments under the same LiteLLM alias
+- [x] Regression fix: AI Routing load no longer auto-probes provider `/models` endpoints for saved route keys; provider model fetches now happen only from explicit Models/Refresh actions, while route editors use the cached catalog by default
+- [x] Regression fix: chat footer guidance now appends the "Prepared for..." attorney-review line only for legal-analysis/legal-drafting responses, not every ordinary chat response
 
 Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_key.py`, `backend/migrations/versions/045_llm_provider_keys.py`, `frontend/src/pages/PlatformPage.jsx`, `frontend/src/api.js`
 
