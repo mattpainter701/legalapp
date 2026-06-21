@@ -11,6 +11,7 @@ import {
   createConversation,
   updateConversation,
   uploadChatAttachment,
+  getMattersV2,
 } from '../api'
 import { AlertBanner } from '../components/ui'
 
@@ -26,6 +27,10 @@ export default function ChatPage() {
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
+  const [matters, setMatters] = useState([])
+  const [matterQuery, setMatterQuery] = useState('')
+  const [matterPickerOpen, setMatterPickerOpen] = useState(false)
+  const [matterLinking, setMatterLinking] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState([])
   const [railOpen, setRailOpen] = useState(false)
   const [notice, setNotice] = useState(null)
@@ -90,6 +95,13 @@ export default function ChatPage() {
       const data = await getConversation(id)
       setMessages(data.messages || [])
       setActiveConvTitle(data.conversation?.title || 'Untitled')
+      if (data.conversation) {
+        setConversations((prev) =>
+          prev.some((conv) => conv.id === data.conversation.id)
+            ? prev.map((conv) => (conv.id === data.conversation.id ? { ...conv, ...data.conversation } : conv))
+            : [data.conversation, ...prev]
+        )
+      }
     } catch (err) {
       console.error('Failed to load conversation', err)
       showErrorNotice('Conversation could not be loaded', 'Select another conversation or retry.', err)
@@ -97,6 +109,12 @@ export default function ChatPage() {
       setIsLoadingMessages(false)
     }
   }, [setActiveConvId, showErrorNotice])
+
+  useEffect(() => {
+    getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
+      .then((data) => setMatters(Array.isArray(data) ? data : (data.items || [])))
+      .catch(() => setMatters([]))
+  }, [])
 
   // Load first conversation on mount, or from URL param
   useEffect(() => {
@@ -306,6 +324,45 @@ export default function ChatPage() {
     return updated
   }, [activeConvId, setConversations])
 
+  const activeConversation = conversations.find((conv) => conv.id === activeConvId) || null
+  const linkedMatterId = activeConversation?.matter_id || null
+  const linkedMatter = matters.find((matter) => matter.id === linkedMatterId) || null
+  const linkedMatterName = linkedMatter?.matter_name || linkedMatter?.name || (linkedMatterId ? 'Linked matter' : '')
+  const filteredMatters = matters
+    .filter((matter) => {
+      const q = matterQuery.trim().toLowerCase()
+      if (!q) return true
+      return [matter.matter_name, matter.name, matter.case_number, matter.client_name]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q))
+    })
+    .slice(0, 20)
+
+  const applyMatterLink = useCallback(async (matterId) => {
+    if (!activeConvId) {
+      setNotice({ type: 'info', title: 'No conversation selected', message: 'Start or select a conversation before linking it to a matter.' })
+      return
+    }
+    setMatterLinking(true)
+    try {
+      const updated = await updateConversation(activeConvId, { matter_id: matterId || '' })
+      setConversations((prev) =>
+        prev.map((conv) => (conv.id === updated.id ? { ...conv, ...updated } : conv))
+      )
+      setMatterPickerOpen(false)
+      setMatterQuery('')
+      setNotice({
+        type: 'success',
+        title: matterId ? 'Matter linked' : 'Matter unlinked',
+        message: matterId ? 'Future messages in this conversation will use that matter context.' : 'This conversation is no longer tied to a matter.',
+      })
+    } catch (err) {
+      showErrorNotice('Matter link failed', 'The conversation could not be updated.', err)
+    } finally {
+      setMatterLinking(false)
+    }
+  }, [activeConvId, setConversations, showErrorNotice])
+
   const activeRef = (() => {
     const idx = conversations.findIndex((c) => c.id === activeConvId)
     return idx >= 0 ? String(idx + 1).padStart(2, '0') : '—'
@@ -361,6 +418,78 @@ export default function ChatPage() {
             onRenameError={(message) => setNotice({ type: 'error', title: 'Rename failed', message })}
             onOpenSidebar={() => setRailOpen(true)}
           />
+
+          <div className="relative px-4 pt-4 md:px-6">
+            <div className="flex flex-col gap-3 rounded-xl border border-brand-line bg-brand-surface/95 px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-brand-muted font-sans">Matter context</p>
+                {linkedMatterId ? (
+                  <p className="mt-1 truncate text-sm font-semibold text-brand-ink font-sans">
+                    {linkedMatterName}
+                    {linkedMatter?.case_number ? <span className="ml-2 font-normal text-brand-muted">{linkedMatter.case_number}</span> : null}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-sm text-brand-muted font-sans">No matter linked to this conversation.</p>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {linkedMatterId && (
+                  <button
+                    onClick={() => navigate(`/matters/${linkedMatterId}`)}
+                    className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-xs font-medium text-brand-ink hover:bg-brand-bg-soft font-sans"
+                  >
+                    Open matter
+                  </button>
+                )}
+                {linkedMatterId && (
+                  <button
+                    onClick={() => applyMatterLink('')}
+                    disabled={matterLinking}
+                    className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-xs font-medium text-brand-muted hover:text-brand-rose disabled:opacity-50 font-sans"
+                  >
+                    Unlink
+                  </button>
+                )}
+                <button
+                  onClick={() => setMatterPickerOpen((open) => !open)}
+                  disabled={!activeConvId || matterLinking}
+                  className="rounded-lg bg-brand-ink px-3 py-2 text-xs font-medium text-white hover:bg-brand-ink-2 disabled:opacity-50 font-sans"
+                >
+                  {linkedMatterId ? 'Change matter' : 'Link to matter'}
+                </button>
+              </div>
+            </div>
+            {matterPickerOpen && (
+              <div className="absolute right-4 top-[calc(100%+8px)] z-20 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-brand-line bg-brand-surface shadow-xl md:right-6">
+                <div className="border-b border-brand-line p-3">
+                  <input
+                    value={matterQuery}
+                    onChange={(e) => setMatterQuery(e.target.value)}
+                    placeholder="Search matters"
+                    className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent font-sans"
+                    autoFocus
+                  />
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  {filteredMatters.length === 0 ? (
+                    <p className="px-4 py-6 text-center text-sm text-brand-muted font-sans">No matters found.</p>
+                  ) : filteredMatters.map((matter) => (
+                    <button
+                      key={matter.id}
+                      onClick={() => applyMatterLink(matter.id)}
+                      disabled={matterLinking}
+                      className="block w-full border-b border-brand-line px-4 py-3 text-left last:border-0 hover:bg-brand-bg-soft disabled:opacity-50"
+                    >
+                      <span className="block truncate text-sm font-semibold text-brand-ink font-sans">{matter.matter_name || matter.name || 'Untitled matter'}</span>
+                      <span className="mt-0.5 block truncate text-xs text-brand-muted font-sans">
+                        {[matter.case_number, matter.client_name, matter.status].filter(Boolean).join(' - ') || 'Matter'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           {notice && (
             <div className="px-4 pt-4 md:px-6">

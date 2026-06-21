@@ -596,3 +596,9 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Added `litellm-postgres`, `litellm` services + `litellm_postgres_data` volume to `docker-compose.hypervisor.yml`
 - [x] Added `litellm: service_healthy` to backend's `depends_on` in hypervisor compose
 - [ ] Redeploy hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`
+
+### BK10. Chat — Matter-linked conversation workflow (P1, SMALL)
+- [x] Backend: allow conversation title updates and matter link/unlink updates in one PATCH with tenant validation
+- [x] Chat UI: show matter link status, searchable matter picker, open/change/unlink actions
+- [x] Matter UI: start and open linked chats through `/chat?conv=...`
+- [x] Tests: link, unlink, and cross-tenant matter rejection

@@ -479,7 +479,7 @@ export default function MatterDetailPage() {
     setStartingConv(true)
     try {
       const conv = await createConversation({ matter_id: id, title: `Chat: ${matter.matter_name}` })
-      navigate('/chat', { state: { conversationId: conv.id } })
+      navigate(`/chat?conv=${conv.id}`)
     } catch { /* silent */ } finally { setStartingConv(false) }
   }
 
@@ -1381,7 +1381,7 @@ export default function MatterDetailPage() {
                   {matterConvs.map(conv => (
                     <div
                       key={conv.id}
-                      onClick={() => navigate('/chat', { state: { conversationId: conv.id } })}
+                      onClick={() => navigate(`/chat?conv=${conv.id}`)}
                       className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group"
                     >
                       <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />

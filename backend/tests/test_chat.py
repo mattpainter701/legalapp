@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.routers.chat import _auto_tier, _join_context_sections
 from app.models.document import Chunk, Document
+from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
@@ -107,6 +108,66 @@ async def test_update_conversation_title(client: AsyncClient):
     detail_resp = await client.get(f"/api/conversations/{conv['id']}")
     assert detail_resp.status_code == 200
     assert detail_resp.json()["conversation"]["title"] == "Renamed matter research"
+
+
+@pytest.mark.asyncio
+async def test_update_conversation_links_and_unlinks_matter(
+    client: AsyncClient, db_session, test_tenant, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"chat-link-{uuid.uuid4().hex[:8]}",
+        matter_name="Linked Matter",
+        matter_type="general",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+
+    conv = (await client.post("/api/conversations", json={"title": "General chat"})).json()
+
+    link_resp = await client.patch(
+        f"/api/conversations/{conv['id']}",
+        json={"matter_id": str(matter.id)},
+    )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["matter_id"] == str(matter.id)
+    assert link_resp.json()["title"] == "General chat"
+
+    unlink_resp = await client.patch(
+        f"/api/conversations/{conv['id']}",
+        json={"matter_id": ""},
+    )
+    assert unlink_resp.status_code == 200
+    assert unlink_resp.json()["matter_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_conversation_rejects_cross_tenant_matter(
+    client: AsyncClient, db_session, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        user_id=test_user.id,
+        slug=f"cross-tenant-{uuid.uuid4().hex[:8]}",
+        matter_name="Other Tenant Matter",
+        matter_type="general",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+
+    conv = (await client.post("/api/conversations", json={"title": "General chat"})).json()
+    resp = await client.patch(
+        f"/api/conversations/{conv['id']}",
+        json={"matter_id": str(matter.id)},
+    )
+
+    assert resp.status_code == 400
+    assert "Matter not found" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

@@ -454,15 +454,38 @@ async def update_conversation(
     if conv.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
-    title = (body.title or "").strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Conversation title is required")
-    if len(title) > 500:
-        raise HTTPException(
-            status_code=400, detail="Conversation title must be 500 characters or less"
-        )
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Conversation title is required")
+        if len(title) > 500:
+            raise HTTPException(
+                status_code=400, detail="Conversation title must be 500 characters or less"
+            )
+        conv.title = title
 
-    conv.title = title
+    if body.matter_id is not None:
+        matter_id = body.matter_id.strip()
+        if not matter_id:
+            conv.matter_id = None
+        else:
+            try:
+                matter_uuid = uuid.UUID(matter_id)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Matter ID is invalid")
+            matter_result = await db.execute(
+                select(MatterModel.id).where(
+                    MatterModel.id == matter_uuid,
+                    MatterModel.tenant_id == user.tenant_id,
+                )
+            )
+            if matter_result.scalar_one_or_none() is None:
+                raise HTTPException(status_code=400, detail="Matter not found")
+            conv.matter_id = matter_uuid
+
+    if body.title is None and body.matter_id is None:
+        raise HTTPException(status_code=400, detail="No conversation updates provided")
+
     await db.commit()
     await db.refresh(conv)
 
