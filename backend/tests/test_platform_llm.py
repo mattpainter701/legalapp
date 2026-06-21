@@ -75,6 +75,66 @@ def test_model_catalog_capabilities_from_provider_metadata():
     assert set(model["capabilities"]).issuperset(
         {"vision", "instruction", "tool_use", "structured_output", "large_context", "rag"}
     )
+    assert model["legal_eligible"] is True
+    assert model["legal_tier"] == "recommended"
+    assert "Legal-ready" in model["eligibility_badges"]
+
+
+def test_model_catalog_marks_document_capable_free_legal_model():
+    model = platform_llm_router._normalize_model_item(
+        {
+            "id": "meta-llama/llama-4-maverick-instruct:free",
+            "description": "Instruction model for reasoning, RAG, document understanding, PDF analysis, and structured output.",
+            "context_length": 1048576,
+            "architecture": {"modality": "text+image->text"},
+            "supported_parameters": ["response_format"],
+            "pricing": {"prompt": "0", "completion": "0"},
+            "latency_ms": 2400,
+        },
+        "openrouter",
+    )
+
+    assert model["legal_eligible"] is True
+    assert model["legal_tier"] == "recommended"
+    assert model["latency_eligible"] is True
+    assert "Document-capable" in model["eligibility_badges"]
+    assert model["exclusion_reasons"] == []
+
+
+def test_model_catalog_excludes_coding_only_free_model():
+    model = platform_llm_router._normalize_model_item(
+        {
+            "id": "qwen/qwen-coder-7b-instruct:free",
+            "description": "Coding assistant specialized for programming and software engineering.",
+            "context_length": 32768,
+            "supported_parameters": ["tools"],
+            "pricing": {"prompt": "0", "completion": "0"},
+        },
+        "openrouter",
+    )
+
+    assert model["legal_eligible"] is False
+    assert model["legal_tier"] == "excluded"
+    assert "coding_specialized" in model["exclusion_reasons"]
+
+
+def test_model_catalog_excludes_slow_free_model():
+    model = platform_llm_router._normalize_model_item(
+        {
+            "id": "qwen/qwen3-235b-a22b-instruct:free",
+            "description": "Instruction reasoning model with RAG and structured output.",
+            "context_length": 262144,
+            "supported_parameters": ["response_format", "reasoning"],
+            "pricing": {"prompt": "0", "completion": "0"},
+            "latency_ms": 4200,
+        },
+        "openrouter",
+    )
+
+    assert model["legal_eligible"] is False
+    assert model["legal_tier"] == "excluded"
+    assert model["latency_eligible"] is False
+    assert "slow_latency" in model["exclusion_reasons"]
 
 
 def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeypatch):

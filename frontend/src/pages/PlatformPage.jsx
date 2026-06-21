@@ -555,6 +555,20 @@ const emptyRoute = () => ({ key_id: '', provider_id: '', model: '', capacity: 10
 const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_id && target?.model)
 const modelTarget = (model) => ({ key_id: model.key_id, provider_id: model.provider_id, model: model.id, capacity: 100 })
 
+function preferredModelOptions(models = []) {
+  const legalReady = models.filter((model) => model.legal_eligible)
+  const source = legalReady.length ? legalReady : models
+  return [...source].sort((a, b) => {
+    const tierRank = { recommended: 0, usable: 1, limited: 2, excluded: 3 }
+    const aRank = tierRank[a.legal_tier] ?? 2
+    const bRank = tierRank[b.legal_tier] ?? 2
+    if (aRank !== bRank) return aRank - bRank
+    if (Boolean(a.latency_eligible) !== Boolean(b.latency_eligible)) return a.latency_eligible ? -1 : 1
+    if (Boolean(a.is_free) !== Boolean(b.is_free)) return a.is_free ? -1 : 1
+    return String(a.id || '').localeCompare(String(b.id || ''))
+  })
+}
+
 function routeIssues(route, allKeys) {
   const issues = []
   const hasAny = Boolean(route.provider_id || route.key_id || route.model)
@@ -586,6 +600,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   const selectedPreset = presets.find((p) => p.id === value.provider_id)
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
+  const suggestedModels = preferredModelOptions(models)
 
   const setField = (field, next) => {
     if (field === 'provider_id') onChange({ ...value, provider_id: next, key_id: '', model: '' })
@@ -629,8 +644,13 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
         />
         <datalist id={modelListId}>
-          {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {suggestedModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </datalist>
+        {!compact && suggestedModels.length > 0 && (
+          <p className="text-[11px] text-brand-muted mt-1 font-sans">
+            Suggestions prioritize legal-ready models under 3s latency when latency data is available. Manual IDs still work.
+          </p>
+        )}
       </div>
       <div>
         <label className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
@@ -1121,6 +1141,25 @@ const CAPABILITY_LABELS = {
   structured_output: { label: 'Structured', color: 'bg-pink-100 text-pink-700 border-pink-200/60' },
 }
 
+const LEGAL_TIER_LABELS = {
+  recommended: { label: 'Legal-ready', color: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20' },
+  usable: { label: 'Usable', color: 'bg-blue-100 text-blue-700 border-blue-200/60' },
+  limited: { label: 'Limited', color: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' },
+  excluded: { label: 'Excluded', color: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20' },
+}
+
+const EXCLUSION_REASON_LABELS = {
+  not_free: 'Paid model',
+  not_chat_model: 'Not chat/instruction',
+  not_text_chat: 'Not text chat',
+  coding_specialized: 'Coding-only/specialized',
+  low_context: 'Low context',
+  low_output_limit: 'Low output limit',
+  slow_latency: 'Latency over 3s',
+  not_instruction_tuned: 'Not instruction-tuned',
+  insufficient_legal_signals: 'Weak legal/RAG signals',
+}
+
 function ApplyRouteMenu({ model, onApply }) {
   const [open, setOpen] = useState(false)
   const canApply = Boolean(model.key_id && model.provider_id && model.id)
@@ -1196,18 +1235,20 @@ function ApplyRouteMenu({ model, onApply }) {
 
 function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState('recommended')
   const [capFilter, setCapFilter] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const models = catalog?.models || []
 
   const baseFiltered = models.filter((model) => {
     const q = query.trim().toLowerCase()
-    const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
+    const reasonText = (model.exclusion_reasons || []).map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(' ')
+    const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name, model.legal_tier, reasonText].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
     const matchesFilter =
-      filter === 'all' ||
-      (filter === 'free' && model.is_free) ||
-      (filter === 'new' && model.is_new)
+      (filter === 'recommended' && model.legal_tier === 'recommended') ||
+      (filter === 'free_legal' && model.is_free && model.legal_eligible) ||
+      (filter === 'all_free' && model.is_free) ||
+      (filter === 'excluded' && model.legal_tier === 'excluded')
     return matchesQuery && matchesFilter
   })
 
@@ -1242,6 +1283,8 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{catalog?.model_count || 0} models</span>
           <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-accent/10 text-brand-accent">{catalog?.free_count || 0} free</span>
+          <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-green/10 text-brand-green">{catalog?.free_legal_count || 0} free legal</span>
+          <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-rose/10 text-brand-rose">{catalog?.excluded_count || 0} excluded</span>
           <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-amber/10 text-brand-amber">{catalog?.new_count || 0} new</span>
           <button
             onClick={onRefresh}
@@ -1263,13 +1306,14 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         />
         <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0">
           {[
-            ['all', 'All'],
-            ['free', 'Free'],
-            ['new', 'New'],
+            ['recommended', 'Recommended'],
+            ['free_legal', 'Free Legal'],
+            ['all_free', 'All Free'],
+            ['excluded', 'Excluded'],
           ].map(([id, label]) => (
             <button
               key={id}
-              onClick={() => setFilter(id)}
+              onClick={() => { setFilter(id); setShowAll(false) }}
               className={`px-3 py-2 text-xs font-sans ${filter === id ? 'bg-brand-ink text-white' : 'bg-brand-surface text-brand-muted hover:text-brand-ink'}`}
             >
               {label}
@@ -1325,6 +1369,8 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         {filtered.map((model) => {
           const pricing = model.pricing
           const hasPricing = pricing && (pricing.prompt !== '0' || pricing.completion !== '0' || (pricing.request && pricing.request !== '0'))
+          const tier = LEGAL_TIER_LABELS[model.legal_tier]
+          const reasons = model.exclusion_reasons || []
           return (
             <div key={`${model.key_id}-${model.id}`} className="px-5 py-3 flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3 hover:bg-brand-bg transition-colors">
               <div className="min-w-0 flex-1">
@@ -1332,6 +1378,16 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                   <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
                   {model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
                   {model.is_new && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
+                  {tier && (
+                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border font-sans ${tier.color}`} title={reasons.length ? reasons.map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(', ') : tier.label}>
+                      {tier.label}
+                    </span>
+                  )}
+                  {(model.eligibility_badges || []).filter((badge) => badge !== tier?.label).map((badge) => (
+                    <span key={badge} className="text-[10px] font-medium px-1.5 py-0.5 rounded border font-sans bg-brand-bg text-brand-ink border-brand-line">
+                      {badge}
+                    </span>
+                  ))}
                   {(model.capabilities || []).map(cap => {
                     const cfg = CAPABILITY_LABELS[cap]
                     return cfg ? (
@@ -1345,8 +1401,14 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                   {model.provider_name || model.provider_id} · {model.key_name || 'key'}
                   {model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
                   {hasPricing ? ` · $${pricing.prompt}/$${pricing.completion}` : ''}
+                  {model.latency_ms != null ? ` · ${model.latency_ms}ms latency` : ''}
                   {model.modality ? ` · ${model.modality}` : ''}
                 </p>
+                {reasons.length > 0 && (
+                  <p className="text-[11px] text-brand-rose font-sans mt-1">
+                    Excluded: {reasons.map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(', ')}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <ApplyRouteMenu model={model} onApply={onApply} />

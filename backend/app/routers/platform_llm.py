@@ -45,6 +45,9 @@ router = APIRouter(prefix="/platform/llm", tags=["platform-llm"])
 
 LLM_ROUTE_CONFIG_KEY = "llm_route_config_v2"
 LLM_MODEL_CATALOG_KEY = "llm_model_catalog_v1"
+LEGAL_READY_LATENCY_MS = 3000
+MIN_LEGAL_CONTEXT_LENGTH = 16000
+RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -297,6 +300,17 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     if any(
         kw in description
         for kw in (
+            "instruction",
+            "instruction-tuned",
+            "chat model",
+            "conversational",
+            "assistant",
+        )
+    ):
+        caps.add("instruction")
+    if any(
+        kw in description
+        for kw in (
             "function calling",
             "tool use",
             "tool_use",
@@ -391,6 +405,172 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     return sorted(caps)
 
 
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_latency_ms(item: dict[str, Any]) -> int | None:
+    """Read latency from provider/catalog metadata when available."""
+    latency = _first_number(
+        item.get("latency_ms"),
+        item.get("avg_latency_ms"),
+        item.get("p50_latency_ms"),
+        item.get("response_time_ms"),
+        item.get("ttft_ms"),
+        item.get("time_to_first_token_ms"),
+    )
+    if latency is None:
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+        latency = _first_number(
+            metrics.get("latency_ms"),
+            metrics.get("avg_latency_ms"),
+            metrics.get("p50_latency_ms"),
+            metrics.get("ttft_ms"),
+        )
+    if latency is None:
+        return None
+    return int(latency)
+
+
+def _model_text(*values: Any) -> str:
+    return " ".join(str(value or "").lower() for value in values)
+
+
+def _legal_model_eligibility(
+    item: dict[str, Any],
+    *,
+    model_id: str,
+    capabilities: list[str],
+    is_free: bool,
+    context_length: Any,
+    max_completion_tokens: Any,
+    latency_ms: int | None,
+) -> dict[str, Any]:
+    caps = set(capabilities)
+    text = _model_text(model_id, item.get("name"), item.get("description"))
+    modality = ""
+    architecture = item.get("architecture")
+    if isinstance(architecture, dict):
+        modality = str(architecture.get("modality") or "").lower()
+
+    exclusion_reasons: list[str] = []
+    badges: list[str] = []
+    score = 0
+
+    if not is_free:
+        exclusion_reasons.append("not_free")
+
+    non_chat_terms = (
+        "embedding",
+        "embed",
+        "rerank",
+        "reranker",
+        "moderation",
+        "audio",
+        "speech",
+        "tts",
+        "stt",
+        "image generation",
+        "text-to-image",
+        "diffusion",
+    )
+    if any(term in text for term in non_chat_terms):
+        exclusion_reasons.append("not_chat_model")
+    if modality and "text" not in modality:
+        exclusion_reasons.append("not_text_chat")
+
+    coding_terms = (
+        "coder",
+        "coding",
+        "code-",
+        "-code",
+        "codestral",
+        "devstral",
+        "programming",
+        "software engineering",
+    )
+    if any(term in text for term in coding_terms):
+        exclusion_reasons.append("coding_specialized")
+
+    ctx = _first_number(context_length)
+    if ctx is None:
+        score += 1
+    elif ctx < MIN_LEGAL_CONTEXT_LENGTH:
+        exclusion_reasons.append("low_context")
+    elif ctx >= RECOMMENDED_LEGAL_CONTEXT_LENGTH:
+        score += 2
+        badges.append("Document-capable")
+    else:
+        score += 1
+
+    completion = _first_number(max_completion_tokens)
+    if completion is not None and completion < 2048:
+        exclusion_reasons.append("low_output_limit")
+
+    if latency_ms is not None:
+        if latency_ms > LEGAL_READY_LATENCY_MS:
+            exclusion_reasons.append("slow_latency")
+        else:
+            score += 2
+            badges.append("Fast")
+
+    if "instruction" in caps:
+        score += 2
+    else:
+        exclusion_reasons.append("not_instruction_tuned")
+
+    preferred_caps = {
+        "reasoning",
+        "rag",
+        "large_context",
+        "ultra_context",
+        "structured_output",
+        "vision",
+        "legal",
+        "tool_use",
+    }
+    score += min(5, len(caps.intersection(preferred_caps)))
+    if caps.intersection({"reasoning", "rag", "large_context", "ultra_context", "structured_output"}):
+        badges.append("Legal-ready")
+    if "vision" in caps:
+        badges.append("Document-capable")
+
+    if exclusion_reasons:
+        legal_tier = "excluded"
+        legal_eligible = False
+    elif score >= 6:
+        legal_tier = "recommended"
+        legal_eligible = True
+    elif score >= 4:
+        legal_tier = "usable"
+        legal_eligible = True
+    else:
+        legal_tier = "limited"
+        legal_eligible = False
+        exclusion_reasons.append("insufficient_legal_signals")
+
+    if legal_eligible and "Legal-ready" not in badges:
+        badges.append("Legal-ready")
+
+    return {
+        "legal_eligible": legal_eligible,
+        "legal_tier": legal_tier,
+        "legal_score": score,
+        "eligibility_badges": list(dict.fromkeys(badges)),
+        "exclusion_reasons": list(dict.fromkeys(exclusion_reasons)),
+        "latency_ms": latency_ms,
+        "latency_eligible": latency_ms is None or latency_ms <= LEGAL_READY_LATENCY_MS,
+        "latency_threshold_ms": LEGAL_READY_LATENCY_MS,
+    }
+
+
 def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
     if isinstance(item, str):
         item = {"id": item, "name": item}
@@ -407,6 +587,23 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         or item.get("context_window")
         or item.get("max_context_length")
     )
+    max_completion_tokens = (
+        top_provider.get("max_completion_tokens")
+        if isinstance(top_provider, dict)
+        else item.get("max_completion_tokens")
+    )
+    capabilities = _derive_capabilities(item, provider_id)
+    is_free = _is_free_model(mid, item)
+    latency_ms = _extract_latency_ms(item)
+    eligibility = _legal_model_eligibility(
+        item,
+        model_id=mid,
+        capabilities=capabilities,
+        is_free=is_free,
+        context_length=ctx,
+        max_completion_tokens=max_completion_tokens,
+        latency_ms=latency_ms,
+    )
     return {
         "id": mid,
         "name": item.get("name") or mid,
@@ -416,18 +613,57 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         "pricing": item.get("pricing")
         if isinstance(item.get("pricing"), dict)
         else None,
-        "is_free": _is_free_model(mid, item),
+        "is_free": is_free,
         "modality": architecture.get("modality")
         if isinstance(architecture, dict)
         else None,
-        "max_completion_tokens": top_provider.get("max_completion_tokens")
-        if isinstance(top_provider, dict)
-        else None,
+        "max_completion_tokens": max_completion_tokens,
         "supported_parameters": item.get("supported_parameters")
         if isinstance(item.get("supported_parameters"), list)
         else [],
-        "capabilities": _derive_capabilities(item, provider_id),
+        "capabilities": capabilities,
+        **eligibility,
     }
+
+
+def _hydrate_legal_eligibility(model: dict[str, Any]) -> dict[str, Any]:
+    """Add eligibility fields to older saved catalog rows."""
+    if "legal_eligible" in model and "legal_tier" in model:
+        return model
+    hydrated = dict(model)
+    eligibility = _legal_model_eligibility(
+        hydrated,
+        model_id=str(hydrated.get("id") or ""),
+        capabilities=hydrated.get("capabilities") or [],
+        is_free=bool(hydrated.get("is_free")),
+        context_length=hydrated.get("context_length"),
+        max_completion_tokens=hydrated.get("max_completion_tokens"),
+        latency_ms=_extract_latency_ms(hydrated),
+    )
+    hydrated.update(eligibility)
+    return hydrated
+
+
+def _hydrate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
+    hydrated = dict(catalog or {})
+    models = [
+        _hydrate_legal_eligibility(model)
+        for model in hydrated.get("models", [])
+        if isinstance(model, dict)
+    ]
+    hydrated["models"] = models
+    hydrated["model_count"] = len(models)
+    hydrated["free_count"] = sum(1 for model in models if model.get("is_free"))
+    hydrated["free_legal_count"] = sum(
+        1 for model in models if model.get("is_free") and model.get("legal_eligible")
+    )
+    hydrated["recommended_count"] = sum(
+        1 for model in models if model.get("legal_tier") == "recommended"
+    )
+    hydrated["excluded_count"] = sum(
+        1 for model in models if model.get("legal_tier") == "excluded"
+    )
+    return hydrated
 
 
 def _litellm_model_name(provider_id: str, model: str) -> str:
@@ -749,7 +985,7 @@ async def _get_model_catalog(db: AsyncSession) -> dict:
     )
     row = result.scalar_one_or_none()
     if row and row.value:
-        return row.value
+        return _hydrate_catalog(row.value)
     return {"models": [], "last_refreshed_at": None}
 
 
@@ -1076,6 +1312,15 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
         "key_count": len({model["key_id"] for model in models}),
         "model_count": len(models),
         "free_count": sum(1 for model in models if model.get("is_free")),
+        "free_legal_count": sum(
+            1 for model in models if model.get("is_free") and model.get("legal_eligible")
+        ),
+        "recommended_count": sum(
+            1 for model in models if model.get("legal_tier") == "recommended"
+        ),
+        "excluded_count": sum(
+            1 for model in models if model.get("legal_tier") == "excluded"
+        ),
         "new_count": sum(1 for model in models if model.get("is_new")),
         "errors": errors,
     }

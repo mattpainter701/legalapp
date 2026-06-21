@@ -602,3 +602,9 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Chat UI: show matter link status, searchable matter picker, open/change/unlink actions
 - [x] Matter UI: start and open linked chats through `/chat?conv=...`
 - [x] Tests: link, unlink, and cross-tenant matter rejection
+
+### BK11. Platform AI Routing — Free legal model eligibility (P1, SMALL)
+- [x] Backend: score free models for legal usability, document/RAG support, and latency eligibility
+- [x] Backend: return `legal_eligible`, `legal_tier`, `eligibility_badges`, and `exclusion_reasons` in catalog rows
+- [x] Platform UI: add Recommended, Free Legal, All Free, and Excluded catalog tabs
+- [x] Tests: recommended legal model, document-capable model, coding-only exclusion, and slow-latency exclusion
