@@ -313,6 +313,69 @@ async def test_dashboard_call_can_create_qualified_lead_and_log_call(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_call_can_assign_general_staff_task_without_lead(
+    client, db_session, test_tenant
+):
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="service@testfirm.com",
+        full_name="Service Provider",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(staff)
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "caller_name": "Sam Caller",
+            "phone": "(701) 555-4444",
+            "practice_area": "general",
+            "purpose": "Needs a copy provider referral",
+            "notes": "Not a legal lead",
+            "outcome": "log_only",
+            "qualified": False,
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Route to service provider",
+            "task_description": "Send caller details to outside provider.",
+        },
+    )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["created_lead"] is False
+    assert data["lead_id"] is None
+    assert data["task_id"]
+
+    task = await db_session.get(Task, uuid.UUID(data["task_id"]))
+    assert task.title == "Route to service provider"
+    assert task.assigned_to_user_id == staff.id
+    assert task.source == "intake_dashboard"
+    assert task.external_ref == f"intake-dashboard:call:{data['communication_id']}:general-task"
+    assert "Needs a copy provider referral" in task.description
+
+    recent = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+    assert recent.status_code == 200
+    caller = recent.json()["callers"][0]
+    assert caller["caller_name"] == "Sam Caller"
+    assert caller["assigned_to_user_id"] == str(staff.id)
+    assert caller["assigned_to_name"] == "Service Provider"
+    assert caller["task_id"] == data["task_id"]
+    assert caller["task_status"] == "pending"
+
+    export = await client.get("/api/intake/dashboard/calls/export")
+    assert export.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(export.text)))
+    row = next(row for row in rows if row["caller_name"] == "Sam Caller")
+    assert row["outcome"] == "log_only"
+    assert row["assigned_to_name"] == "Service Provider"
+    assert row["task_status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
     client, db_session, test_tenant, test_user
 ):

@@ -34,6 +34,14 @@ const PRACTICE_AREAS = [
   'general',
 ]
 
+const TASK_PRESETS = [
+  { value: 'Call back caller', label: 'Call back caller' },
+  { value: 'Schedule consultation', label: 'Schedule consultation' },
+  { value: 'Conflict check', label: 'Conflict check' },
+  { value: 'Route to service provider', label: 'Route to service provider' },
+  { value: 'Custom task', label: 'Custom task' },
+]
+
 const RESULT_LABELS = {
   contact: 'Current contact',
   lead: 'Active lead',
@@ -451,6 +459,9 @@ export default function IntakeDashboardPage() {
   const [searchData, setSearchData] = useState(null)
   const [searching, setSearching] = useState(false)
   const [selected, setSelected] = useState(null)
+  const [staffQuery, setStaffQuery] = useState('')
+  const [staffUsers, setStaffUsers] = useState([])
+  const [selectedStaff, setSelectedStaff] = useState(null)
   const [message, setMessage] = useState(null)
   const [form, setForm] = useState({
     caller_name: '',
@@ -459,6 +470,9 @@ export default function IntakeDashboardPage() {
     notes: '',
     qualified: true,
     outcome: 'create_lead',
+    task_mode: 'partner_rotation',
+    task_title: 'Call back caller',
+    custom_task_title: '',
     auto_assign: true,
   })
 
@@ -480,7 +494,7 @@ export default function IntakeDashboardPage() {
   useEffect(() => { loadRecentCallers(recentLimit) }, [loadRecentCallers, recentLimit])
 
   useEffect(() => {
-    if (form.outcome !== 'create_lead') {
+    if (form.outcome !== 'create_lead' || form.task_mode !== 'partner_rotation') {
       setAssignmentAvailability(null)
       return
     }
@@ -501,7 +515,19 @@ export default function IntakeDashboardPage() {
         if (!cancelled) setAssignmentChecking(false)
       })
     return () => { cancelled = true }
-  }, [form.outcome, form.practice_area])
+  }, [form.outcome, form.practice_area, form.task_mode])
+
+  useEffect(() => {
+    if (form.task_mode !== 'specific_staff' || staffQuery.trim().length < 2) {
+      setStaffUsers([])
+      return
+    }
+    let cancelled = false
+    searchUsers(staffQuery.trim())
+      .then((data) => { if (!cancelled) setStaffUsers(data || []) })
+      .catch(() => { if (!cancelled) setStaffUsers([]) })
+    return () => { cancelled = true }
+  }, [form.task_mode, staffQuery])
 
   const searchParams = () => {
     const query = q.trim()
@@ -644,16 +670,28 @@ export default function IntakeDashboardPage() {
         purpose: form.purpose || undefined,
         notes: form.notes || undefined,
         outcome: form.outcome,
+        task_mode: form.task_mode,
+        task_assigned_to_user_id: form.task_mode === 'specific_staff' ? selectedStaff?.id : undefined,
+        task_title: form.task_mode === 'specific_staff'
+          ? (form.task_title === 'Custom task' ? form.custom_task_title : form.task_title)
+          : undefined,
+        task_description: form.task_mode === 'specific_staff' ? form.notes || form.purpose || undefined : undefined,
         qualified: Boolean(form.qualified),
         existing_contact_id: selected?.contact_id || undefined,
         existing_lead_id: selected?.lead_id || undefined,
-        assigned_to_user_id: searchData?.recommended_attorney_user_id || undefined,
+        assigned_to_user_id: form.task_mode === 'partner_rotation' ? searchData?.recommended_attorney_user_id || undefined : undefined,
+      }
+      if (form.task_mode === 'specific_staff' && !selectedStaff?.id) {
+        setMessage('Select a staff member before creating a general task.')
+        return
       }
       const result = await createIntakeDashboardCall(payload)
       let assignedText = ''
       if (result.task_id) {
-        assignedText = ' Urgent follow-up task created.'
-      } else if (form.auto_assign && result.lead_id) {
+        assignedText = form.task_mode === 'specific_staff'
+          ? ` General task assigned to ${selectedStaff?.full_name || selectedStaff?.email || 'staff'}.`
+          : ' Urgent follow-up task created.'
+      } else if (form.task_mode === 'partner_rotation' && form.auto_assign && result.lead_id) {
         if (assignmentAvailability && !assignmentAvailability.can_assign) {
           assignedText = ` Assignment skipped: ${assignmentAvailability.reason || 'no matching rotation rule'}.`
         } else {
@@ -866,6 +904,100 @@ export default function IntakeDashboardPage() {
                   </button>
                 </div>
 
+                <div>
+                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task / Routing</label>
+                  <select
+                    value={form.task_mode}
+                    onChange={(e) => {
+                      const nextMode = e.target.value
+                      setForm((current) => ({
+                        ...current,
+                        task_mode: nextMode,
+                        auto_assign: nextMode === 'partner_rotation' ? current.auto_assign : false,
+                      }))
+                      if (nextMode !== 'specific_staff') {
+                        setSelectedStaff(null)
+                        setStaffQuery('')
+                        setStaffUsers([])
+                      }
+                    }}
+                    className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="partner_rotation">Assign partner / prior attorney</option>
+                    <option value="specific_staff">General task to staff</option>
+                    <option value="none">No task, log only</option>
+                  </select>
+                  <p className="mt-1 text-[11px] leading-4 text-brand-muted">
+                    Partner routing is the default workflow. General tasks are for sales, service providers, admin follow-up, or other staff handoffs.
+                  </p>
+                </div>
+
+                {form.task_mode === 'specific_staff' && (
+                  <div className="space-y-3 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Assign To</label>
+                      <input
+                        value={staffQuery}
+                        onChange={(e) => setStaffQuery(e.target.value)}
+                        placeholder={selectedStaff ? (selectedStaff.full_name || selectedStaff.email) : 'Search staff by name/email'}
+                        className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
+                      />
+                      {selectedStaff && (
+                        <div className="mt-2 flex items-center justify-between rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs text-brand-ink">
+                          <span>Assigned to <span className="font-bold">{selectedStaff.full_name || selectedStaff.email}</span></span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStaff(null)}
+                            className="font-bold text-brand-muted hover:text-brand-ink"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      )}
+                      {staffUsers.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {staffUsers.map((staff) => (
+                            <button
+                              key={staff.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedStaff(staff)
+                                setStaffQuery(staff.full_name || staff.email)
+                                setStaffUsers([])
+                              }}
+                              className="rounded-full border border-brand-line bg-white px-3 py-1 text-xs text-brand-ink hover:border-brand-accent"
+                            >
+                              {staff.full_name || staff.email}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task</label>
+                      <select
+                        value={form.task_title}
+                        onChange={(e) => set('task_title', e.target.value)}
+                        className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
+                      >
+                        {TASK_PRESETS.map((task) => (
+                          <option key={task.value} value={task.value}>{task.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {form.task_title === 'Custom task' && (
+                      <input
+                        value={form.custom_task_title}
+                        onChange={(e) => set('custom_task_title', e.target.value)}
+                        placeholder="Describe the task"
+                        className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
+                      />
+                    )}
+                  </div>
+                )}
+
                 <label className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
                   <input
                     type="checkbox"
@@ -875,23 +1007,25 @@ export default function IntakeDashboardPage() {
                   Qualified enough for follow-up
                 </label>
 
-                <label className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
-                  <input
-                    type="checkbox"
-                    checked={form.auto_assign}
-                    onChange={(e) => set('auto_assign', e.target.checked)}
-                    disabled={form.outcome !== 'create_lead' || assignmentChecking || assignmentAvailability?.can_assign === false}
-                  />
-                  Assign next partner after lead creation
-                </label>
+                {form.task_mode === 'partner_rotation' && (
+                  <label className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
+                    <input
+                      type="checkbox"
+                      checked={form.auto_assign}
+                      onChange={(e) => set('auto_assign', e.target.checked)}
+                      disabled={form.outcome !== 'create_lead' || assignmentChecking || assignmentAvailability?.can_assign === false}
+                    />
+                    Assign next partner after lead creation
+                  </label>
+                )}
 
-                {form.outcome === 'create_lead' && assignmentAvailability?.can_assign === false && (
+                {form.task_mode === 'partner_rotation' && form.outcome === 'create_lead' && assignmentAvailability?.can_assign === false && (
                   <div className="rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
                     Auto-assignment is off for {form.practice_area}: {assignmentAvailability.reason}. Create or enable a general rotation rule to avoid manual routing.
                   </div>
                 )}
 
-                {form.outcome === 'create_lead' && assignmentAvailability?.can_assign === true && (
+                {form.task_mode === 'partner_rotation' && form.outcome === 'create_lead' && assignmentAvailability?.can_assign === true && (
                   <div className="rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs leading-5 text-brand-ink">
                     Auto-assignment ready via {assignmentAvailability.rule_practice_area} rotation ({assignmentAvailability.eligible_count} eligible).
                   </div>
@@ -908,7 +1042,9 @@ export default function IntakeDashboardPage() {
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 py-3 text-sm font-bold text-white"
                 >
                   {form.outcome === 'create_lead' ? <UserPlus size={16} /> : <ShieldCheck size={16} />}
-                  {form.outcome === 'create_lead' ? 'Create Lead + Log Call' : 'Log Call Only'}
+                  {form.outcome === 'create_lead'
+                    ? (form.task_mode === 'specific_staff' ? 'Create Lead + Staff Task' : 'Create Lead + Log Call')
+                    : (form.task_mode === 'specific_staff' ? 'Log Call + Staff Task' : 'Log Call Only')}
                 </button>
               </form>
             </section>

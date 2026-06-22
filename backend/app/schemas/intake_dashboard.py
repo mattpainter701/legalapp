@@ -81,6 +81,10 @@ class IntakeDashboardCallCreate(BaseModel):
     practice_area: Optional[str] = Field(None, max_length=100)
     purpose: Optional[str] = None
     outcome: Literal["log_only", "create_lead"] = "log_only"
+    task_mode: Literal["partner_rotation", "specific_staff", "none"] = "partner_rotation"
+    task_assigned_to_user_id: Optional[uuid.UUID] = None
+    task_title: Optional[str] = Field(None, max_length=500)
+    task_description: Optional[str] = None
     qualified: bool = False
     source: Optional[str] = Field("phone", max_length=50)
     existing_contact_id: Optional[uuid.UUID] = None
@@ -89,7 +93,7 @@ class IntakeDashboardCallCreate(BaseModel):
     occurred_at: Optional[datetime] = None
     notes: Optional[str] = None
 
-    @field_validator("caller_name", "phone", "purpose", "notes", mode="before")
+    @field_validator("caller_name", "phone", "purpose", "notes", "task_title", "task_description", mode="before")
     @classmethod
     def blank_to_none(cls, value):
         if isinstance(value, str) and not value.strip():
