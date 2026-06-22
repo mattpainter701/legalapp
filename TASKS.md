@@ -14,6 +14,32 @@ Follow-up: add Zoom webhook CRC/signature handling so real-time call-element eve
 
 ---
 
+## Zoom Phone Credential Admin UX — P1 Backlog
+
+**Goal:** Replace operator-only `.env` setup with an admin/operator UI for entering and validating customer Zoom Phone Server-to-Server OAuth credentials.
+
+- [ ] Add secure credential entry for `ZOOM_PHONE_CLIENT_ID`, `ZOOM_PHONE_CLIENT_SECRET`, and account ID, stored encrypted per tenant instead of as global env-only settings
+- [ ] Add a "Test Zoom Phone connection" action that requests an account-credentials token and probes a minimal Call History request without importing data
+- [ ] Show setup status in the Zoom Phone Calls panel and Admin integrations area: not configured, connected, missing scopes, Zoom Phone not enabled, rate limited, or token failure
+- [ ] Keep the current env fallback for single-customer/operator deployments until the credential UI is proven
+- [ ] Document customer setup steps for creating the Zoom Server-to-Server OAuth app and selecting current required Phone scopes
+
+---
+
+## Zoom Marketplace App For Intake — P2 Backlog
+
+**Goal:** Evaluate and design a Zoom-side Clarity Legal Intake app after the customer MVP proves value. Do not start implementation without a fresh, heavy research pass against current Zoom Marketplace, Zoom Phone, webhook, security review, and app-distribution requirements.
+
+- [ ] Research Zoom Marketplace app types for this use case: private/internal app, unlisted Marketplace app, public Marketplace app, Zoom App surface, account-level OAuth, and Server-to-Server OAuth
+- [ ] Verify current Zoom Phone Call History/Call Element APIs, webhook event names, granular scopes, recording/transcript access, AI-summary/ZRA availability, rate limits, and deprecations
+- [ ] Document marketplace review requirements: privacy policy, support URLs, uninstall/deauthorize handling, data-retention disclosures, scope justifications, security audit expectations, and webhook verification
+- [ ] Decide target architecture: keep Clarity as system of record, use Zoom webhooks for low-latency ingestion, retain polling as reconciler, and reuse the existing `CommunicationLog` importer
+- [ ] Design tenant install flow: Zoom admin installs app, Clarity links the Zoom account to the correct tenant, credentials are stored in `TenantCredential`, and failed/missing scope states are visible to admins
+- [ ] Evaluate whether an in-Zoom app surface is worth building for receptionists, or whether the Clarity intake dashboard remains the primary UI
+- [ ] Produce a written spec and implementation plan before coding
+
+---
+
 ## Standalone Call Intake — Plan/Tier Framework — 2026-06-22 (DONE)
 
 **Goal:** Sell Call Intake as a standalone product — provision a tenant locked to the intake
