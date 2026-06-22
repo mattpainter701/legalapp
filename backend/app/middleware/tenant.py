@@ -23,6 +23,7 @@ SKIP_PATHS = {
 SKIP_PREFIXES = (
     "/auth/",
     "/api/auth/",
+    "/api/integrations/zoom-phone/webhook",
 )
 
 LICENSE_EXEMPT_PREFIXES = (

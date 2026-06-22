@@ -10,8 +10,9 @@
 - [x] Add focused backend coverage for dedupe and intake handoff behavior; local DB execution was blocked by unavailable Postgres, so compile/build/normalizer probes were run locally
 - [x] Verify and deploy to production
 - [x] Fix Zoom Phone intake import to keep inbound calls only and persist caller phone numbers from Zoom call-history payloads
+- [x] Add post-call Zoom Phone webhook ingestion for completed inbound call-history records
 
-Follow-up: add Zoom webhook CRC/signature handling so real-time call-element events feed the same importer; current production path is admin-triggered Call History sync after a tenant admin grants Zoom Phone OAuth.
+Follow-up: add recording/transcript/summary enrichment and redesign the staff call queue around inbound caller facts, answered-by, phone, duration, and workflow status. Live ringing/in-progress events are intentionally deferred to avoid flooding the receptionist portal.
 
 ---
 

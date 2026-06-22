@@ -73,6 +73,22 @@ async def get_zoom_phone_oauth_client(
     return None
 
 
+async def get_zoom_phone_webhook_secret(
+    db: AsyncSession,
+    *,
+    tenant_id: str | uuid.UUID | None = None,
+) -> str | None:
+    if tenant_id:
+        app = await get_tenant_oauth_app(
+            db,
+            tenant_id=tenant_id,
+            provider=ZOOM_PHONE_APP_PROVIDER,
+        )
+        if app and app.encrypted_webhook_secret_token:
+            return decrypt_token(app.encrypted_webhook_secret_token)
+    return settings.ZOOM_WEBHOOK_SECRET_TOKEN or None
+
+
 async def upsert_zoom_phone_oauth_app(
     db: AsyncSession,
     *,
@@ -80,6 +96,7 @@ async def upsert_zoom_phone_oauth_app(
     user_id: str | uuid.UUID,
     client_id: str,
     client_secret: str,
+    webhook_secret_token: str | None = None,
     redirect_uri: str,
     scopes: str,
 ) -> TenantOAuthApp:
@@ -96,6 +113,8 @@ async def upsert_zoom_phone_oauth_app(
     if app:
         app.encrypted_client_id = encrypted_client_id
         app.encrypted_client_secret = encrypted_client_secret
+        if webhook_secret_token:
+            app.encrypted_webhook_secret_token = encrypt_token(webhook_secret_token)
         app.redirect_uri = redirect_uri
         app.scopes = scopes
         app.configured_by_user_id = uuid.UUID(str(user_id))
@@ -108,6 +127,9 @@ async def upsert_zoom_phone_oauth_app(
         provider=ZOOM_PHONE_APP_PROVIDER,
         encrypted_client_id=encrypted_client_id,
         encrypted_client_secret=encrypted_client_secret,
+        encrypted_webhook_secret_token=(
+            encrypt_token(webhook_secret_token) if webhook_secret_token else None
+        ),
         redirect_uri=redirect_uri,
         scopes=scopes,
         configured_by_user_id=uuid.UUID(str(user_id)),

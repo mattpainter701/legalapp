@@ -22,7 +22,13 @@ from app.services.intake_archive_import import (
     normalize_phone,
     parse_legacy_call_csv,
 )
-from app.services.zoom_phone import import_zoom_phone_records, normalize_zoom_phone_record
+from app.services.zoom_phone import (
+    extract_zoom_phone_webhook_call_logs,
+    import_zoom_phone_records,
+    normalize_zoom_phone_record,
+    verify_zoom_webhook_signature,
+    zoom_webhook_validation_response,
+)
 
 
 def test_normalize_phone_strips_formatting_and_country_code():
@@ -58,6 +64,68 @@ def test_zoom_phone_normalizer_keeps_only_inbound_and_extracts_nested_phone():
     assert inbound["participants"]["normalized_phone"] == "7015550199"
     assert "SCHMIDT JOANN" in inbound["subject"]
     assert outbound is None
+
+
+def test_zoom_webhook_crc_and_signature_helpers():
+    validation = zoom_webhook_validation_response("plain-token", secret="zoom-secret")
+    assert validation == {
+        "plainToken": "plain-token",
+        "encryptedToken": "d83eef2ba06385e69f487c6fe8949751a8c039fd802f4bc14c765398750528ac",
+    }
+
+    body = b'{"event":"phone.callee_call_history_completed"}'
+    timestamp = "1710000000"
+    signature = (
+        "v0="
+        "ec914a6f28f9db2fdf91b4993df12354403b78ea150c45531c540726289afb4e"
+    )
+    assert verify_zoom_webhook_signature(
+        body,
+        timestamp,
+        signature,
+        secret="zoom-secret",
+        tolerance_seconds=0,
+    )
+    assert not verify_zoom_webhook_signature(
+        body,
+        timestamp,
+        "v0=bad",
+        secret="zoom-secret",
+        tolerance_seconds=0,
+    )
+
+
+def test_extract_zoom_phone_webhook_call_logs_keeps_completed_inbound_callee_records():
+    event = {
+        "event": "phone.callee_call_history_completed",
+        "payload": {
+            "account_id": "acct-1",
+            "object": {
+                "call_logs": [
+                    {
+                        "id": "history-detail-1",
+                        "direction": "inbound",
+                        "caller_name": "Jane Caller",
+                    },
+                    {
+                        "id": "outbound-1",
+                        "direction": "outbound",
+                        "caller_name": "Main - Receptionist",
+                    },
+                ],
+            },
+        },
+    }
+
+    logs = extract_zoom_phone_webhook_call_logs(event)
+
+    assert logs == [
+        {
+            "id": "history-detail-1",
+            "direction": "inbound",
+            "caller_name": "Jane Caller",
+        }
+    ]
 
 
 def test_parse_legacy_call_csv_validates_duplicates_and_dates():

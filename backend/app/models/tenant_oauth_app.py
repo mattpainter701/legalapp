@@ -28,6 +28,9 @@ class TenantOAuthApp(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     encrypted_client_id: Mapped[str] = mapped_column(Text, nullable=False)
     encrypted_client_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_webhook_secret_token: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     redirect_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
     configured_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

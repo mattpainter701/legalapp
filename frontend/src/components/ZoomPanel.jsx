@@ -41,7 +41,7 @@ export default function ZoomPanel() {
   const [busy, setBusy] = useState(false)
   const [phoneBusy, setPhoneBusy] = useState(false)
   const [flash, setFlash] = useState(null)
-  const [appForm, setAppForm] = useState({ client_id: '', client_secret: '' })
+  const [appForm, setAppForm] = useState({ client_id: '', client_secret: '', webhook_secret_token: '' })
 
   const showFlash = (text, type = 'success') => {
     setFlash({ text, type })
@@ -107,7 +107,7 @@ export default function ZoomPanel() {
     setPhoneBusy(true)
     try {
       await saveZoomPhoneAppCredentials(appForm)
-      setAppForm({ client_id: '', client_secret: '' })
+      setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '' })
       await loadPanel()
       showFlash('Zoom Phone app credentials saved.')
     } catch (err) {
@@ -328,8 +328,12 @@ function ZoomPhoneAppSetup({
   platformConfigured,
 }) {
   const callbackUrl = status?.redirect_uri || status?.app_credentials?.redirect_uri
+  const webhookUrl = status?.webhook_url || status?.app_credentials?.webhook_url
   const clientIdHint = status?.app_credentials?.client_id_hint
-  const canSave = form.client_id.trim() && form.client_secret.trim() && !busy
+  const hasOAuthPair = form.client_id.trim() && form.client_secret.trim()
+  const hasPartialOAuth = Boolean(form.client_id.trim()) !== Boolean(form.client_secret.trim())
+  const hasWebhookSecret = Boolean(form.webhook_secret_token.trim())
+  const canSave = !busy && !hasPartialOAuth && (hasOAuthPair || (tenantConfigured && hasWebhookSecret))
 
   return (
     <div className="rounded-lg border border-brand-line bg-brand-bg overflow-hidden">
@@ -342,7 +346,7 @@ function ZoomPhoneAppSetup({
             <div className="text-sm font-bold text-brand-ink">Customer Zoom app</div>
             <div className="text-xs text-brand-ink-2 mt-0.5">
               {tenantConfigured
-                ? `Saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Enter both fields to replace it.`
+                ? `Saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Add the webhook secret token, or enter both OAuth fields to replace it.`
                 : platformConfigured
                   ? 'A platform app is available, but this tenant can use its own Zoom OAuth app.'
                   : 'Save the Zoom OAuth client ID and secret from this firm-owned app.'}
@@ -376,6 +380,26 @@ function ZoomPhoneAppSetup({
             </div>
           </div>
         )}
+        {webhookUrl && (
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+              Zoom webhook URL
+            </label>
+            <div className="flex gap-2">
+              <code className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line px-3 py-2 text-[11px] text-brand-ink break-all">
+                {webhookUrl}
+              </code>
+              <button
+                type="button"
+                onClick={() => onCopy(webhookUrl)}
+                className="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-brand-line text-brand-ink hover:bg-brand-surface"
+                title="Copy webhook URL"
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={onSave} className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <label className="block">
@@ -400,6 +424,21 @@ function ZoomPhoneAppSetup({
               placeholder={tenantConfigured ? 'Enter to replace saved secret' : 'Client secret'}
               className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
             />
+          </label>
+          <label className="block lg:col-span-2">
+            <span className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+              Zoom webhook secret token
+            </span>
+            <input
+              type="password"
+              value={form.webhook_secret_token}
+              onChange={(event) => setForm((current) => ({ ...current, webhook_secret_token: event.target.value }))}
+              placeholder={status?.webhook_secret_configured ? 'Enter to replace saved webhook secret token' : 'Secret token from Zoom app Webhook settings'}
+              className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+            />
+            {status?.webhook_secret_configured && (
+              <span className="mt-1 block text-[11px] font-semibold text-green-700">Webhook signing is configured.</span>
+            )}
           </label>
           <div className="lg:col-span-2 flex flex-wrap gap-2">
             <button

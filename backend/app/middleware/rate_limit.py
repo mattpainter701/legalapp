@@ -38,6 +38,7 @@ AUTH_LIMITS = {
 SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
+    "/api/integrations/zoom-phone/webhook",
     "/api/platform/",  # platform auth is key-based, not JWT
     "/health",
     "/docs",
