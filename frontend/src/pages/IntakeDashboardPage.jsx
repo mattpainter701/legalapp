@@ -90,6 +90,17 @@ function ResultCard({ item, selected, onSelect, onAssign }) {
         </span>
       </div>
       <div className={`mt-3 flex flex-wrap gap-2 text-[11px] ${selected ? 'text-white/75' : 'text-brand-muted'}`}>
+        {item.occurred_at && (
+          <span>
+            {new Date(item.occurred_at).toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
+          </span>
+        )}
         {item.phone && <span>{item.phone}</span>}
         {item.practice_area && <span>{item.practice_area}</span>}
         {item.prior_attorney_name && <span>Prior: {item.prior_attorney_name}</span>}

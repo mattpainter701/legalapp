@@ -14,6 +14,15 @@ function durationLabel(seconds) {
   return m ? `${m}m ${s}s` : `${s}s`
 }
 
+// Time only for today's calls; "Jun 21, 3:45 PM" for older ones.
+function whenLabel(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === new Date().toDateString()) return time
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
+
 export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
   const status = STATUS[(caller.result || '').toLowerCase()]
   const Icon = (caller.result || '').toLowerCase() === 'missed' ? PhoneMissed : PhoneIncoming
@@ -35,9 +44,7 @@ export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
           <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
         </div>
         <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
-          {caller.occurred_at
-            ? new Date(caller.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-            : ''}
+          {whenLabel(caller.occurred_at)}
         </span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-brand-muted">
