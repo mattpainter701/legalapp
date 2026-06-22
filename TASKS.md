@@ -1,5 +1,20 @@
 # TASKS.md
 
+## Call Inbox Dashboard Redesign — 2026-06-22 (DONE)
+
+**Goal:** Rework the receptionist intake dashboard into a functional two-pane "Call Inbox" with a live, auto-refreshing call feed and an in-page sound + nudge when a new call (manual or webhook-imported) lands. Framed source-agnostically so any tenant's call integration lights up the same feed. Spec/plan in `docs/superpowers/specs/2026-06-22-call-inbox-redesign-design.md` and `docs/superpowers/plans/2026-06-22-call-inbox-redesign.md`.
+
+- [x] Surface call facts on the `recent-callers` feed (`source`, `answered_by`, `result`, `duration_seconds`, recording/transcript URLs); accept `limit=5`
+- [x] Batch the `recent-callers` enrichment queries (was N+1 per row) — polled endpoint
+- [x] `useCallFeedPolling` hook — visibility-aware 15s poll + new-call id diff
+- [x] `useCallAlerts` hook — in-page toast queue + WebAudio chime + per-tenant mute
+- [x] Call inbox components — `CallFeed`/`CallFeedItem`, `CallFacts`, `NewCallToasts`, `RecordsTabs`
+- [x] Two-pane layout in `IntakeDashboardPage` (left feed + right work panel); Export/Partner/Rotation tabbed
+- [x] Source-agnostic, multi-tenant gating: Sync + source filter only when the tenant has a connected call source
+- [x] Tests: backend feed-fields + batching regression (`test_intake_dashboard.py`, 23 passing); frontend `npm run build` clean
+
+---
+
 ## Zoom Phone Intake Call History — 2026-06-22 (DONE)
 
 **Goal:** Bring customer Zoom Phone call history into the intake dashboard so receptionists and admins can review missed/completed calls later and create follow-up tasks or leads from those records.
