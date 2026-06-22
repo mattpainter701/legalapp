@@ -81,7 +81,9 @@ class IntakeDashboardCallCreate(BaseModel):
     practice_area: Optional[str] = Field(None, max_length=100)
     purpose: Optional[str] = None
     outcome: Literal["log_only", "create_lead"] = "log_only"
-    task_mode: Literal["partner_rotation", "specific_staff", "none"] = "partner_rotation"
+    task_mode: Literal["partner_rotation", "specific_staff", "none"] = (
+        "partner_rotation"
+    )
     task_assigned_to_user_id: Optional[uuid.UUID] = None
     task_title: Optional[str] = Field(None, max_length=500)
     task_description: Optional[str] = None
@@ -93,7 +95,15 @@ class IntakeDashboardCallCreate(BaseModel):
     occurred_at: Optional[datetime] = None
     notes: Optional[str] = None
 
-    @field_validator("caller_name", "phone", "purpose", "notes", "task_title", "task_description", mode="before")
+    @field_validator(
+        "caller_name",
+        "phone",
+        "purpose",
+        "notes",
+        "task_title",
+        "task_description",
+        mode="before",
+    )
     @classmethod
     def blank_to_none(cls, value):
         if isinstance(value, str) and not value.strip():
@@ -146,3 +156,22 @@ class AssignNextResponse(BaseModel):
     practice_area: str
     rotation_rule_id: uuid.UUID
     task_id: Optional[uuid.UUID] = None
+
+
+class PartnerAssignmentLogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    assignment_method: str
+    assigned_to_user_id: Optional[uuid.UUID] = None
+    assigned_to_name: Optional[str] = None
+    assigned_by_name: Optional[str] = None
+    practice_area: Optional[str] = None
+    lead_id: Optional[uuid.UUID] = None
+    contact_id: Optional[uuid.UUID] = None
+    communication_id: Optional[uuid.UUID] = None
+
+
+class PartnerAssignmentLogResponse(BaseModel):
+    entries: list[PartnerAssignmentLogEntry]

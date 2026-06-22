@@ -8,7 +8,11 @@ from sqlalchemy import func, select
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
-from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
+from app.models.intake_dashboard import (
+    LegacyCallRecord,
+    PartnerAssignmentLog,
+    PartnerRotationState,
+)
 from app.models.tenant import Tenant
 from app.models.task import Task
 from app.models.user import User
@@ -43,8 +47,7 @@ def test_parse_legacy_call_csv_validates_duplicates_and_dates():
 
 def test_parse_legacy_call_csv_preserves_nameless_archive_rows():
     preview = parse_legacy_call_csv(
-        "id,name,phone,date,reason\n"
-        "1,,,2024-01-02 09:30:00,Transferred to queue\n"
+        "id,name,phone,date,reason\n" "1,,,2024-01-02 09:30:00,Transferred to queue\n"
     )
 
     assert preview.total_rows == 1
@@ -88,13 +91,17 @@ async def test_legacy_import_dashboard_search_promote_and_convert_smoke(
     )
     assert (
         await db_session.scalar(
-            select(func.count()).select_from(Contact).where(Contact.tenant_id == test_tenant.id)
+            select(func.count())
+            .select_from(Contact)
+            .where(Contact.tenant_id == test_tenant.id)
         )
         == 0
     )
     assert (
         await db_session.scalar(
-            select(func.count()).select_from(Lead).where(Lead.tenant_id == test_tenant.id)
+            select(func.count())
+            .select_from(Lead)
+            .where(Lead.tenant_id == test_tenant.id)
         )
         == 0
     )
@@ -215,7 +222,9 @@ async def test_dashboard_search_returns_current_and_legacy_history_tenant_scoped
     titles = [item["title"] for item in data["results"]]
     assert "John Doe" in titles
     assert "John Doe Secret" not in titles
-    legacy_result = next(item for item in data["results"] if item["result_type"] == "legacy_call")
+    legacy_result = next(
+        item for item in data["results"] if item["result_type"] == "legacy_call"
+    )
     assert legacy_result["metadata"]["phone_only_match"] is True
 
     name_resp = await client.get(
@@ -354,10 +363,15 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
     assert task.title == "Route to service provider"
     assert task.assigned_to_user_id == staff.id
     assert task.source == "intake_dashboard"
-    assert task.external_ref == f"intake-dashboard:call:{data['communication_id']}:general-task"
+    assert (
+        task.external_ref
+        == f"intake-dashboard:call:{data['communication_id']}:general-task"
+    )
     assert "Needs a copy provider referral" in task.description
 
-    recent = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+    recent = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 10}
+    )
     assert recent.status_code == 200
     caller = recent.json()["callers"][0]
     assert caller["caller_name"] == "Sam Caller"
@@ -480,7 +494,9 @@ async def test_recent_callers_returns_recent_dashboard_calls_tenant_scoped(
     )
     await db_session.commit()
 
-    resp = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+    resp = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 10}
+    )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -950,7 +966,9 @@ async def test_partner_task_qualifies_lead_and_assigns_attorney_intake(
     assert attorney_task.priority == "urgent"
     assert attorney_task.assigned_to_user_id == attorney.id
     assert attorney_task.contact_id == contact.id
-    assert attorney_task.external_ref == f"intake-dashboard:lead:{lead.id}:attorney-intake"
+    assert (
+        attorney_task.external_ref == f"intake-dashboard:lead:{lead.id}:attorney-intake"
+    )
     assert "Receptionist call/task notes" in attorney_task.description
     assert "Good fit" in attorney_task.description
 
@@ -981,3 +999,85 @@ async def test_partner_task_qualifies_lead_and_assigns_attorney_intake(
     assert matter.billing_method == "flat_fee"
     assert contact.contact_type == "client"
     assert lead.status == "matter_opened"
+
+
+@pytest.mark.asyncio
+async def test_partner_assignment_is_logged_on_assign_next(
+    client, db_session, test_tenant, test_user
+):
+    partner = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="p@f.com",
+        full_name="Pat Partner",
+        role="user",
+        is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id,
+        contact_type="prospect",
+        first_name="Lee",
+        last_name="Caller",
+    )
+    db_session.add_all([partner, contact])
+    await db_session.commit()
+    lead = Lead(
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="new",
+        source="phone",
+        practice_area="divorce",
+    )
+    db_session.add(lead)
+    db_session.add(
+        PartnerRotationState(
+            tenant_id=test_tenant.id,
+            practice_area="divorce",
+            eligible_user_ids=[str(partner.id)],
+            is_enabled=True,
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.post(f"/api/intake/dashboard/leads/{lead.id}/assign-next")
+    assert resp.status_code == 200
+
+    rows = (
+        (
+            await db_session.execute(
+                select(PartnerAssignmentLog).where(
+                    PartnerAssignmentLog.tenant_id == test_tenant.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].assignment_method == "partner_rotation"
+    assert rows[0].assigned_to_name == "Pat Partner"
+    assert rows[0].lead_id == lead.id
+
+
+@pytest.mark.asyncio
+async def test_partner_log_list_and_export(client, db_session, test_tenant, test_user):
+    db_session.add(
+        PartnerAssignmentLog(
+            tenant_id=test_tenant.id,
+            assignment_method="partner_rotation",
+            assigned_to_name="Pat Partner",
+            assigned_by_name="Reception",
+            practice_area="divorce",
+        )
+    )
+    await db_session.commit()
+
+    listing = await client.get("/api/intake/dashboard/partner-log")
+    assert listing.status_code == 200
+    assert listing.json()["entries"][0]["assigned_to_name"] == "Pat Partner"
+
+    export = await client.get("/api/intake/dashboard/partner-log/export")
+    assert export.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(export.text)))
+    assert rows[0]["assigned_to_name"] == "Pat Partner"
+    assert rows[0]["assignment_method"] == "partner_rotation"
