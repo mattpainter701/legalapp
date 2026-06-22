@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -186,6 +186,68 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
         </button>
         <p className="text-xs text-brand-muted font-sans">Blank fields inherit the platform aliases.</p>
       </div>
+    </div>
+  )
+}
+
+function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate }) {
+  const currentPlan = tenantDetail?.module_config?.plan || ''
+  const [plans, setPlans] = useState([])
+  const [value, setValue] = useState(currentPlan)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { setValue(currentPlan); setSaved(false) }, [currentPlan])
+
+  useEffect(() => {
+    let cancelled = false
+    getPlatformPlans(platformKey)
+      .then((data) => { if (!cancelled) setPlans(data.plans || []) })
+      .catch(() => { if (!cancelled) setPlans([]) })
+    return () => { cancelled = true }
+  }, [platformKey])
+
+  const save = async () => {
+    if (!value) return
+    setSaving(true)
+    setSaved(false)
+    try {
+      await updatePlatformTenant(platformKey, tenant.id, { plan: value })
+      onUpdate(tenant.id, {})
+      setSaved(true)
+    } catch {
+      /* save error silently */
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex items-end gap-3">
+      <div className="flex-1">
+        <label className="block text-xs text-brand-muted font-sans mb-1">Plan</label>
+        <select
+          value={value}
+          onChange={(e) => { setValue(e.target.value); setSaved(false) }}
+          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface focus:outline-none focus:ring-2 focus:ring-brand-accent"
+        >
+          <option value="">(default / full platform)</option>
+          {plans.map((p) => (
+            <option key={p.id} value={p.id}>{p.label} ({p.id})</option>
+          ))}
+        </select>
+      </div>
+      <button
+        onClick={save}
+        disabled={saving || !value || value === currentPlan}
+        className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
+          saved
+            ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
+            : 'bg-brand-ink text-white border-brand-ink hover:bg-brand-ink-2 disabled:opacity-40'
+        }`}
+      >
+        {saved ? 'Saved' : saving ? 'Saving...' : 'Set Plan'}
+      </button>
     </div>
   )
 }
@@ -2084,6 +2146,16 @@ export default function PlatformPage() {
                                       onUpdate={handleUpdate}
                                       saving={savingProvider}
                                       setSaving={setSavingProvider}
+                                    />
+                                  </div>
+                                  {/* Plan / module bundle override */}
+                                  <div className="mt-4 pt-4 border-t border-brand-line">
+                                    <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Plan</h4>
+                                    <TenantPlanOverride
+                                      tenant={t}
+                                      tenantDetail={tenantDetail}
+                                      platformKey={platformKey}
+                                      onUpdate={handleUpdate}
                                     />
                                   </div>
                                   </>

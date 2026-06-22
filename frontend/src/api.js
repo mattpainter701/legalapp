@@ -786,6 +786,9 @@ export const getPlatformTenant = (key, id) =>
 export const updatePlatformTenant = (key, id, data) =>
   platformApi(key).put(`/platform/tenants/${id}`, data).then((r) => r.data)
 
+export const getPlatformPlans = (key) =>
+  platformApi(key).get('/platform/plans').then((r) => r.data)
+
 export const getPlatformUsage = (key) =>
   platformApi(key).get('/platform/usage').then((r) => r.data)
 
