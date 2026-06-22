@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Zoom Phone intake call history:** sync now requests inbound Zoom Phone history only, the importer skips non-inbound call-history rows, nested caller/callee payloads are scanned for the actual caller phone number, and the Zoom Phone queue filters out previously imported outbound legs.
 - **Zoom Phone token expiry copy:** replaced the confusing one-hour access-token expiry footer with admin-facing copy explaining that Clarity refreshes Zoom access automatically during sync/test and only needs reauthorization if access is revoked, scopes change, or the refresh grant expires unused.
 - **Platform AI routing save/reload:** enabled LiteLLM DB-backed model storage in compose (`STORE_MODEL_IN_DB=True`) so operator route changes can hot-reload through `/config/update` instead of returning a 500.
 - **Platform AI routing load:** stopped auto-fetching provider model lists for saved routes on page load; the AI Routing page now uses the cached catalog by default and only probes provider `/models` endpoints when an operator explicitly clicks a model refresh button.

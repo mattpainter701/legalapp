@@ -1358,6 +1358,7 @@ async def list_zoom_phone_calls(
         .where(
             CommunicationLog.tenant_id == tenant_id,
             CommunicationLog.channel == "call",
+            CommunicationLog.direction == "inbound",
             or_(
                 CommunicationLog.external_ref.like("zoom_phone:call:%"),
                 CommunicationLog.participants["provider"].astext == "zoom_phone",

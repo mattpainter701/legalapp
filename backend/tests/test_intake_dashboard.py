@@ -22,13 +22,42 @@ from app.services.intake_archive_import import (
     normalize_phone,
     parse_legacy_call_csv,
 )
-from app.services.zoom_phone import import_zoom_phone_records
+from app.services.zoom_phone import import_zoom_phone_records, normalize_zoom_phone_record
 
 
 def test_normalize_phone_strips_formatting_and_country_code():
     assert normalize_phone("+1 (701) 555-1212") == "7015551212"
     assert normalize_phone("701.555.1212") == "7015551212"
     assert normalize_phone("") is None
+
+
+def test_zoom_phone_normalizer_keeps_only_inbound_and_extracts_nested_phone():
+    inbound = normalize_zoom_phone_record(
+        {
+            "id": "nested-inbound-1",
+            "direction": "incoming",
+            "caller_number": "SCHMIDT JOANN",
+            "caller": {"phone_number": "+1 701-555-0199"},
+            "callee": {"display_name": "Main - Receptionist"},
+            "start_time": "2026-06-22T14:15:00Z",
+            "result": "answered",
+        }
+    )
+    outbound = normalize_zoom_phone_record(
+        {
+            "id": "outbound-1",
+            "direction": "outbound",
+            "caller": {"display_name": "Main - Receptionist"},
+            "callee": {"phone_number": "+1 701-555-0100"},
+        }
+    )
+
+    assert inbound is not None
+    assert inbound["direction"] == "inbound"
+    assert inbound["participants"]["phone"] == "+1 701-555-0199"
+    assert inbound["participants"]["normalized_phone"] == "7015550199"
+    assert "SCHMIDT JOANN" in inbound["subject"]
+    assert outbound is None
 
 
 def test_parse_legacy_call_csv_validates_duplicates_and_dates():

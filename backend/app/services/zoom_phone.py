@@ -56,6 +56,59 @@ def _first(data: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _path_value(data: dict[str, Any], path: str) -> Any:
+    current: Any = data
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+        if current in (None, ""):
+            return None
+    return current
+
+
+def _first_path(data: dict[str, Any], *paths: str) -> Any:
+    for path in paths:
+        value = _path_value(data, path) if "." in path else data.get(path)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _first_phone(data: dict[str, Any], *paths: str) -> str | None:
+    for path in paths:
+        value = _stringify(_first_path(data, path))
+        if not value:
+            continue
+        if normalize_phone(value):
+            return value
+    return None
+
+
+def _normalize_zoom_direction(record: dict[str, Any]) -> str | None:
+    raw = _stringify(
+        _first_path(
+            record,
+            "direction",
+            "call_type",
+            "call.direction",
+            "details.direction",
+        )
+    )
+    if not raw:
+        return None
+    direction = raw.lower().replace("-", "_").strip()
+    if direction in {"inbound", "incoming", "in"}:
+        return "inbound"
+    if direction in {"outbound", "outgoing", "out"}:
+        return "outbound"
+    if "inbound" in direction or "incoming" in direction:
+        return "inbound"
+    if "outbound" in direction or "outgoing" in direction:
+        return "outbound"
+    return None
+
+
 def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -250,21 +303,77 @@ def normalize_zoom_phone_record(record: dict[str, Any]) -> dict[str, Any] | None
     if not call_id:
         return None
 
-    direction = (_stringify(_first(record, "direction", "call_type")) or "inbound").lower()
-    if direction not in {"inbound", "outbound"}:
-        direction = "inbound" if "in" in direction else "outbound"
+    direction = _normalize_zoom_direction(record)
+    if direction != "inbound":
+        return None
 
-    caller_number = _stringify(
-        _first(record, "caller_number", "caller_phone_number", "from_number", "from")
+    caller_number = _first_phone(
+        record,
+        "caller_number",
+        "caller_phone_number",
+        "caller_did_number",
+        "caller.phone_number",
+        "caller.number",
+        "caller.did_number",
+        "caller.extension_number",
+        "from_number",
+        "from.phone_number",
+        "from.number",
+        "from",
     )
-    callee_number = _stringify(
-        _first(record, "callee_number", "callee_phone_number", "to_number", "to")
+    callee_number = _first_phone(
+        record,
+        "callee_number",
+        "callee_phone_number",
+        "callee_did_number",
+        "callee.phone_number",
+        "callee.number",
+        "callee.did_number",
+        "callee.extension_number",
+        "to_number",
+        "to.phone_number",
+        "to.number",
+        "to",
     )
-    caller_name = _stringify(_first(record, "caller_name", "caller_display_name", "from_name"))
-    callee_name = _stringify(_first(record, "callee_name", "callee_display_name", "to_name"))
+    caller_name = _stringify(
+        _first_path(
+            record,
+            "caller_name",
+            "caller_display_name",
+            "caller.name",
+            "caller.display_name",
+            "caller.user_name",
+            "from_name",
+            "from.name",
+        )
+    )
+    callee_name = _stringify(
+        _first_path(
+            record,
+            "callee_name",
+            "callee_display_name",
+            "callee.name",
+            "callee.display_name",
+            "callee.user_name",
+            "to_name",
+            "to.name",
+        )
+    )
+    caller_identity = _stringify(
+        _first_path(
+            record,
+            "caller_number",
+            "caller_phone_number",
+            "from_number",
+            "from",
+        )
+    )
+    if not caller_name and caller_identity and not normalize_phone(caller_identity):
+        caller_name = caller_identity
 
-    phone = caller_number if direction == "inbound" else callee_number
-    display_name = caller_name if direction == "inbound" else callee_name
+    phone = caller_number
+    normalized_phone = normalize_phone(phone)
+    display_name = caller_name
     display_name = display_name or phone or "Unknown Zoom Phone caller"
 
     occurred_at = _parse_datetime(
@@ -305,7 +414,7 @@ def normalize_zoom_phone_record(record: dict[str, Any]) -> dict[str, Any] | None
             "phone": phone,
             "caller_number": caller_number,
             "callee_number": callee_number,
-            "normalized_phone": normalize_phone(phone),
+            "normalized_phone": normalized_phone,
             "direction": direction,
             "result": result,
             "duration_seconds": duration,
@@ -392,6 +501,7 @@ async def fetch_zoom_phone_call_history(
                 params={
                     "from": since.date().isoformat(),
                     "to": datetime.now(timezone.utc).date().isoformat(),
+                    "directions": "inbound",
                     "page_size": max(1, min(page_size, 300)),
                     **({"next_page_token": next_page_token} if next_page_token else {}),
                 },

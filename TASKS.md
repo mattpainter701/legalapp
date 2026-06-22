@@ -9,6 +9,7 @@
 - [x] Add an intake-dashboard API/UI surface for recent Zoom Phone calls with quick access to the imported summary/transcript and the existing call-capture/task workflow
 - [x] Add focused backend coverage for dedupe and intake handoff behavior; local DB execution was blocked by unavailable Postgres, so compile/build/normalizer probes were run locally
 - [x] Verify and deploy to production
+- [x] Fix Zoom Phone intake import to keep inbound calls only and persist caller phone numbers from Zoom call-history payloads
 
 Follow-up: add Zoom webhook CRC/signature handling so real-time call-element events feed the same importer; current production path is admin-triggered Call History sync after a tenant admin grants Zoom Phone OAuth.
 
