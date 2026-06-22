@@ -64,7 +64,7 @@ async def test_unlicensed_user_gets_basic_addon_portal_only(db_session, test_ten
 
 
 @pytest.mark.asyncio
-async def test_intake_only_tenant_gets_intake_widget_and_addon_page(db_session, test_tenant):
+async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenant):
     user = User(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -86,7 +86,9 @@ async def test_intake_only_tenant_gets_intake_widget_and_addon_page(db_session, 
     app.dependency_overrides.clear()
     assert response.status_code == 200
     body = response.json()
-    assert body["enabled_modules"] == ["intake-dashboard", "plugins"]
+    # Standalone Call Intake plan: no plugins/marketplace for a non-admin user;
+    # upsell is handled by locked-nav teasers instead.
+    assert body["enabled_modules"] == ["intake-dashboard"]
     assert body["default_route"] == "/intake/dashboard"
 
 
