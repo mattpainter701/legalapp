@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.models.communication_log import CommunicationLog
 from app.models.tenant_credential import TenantCredential
 from app.services.intake_archive_import import normalize_phone
+from app.services.tenant_oauth_apps import get_zoom_phone_oauth_client
 from app.services.token_vault import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -122,11 +123,15 @@ async def get_zoom_phone_token(db: AsyncSession, tenant_id: str) -> str | None:
             logger.warning("Zoom Phone token decrypt failed; refreshing")
 
     if cred.encrypted_refresh_token:
+        oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
+        if not oauth_client:
+            logger.warning("Zoom Phone OAuth refresh skipped; app credentials missing")
+            return None
         refresh_token = decrypt_token(cred.encrypted_refresh_token)
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
                 "https://zoom.us/oauth/token",
-                auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+                auth=(oauth_client.client_id, oauth_client.client_secret),
                 data={
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",

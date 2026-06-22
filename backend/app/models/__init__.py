@@ -41,6 +41,7 @@ from app.models.matter_note import MatterNote
 from app.models.retainer import Retainer, RetainerTransaction
 from app.models.scheduler import SchedulerLog
 from app.models.tenant_credential import TenantCredential
+from app.models.tenant_oauth_app import TenantOAuthApp
 from app.models.user_oauth_token import UserOAuthToken
 from app.models.teams_channel_link import TeamsChannelLink
 from app.models.teams_notification_setting import TeamsNotificationSetting
@@ -128,6 +129,7 @@ __all__ = [
     "RetainerTransaction",
     "SchedulerLog",
     "TenantCredential",
+    "TenantOAuthApp",
     "UserOAuthToken",
     "TeamsChannelLink",
     "TeamsNotificationSetting",

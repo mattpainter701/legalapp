@@ -28,6 +28,7 @@ Follow-up: add Zoom webhook CRC/signature handling so real-time call-element eve
 - [x] Fix Admin -> Zoom tab so Zoom Phone OAuth is actionable even when meeting-only Zoom is not configured
 - [x] Bring Admin -> Zoom UI to Microsoft/Google integration parity with professional cards, scoped setup status, and customer-facing OAuth actions
 - [x] Hide global/operator Zoom OAuth app setup from tenant admin UI and expose redacted Zoom readiness in the platform operator console
+- [x] Support tenant-owned Zoom OAuth app credentials so customer admins can configure their own Zoom app, then grant Phone access without global Clarity Zoom credentials
 
 ---
 

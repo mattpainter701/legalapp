@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +23,13 @@ from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
 from app.services.teams_gate import missing_teams_scopes
-from app.services.token_vault import encrypt_token
+from app.services.token_vault import decrypt_token, encrypt_token
+from app.services.tenant_oauth_apps import (
+    get_tenant_oauth_app,
+    get_zoom_phone_oauth_client,
+    mask_client_id,
+    upsert_zoom_phone_oauth_app,
+)
 from app.services.zoom_phone import (
     ZOOM_PHONE_PROVIDER,
     ZoomPhoneIntegrationError,
@@ -36,6 +43,11 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 _STATE_TTL = 600
 _fallback_states: dict[str, float] = {}
 _fallback_state_data: dict[str, dict] = {}
+
+
+class ZoomPhoneAppCredentialRequest(BaseModel):
+    client_id: str
+    client_secret: str
 
 
 async def _save_state(request: Request, state: str, data: dict | None = None) -> None:
@@ -163,6 +175,23 @@ def _missing_scopes(provider: str, granted: str | None, required: str) -> list[s
         for scope in required.split()
         if not _scope_is_granted(scope, granted_set, provider)
     )
+
+
+def _app_credentials_payload(app, *, source: str | None, platform_ready: bool) -> dict:
+    client_id_hint = None
+    if app:
+        try:
+            client_id_hint = mask_client_id(decrypt_token(app.encrypted_client_id))
+        except Exception:
+            logger.warning("Zoom Phone tenant app client ID decrypt failed")
+    return {
+        "configured": bool(app),
+        "source": source,
+        "client_id_hint": client_id_hint,
+        "platform_app_configured": platform_ready,
+        "redirect_uri": _zoom_phone_redirect_uri(),
+        "required_scopes": settings.ZOOM_PHONE_SCOPES.split(),
+    }
 
 
 @router.get("/microsoft/connect")
@@ -677,8 +706,17 @@ async def zoom_phone_connect(
     user = await get_current_user(request, db)
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    if not settings.ZOOM_CLIENT_ID or not settings.ZOOM_CLIENT_SECRET:
-        raise HTTPException(status_code=501, detail="Zoom OAuth not configured")
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
+    if not oauth_client:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Zoom Phone OAuth app credentials are not configured. Add your "
+                "firm's Zoom OAuth client ID and secret first."
+            ),
+        )
 
     state = secrets.token_urlsafe(32)
     await _save_state(
@@ -688,15 +726,16 @@ async def zoom_phone_connect(
             "intent": "admin",
             "provider": ZOOM_PHONE_PROVIDER,
             "user_id": str(user.id),
-            "tenant_id": str(user.tenant_id),
+            "tenant_id": tenant_id,
             "role": user.role,
+            "oauth_app_source": oauth_client.source,
         },
     )
 
     authorize_url = "https://zoom.us/oauth/authorize?" + urlencode(
         {
             "response_type": "code",
-            "client_id": settings.ZOOM_CLIENT_ID,
+            "client_id": oauth_client.client_id,
             "redirect_uri": _zoom_phone_redirect_uri(),
             "state": state,
         }
@@ -718,11 +757,14 @@ async def zoom_phone_callback(
     if meta.get("provider") != ZOOM_PHONE_PROVIDER:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "invalid_state")
     await set_tenant_context(db, tenant_id)
+    oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
+    if not oauth_client:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "app_credentials_missing")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             "https://zoom.us/oauth/token",
-            auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+            auth=(oauth_client.client_id, oauth_client.client_secret),
             data={
                 "grant_type": "authorization_code",
                 "code": code,
@@ -778,6 +820,75 @@ async def zoom_phone_callback(
         )
     await db.commit()
     return await _post_connect_redirect(db, tenant_id, ZOOM_PHONE_PROVIDER)
+
+
+@router.put("/zoom-phone/app-credentials")
+async def save_zoom_phone_app_credentials(
+    payload: ZoomPhoneAppCredentialRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    client_id = payload.client_id.strip()
+    client_secret = payload.client_secret.strip()
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=422,
+            detail="Zoom OAuth client ID and client secret are required.",
+        )
+    app = await upsert_zoom_phone_oauth_app(
+        db,
+        tenant_id=tenant_id,
+        user_id=str(user.id),
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=_zoom_phone_redirect_uri(),
+        scopes=settings.ZOOM_PHONE_SCOPES,
+    )
+    await db.commit()
+    return {
+        "status": "saved",
+        "app_credentials": _app_credentials_payload(
+            app,
+            source="tenant",
+            platform_ready=bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
+        ),
+    }
+
+
+@router.delete("/zoom-phone/app-credentials")
+async def clear_zoom_phone_app_credentials(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    app = await get_tenant_oauth_app(
+        db,
+        tenant_id=tenant_id,
+        provider=ZOOM_PHONE_PROVIDER,
+    )
+    if app:
+        app.is_active = False
+    await db.commit()
+    return {
+        "status": "cleared",
+        "app_credentials": _app_credentials_payload(
+            None,
+            source="platform"
+            if settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
+            else None,
+            platform_ready=bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
+        ),
+    }
 
 
 # ── Onboarding hook ─────────────────────────────────────────────────────
@@ -1141,17 +1252,34 @@ async def zoom_phone_status(
         )
     )
     row = result.scalar_one_or_none()
+    app = await get_tenant_oauth_app(
+        db,
+        tenant_id=tenant_id,
+        provider=ZOOM_PHONE_PROVIDER,
+    )
     missing = _missing_scopes(
         "zoom",
         row.scopes if row else None,
         settings.ZOOM_PHONE_SCOPES,
     )
-    configured = bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET)
+    platform_ready = bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET)
+    tenant_app_ready = bool(app)
+    configured = tenant_app_ready or platform_ready
     connected = bool(row)
+    app_source = "tenant" if tenant_app_ready else "platform" if platform_ready else None
     return {
         "configured": configured,
         "connected": connected,
         "provider": ZOOM_PHONE_PROVIDER,
+        "app_source": app_source,
+        "tenant_app_configured": tenant_app_ready,
+        "platform_app_configured": platform_ready,
+        "redirect_uri": _zoom_phone_redirect_uri(),
+        "app_credentials": _app_credentials_payload(
+            app,
+            source=app_source,
+            platform_ready=platform_ready,
+        ),
         "required_scopes": settings.ZOOM_PHONE_SCOPES.split(),
         "missing_scopes": missing,
         "scopes": row.scopes.split() if row and row.scopes else [],

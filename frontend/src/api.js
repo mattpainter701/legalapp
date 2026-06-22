@@ -393,6 +393,10 @@ export const disconnectZoomIntegration = () =>
   api.post('/integrations/zoom/disconnect').then((r) => r.data)
 export const getZoomPhoneStatus = () =>
   api.get('/integrations/zoom-phone/status').then((r) => r.data)
+export const saveZoomPhoneAppCredentials = (data) =>
+  api.put('/integrations/zoom-phone/app-credentials', data).then((r) => r.data)
+export const clearZoomPhoneAppCredentials = () =>
+  api.delete('/integrations/zoom-phone/app-credentials').then((r) => r.data)
 export const connectZoomPhoneIntegration = () => {
   window.location.href = `${BASE_URL}/integrations/zoom-phone/connect`
 }

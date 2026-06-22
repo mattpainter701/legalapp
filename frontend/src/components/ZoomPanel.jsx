@@ -2,21 +2,27 @@ import React, { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
+  Copy,
+  KeyRound,
   PhoneCall,
   PlugZap,
   RefreshCw,
+  Save,
   ShieldCheck,
+  Trash2,
   Unplug,
   Video,
   XCircle,
 } from 'lucide-react'
 import {
+  clearZoomPhoneAppCredentials,
   connectZoomPhoneIntegration,
   connectZoomIntegration,
   disconnectZoomPhoneIntegration,
   disconnectZoomIntegration,
   getZoomPhoneStatus,
   getZoomStatus,
+  saveZoomPhoneAppCredentials,
   testZoomPhoneIntegration,
 } from '../api'
 
@@ -35,6 +41,7 @@ export default function ZoomPanel() {
   const [busy, setBusy] = useState(false)
   const [phoneBusy, setPhoneBusy] = useState(false)
   const [flash, setFlash] = useState(null)
+  const [appForm, setAppForm] = useState({ client_id: '', client_secret: '' })
 
   const showFlash = (text, type = 'success') => {
     setFlash({ text, type })
@@ -95,6 +102,44 @@ export default function ZoomPanel() {
     }
   }
 
+  const handleSavePhoneApp = async (event) => {
+    event.preventDefault()
+    setPhoneBusy(true)
+    try {
+      await saveZoomPhoneAppCredentials(appForm)
+      setAppForm({ client_id: '', client_secret: '' })
+      await loadPanel()
+      showFlash('Zoom Phone app credentials saved.')
+    } catch (err) {
+      showFlash(err?.response?.data?.detail || 'Failed to save Zoom Phone app credentials.', 'error')
+    } finally {
+      setPhoneBusy(false)
+    }
+  }
+
+  const handleClearPhoneApp = async () => {
+    setPhoneBusy(true)
+    try {
+      await clearZoomPhoneAppCredentials()
+      await loadPanel()
+      showFlash('Zoom Phone app credentials cleared.')
+    } catch (err) {
+      showFlash(err?.response?.data?.detail || 'Failed to clear Zoom Phone app credentials.', 'error')
+    } finally {
+      setPhoneBusy(false)
+    }
+  }
+
+  const handleCopy = async (text) => {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      showFlash('Callback URL copied.')
+    } catch {
+      showFlash('Could not copy callback URL.', 'error')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -108,6 +153,8 @@ export default function ZoomPanel() {
   const phoneConfigured = Boolean(phoneStatus?.configured)
   const phoneConnected = Boolean(phoneStatus?.connected)
   const phoneMissingScopes = phoneStatus?.missing_scopes || []
+  const tenantPhoneAppConfigured = Boolean(phoneStatus?.tenant_app_configured)
+  const platformPhoneAppConfigured = Boolean(phoneStatus?.platform_app_configured)
 
   return (
     <div className="space-y-6">
@@ -125,7 +172,7 @@ export default function ZoomPanel() {
           <div className="flex flex-wrap gap-2">
             <StatusBadge
               status={phoneConnected && phoneMissingScopes.length === 0 ? 'healthy' : phoneConfigured ? 'attention' : 'missing'}
-              label={phoneConnected ? 'Phone grant connected' : phoneConfigured ? 'Phone ready to connect' : 'Phone app pending'}
+              label={phoneConnected ? 'Phone grant connected' : phoneConfigured ? 'Phone ready to connect' : 'Add Phone app'}
             />
             <StatusBadge
               status={connected ? 'healthy' : configured ? 'attention' : 'neutral'}
@@ -167,10 +214,21 @@ export default function ZoomPanel() {
           {!phoneConfigured && (
             <SetupNotice
               tone="info"
-              title="Zoom Phone is waiting on platform setup"
-              body="Once Clarity enables the shared Zoom app, your Zoom account admin can grant Phone access here."
+              title="Add your firm's Zoom OAuth app"
+              body="Create a Zoom OAuth app for this tenant, add the callback URL below, save the client credentials, then connect Zoom Phone."
             />
           )}
+          <ZoomPhoneAppSetup
+            status={phoneStatus}
+            form={appForm}
+            setForm={setAppForm}
+            busy={phoneBusy}
+            onSave={handleSavePhoneApp}
+            onClear={handleClearPhoneApp}
+            onCopy={handleCopy}
+            tenantConfigured={tenantPhoneAppConfigured}
+            platformConfigured={platformPhoneAppConfigured}
+          />
           {phoneConnected && phoneMissingScopes.length > 0 && (
             <SetupNotice
               tone="warning"
@@ -178,12 +236,10 @@ export default function ZoomPanel() {
               body="The current Zoom grant is missing Phone permissions. Re-authorize with the updated scope set."
             />
           )}
-          {(phoneConfigured || phoneConnected) && (
-            <ScopeChecklist
-              required={phoneStatus?.required_scopes || []}
-              missing={phoneMissingScopes}
-            />
-          )}
+          <ScopeChecklist
+            required={phoneStatus?.required_scopes || []}
+            missing={phoneMissingScopes}
+          />
         </IntegrationCard>
 
         <IntegrationCard
@@ -228,7 +284,7 @@ export default function ZoomPanel() {
 }
 
 function phoneStatusLabel(phoneStatus, phoneConfigured, phoneConnected) {
-  if (!phoneConfigured) return 'Platform setup pending'
+  if (!phoneConfigured) return 'Add Zoom app'
   if (!phoneConnected) return 'Ready to connect'
   if (phoneStatus?.missing_scopes?.length > 0) return 'Missing permissions'
   return 'Connected'
@@ -249,6 +305,118 @@ function FlashMessage({ flash }) {
         : 'bg-red-50 border border-red-200 text-red-700'
     }`}>
       {flash.text}
+    </div>
+  )
+}
+
+function ZoomPhoneAppSetup({
+  status,
+  form,
+  setForm,
+  busy,
+  onSave,
+  onClear,
+  onCopy,
+  tenantConfigured,
+  platformConfigured,
+}) {
+  const callbackUrl = status?.redirect_uri || status?.app_credentials?.redirect_uri
+  const clientIdHint = status?.app_credentials?.client_id_hint
+  const canSave = form.client_id.trim() && form.client_secret.trim() && !busy
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-bg overflow-hidden">
+      <div className="px-4 py-3 border-b border-brand-line flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-brand-surface border border-brand-line flex items-center justify-center text-brand-ink">
+            <KeyRound size={17} />
+          </div>
+          <div>
+            <div className="text-sm font-bold text-brand-ink">Customer Zoom app</div>
+            <div className="text-xs text-brand-ink-2 mt-0.5">
+              {tenantConfigured
+                ? `Saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Enter both fields to replace it.`
+                : platformConfigured
+                  ? 'A platform app is available, but this tenant can use its own Zoom OAuth app.'
+                  : 'Save the Zoom OAuth client ID and secret from this firm-owned app.'}
+            </div>
+          </div>
+        </div>
+        <StatusBadge
+          status={tenantConfigured || platformConfigured ? 'healthy' : 'missing'}
+          label={tenantConfigured ? 'Tenant app saved' : platformConfigured ? 'Platform fallback' : 'App required'}
+        />
+      </div>
+
+      <div className="p-4 space-y-4">
+        {callbackUrl && (
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+              Zoom callback URL
+            </label>
+            <div className="flex gap-2">
+              <code className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line px-3 py-2 text-[11px] text-brand-ink break-all">
+                {callbackUrl}
+              </code>
+              <button
+                type="button"
+                onClick={() => onCopy(callbackUrl)}
+                className="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-brand-line text-brand-ink hover:bg-brand-surface"
+                title="Copy callback URL"
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={onSave} className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+              Zoom OAuth client ID
+            </span>
+            <input
+              value={form.client_id}
+              onChange={(event) => setForm((current) => ({ ...current, client_id: event.target.value }))}
+              placeholder={clientIdHint ? `Current: ${clientIdHint}` : 'Client ID'}
+              className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+              Zoom OAuth client secret
+            </span>
+            <input
+              type="password"
+              value={form.client_secret}
+              onChange={(event) => setForm((current) => ({ ...current, client_secret: event.target.value }))}
+              placeholder={tenantConfigured ? 'Enter to replace saved secret' : 'Client secret'}
+              className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
+            />
+          </label>
+          <div className="lg:col-span-2 flex flex-wrap gap-2">
+            <button
+              type="submit"
+              disabled={!canSave}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-ink text-white font-sans text-xs font-bold hover:bg-brand-ink/90 disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              <Save size={14} />
+              Save Zoom app
+            </button>
+            {tenantConfigured && (
+              <button
+                type="button"
+                onClick={onClear}
+                disabled={busy}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-brand-ink font-sans text-xs font-bold hover:bg-brand-surface disabled:opacity-45 disabled:cursor-not-allowed"
+              >
+                <Trash2 size={14} />
+                Clear tenant app
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
