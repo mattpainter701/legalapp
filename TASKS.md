@@ -25,6 +25,7 @@ Follow-up: add Zoom webhook CRC/signature handling so real-time call-element eve
 - [x] Show setup status in the Zoom Phone Calls panel and Admin integrations area: not configured, connected, missing scopes, Zoom Phone not enabled, rate limited, token refresh failure, or auth revoked
 - [x] Document customer setup steps as "admin grants Clarity Zoom Phone access" rather than asking customers to create their own Zoom app credentials
 - [x] Confirm current Zoom requirements for account-level/admin OAuth scopes before implementation; do not rely on the meeting-only Zoom OAuth scopes already in the app
+- [x] Fix Admin -> Zoom tab so Zoom Phone OAuth is actionable even when meeting-only Zoom is not configured
 
 ---
 

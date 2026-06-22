@@ -106,32 +106,26 @@ export default function ZoomPanel() {
     ...(readiness?.expected_redirect_uris?.zoom_phone || []),
   ]
 
-  if (!configured) {
-    return (
-      <div className="space-y-6">
-        {flash && <FlashMessage flash={flash} />}
-        <GateCard
-          title="Set up Zoom when a firm needs it"
-          body="Zoom meeting links are optional and no longer affect Microsoft or Google cloud integration readiness. Add the Zoom OAuth credentials, then return here to connect it."
-        />
-        <ZoomSetupCard envEntries={envEntries} redirectUris={zoomRedirects} />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-6">
       {flash && <FlashMessage flash={flash} />}
 
       <div className="flex flex-wrap items-center gap-3">
-        <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
-          connected
-            ? 'bg-green-100 text-green-700 border-green-200'
-            : 'bg-amber-100 text-amber-700 border-amber-200'
-        }`}>
-          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-amber-500'}`} />
-          {connected ? 'Zoom connected' : 'Zoom ready to connect'}
-        </span>
+        {configured ? (
+          <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
+            connected
+              ? 'bg-green-100 text-green-700 border-green-200'
+              : 'bg-amber-100 text-amber-700 border-amber-200'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-amber-500'}`} />
+            {connected ? 'Zoom connected' : 'Zoom ready to connect'}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold bg-brand-bg-soft text-brand-muted border-brand-line">
+            <span className="w-2 h-2 rounded-full bg-brand-muted" />
+            Zoom meetings not configured
+          </span>
+        )}
         <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
           phoneConnected && phoneStatus?.missing_scopes?.length === 0
             ? 'bg-green-100 text-green-700 border-green-200'
@@ -201,39 +195,46 @@ export default function ZoomPanel() {
         </div>
       </div>
 
-      <div className="bg-brand-surface border border-brand-line rounded-xl p-6 max-w-3xl">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Zoom meetings</h3>
-            <p className="text-brand-ink-2 font-sans text-sm">
-              Use Zoom only for firms that want Zoom meeting links in calendar events. Microsoft and Google setup stays separate.
-            </p>
-            {connected && (
-              <p className="text-xs text-brand-ink-2 font-sans mt-3">
-                Connected as {status.connection_type === 'tenant' ? 'tenant-wide' : 'current user'}
-                {status.expires_at ? ` - expires ${new Date(status.expires_at).toLocaleDateString()}` : ''}
+      {configured ? (
+        <div className="bg-brand-surface border border-brand-line rounded-xl p-6 max-w-3xl">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Zoom meetings</h3>
+              <p className="text-brand-ink-2 font-sans text-sm">
+                Use Zoom only for firms that want Zoom meeting links in calendar events. Microsoft and Google setup stays separate.
               </p>
+              {connected && (
+                <p className="text-xs text-brand-ink-2 font-sans mt-3">
+                  Connected as {status.connection_type === 'tenant' ? 'tenant-wide' : 'current user'}
+                  {status.expires_at ? ` - expires ${new Date(status.expires_at).toLocaleDateString()}` : ''}
+                </p>
+              )}
+            </div>
+            {connected ? (
+              <button
+                onClick={handleDisconnect}
+                disabled={busy}
+                className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+              >
+                {busy ? 'Disconnecting...' : 'Disconnect Zoom'}
+              </button>
+            ) : (
+              <button
+                onClick={() => connectZoomIntegration('admin')}
+                disabled={busy}
+                className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-medium rounded-lg hover:bg-brand-ink/90 transition-colors disabled:opacity-50"
+              >
+                Connect Zoom
+              </button>
             )}
           </div>
-          {connected ? (
-            <button
-              onClick={handleDisconnect}
-              disabled={busy}
-              className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
-            >
-              {busy ? 'Disconnecting...' : 'Disconnect Zoom'}
-            </button>
-          ) : (
-            <button
-              onClick={() => connectZoomIntegration('admin')}
-              disabled={busy}
-              className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-medium rounded-lg hover:bg-brand-ink/90 transition-colors disabled:opacity-50"
-            >
-              Connect Zoom
-            </button>
-          )}
         </div>
-      </div>
+      ) : (
+        <GateCard
+          title="Zoom meetings are not configured"
+          body="Meeting links are optional and separate from Zoom Phone intake. Add the Zoom OAuth credentials if a firm wants Zoom meeting links."
+        />
+      )}
 
       <ZoomSetupCard envEntries={envEntries} redirectUris={zoomRedirects} />
     </div>
