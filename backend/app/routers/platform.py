@@ -83,6 +83,7 @@ class TenantUpdate(BaseModel):
     premium_llm_model: Optional[str] = None
     enabled_modules: Optional[list[str]] = None
     default_module: Optional[str] = None
+    plan: Optional[str] = None
 
 
 class PlatformLLMConfigUpdate(BaseModel):
@@ -294,9 +295,33 @@ async def get_tenant_detail(
             "premium_model": ts.premium_llm_model if ts else None,
         },
         "module_config": {
-            "enabled_modules": (ts.custom_config or {}).get("enabled_modules") if ts else None,
-            "default_module": (ts.custom_config or {}).get("default_module") if ts else None,
+            "enabled_modules": (ts.custom_config or {}).get("enabled_modules")
+            if ts
+            else None,
+            "default_module": (ts.custom_config or {}).get("default_module")
+            if ts
+            else None,
+            "plan": (ts.custom_config or {}).get("plan") if ts else None,
         },
+    }
+
+
+@router.get("/plans")
+async def list_plans(request: Request):
+    _require_platform_key(request)
+    from app.services.plans import PLANS
+
+    return {
+        "plans": [
+            {
+                "id": p.id,
+                "label": p.label,
+                "modules": p.modules,
+                "public_signup": p.public_signup,
+                "upsell_target": p.upsell_target,
+            }
+            for p in PLANS.values()
+        ]
     }
 
 
@@ -340,7 +365,11 @@ async def update_tenant(
                 status_code=400,
                 detail=f"Unknown default_module '{body.default_module}'. Valid modules: {sorted(KNOWN_MODULES)}",
             )
-        if enabled_modules is not None and default_module and default_module not in enabled_modules:
+        if (
+            enabled_modules is not None
+            and default_module
+            and default_module not in enabled_modules
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="default_module must be included in enabled_modules",
@@ -359,6 +388,23 @@ async def update_tenant(
             custom_config["enabled_modules"] = enabled_modules
         if default_module is not None:
             custom_config["default_module"] = default_module
+        ts.custom_config = custom_config
+
+    if _field_was_sent(body, "plan"):
+        from app.services.plans import get_plan
+
+        if get_plan(body.plan) is None:
+            raise HTTPException(status_code=400, detail=f"Unknown plan '{body.plan}'")
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
+        if ts is None:
+            ts = TenantSettings(tenant_id=tenant.id)
+            db.add(ts)
+            await db.flush()
+        custom_config = dict(ts.custom_config or {})
+        custom_config["plan"] = body.plan
         ts.custom_config = custom_config
 
     standard_provider_sent = _field_was_sent(
