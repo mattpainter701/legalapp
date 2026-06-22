@@ -1,5 +1,23 @@
 # TASKS.md
 
+## Standalone Call Intake — Plan/Tier Framework — 2026-06-22 (DONE)
+
+**Goal:** Sell Call Intake as a standalone product — provision a tenant locked to the intake
+dashboard, on a reusable plan/tier framework with an upsell path. Spec/plan in
+`docs/superpowers/specs/2026-06-22-call-intake-standalone-plan-design.md` and
+`docs/superpowers/plans/2026-06-22-call-intake-standalone-plan.md`.
+
+- [x] Plan registry (`app/services/plans.py`) + module-visibility refactor (registry-driven)
+- [x] Fail-closed API module guard (`ModuleGuardMiddleware`, signed `plan` JWT claim)
+- [x] Partner assignment log (`partner_assignment_log`, migration 064) + list/CSV export endpoints
+- [x] Operator plan toggle (`PUT /platform/tenants/{id}` plan, `GET /platform/plans`) + selector UI
+- [x] Public self-serve signup (`POST /auth/signup/plan`) → intake-only tenant + admin + trial
+- [x] Upsell: locked-nav teasers + Upgrade modal + `plan_upgrade_requests` (migration 065)
+- [x] `plan`/`upsell_target` in `/me`; Partner Log panel on the intake dashboard
+- [x] Tests: plans, module guard, partner log, platform plan toggle, signup, upgrade request
+
+---
+
 ## Bug Fixes — 2026-06-11
 
 ### Fixed
