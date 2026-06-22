@@ -709,10 +709,106 @@ async def recent_callers(
         )
     ).all()
 
+    # Batch the enrichment lookups (lead → task → assignee names) into a handful
+    # of queries instead of N+1 per row — this endpoint is polled, so per-row
+    # round-trips add up. Mirrors the batching in export_call_records.
+    contact_ids = [log.contact_id for log, _c, _u in rows if log.contact_id]
+    lead_by_contact_id: dict[uuid.UUID, Lead] = {}
+    if contact_ids:
+        leads = (
+            (
+                await db.execute(
+                    select(Lead)
+                    .where(
+                        Lead.tenant_id == tenant_id, Lead.contact_id.in_(contact_ids)
+                    )
+                    .order_by(Lead.updated_at.desc(), Lead.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for lead in leads:
+            lead_by_contact_id.setdefault(lead.contact_id, lead)
+
+    call_ref_to_log_id = {
+        f"intake-dashboard:call:{log.id}:general-task": log.id for log, _c, _u in rows
+    }
+    task_by_log_id: dict[uuid.UUID, Task] = {}
+    if call_ref_to_log_id:
+        tasks = (
+            (
+                await db.execute(
+                    select(Task)
+                    .where(
+                        Task.tenant_id == tenant_id,
+                        Task.external_ref.in_(list(call_ref_to_log_id.keys())),
+                    )
+                    .order_by(Task.updated_at.desc(), Task.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for task in tasks:
+            log_id = call_ref_to_log_id.get(task.external_ref)
+            if log_id:
+                task_by_log_id.setdefault(log_id, task)
+
+    task_by_lead_id: dict[uuid.UUID, Task] = {}
+    if lead_by_contact_id:
+        ref_to_lead_id = {
+            f"intake-dashboard:lead:{lead.id}:follow-up": lead.id
+            for lead in lead_by_contact_id.values()
+        }
+        tasks = (
+            (
+                await db.execute(
+                    select(Task)
+                    .where(
+                        Task.tenant_id == tenant_id,
+                        Task.external_ref.in_(list(ref_to_lead_id.keys())),
+                    )
+                    .order_by(Task.updated_at.desc(), Task.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for task in tasks:
+            lead_id = ref_to_lead_id.get(task.external_ref)
+            if lead_id:
+                task_by_lead_id.setdefault(lead_id, task)
+
+    assignee_ids = {
+        task.assigned_to_user_id
+        for task in (*task_by_log_id.values(), *task_by_lead_id.values())
+        if task.assigned_to_user_id
+    }
+    for lead in lead_by_contact_id.values():
+        if lead.assigned_to_user_id:
+            assignee_ids.add(lead.assigned_to_user_id)
+    assignees_by_id: dict[uuid.UUID, User] = {}
+    if assignee_ids:
+        assignees_by_id = {
+            user.id: user
+            for user in (
+                await db.execute(
+                    select(User).where(
+                        User.tenant_id == tenant_id, User.id.in_(assignee_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        }
+
     callers = []
     for log, contact, creator in rows:
-        lead = await _recent_lead_for_log(db, tenant_id, log)
-        task = await _assignment_task_for_log(db, tenant_id, log, lead)
+        lead = lead_by_contact_id.get(log.contact_id) if log.contact_id else None
+        task = task_by_log_id.get(log.id) or (
+            task_by_lead_id.get(lead.id) if lead else None
+        )
         assigned_to_user_id = None
         if task and task.assigned_to_user_id:
             assigned_to_user_id = task.assigned_to_user_id
@@ -732,7 +828,9 @@ async def recent_callers(
                 lead_id=lead.id if lead else None,
                 lead_status=lead.status if lead else None,
                 assigned_to_user_id=assigned_to_user_id,
-                assigned_to_name=await _user_name(db, assigned_to_user_id),
+                assigned_to_name=_user_name_from_row(
+                    assignees_by_id.get(assigned_to_user_id)
+                ),
                 task_id=task.id if task else None,
                 task_status=task.status if task else None,
                 task_priority=task.priority if task else None,
