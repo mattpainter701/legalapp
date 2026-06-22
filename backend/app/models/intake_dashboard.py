@@ -3,7 +3,15 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,7 +53,9 @@ class LegacyCallRecord(Base):
     practice_area: Mapped[str | None] = mapped_column(String(100), nullable=True)
     purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
     prior_attorney_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    call_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    call_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
@@ -116,4 +126,54 @@ class PartnerRotationState(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default="now()",
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class PartnerAssignmentLog(Base):
+    """Append-only record of every partner/staff assignment event."""
+
+    __tablename__ = "partner_assignment_log"
+    __table_args__ = (
+        Index("idx_partner_assignment_log_tenant", "tenant_id"),
+        Index("idx_partner_assignment_log_created", "tenant_id", "created_at"),
+        Index(
+            "idx_partner_assignment_log_assignee", "tenant_id", "assigned_to_user_id"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    communication_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    practice_area: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    assigned_to_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    assigned_to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rotation_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    assignment_method: Mapped[str] = mapped_column(String(50), nullable=False)
+    assigned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    assigned_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
     )
