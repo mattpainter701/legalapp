@@ -48,3 +48,6 @@ entities.json
 
 # Agent worktrees
 .claude/worktrees/
+
+# Superpowers brainstorm mockups (local only)
+.superpowers/
