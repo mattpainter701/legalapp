@@ -515,6 +515,23 @@ def _log_participant(log: CommunicationLog, key: str) -> str | None:
     return None
 
 
+def _log_source(log: CommunicationLog) -> str:
+    participants = log.participants or {}
+    if participants.get("provider") == "zoom_phone" or (
+        log.external_ref or ""
+    ).startswith("zoom_phone:call:"):
+        return "zoom_phone"
+    return "manual"
+
+
+def _log_int(log: CommunicationLog, key: str) -> int | None:
+    value = (log.participants or {}).get(key)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _log_field_from_body(log: CommunicationLog, prefix: str) -> str | None:
     body = log.body or ""
     marker = f"{prefix}:"
@@ -666,8 +683,8 @@ async def recent_callers(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
-    if limit not in {10, 20, 50}:
-        raise HTTPException(status_code=422, detail="Limit must be 10, 20, or 50")
+    if limit not in {5, 10, 20, 50}:
+        raise HTTPException(status_code=422, detail="Limit must be 5, 10, 20, or 50")
 
     rows = (
         await db.execute(
@@ -724,6 +741,12 @@ async def recent_callers(
                 created_by_user_id=log.created_by_user_id,
                 created_by_name=_user_name_from_row(creator),
                 occurred_at=log.occurred_at,
+                source=_log_source(log),
+                answered_by=_log_participant(log, "callee_name"),
+                result=_log_participant(log, "result"),
+                duration_seconds=_log_int(log, "duration_seconds"),
+                recording_url=_log_participant(log, "recording_url"),
+                transcript_url=_log_participant(log, "transcript_url"),
             )
         )
     return RecentIntakeCallersResponse(limit=limit, callers=callers)

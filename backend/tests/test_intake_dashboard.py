@@ -1254,3 +1254,119 @@ async def test_partner_log_list_and_export(client, db_session, test_tenant, test
     rows = list(csv.DictReader(io.StringIO(export.text)))
     assert rows[0]["assigned_to_name"] == "Pat Partner"
     assert rows[0]["assignment_method"] == "partner_rotation"
+
+
+@pytest.mark.asyncio
+async def test_recent_callers_exposes_source_and_call_facts(
+    client, db_session, test_tenant, test_user
+):
+    now = datetime.now(timezone.utc)
+    db_session.add_all(
+        [
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Zoom Phone inbound call: Zed Caller",
+                summary="Zoom call",
+                external_ref="zoom_phone:call:abc123",
+                participants={
+                    "caller_name": "Zed Caller",
+                    "phone": "701-555-7777",
+                    "callee_name": "Front Desk",
+                    "result": "answered",
+                    "duration_seconds": 142,
+                    "recording_url": "https://zoom.example/rec",
+                    "transcript_url": "https://zoom.example/txt",
+                    "provider": "zoom_phone",
+                },
+                occurred_at=now,
+            ),
+            CommunicationLog(
+                tenant_id=test_tenant.id,
+                direction="inbound",
+                channel="call",
+                status="logged",
+                subject="Inbound call: Manny Manual",
+                summary="Walk-in style",
+                participants={"caller_name": "Manny Manual", "phone": "701-555-0000"},
+                created_by_user_id=test_user.id,
+                occurred_at=now - timedelta(minutes=3),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    resp = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 5}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["limit"] == 5
+    by_name = {c["caller_name"]: c for c in data["callers"]}
+
+    zed = by_name["Zed Caller"]
+    assert zed["source"] == "zoom_phone"
+    assert zed["answered_by"] == "Front Desk"
+    assert zed["result"] == "answered"
+    assert zed["duration_seconds"] == 142
+    assert zed["recording_url"] == "https://zoom.example/rec"
+    assert zed["transcript_url"] == "https://zoom.example/txt"
+
+    manny = by_name["Manny Manual"]
+    assert manny["source"] == "manual"
+    assert manny["answered_by"] is None
+    assert manny["recording_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_recent_callers_batched_enrichment_matches(
+    client, db_session, test_tenant, test_user
+):
+    partner = User(
+        id=uuid.uuid4(), tenant_id=test_tenant.id, email="bq@f.com",
+        full_name="Batch Partner", role="user", is_active=True,
+    )
+    contact = Contact(
+        tenant_id=test_tenant.id, first_name="Bea", last_name="Quary",
+        phone="701-555-3333", created_by_user_id=test_user.id,
+    )
+    db_session.add_all([partner, contact])
+    await db_session.flush()
+    lead = Lead(
+        tenant_id=test_tenant.id, contact_id=contact.id, status="qualified",
+        practice_area="divorce", assigned_to_user_id=partner.id,
+        created_by_user_id=test_user.id,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    log = CommunicationLog(
+        tenant_id=test_tenant.id, direction="inbound", channel="call",
+        status="logged", subject="Inbound call: Bea Quary", summary="Batched",
+        participants={"caller_name": "Bea Quary", "phone": "701-555-3333"},
+        contact_id=contact.id, created_by_user_id=test_user.id,
+        occurred_at=datetime.now(timezone.utc),
+    )
+    db_session.add(log)
+    db_session.add(
+        Task(
+            tenant_id=test_tenant.id, title="Urgent intake follow-up: Bea Quary",
+            description="x", task_type="follow_up", status="pending",
+            priority="urgent", due_date=date.today(), contact_id=contact.id,
+            assigned_to_user_id=partner.id, created_by_user_id=test_user.id,
+            source="intake_dashboard",
+            external_ref=f"intake-dashboard:lead:{lead.id}:follow-up",
+        )
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+    assert resp.status_code == 200
+    caller = resp.json()["callers"][0]
+    assert caller["caller_name"] == "Bea Quary"
+    assert caller["lead_id"] == str(lead.id)
+    assert caller["lead_status"] == "qualified"
+    assert caller["assigned_to_name"] == "Batch Partner"
+    assert caller["task_status"] == "pending"
+    assert caller["created_by_name"] in (test_user.full_name, test_user.email)

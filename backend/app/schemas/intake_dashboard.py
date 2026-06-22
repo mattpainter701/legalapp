@@ -60,6 +60,12 @@ class RecentIntakeCaller(BaseModel):
     created_by_user_id: Optional[uuid.UUID] = None
     created_by_name: Optional[str] = None
     occurred_at: datetime
+    source: str = "manual"
+    answered_by: Optional[str] = None
+    result: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    recording_url: Optional[str] = None
+    transcript_url: Optional[str] = None
 
 
 class RecentIntakeCallersResponse(BaseModel):
