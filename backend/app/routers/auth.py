@@ -30,6 +30,7 @@ from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
     OAuthCallbackExchangeRequest,
+    PlanSignupRequest,
     RegisterRequest,
     ResetPasswordRequest,
     TokenResponse,
@@ -923,6 +924,86 @@ async def register(
     )
     db.add(user)
     await ensure_stripe_customer(tenant, db)
+    await db.commit()
+    await db.refresh(user)
+    await db.refresh(tenant)
+
+    jwt_token = await _issue_access_token(db, user, tenant)
+    refresh_token = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, jwt_token, refresh_token)
+    return TokenResponse(
+        access_token=jwt_token,
+        user_id=str(user.id),
+        tenant_id=str(tenant.id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
+
+
+@router.post("/signup/plan", status_code=201)
+async def signup_with_plan(
+    body: PlanSignupRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Self-serve provisioning for a public plan (e.g. standalone Call Intake).
+
+    Creates a tenant on the plan's billing tier, an admin user, and a trial
+    window. Only plans flagged ``public_signup`` may be requested here.
+    """
+    import re
+    from datetime import timedelta as _timedelta
+
+    from app.models.tenant import TenantSettings
+    from app.services.plans import get_plan
+
+    plan = get_plan(body.plan)
+    if plan is None or not plan.public_signup:
+        raise HTTPException(status_code=403, detail="Plan is not available for signup")
+
+    body.email = body.email.lower().strip()
+
+    # Cross-tenant email-exists check with no tenant context: allow RLS bypass.
+    await enable_rls_bypass(db)
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    slug = re.sub(r"[^a-z0-9]+", "-", body.firm_name.lower()).strip("-") or "firm"
+    domain = f"{slug}-{uuid.uuid4().hex[:8]}"
+
+    tenant = Tenant(
+        id=uuid.uuid4(),
+        name=body.firm_name,
+        domain=domain,
+        company_name=body.firm_name,
+        billing_tier=plan.billing_tier,
+        is_active=True,
+    )
+    db.add(tenant)
+    await db.flush()
+
+    trial_ends_at = (datetime.now(timezone.utc) + _timedelta(days=14)).isoformat()
+    db.add(
+        TenantSettings(
+            tenant_id=tenant.id,
+            custom_config={"plan": plan.id, "trial_ends_at": trial_ends_at},
+        )
+    )
+
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=tenant.id,
+        email=body.email,
+        full_name=body.full_name or "",
+        password_hash=_hash_password(body.password),
+        role="admin",
+        is_active=True,
+        license_active=True,
+    )
+    db.add(user)
     await db.commit()
     await db.refresh(user)
     await db.refresh(tenant)

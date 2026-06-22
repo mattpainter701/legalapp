@@ -18,6 +18,14 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class PlanSignupRequest(BaseModel):
+    plan: str
+    firm_name: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=128)
+    full_name: Optional[str] = None
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
