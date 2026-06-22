@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
+  Bell,
+  BellOff,
   ClipboardList,
   Download,
-  ExternalLink,
   History,
   PhoneCall,
-  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -18,11 +18,10 @@ import {
   createIntakeDashboardCall,
   downloadIntakeDashboardCallsCsv,
   getIntakeAssignmentAvailability,
-  getRecentIntakeDashboardCallers,
-  getZoomPhoneIntakeCalls,
   getPartnerLog,
   downloadPartnerLogCsv,
   getRotationRules,
+  getZoomPhoneStatus,
   searchIntakeDashboard,
   searchUsers,
   syncZoomPhoneIntakeCalls,
@@ -30,6 +29,12 @@ import {
   updateRotationRules,
 } from '../api'
 import { useAuth } from '../App'
+import CallFeed from '../components/intake/CallFeed'
+import CallFacts from '../components/intake/CallFacts'
+import NewCallToasts from '../components/intake/NewCallToasts'
+import RecordsTabs from '../components/intake/RecordsTabs'
+import { useCallFeedPolling } from '../hooks/useCallFeedPolling'
+import { useCallAlerts } from '../hooks/useCallAlerts'
 
 const PRACTICE_AREAS = [
   'divorce',
@@ -180,7 +185,7 @@ function RotationAdmin() {
   }
 
   return (
-    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+    <div>
       <div className="flex items-center gap-2">
         <RotateCcw size={18} className="text-brand-accent" />
         <h2 className="font-serif text-lg font-bold text-brand-ink">Partner Rotation</h2>
@@ -248,264 +253,7 @@ function RotationAdmin() {
           ))}
         </div>
       )}
-    </section>
-  )
-}
-
-function RecentCallersPanel({
-  callers,
-  limit,
-  loading,
-  selectedCaller,
-  onLimitChange,
-  onSelect,
-}) {
-  const statusLabel = (caller) => {
-    if (caller.task_status === 'completed') return 'Responded'
-    if (caller.task_status) return `Task ${caller.task_status.replaceAll('_', ' ')}`
-    if (caller.assigned_to_name) return 'Routed'
-    if (caller.lead_id) return 'Lead open'
-    return 'Logged'
-  }
-
-  return (
-    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <PhoneCall size={18} className="text-brand-accent" />
-          <h2 className="font-serif text-lg font-bold text-brand-ink">Recent Callers</h2>
-        </div>
-        <select
-          value={limit}
-          onChange={(event) => onLimitChange(Number(event.target.value))}
-          className="rounded-xl border border-brand-line bg-white px-2 py-1 text-xs font-semibold text-brand-ink"
-        >
-          {[10, 20, 50].map((value) => (
-            <option key={value} value={value}>Last {value}</option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? (
-        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
-          Loading recent calls...
-        </div>
-      ) : callers.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
-          No recent dashboard calls yet.
-        </div>
-      ) : (
-        <div className="grid gap-2 lg:grid-cols-2">
-          {callers.map((caller) => (
-            <button
-              key={caller.id}
-              type="button"
-              onClick={() => onSelect(caller)}
-              className={`rounded-2xl border p-3 text-left transition hover:border-brand-accent/60 hover:bg-white ${
-                selectedCaller?.id === caller.id ? 'border-brand-accent bg-white shadow-sm' : 'border-brand-line bg-brand-bg-soft'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
-                  <p className="mt-0.5 truncate text-xs text-brand-muted">
-                    {caller.purpose || caller.practice_area || 'Call logged'}
-                  </p>
-                </div>
-                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
-                  {caller.occurred_at ? new Date(caller.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-brand-muted">
-                {caller.phone && <span>{caller.phone}</span>}
-                {caller.practice_area && <span>{caller.practice_area}</span>}
-                {caller.created_by_name && <span>by {caller.created_by_name}</span>}
-                <span className="font-bold text-brand-ink">{statusLabel(caller)}</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {selectedCaller && (
-        <div className="mt-4 rounded-2xl border border-brand-line bg-white p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-brand-muted">Selected call</p>
-              <h3 className="mt-1 font-serif text-lg font-bold text-brand-ink">{selectedCaller.caller_name}</h3>
-            </div>
-            <span className="rounded-full bg-brand-bg-soft px-3 py-1 text-[11px] font-bold text-brand-ink">
-              {statusLabel(selectedCaller)}
-            </span>
-          </div>
-          <dl className="mt-4 grid gap-3 text-xs md:grid-cols-2">
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Called</dt>
-              <dd className="mt-1 text-brand-ink">
-                {selectedCaller.occurred_at ? new Date(selectedCaller.occurred_at).toLocaleString() : 'Unknown'}
-              </dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Logged By</dt>
-              <dd className="mt-1 text-brand-ink">{selectedCaller.created_by_name || 'Unknown'}</dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Phone</dt>
-              <dd className="mt-1 text-brand-ink">{selectedCaller.phone || 'Not captured'}</dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Practice</dt>
-              <dd className="mt-1 text-brand-ink">{selectedCaller.practice_area || 'Not set'}</dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Routed To</dt>
-              <dd className="mt-1 text-brand-ink">{selectedCaller.assigned_to_name || 'Not assigned'}</dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Lead Status</dt>
-              <dd className="mt-1 text-brand-ink">{selectedCaller.lead_status || 'No lead'}</dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Task Status</dt>
-              <dd className="mt-1 text-brand-ink">
-                {selectedCaller.task_status || 'No follow-up task'}
-                {selectedCaller.task_priority ? ` (${selectedCaller.task_priority})` : ''}
-              </dd>
-            </div>
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Task Due / Done</dt>
-              <dd className="mt-1 text-brand-ink">
-                {selectedCaller.task_completed_at
-                  ? `Completed ${new Date(selectedCaller.task_completed_at).toLocaleString()}`
-                  : selectedCaller.task_due_date || 'Not scheduled'}
-              </dd>
-            </div>
-            <div className="md:col-span-2">
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Customer Reason</dt>
-              <dd className="mt-1 whitespace-pre-wrap text-brand-ink">{selectedCaller.purpose || 'No reason captured'}</dd>
-            </div>
-            {selectedCaller.notes && (
-              <div className="md:col-span-2">
-                <dt className="font-black uppercase tracking-widest text-brand-muted">Internal Notes</dt>
-                <dd className="mt-1 whitespace-pre-wrap text-brand-ink">{selectedCaller.notes}</dd>
-              </div>
-            )}
-          </dl>
-        </div>
-      )}
-    </section>
-  )
-}
-
-function ZoomPhoneCallsPanel({
-  calls,
-  loading,
-  syncing,
-  canSync,
-  onRefresh,
-  onSync,
-  onSelect,
-}) {
-  const durationLabel = (seconds) => {
-    const value = Number(seconds)
-    if (!Number.isFinite(value) || value <= 0) return null
-    const minutes = Math.floor(value / 60)
-    const remaining = value % 60
-    return minutes ? `${minutes}m ${remaining}s` : `${remaining}s`
-  }
-
-  return (
-    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
-      <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
-        <div className="flex items-center gap-2">
-          <PhoneCall size={18} className="text-brand-accent" />
-          <h2 className="font-serif text-lg font-bold text-brand-ink">Zoom Phone Calls</h2>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl border border-brand-line bg-white px-3 py-2 text-xs font-bold text-brand-ink disabled:opacity-50"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-          {canSync && (
-            <button
-              type="button"
-              onClick={onSync}
-              disabled={syncing}
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-ink px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
-            >
-              <RefreshCw size={14} />
-              {syncing ? 'Syncing...' : 'Sync Zoom'}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
-          Loading Zoom Phone calls...
-        </div>
-      ) : calls.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
-          No imported Zoom Phone calls yet.
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {calls.map((call) => (
-            <button
-              key={call.id}
-              type="button"
-              onClick={() => onSelect(call)}
-              className="w-full rounded-2xl border border-brand-line bg-brand-bg-soft p-3 text-left transition hover:border-brand-accent/60 hover:bg-white"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-brand-ink">{call.caller_name}</p>
-                  <p className="mt-0.5 truncate text-xs text-brand-muted">
-                    {call.summary || call.result || 'Zoom Phone call'}
-                  </p>
-                </div>
-                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
-                  {call.occurred_at ? new Date(call.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-brand-muted">
-                {call.phone && <span>{call.phone}</span>}
-                <span className="font-bold text-brand-ink">{call.direction}</span>
-                {call.result && <span>{call.result}</span>}
-                {durationLabel(call.duration_seconds) && <span>{durationLabel(call.duration_seconds)}</span>}
-                {call.transcript_url && (
-                  <a
-                    href={call.transcript_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(event) => event.stopPropagation()}
-                    className="inline-flex items-center gap-1 font-bold text-brand-accent"
-                  >
-                    Transcript <ExternalLink size={11} />
-                  </a>
-                )}
-                {call.recording_url && (
-                  <a
-                    href={call.recording_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(event) => event.stopPropagation()}
-                    className="inline-flex items-center gap-1 font-bold text-brand-accent"
-                  >
-                    Recording <ExternalLink size={11} />
-                  </a>
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </section>
+    </div>
   )
 }
 
@@ -518,7 +266,7 @@ function IntakeExportPanel({
   onExport,
 }) {
   return (
-    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+    <div>
       <div className="flex items-center gap-2">
         <Download size={18} className="text-brand-accent" />
         <h2 className="font-serif text-lg font-bold text-brand-ink">Export Call Records</h2>
@@ -557,7 +305,7 @@ function IntakeExportPanel({
           {exporting ? 'Exporting...' : 'Export CSV'}
         </button>
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -591,7 +339,7 @@ function PartnerLogPanel() {
   const methodLabel = (m) => (m || '').replaceAll('_', ' ')
 
   return (
-    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+    <div>
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <RotateCcw size={18} className="text-brand-accent" />
@@ -637,7 +385,7 @@ function PartnerLogPanel() {
           ))}
         </div>
       )}
-    </section>
+    </div>
   )
 }
 
@@ -645,13 +393,9 @@ export default function IntakeDashboardPage() {
   const { user } = useAuth()
   const [q, setQ] = useState('')
   const [phone, setPhone] = useState('')
-  const [recentLimit, setRecentLimit] = useState(20)
-  const [recentCallers, setRecentCallers] = useState([])
-  const [recentLoading, setRecentLoading] = useState(false)
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
-  const [zoomPhoneCalls, setZoomPhoneCalls] = useState([])
-  const [zoomPhoneLoading, setZoomPhoneLoading] = useState(false)
   const [zoomPhoneSyncing, setZoomPhoneSyncing] = useState(false)
+  const [zoomConnected, setZoomConnected] = useState(false)
   const [exportStart, setExportStart] = useState('')
   const [exportEnd, setExportEnd] = useState('')
   const [exporting, setExporting] = useState(false)
@@ -680,34 +424,24 @@ export default function IntakeDashboardPage() {
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
 
-  const loadRecentCallers = useCallback(async (limitValue = recentLimit) => {
-    setRecentLoading(true)
-    try {
-      const data = await getRecentIntakeDashboardCallers({ limit: limitValue })
-      setRecentCallers(data.callers || [])
-    } catch {
-      setRecentCallers([])
-      setSelectedRecentCaller(null)
-    } finally {
-      setRecentLoading(false)
-    }
-  }, [recentLimit])
+  const { callers: feedCallers, loading: feedLoading, newCallIds, refresh: refreshFeed } =
+    useCallFeedPolling(20)
+  const { toasts, notify, dismiss, muted, toggleMute, soundReady } = useCallAlerts(user?.tenant_id)
 
-  useEffect(() => { loadRecentCallers(recentLimit) }, [loadRecentCallers, recentLimit])
-
-  const loadZoomPhoneCalls = useCallback(async () => {
-    setZoomPhoneLoading(true)
-    try {
-      const data = await getZoomPhoneIntakeCalls({ limit: 25 })
-      setZoomPhoneCalls(data.calls || [])
-    } catch {
-      setZoomPhoneCalls([])
-    } finally {
-      setZoomPhoneLoading(false)
-    }
+  useEffect(() => {
+    let cancelled = false
+    getZoomPhoneStatus()
+      .then((s) => { if (!cancelled) setZoomConnected(Boolean(s?.connected)) })
+      .catch(() => { if (!cancelled) setZoomConnected(false) })
+    return () => { cancelled = true }
   }, [])
 
-  useEffect(() => { loadZoomPhoneCalls() }, [loadZoomPhoneCalls])
+  // Fire alerts whenever the poll surfaces new ids.
+  useEffect(() => {
+    if (!newCallIds.length) return
+    const fresh = feedCallers.filter((c) => newCallIds.includes(c.id))
+    notify(fresh)
+  }, [newCallIds, feedCallers, notify])
 
   useEffect(() => {
     if (form.outcome !== 'create_lead' || form.task_mode !== 'partner_rotation') {
@@ -829,7 +563,7 @@ export default function IntakeDashboardPage() {
     if (item.phone) setPhone(item.phone)
   }
 
-  const selectRecentCaller = async (caller) => {
+  const selectRecentCaller = useCallback(async (caller) => {
     setSelectedRecentCaller(caller)
     const nextName = caller.caller_name || ''
     const nextPhone = caller.phone || ''
@@ -841,30 +575,16 @@ export default function IntakeDashboardPage() {
       practice_area: caller.practice_area || current.practice_area,
       purpose: caller.purpose || current.purpose,
       notes: caller.notes || current.notes,
+      source_communication_id: caller.source === 'zoom_phone' ? caller.id : current.source_communication_id,
     }))
     setMessage(nextPhone && !nextName ? 'Recent caller selected. Verify identity before relying on phone-only history.' : null)
     await runSearchFor({ query: nextName, phoneValue: nextPhone })
-  }
+  }, [])
 
-  const selectZoomPhoneCall = async (call) => {
-    const nextName = call.caller_name || ''
-    const nextPhone = call.phone || ''
-    setQ(nextName)
-    setPhone(nextPhone)
-    setForm((current) => ({
-      ...current,
-      caller_name: nextName || current.caller_name,
-      purpose: call.summary || current.purpose,
-      notes: [
-        call.result ? `Zoom result: ${call.result}` : '',
-        call.recording_url ? `Recording: ${call.recording_url}` : '',
-        call.transcript_url ? `Transcript: ${call.transcript_url}` : '',
-      ].filter(Boolean).join('\n') || current.notes,
-      source_communication_id: call.id,
-    }))
-    setMessage('Zoom Phone call selected. Review the caller and create a lead or staff task from the call capture panel.')
-    await runSearchFor({ query: nextName, phoneValue: nextPhone })
-  }
+  const selectCallById = useCallback((callId) => {
+    const caller = feedCallers.find((c) => c.id === callId)
+    if (caller) selectRecentCaller(caller)
+  }, [feedCallers, selectRecentCaller])
 
   const syncZoomPhoneCalls = async () => {
     setZoomPhoneSyncing(true)
@@ -872,7 +592,7 @@ export default function IntakeDashboardPage() {
     try {
       const result = await syncZoomPhoneIntakeCalls({ days: 7 })
       setMessage(`Zoom Phone sync imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped}.`)
-      await loadZoomPhoneCalls()
+      await refreshFeed()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Zoom Phone sync failed.')
     } finally {
@@ -957,8 +677,7 @@ export default function IntakeDashboardPage() {
       setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
       setForm((current) => ({ ...current, purpose: '', notes: '', source_communication_id: null }))
       await refreshSearchSilently()
-      await loadRecentCallers()
-      await loadZoomPhoneCalls()
+      await refreshFeed()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Failed to log call.')
     }
@@ -976,14 +695,24 @@ export default function IntakeDashboardPage() {
             </div>
             <h1 className="mt-3 font-serif text-3xl font-black text-brand-ink">Local Intake Dashboard</h1>
             <p className="mt-1 max-w-2xl text-sm text-brand-muted">
-              Search by name/history first, use phone numbers as context, and only promote qualified calls into active leads.
+              The call feed updates automatically every 15 seconds. Select a call to see its history and log or route it.
             </p>
           </div>
-          {searchData?.recommended_attorney_name && (
-            <div className="rounded-2xl border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">
-              <span className="font-bold">Prior attorney:</span> {searchData.recommended_attorney_name}
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleMute}
+              className="inline-flex items-center gap-1 rounded-full border border-brand-line bg-white px-3 py-1 text-[11px] font-bold text-brand-muted"
+            >
+              {muted ? <BellOff size={13} /> : <Bell size={13} />}
+              {muted ? 'Muted' : (soundReady ? 'Sound on' : 'Click to enable sound')}
+            </button>
+            {searchData?.recommended_attorney_name && (
+              <div className="rounded-2xl border border-brand-amber/30 bg-brand-amber/10 px-4 py-3 text-sm text-brand-ink">
+                <span className="font-bold">Prior attorney:</span> {searchData.recommended_attorney_name}
+              </div>
+            )}
+          </div>
         </div>
 
         {message && (
@@ -998,26 +727,20 @@ export default function IntakeDashboardPage() {
           </div>
         )}
 
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <div className="space-y-5">
-            <RecentCallersPanel
-              callers={recentCallers}
-              limit={recentLimit}
-              loading={recentLoading}
-              selectedCaller={selectedRecentCaller}
-              onLimitChange={setRecentLimit}
-              onSelect={selectRecentCaller}
-            />
+        <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
+          <CallFeed
+            callers={feedCallers}
+            loading={feedLoading}
+            newCallIds={newCallIds}
+            selectedId={selectedRecentCaller?.id}
+            onSelect={selectRecentCaller}
+            canSync={user?.role === 'admin' && zoomConnected}
+            syncing={zoomPhoneSyncing}
+            onSync={syncZoomPhoneCalls}
+          />
 
-            <ZoomPhoneCallsPanel
-              calls={zoomPhoneCalls}
-              loading={zoomPhoneLoading}
-              syncing={zoomPhoneSyncing}
-              canSync={user?.role === 'admin'}
-              onRefresh={loadZoomPhoneCalls}
-              onSync={syncZoomPhoneCalls}
-              onSelect={selectZoomPhoneCall}
-            />
+          <div className="space-y-5">
+            {selectedRecentCaller && <CallFacts caller={selectedRecentCaller} />}
 
             <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
               <form onSubmit={runSearch} className="grid gap-3 md:grid-cols-[1fr_220px_auto]">
@@ -1075,27 +798,14 @@ export default function IntakeDashboardPage() {
               )}
             </section>
 
-            <IntakeExportPanel
-              exportStart={exportStart}
-              exportEnd={exportEnd}
-              exporting={exporting}
-              onExportStartChange={setExportStart}
-              onExportEndChange={setExportEnd}
-              onExport={exportCalls}
-            />
-
-            <PartnerLogPanel />
-          </div>
-
-          <aside className="space-y-5">
             <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
               <div className="flex items-center gap-2">
                 <ClipboardList size={18} className="text-brand-accent" />
                 <h2 className="font-serif text-lg font-bold text-brand-ink">Call Capture</h2>
               </div>
 
-              <form onSubmit={submitCall} className="mt-4 space-y-4">
-                <div>
+              <form onSubmit={submitCall} className="mt-4 grid gap-4 lg:grid-cols-2">
+                <div className="lg:col-span-2">
                   <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Caller</label>
                   <input
                     value={form.caller_name}
@@ -1106,7 +816,7 @@ export default function IntakeDashboardPage() {
                 </div>
 
                 {phone && (
-                  <div className="rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                  <div className="lg:col-span-2 rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
                     Phone is saved on the call/lead when useful, but shared numbers like jail, court, or relatives should not drive routing by themselves.
                   </div>
                 )}
@@ -1120,27 +830,6 @@ export default function IntakeDashboardPage() {
                   >
                     {PRACTICE_AREAS.map((area) => <option key={area} value={area}>{area}</option>)}
                   </select>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Purpose</label>
-                  <textarea
-                    value={form.purpose}
-                    onChange={(e) => set('purpose', e.target.value)}
-                    rows={4}
-                    placeholder="Needs divorce attorney; no prior history"
-                    className="w-full resize-none rounded-xl border border-brand-line px-3 py-2 text-sm"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Internal Notes</label>
-                  <textarea
-                    value={form.notes}
-                    onChange={(e) => set('notes', e.target.value)}
-                    rows={2}
-                    className="w-full resize-none rounded-xl border border-brand-line px-3 py-2 text-sm"
-                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -1168,7 +857,28 @@ export default function IntakeDashboardPage() {
                   </button>
                 </div>
 
-                <div>
+                <div className="lg:col-span-2">
+                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Purpose</label>
+                  <textarea
+                    value={form.purpose}
+                    onChange={(e) => set('purpose', e.target.value)}
+                    rows={3}
+                    placeholder="Needs divorce attorney; no prior history"
+                    className="w-full resize-none rounded-xl border border-brand-line px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
+                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Internal Notes</label>
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => set('notes', e.target.value)}
+                    rows={2}
+                    className="w-full resize-none rounded-xl border border-brand-line px-3 py-2 text-sm"
+                  />
+                </div>
+
+                <div className="lg:col-span-2">
                   <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task / Routing</label>
                   <select
                     value={form.task_mode}
@@ -1197,7 +907,7 @@ export default function IntakeDashboardPage() {
                 </div>
 
                 {form.task_mode === 'specific_staff' && (
-                  <div className="space-y-3 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
+                  <div className="lg:col-span-2 space-y-3 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
                     <div>
                       <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Assign To</label>
                       <input
@@ -1262,7 +972,7 @@ export default function IntakeDashboardPage() {
                   </div>
                 )}
 
-                <label className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
+                <label className="lg:col-span-2 flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
                   <input
                     type="checkbox"
                     checked={form.qualified}
@@ -1272,7 +982,7 @@ export default function IntakeDashboardPage() {
                 </label>
 
                 {form.task_mode === 'partner_rotation' && (
-                  <label className="flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
+                  <label className="lg:col-span-2 flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
                     <input
                       type="checkbox"
                       checked={form.auto_assign}
@@ -1284,32 +994,32 @@ export default function IntakeDashboardPage() {
                 )}
 
                 {form.task_mode === 'partner_rotation' && form.outcome === 'create_lead' && assignmentAvailability?.can_assign === false && (
-                  <div className="rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                  <div className="lg:col-span-2 rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
                     Auto-assignment is off for {form.practice_area}: {assignmentAvailability.reason}. Create or enable a general rotation rule to avoid manual routing.
                   </div>
                 )}
 
                 {form.task_mode === 'partner_rotation' && form.outcome === 'create_lead' && assignmentAvailability?.can_assign === true && (
-                  <div className="rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                  <div className="lg:col-span-2 rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs leading-5 text-brand-ink">
                     Auto-assignment ready via {assignmentAvailability.rule_practice_area} rotation ({assignmentAvailability.eligible_count} eligible).
                   </div>
                 )}
 
                 {selected && (
-                  <div className="rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs text-brand-ink">
+                  <div className="lg:col-span-2 rounded-xl border border-brand-green/20 bg-brand-green/10 px-3 py-2 text-xs text-brand-ink">
                     Linked to {RESULT_LABELS[selected.result_type]}: <span className="font-bold">{selected.title}</span>
                   </div>
                 )}
 
                 {form.source_communication_id && (
-                  <div className="rounded-xl border border-brand-accent/30 bg-brand-accent/10 px-3 py-2 text-xs text-brand-ink">
-                    Linked to imported Zoom Phone call. Saving will update that call record with the selected lead/task context.
+                  <div className="lg:col-span-2 rounded-xl border border-brand-accent/30 bg-brand-accent/10 px-3 py-2 text-xs text-brand-ink">
+                    Linked to imported phone call. Saving will update that call record with the selected lead/task context.
                   </div>
                 )}
 
                 <button
                   type="submit"
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 py-3 text-sm font-bold text-white"
+                  className="lg:col-span-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 py-3 text-sm font-bold text-white"
                 >
                   {form.outcome === 'create_lead' ? <UserPlus size={16} /> : <ShieldCheck size={16} />}
                   {form.outcome === 'create_lead'
@@ -1325,15 +1035,38 @@ export default function IntakeDashboardPage() {
                 <div>
                   <h2 className="font-serif text-base font-bold text-brand-ink">MVP Boundary</h2>
                   <p className="mt-1 text-xs leading-5 text-brand-muted">
-                    Phone integrations add context to the same manual intake workflow. Reception can still log calls and route tasks when Zoom Phone is unavailable.
+                    Phone integrations add context to the same manual intake workflow. Reception can still log calls and route tasks when a phone integration is unavailable.
                   </p>
                 </div>
               </div>
             </section>
 
-            {user?.role === 'admin' && <RotationAdmin />}
-          </aside>
+            <RecordsTabs
+              tabs={[
+                {
+                  key: 'export',
+                  label: 'Call records',
+                  node: (
+                    <IntakeExportPanel
+                      exportStart={exportStart}
+                      exportEnd={exportEnd}
+                      exporting={exporting}
+                      onExportStartChange={setExportStart}
+                      onExportEndChange={setExportEnd}
+                      onExport={exportCalls}
+                    />
+                  ),
+                },
+                { key: 'partner', label: 'Partner log', node: <PartnerLogPanel /> },
+                ...(user?.role === 'admin'
+                  ? [{ key: 'rotation', label: 'Rotation', node: <RotationAdmin /> }]
+                  : []),
+              ]}
+            />
+          </div>
         </div>
+
+        <NewCallToasts toasts={toasts} onView={selectCallById} onDismiss={dismiss} />
       </div>
     </div>
   )
