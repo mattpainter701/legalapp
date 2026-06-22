@@ -107,7 +107,11 @@ async def _get_or_create_credential(
 
 
 async def get_zoom_phone_token(db: AsyncSession, tenant_id: str) -> str | None:
-    """Return a tenant Zoom Phone S2S token, refreshing account_credentials as needed."""
+    """Return a tenant Zoom Phone token.
+
+    Prefer a customer admin OAuth grant stored as ``zoom_phone``. The S2S/env
+    path remains as an operator fallback while the portal grant rolls out.
+    """
     cred = await _get_or_create_credential(db, tenant_id)
     if not cred:
         return None
@@ -116,6 +120,38 @@ async def get_zoom_phone_token(db: AsyncSession, tenant_id: str) -> str | None:
             return decrypt_token(cred.encrypted_access_token)
         except Exception:
             logger.warning("Zoom Phone token decrypt failed; refreshing")
+
+    if cred.encrypted_refresh_token:
+        refresh_token = decrypt_token(cred.encrypted_refresh_token)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://zoom.us/oauth/token",
+                auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+                data={
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "Zoom Phone OAuth refresh failed: %s %s",
+                resp.status_code,
+                resp.text[:300],
+            )
+            return None
+
+        data = resp.json()
+        access_token = data.get("access_token")
+        if not access_token:
+            return None
+        new_refresh_token = data.get("refresh_token")
+        cred.encrypted_access_token = encrypt_token(access_token)
+        if new_refresh_token:
+            cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
+        cred.token_expires_at = _expires_at(int(data.get("expires_in") or 3600))
+        cred.scopes = data.get("scope") or cred.scopes or settings.ZOOM_PHONE_SCOPES
+        await db.flush()
+        return access_token
 
     client_id = settings.ZOOM_PHONE_CLIENT_ID or settings.ZOOM_CLIENT_ID
     client_secret = settings.ZOOM_PHONE_CLIENT_SECRET or settings.ZOOM_CLIENT_SECRET
@@ -150,6 +186,47 @@ async def get_zoom_phone_token(db: AsyncSession, tenant_id: str) -> str | None:
     cred.service_account_email = account_id
     await db.flush()
     return access_token
+
+
+def _zoom_phone_error(resp: httpx.Response) -> str:
+    try:
+        body = resp.json()
+        code = body.get("code")
+        message = body.get("message") or "Zoom Phone request failed."
+        if code == 2031:
+            return "Zoom Phone is not enabled for this Zoom account."
+        if code == 104:
+            return f"Zoom Phone token is missing required scopes: {message}"
+        return f"{message} (Zoom code {code})" if code else message
+    except Exception:
+        return f"Zoom Phone request failed (HTTP {resp.status_code})."
+
+
+async def probe_zoom_phone_connection(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Probe the minimal Call History API used by intake sync."""
+    token = await get_zoom_phone_token(db, tenant_id)
+    if not token:
+        raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            f"{ZOOM_BASE}/phone/call_history",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"from": today, "to": today, "page_size": 1},
+        )
+    if resp.status_code != 200:
+        raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
+    data = resp.json()
+    return {
+        "ok": True,
+        "sample_count": len(data.get("call_history") or data.get("call_logs") or []),
+        "next_page_token": data.get("next_page_token") or "",
+    }
 
 
 def normalize_zoom_phone_record(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -295,11 +372,10 @@ async def fetch_zoom_phone_call_history(
     """Fetch recent account call history from Zoom Phone."""
     token = await get_zoom_phone_token(db, tenant_id)
     if not token:
-        raise ZoomPhoneIntegrationError("Zoom Phone Server-to-Server credentials are not configured.")
+        raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
 
     since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 31)))
-    account_id = settings.ZOOM_PHONE_ACCOUNT_ID
-    path = f"/accounts/{account_id}/phone/call_history" if account_id else "/phone/call_history"
+    path = "/phone/call_history"
     records: list[dict[str, Any]] = []
     next_page_token = ""
 
@@ -316,9 +392,7 @@ async def fetch_zoom_phone_call_history(
                 },
             )
             if resp.status_code != 200:
-                raise ZoomPhoneIntegrationError(
-                    f"Zoom Phone call history failed (HTTP {resp.status_code})."
-                )
+                raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
             data = resp.json()
             page_records = data.get("call_history") or data.get("call_logs") or data.get("calls") or []
             records.extend(page_records)

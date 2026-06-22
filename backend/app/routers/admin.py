@@ -227,6 +227,10 @@ async def integration_readiness(
             settings.ZOOM_REDIRECT_URI
             or f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/zoom/callback"
         ],
+        "zoom_phone": [
+            settings.ZOOM_PHONE_REDIRECT_URI
+            or f"{settings.BACKEND_URL.rstrip('/')}/api/integrations/zoom-phone/callback"
+        ],
     }
     env_keys = [
         "FRONTEND_URL",
@@ -239,6 +243,7 @@ async def integration_readiness(
         "ZOOM_CLIENT_ID",
         "ZOOM_CLIENT_SECRET",
         "ZOOM_REDIRECT_URI",
+        "ZOOM_PHONE_REDIRECT_URI",
         "TEAMS_APP_ID",
     ]
     env_status = {

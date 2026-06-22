@@ -1,22 +1,29 @@
 import React, { useEffect, useState } from 'react'
 import {
+  connectZoomPhoneIntegration,
   connectZoomIntegration,
+  disconnectZoomPhoneIntegration,
   disconnectZoomIntegration,
   getIntegrationReadiness,
+  getZoomPhoneStatus,
   getZoomStatus,
+  testZoomPhoneIntegration,
 } from '../api'
 
 const ZOOM_ENV_KEYS = new Set([
   'ZOOM_CLIENT_ID',
   'ZOOM_CLIENT_SECRET',
   'ZOOM_REDIRECT_URI',
+  'ZOOM_PHONE_REDIRECT_URI',
 ])
 
 export default function ZoomPanel() {
   const [status, setStatus] = useState(null)
+  const [phoneStatus, setPhoneStatus] = useState(null)
   const [readiness, setReadiness] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [phoneBusy, setPhoneBusy] = useState(false)
   const [flash, setFlash] = useState(null)
 
   const showFlash = (text, type = 'success') => {
@@ -25,11 +32,13 @@ export default function ZoomPanel() {
   }
 
   const loadPanel = async () => {
-    const [zoomData, readinessData] = await Promise.all([
+    const [zoomData, zoomPhoneData, readinessData] = await Promise.all([
       getZoomStatus().catch(() => ({ configured: false, connected: false })),
+      getZoomPhoneStatus().catch(() => ({ configured: false, connected: false, status: 'not_configured' })),
       getIntegrationReadiness().catch(() => null),
     ])
     setStatus(zoomData)
+    setPhoneStatus(zoomPhoneData)
     setReadiness(readinessData)
   }
 
@@ -52,6 +61,32 @@ export default function ZoomPanel() {
     }
   }
 
+  const handlePhoneTest = async () => {
+    setPhoneBusy(true)
+    try {
+      const result = await testZoomPhoneIntegration()
+      await loadPanel()
+      showFlash(`Zoom Phone connection works. Sample calls found: ${result.sample_count ?? 0}.`)
+    } catch (err) {
+      showFlash(err?.response?.data?.detail || 'Zoom Phone connection test failed.', 'error')
+    } finally {
+      setPhoneBusy(false)
+    }
+  }
+
+  const handlePhoneDisconnect = async () => {
+    setPhoneBusy(true)
+    try {
+      await disconnectZoomPhoneIntegration()
+      await loadPanel()
+      showFlash('Zoom Phone disconnected.')
+    } catch (err) {
+      showFlash(err?.response?.data?.detail || 'Failed to disconnect Zoom Phone.', 'error')
+    } finally {
+      setPhoneBusy(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -62,9 +97,14 @@ export default function ZoomPanel() {
 
   const configured = Boolean(status?.configured)
   const connected = Boolean(status?.connected)
+  const phoneConfigured = Boolean(phoneStatus?.configured)
+  const phoneConnected = Boolean(phoneStatus?.connected)
   const envEntries = Object.entries(readiness?.env || {})
     .filter(([key]) => ZOOM_ENV_KEYS.has(key))
-  const zoomRedirects = readiness?.expected_redirect_uris?.zoom || []
+  const zoomRedirects = [
+    ...(readiness?.expected_redirect_uris?.zoom || []),
+    ...(readiness?.expected_redirect_uris?.zoom_phone || []),
+  ]
 
   if (!configured) {
     return (
@@ -92,6 +132,73 @@ export default function ZoomPanel() {
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-amber-500'}`} />
           {connected ? 'Zoom connected' : 'Zoom ready to connect'}
         </span>
+        <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
+          phoneConnected && phoneStatus?.missing_scopes?.length === 0
+            ? 'bg-green-100 text-green-700 border-green-200'
+            : phoneConnected
+              ? 'bg-amber-100 text-amber-700 border-amber-200'
+              : 'bg-brand-bg-soft text-brand-muted border-brand-line'
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${
+            phoneConnected && phoneStatus?.missing_scopes?.length === 0 ? 'bg-green-500' : phoneConnected ? 'bg-amber-500' : 'bg-brand-muted'
+          }`} />
+          {phoneConnected ? 'Zoom Phone connected' : 'Zoom Phone not connected'}
+        </span>
+      </div>
+
+      <div className="bg-brand-surface border border-brand-line rounded-xl p-6 max-w-3xl">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="text-brand-ink font-sans text-base font-bold mb-1">Zoom Phone intake</h3>
+            <p className="text-brand-ink-2 font-sans text-sm">
+              Connect a Zoom account admin so Clarity can import Phone call history into the intake dashboard.
+            </p>
+            {phoneConnected && (
+              <p className="text-xs text-brand-ink-2 font-sans mt-3">
+                Connected
+                {phoneStatus.expires_at ? ` - token expires ${new Date(phoneStatus.expires_at).toLocaleString()}` : ''}
+              </p>
+            )}
+            {phoneStatus?.missing_scopes?.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Missing Zoom Phone scopes: {phoneStatus.missing_scopes.join(', ')}
+              </div>
+            )}
+            {!phoneConfigured && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Zoom OAuth client credentials are not configured on the server.
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {phoneConnected ? (
+              <>
+                <button
+                  onClick={handlePhoneTest}
+                  disabled={phoneBusy}
+                  className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-medium rounded-lg hover:bg-brand-ink/90 transition-colors disabled:opacity-50"
+                >
+                  {phoneBusy ? 'Testing...' : 'Test Phone'}
+                </button>
+                <button
+                  onClick={handlePhoneDisconnect}
+                  disabled={phoneBusy}
+                  className="px-4 py-2 border border-brand-line text-brand-ink font-sans text-xs font-medium rounded-lg hover:bg-brand-bg-soft transition-colors disabled:opacity-50"
+                >
+                  Disconnect
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={connectZoomPhoneIntegration}
+                disabled={phoneBusy || !phoneConfigured}
+                className="px-4 py-2 bg-brand-ink text-white font-sans text-xs font-medium rounded-lg hover:bg-brand-ink/90 transition-colors disabled:opacity-50"
+              >
+                Connect Zoom Phone
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6 max-w-3xl">

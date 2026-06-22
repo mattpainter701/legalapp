@@ -391,6 +391,15 @@ export const connectZoomIntegration = (intent = 'user') => {
 }
 export const disconnectZoomIntegration = () =>
   api.post('/integrations/zoom/disconnect').then((r) => r.data)
+export const getZoomPhoneStatus = () =>
+  api.get('/integrations/zoom-phone/status').then((r) => r.data)
+export const connectZoomPhoneIntegration = () => {
+  window.location.href = `${BASE_URL}/integrations/zoom-phone/connect`
+}
+export const testZoomPhoneIntegration = () =>
+  api.post('/integrations/zoom-phone/test').then((r) => r.data)
+export const disconnectZoomPhoneIntegration = () =>
+  api.post('/integrations/zoom-phone/disconnect').then((r) => r.data)
 
 // Customer LLM
 export const configureCustomerLLM = (config) =>

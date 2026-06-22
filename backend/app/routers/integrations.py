@@ -23,6 +23,11 @@ from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
 from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import encrypt_token
+from app.services.zoom_phone import (
+    ZOOM_PHONE_PROVIDER,
+    ZoomPhoneIntegrationError,
+    probe_zoom_phone_connection,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -137,6 +142,26 @@ def _zoom_redirect_uri() -> str:
     return (
         settings.ZOOM_REDIRECT_URI
         or f"{settings.BACKEND_URL}/api/integrations/zoom/callback"
+    )
+
+
+def _zoom_phone_redirect_uri() -> str:
+    return (
+        settings.ZOOM_PHONE_REDIRECT_URI
+        or f"{settings.BACKEND_URL}/api/integrations/zoom-phone/callback"
+    )
+
+
+def _missing_scopes(provider: str, granted: str | None, required: str) -> list[str]:
+    if not required:
+        return []
+    if not granted:
+        return required.split()
+    granted_set = set(granted.split())
+    return sorted(
+        scope
+        for scope in required.split()
+        if not _scope_is_granted(scope, granted_set, provider)
     )
 
 
@@ -644,6 +669,117 @@ async def zoom_callback(
     return await _post_connect_redirect(db, tenant_id, "zoom")
 
 
+@router.get("/zoom-phone/connect")
+async def zoom_phone_connect(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if not settings.ZOOM_CLIENT_ID or not settings.ZOOM_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="Zoom OAuth not configured")
+
+    state = secrets.token_urlsafe(32)
+    await _save_state(
+        request,
+        state,
+        {
+            "intent": "admin",
+            "provider": ZOOM_PHONE_PROVIDER,
+            "user_id": str(user.id),
+            "tenant_id": str(user.tenant_id),
+            "role": user.role,
+        },
+    )
+
+    authorize_url = "https://zoom.us/oauth/authorize?" + urlencode(
+        {
+            "response_type": "code",
+            "client_id": settings.ZOOM_CLIENT_ID,
+            "redirect_uri": _zoom_phone_redirect_uri(),
+            "state": state,
+        }
+    )
+    return RedirectResponse(authorize_url)
+
+
+@router.get("/zoom-phone/callback")
+async def zoom_phone_callback(
+    code: str,
+    state: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    valid, meta = await _consume_state(request, state)
+    if not valid:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "invalid_state")
+    user_id, tenant_id = _require_state_user(meta, "admin")
+    if meta.get("provider") != ZOOM_PHONE_PROVIDER:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "invalid_state")
+    await set_tenant_context(db, tenant_id)
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://zoom.us/oauth/token",
+            auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _zoom_phone_redirect_uri(),
+            },
+        )
+    if token_resp.status_code != 200:
+        logger.warning(
+            "Zoom Phone token exchange failed: %s %s",
+            token_resp.status_code,
+            token_resp.text[:300],
+        )
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "token_exchange_failed")
+
+    token_data = token_resp.json()
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in", 3600)
+    scope_str = token_data.get("scope") or settings.ZOOM_PHONE_SCOPES
+    if not access_token:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "no_access_token")
+
+    result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == tenant_id,
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        row.encrypted_access_token = encrypt_token(access_token)
+        row.encrypted_refresh_token = (
+            encrypt_token(refresh_token) if refresh_token else None
+        )
+        row.token_expires_at = _expires_at(expires_in)
+        row.scopes = scope_str
+        row.is_active = True
+        row.granted_by_user_id = uuid.UUID(user_id)
+        row.service_account_email = None
+    else:
+        db.add(
+            TenantCredential(
+                tenant_id=uuid.UUID(tenant_id),
+                provider=ZOOM_PHONE_PROVIDER,
+                encrypted_access_token=encrypt_token(access_token),
+                encrypted_refresh_token=encrypt_token(refresh_token)
+                if refresh_token
+                else None,
+                token_expires_at=_expires_at(expires_in),
+                scopes=scope_str,
+                granted_by_user_id=uuid.UUID(user_id),
+            )
+        )
+    await db.commit()
+    return await _post_connect_redirect(db, tenant_id, ZOOM_PHONE_PROVIDER)
+
+
 # ── Onboarding hook ─────────────────────────────────────────────────────
 
 
@@ -767,7 +903,8 @@ async def _post_connect_redirect(
 
     base = settings.FRONTEND_URL.rstrip("/")
     if completed:
-        target = f"{base}/admin?tab=cloud-search&connected={provider}"
+        tab = "zoom" if provider in {"zoom", ZOOM_PHONE_PROVIDER} else "cloud-search"
+        target = f"{base}/admin?tab={tab}&connected={provider}"
     else:
         target = f"{base}/onboarding?connected={provider}"
     return RedirectResponse(target, status_code=302)
@@ -985,6 +1122,90 @@ async def zoom_status(
         else None,
         "scopes": row.scopes.split() if row and row.scopes else [],
     }
+
+
+@router.get("/zoom-phone/status")
+async def zoom_phone_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+            TenantCredential.is_active,
+        )
+    )
+    row = result.scalar_one_or_none()
+    missing = _missing_scopes(
+        "zoom",
+        row.scopes if row else None,
+        settings.ZOOM_PHONE_SCOPES,
+    )
+    configured = bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET)
+    connected = bool(row)
+    return {
+        "configured": configured,
+        "connected": connected,
+        "provider": ZOOM_PHONE_PROVIDER,
+        "required_scopes": settings.ZOOM_PHONE_SCOPES.split(),
+        "missing_scopes": missing,
+        "scopes": row.scopes.split() if row and row.scopes else [],
+        "expires_at": row.token_expires_at.isoformat()
+        if row and row.token_expires_at
+        else None,
+        "status": (
+            "not_configured"
+            if not configured
+            else "not_connected"
+            if not connected
+            else "missing_scopes"
+            if missing
+            else "connected"
+        ),
+    }
+
+
+@router.post("/zoom-phone/test")
+async def zoom_phone_test(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    try:
+        result = await probe_zoom_phone_connection(db, tenant_id=tenant_id)
+        await db.commit()
+        return {"status": "ok", **result}
+    except ZoomPhoneIntegrationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/zoom-phone/disconnect")
+async def zoom_phone_disconnect(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_current_user(request, db)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = str(user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+    await db.execute(
+        delete(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+        )
+    )
+    await db.commit()
+    return {"status": "disconnected", "provider": ZOOM_PHONE_PROVIDER}
 
 
 @router.post("/zoom/disconnect")

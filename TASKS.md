@@ -10,21 +10,21 @@
 - [x] Add focused backend coverage for dedupe and intake handoff behavior; local DB execution was blocked by unavailable Postgres, so compile/build/normalizer probes were run locally
 - [x] Verify and deploy to production
 
-Follow-up: add Zoom webhook CRC/signature handling so real-time call-element events feed the same importer; current production path is admin-triggered Call History sync.
+Follow-up: add Zoom webhook CRC/signature handling so real-time call-element events feed the same importer; current production path is admin-triggered Call History sync after a tenant admin grants Zoom Phone OAuth.
 
 ---
 
-## Zoom Phone Admin OAuth Grant — P1 Backlog
+## Zoom Phone Admin OAuth Grant — P1 Backlog (DONE)
 
 **Goal:** Replace operator-only `.env` setup with a customer admin OAuth grant in the Clarity portal, matching the Microsoft/Google cloud integration pattern. Clarity owns the Zoom OAuth app/client; the customer admin clicks Connect, approves Zoom Phone scopes, and we store the returned refresh token encrypted per tenant.
 
-- [ ] Add a Zoom Phone Connect action in the Admin integrations area that starts Zoom OAuth `authorization_code` flow with account/admin Phone scopes
-- [ ] Store tenant-level Zoom Phone refresh/access tokens in `TenantCredential` under a distinct provider such as `zoom_phone`, separate from the existing Zoom meetings integration
-- [ ] Update the Zoom Phone importer to prefer the tenant OAuth token and keep the current env/S2S fallback only as an operator escape hatch during transition
-- [ ] Add a "Test Zoom Phone connection" action that refreshes the OAuth token and probes a minimal Call History request without importing data
-- [ ] Show setup status in the Zoom Phone Calls panel and Admin integrations area: not configured, connected, missing scopes, Zoom Phone not enabled, rate limited, token refresh failure, or auth revoked
-- [ ] Document customer setup steps as "admin grants Clarity Zoom Phone access" rather than asking customers to create their own Zoom app credentials
-- [ ] Confirm current Zoom requirements for account-level/admin OAuth scopes before implementation; do not rely on the meeting-only Zoom OAuth scopes already in the app
+- [x] Add a Zoom Phone Connect action in the Admin integrations area that starts Zoom OAuth `authorization_code` flow with account/admin Phone scopes
+- [x] Store tenant-level Zoom Phone refresh/access tokens in `TenantCredential` under a distinct provider such as `zoom_phone`, separate from the existing Zoom meetings integration
+- [x] Update the Zoom Phone importer to prefer the tenant OAuth token and keep the current env/S2S fallback only as an operator escape hatch during transition
+- [x] Add a "Test Zoom Phone connection" action that refreshes the OAuth token and probes a minimal Call History request without importing data
+- [x] Show setup status in the Zoom Phone Calls panel and Admin integrations area: not configured, connected, missing scopes, Zoom Phone not enabled, rate limited, token refresh failure, or auth revoked
+- [x] Document customer setup steps as "admin grants Clarity Zoom Phone access" rather than asking customers to create their own Zoom app credentials
+- [x] Confirm current Zoom requirements for account-level/admin OAuth scopes before implementation; do not rely on the meeting-only Zoom OAuth scopes already in the app
 
 ---
 

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     ZOOM_CLIENT_SECRET: str = ""
     ZOOM_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
     ZOOM_WEBHOOK_SECRET_TOKEN: str = ""
+    ZOOM_PHONE_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom-phone/callback
     # Optional Zoom Phone Server-to-Server OAuth app. The account ID is
     # tenant-specific in multi-tenant installs; this default is for a single
     # customer deployment until the admin credential UI lands.
