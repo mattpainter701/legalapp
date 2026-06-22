@@ -90,6 +90,8 @@ async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenan
     # upsell is handled by locked-nav teasers instead.
     assert body["enabled_modules"] == ["intake-dashboard"]
     assert body["default_route"] == "/intake/dashboard"
+    assert body["plan"] == "intake-only"
+    assert body["upsell_target"] == "full-platform"
 
 
 @pytest.mark.asyncio

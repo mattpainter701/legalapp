@@ -62,5 +62,7 @@ class UserInfo(BaseModel):
     billing_tier: str
     enabled_modules: list[str] = []
     default_route: str = "/matters"
+    plan: str = "full-platform"
+    upsell_target: Optional[str] = None
 
     model_config = {"from_attributes": True}

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
-from app.services.module_visibility import resolve_enabled_modules
+from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
@@ -1331,6 +1331,7 @@ async def get_me(
     enabled_modules, default_route = await resolve_enabled_modules(
         db, user.tenant_id, user=user
     )
+    plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),
@@ -1344,6 +1345,8 @@ async def get_me(
         billing_tier=user.tenant.billing_tier if user.tenant else "payg",
         enabled_modules=enabled_modules,
         default_route=default_route,
+        plan=plan_id,
+        upsell_target=upsell_target,
     )
 
 
