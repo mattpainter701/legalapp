@@ -11,6 +11,7 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.database import engine
 from app.middleware.tenant import TenantMiddleware
+from app.middleware.module_guard import ModuleGuardMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.access_log import ApiAccessLogMiddleware
 from app.routers.auth import router as auth_router
@@ -237,6 +238,8 @@ app.add_middleware(
 # Tenant middleware (must come after CORS)
 # ─────────────────────────────────────────────────────
 app.add_middleware(TenantMiddleware)
+
+app.add_middleware(ModuleGuardMiddleware)  # fail-closed plan/module enforcement
 
 app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
 

@@ -158,7 +158,9 @@ def _verify_password(password: str, password_hash: str) -> bool:
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
 
-def _create_access_token(user: User, tenant: Tenant) -> str:
+def _create_access_token(
+    user: User, tenant: Tenant, plan_id: str = "full-platform"
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user.id),
@@ -166,11 +168,20 @@ def _create_access_token(user: User, tenant: Tenant) -> str:
         "role": user.role,
         "email": user.email,
         "billing_tier": tenant.billing_tier,
+        "plan": plan_id,
         "iat": now,
         "jti": str(uuid.uuid4()),
         "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+async def _issue_access_token(db: AsyncSession, user: User, tenant: Tenant) -> str:
+    """Resolve the tenant's plan and mint an access token carrying the plan claim."""
+    from app.services.module_visibility import resolve_plan_meta
+
+    plan_id, _ = await resolve_plan_meta(db, user.tenant_id)
+    return _create_access_token(user, tenant, plan_id)
 
 
 # ── Cookie + refresh-token helpers ─────────────────────────────────────────────
@@ -581,7 +592,7 @@ async def microsoft_callback(
             )
         await ensure_stripe_customer(tenant, db)
 
-    jwt_token = _create_access_token(user, tenant)
+    jwt_token = await _issue_access_token(db, user, tenant)
     callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
         url=f"{settings.FRONTEND_URL}/auth/callback?code={callback_code}"
@@ -806,7 +817,7 @@ async def google_callback(
             )
         await ensure_stripe_customer(tenant, db)
 
-    jwt_token = _create_access_token(user, tenant)
+    jwt_token = await _issue_access_token(db, user, tenant)
     callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
         url=f"{settings.FRONTEND_URL}/auth/callback?code={callback_code}"
@@ -916,7 +927,7 @@ async def register(
     await db.refresh(user)
     await db.refresh(tenant)
 
-    jwt_token = _create_access_token(user, tenant)
+    jwt_token = await _issue_access_token(db, user, tenant)
     refresh_token = await _create_refresh_token(request, user)
     _set_auth_cookies(response, jwt_token, refresh_token)
     return TokenResponse(
@@ -955,7 +966,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     tenant = user.tenant
-    jwt_token = _create_access_token(user, tenant)
+    jwt_token = await _issue_access_token(db, user, tenant)
     refresh_token = await _create_refresh_token(request, user)
 
     # Set hardened httpOnly access + refresh cookies.
@@ -1215,7 +1226,7 @@ async def refresh(
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
     tenant = user.tenant
-    access_token = _create_access_token(user, tenant)
+    access_token = await _issue_access_token(db, user, tenant)
     new_refresh = await _create_refresh_token(request, user, family=family)
     _set_auth_cookies(response, access_token, new_refresh)
 
@@ -1318,7 +1329,9 @@ async def get_calendar_providers(
     login_provider = user.oauth_provider if user.oauth_provider in providers else None
     if not login_provider and user.oauth_provider in ("microsoft", "google"):
         login_provider = user.oauth_provider
-    connect_provider = login_provider or (tenant_providers[0] if tenant_providers else None)
+    connect_provider = login_provider or (
+        tenant_providers[0] if tenant_providers else None
+    )
 
     return {
         "providers": providers,
