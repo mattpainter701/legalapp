@@ -1,10 +1,11 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  Mail, Shield, Server, Rocket, PhoneCall,
+  Mail, Shield, Server, Rocket, PhoneCall, Lock,
 } from 'lucide-react'
+import UpgradeModal from './UpgradeModal'
 
 const NAV_GROUPS = [
   {
@@ -59,6 +60,8 @@ export default function Sidebar({
 }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const isLimited = Boolean(user?.upsell_target)
 
   const isActive = (path) => {
     if (path === '/intake') return pathname === '/intake'
@@ -75,11 +78,18 @@ export default function Sidebar({
     (g) => (!g.adminOnly || user?.role === 'admin') && (!g.financeOnly || hasFinanceAccess)
   ).map((group) => {
     const enabled = user?.enabled_modules
-    const items = group.items.filter((item) => {
-      if (item.adminOnly && user?.role !== 'admin') return false
-      if (!item.module || !Array.isArray(enabled) || enabled.length === 0) return true
-      return enabled.includes(item.module)
-    })
+    const items = group.items.map((item) => {
+      if (item.adminOnly && user?.role !== 'admin') return null
+      const moduleOk =
+        !item.module ||
+        !Array.isArray(enabled) ||
+        enabled.length === 0 ||
+        enabled.includes(item.module)
+      if (moduleOk) return item
+      // On a limited plan, show disabled modules as locked upsell teasers
+      // instead of hiding them. On full plans, hide as before.
+      return isLimited ? { ...item, locked: true } : null
+    }).filter(Boolean)
     return { ...group, items }
   }).filter((group) => group.items.length > 0)
 
@@ -122,8 +132,22 @@ export default function Sidebar({
                 </div>
               )}
               <div className="flex flex-col gap-0.5">
-                {group.items.map(({ path, label, icon: Icon, primary }) => {
+                {group.items.map(({ path, label, icon: Icon, primary, locked }) => {
                   const active = isActive(path)
+                  if (locked) {
+                    return (
+                      <button
+                        key={path}
+                        onClick={() => setUpgradeOpen(true)}
+                        title="Upgrade to unlock"
+                        className="sidebar-item w-full rounded sidebar-item-inactive opacity-50 hover:opacity-90"
+                      >
+                        <Icon className="w-4 h-4" />
+                        <span className="flex-1 text-left">{label}</span>
+                        <Lock className="w-3 h-3" />
+                      </button>
+                    )
+                  }
                   if (primary) {
                     return (
                       <button
@@ -183,6 +207,8 @@ export default function Sidebar({
           </button>
         </div>
       </div>{/* end sidebar panel */}
+
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
     </>
   )
 }

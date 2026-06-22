@@ -17,6 +17,8 @@ import {
   downloadIntakeDashboardCallsCsv,
   getIntakeAssignmentAvailability,
   getRecentIntakeDashboardCallers,
+  getPartnerLog,
+  downloadPartnerLogCsv,
   getRotationRules,
   searchIntakeDashboard,
   searchUsers,
@@ -443,6 +445,86 @@ function IntakeExportPanel({
   )
 }
 
+function PartnerLogPanel() {
+  const [entries, setEntries] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    getPartnerLog({ limit: 25 })
+      .then((data) => { if (!cancelled) setEntries(data.entries || []) })
+      .catch(() => { if (!cancelled) setEntries([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const exportLog = async () => {
+    setExporting(true)
+    try {
+      const blob = await downloadPartnerLogCsv({})
+      triggerBlobDownload(blob, 'partner-log.csv')
+    } catch {
+      /* surfaced via empty state; export is best-effort */
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const methodLabel = (m) => (m || '').replaceAll('_', ' ')
+
+  return (
+    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <RotateCcw size={18} className="text-brand-accent" />
+          <h2 className="font-serif text-lg font-bold text-brand-ink">Partner Log</h2>
+        </div>
+        <button
+          type="button"
+          onClick={exportLog}
+          disabled={exporting}
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-ink px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+        >
+          <Download size={14} />
+          {exporting ? 'Exporting…' : 'Export CSV'}
+        </button>
+      </div>
+      <p className="mb-3 text-xs text-brand-muted">
+        Every partner/staff assignment, captured for finance and accountability. Export for Tabs3 reconciliation.
+      </p>
+      {loading ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          Loading partner log…
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          No assignments recorded yet.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {entries.map((entry) => (
+            <div key={entry.id} className="rounded-2xl border border-brand-line bg-brand-bg-soft px-3 py-2">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-bold text-brand-ink">{entry.assigned_to_name || 'Unassigned'}</p>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
+                  {entry.created_at ? new Date(entry.created_at).toLocaleString() : ''}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-brand-muted">
+                <span className="font-bold text-brand-ink">{methodLabel(entry.assignment_method)}</span>
+                {entry.practice_area && <span>{entry.practice_area}</span>}
+                {entry.assigned_by_name && <span>by {entry.assigned_by_name}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function IntakeDashboardPage() {
   const { user } = useAuth()
   const [q, setQ] = useState('')
@@ -821,6 +903,8 @@ export default function IntakeDashboardPage() {
               onExportEndChange={setExportEnd}
               onExport={exportCalls}
             />
+
+            <PartnerLogPanel />
           </div>
 
           <aside className="space-y-5">

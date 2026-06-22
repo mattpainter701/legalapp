@@ -1000,6 +1000,17 @@ export const getRotationRules = () =>
 export const updateRotationRules = (rules) =>
   api.put('/intake/dashboard/rotation-rules', { rules }).then(r => r.data)
 
+export const getPartnerLog = (params = {}) =>
+  api.get('/intake/dashboard/partner-log', { params }).then(r => r.data)
+
+export const downloadPartnerLogCsv = (params = {}) =>
+  api.get('/intake/dashboard/partner-log/export', { params, responseType: 'blob' }).then(r => r.data)
+
+// ── Plan / Upsell ───────────────────────────────────────────────────────────
+
+export const requestPlanUpgrade = (data = {}) =>
+  api.post('/plan/upgrade-request', data).then(r => r.data)
+
 // ── Matter Parties ──────────────────────────────────────────────────────────
 
 export const getMatterParties = (matterId) =>
