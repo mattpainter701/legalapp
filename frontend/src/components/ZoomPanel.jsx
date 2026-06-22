@@ -5,7 +5,6 @@ import {
   PhoneCall,
   PlugZap,
   RefreshCw,
-  Settings2,
   ShieldCheck,
   Unplug,
   Video,
@@ -16,18 +15,10 @@ import {
   connectZoomIntegration,
   disconnectZoomPhoneIntegration,
   disconnectZoomIntegration,
-  getIntegrationReadiness,
   getZoomPhoneStatus,
   getZoomStatus,
   testZoomPhoneIntegration,
 } from '../api'
-
-const ZOOM_ENV_KEYS = new Set([
-  'ZOOM_CLIENT_ID',
-  'ZOOM_CLIENT_SECRET',
-  'ZOOM_REDIRECT_URI',
-  'ZOOM_PHONE_REDIRECT_URI',
-])
 
 const PHONE_SCOPE_LABELS = {
   'phone:read:list_call_logs:admin': 'Read account call history',
@@ -37,17 +28,9 @@ const PHONE_SCOPE_LABELS = {
   'phone:read:recording_transcript:admin': 'Read recording transcripts',
 }
 
-const ENV_LABELS = {
-  ZOOM_CLIENT_ID: 'Zoom OAuth client ID',
-  ZOOM_CLIENT_SECRET: 'Zoom OAuth client secret',
-  ZOOM_REDIRECT_URI: 'Meetings callback',
-  ZOOM_PHONE_REDIRECT_URI: 'Phone intake callback',
-}
-
 export default function ZoomPanel() {
   const [status, setStatus] = useState(null)
   const [phoneStatus, setPhoneStatus] = useState(null)
-  const [readiness, setReadiness] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [phoneBusy, setPhoneBusy] = useState(false)
@@ -59,14 +42,12 @@ export default function ZoomPanel() {
   }
 
   const loadPanel = async () => {
-    const [zoomData, zoomPhoneData, readinessData] = await Promise.all([
+    const [zoomData, zoomPhoneData] = await Promise.all([
       getZoomStatus().catch(() => ({ configured: false, connected: false })),
       getZoomPhoneStatus().catch(() => ({ configured: false, connected: false, status: 'not_configured' })),
-      getIntegrationReadiness().catch(() => null),
     ])
     setStatus(zoomData)
     setPhoneStatus(zoomPhoneData)
-    setReadiness(readinessData)
   }
 
   useEffect(() => {
@@ -127,12 +108,6 @@ export default function ZoomPanel() {
   const phoneConfigured = Boolean(phoneStatus?.configured)
   const phoneConnected = Boolean(phoneStatus?.connected)
   const phoneMissingScopes = phoneStatus?.missing_scopes || []
-  const envEntries = Object.entries(readiness?.env || {})
-    .filter(([key]) => ZOOM_ENV_KEYS.has(key))
-  const zoomRedirects = [
-    ...(readiness?.expected_redirect_uris?.zoom || []),
-    ...(readiness?.expected_redirect_uris?.zoom_phone || []),
-  ]
 
   return (
     <div className="space-y-6">
@@ -150,7 +125,7 @@ export default function ZoomPanel() {
           <div className="flex flex-wrap gap-2">
             <StatusBadge
               status={phoneConnected && phoneMissingScopes.length === 0 ? 'healthy' : phoneConfigured ? 'attention' : 'missing'}
-              label={phoneConnected ? 'Phone grant connected' : phoneConfigured ? 'Phone ready to connect' : 'Phone setup required'}
+              label={phoneConnected ? 'Phone grant connected' : phoneConfigured ? 'Phone ready to connect' : 'Phone app pending'}
             />
             <StatusBadge
               status={connected ? 'healthy' : configured ? 'attention' : 'neutral'}
@@ -191,9 +166,9 @@ export default function ZoomPanel() {
         >
           {!phoneConfigured && (
             <SetupNotice
-              tone="warning"
-              title="Clarity Zoom app setup required"
-              body="Add the shared Zoom OAuth client ID and secret before customer admins can grant Phone access."
+              tone="info"
+              title="Zoom Phone is waiting on platform setup"
+              body="Once Clarity enables the shared Zoom app, your Zoom account admin can grant Phone access here."
             />
           )}
           {phoneConnected && phoneMissingScopes.length > 0 && (
@@ -203,10 +178,12 @@ export default function ZoomPanel() {
               body="The current Zoom grant is missing Phone permissions. Re-authorize with the updated scope set."
             />
           )}
-          <ScopeChecklist
-            required={phoneStatus?.required_scopes || []}
-            missing={phoneMissingScopes}
-          />
+          {(phoneConfigured || phoneConnected) && (
+            <ScopeChecklist
+              required={phoneStatus?.required_scopes || []}
+              missing={phoneMissingScopes}
+            />
+          )}
         </IntegrationCard>
 
         <IntegrationCard
@@ -235,7 +212,7 @@ export default function ZoomPanel() {
             <SetupNotice
               tone="info"
               title="Meeting links are optional"
-              body="Zoom Meetings can remain unconfigured when the tenant only needs Phone intake."
+              body="Zoom Meetings can remain unavailable when the tenant only needs Phone intake."
             />
           )}
           {connected && (
@@ -246,20 +223,19 @@ export default function ZoomPanel() {
         </IntegrationCard>
       </div>
 
-      <ZoomSetupCard envEntries={envEntries} redirectUris={zoomRedirects} />
     </div>
   )
 }
 
 function phoneStatusLabel(phoneStatus, phoneConfigured, phoneConnected) {
-  if (!phoneConfigured) return 'Setup required'
+  if (!phoneConfigured) return 'Platform setup pending'
   if (!phoneConnected) return 'Ready to connect'
   if (phoneStatus?.missing_scopes?.length > 0) return 'Missing permissions'
   return 'Connected'
 }
 
 function phoneStatusTone(phoneStatus, phoneConfigured, phoneConnected) {
-  if (!phoneConfigured) return 'missing'
+  if (!phoneConfigured) return 'neutral'
   if (!phoneConnected) return 'attention'
   if (phoneStatus?.missing_scopes?.length > 0) return 'warning'
   return 'healthy'
@@ -410,80 +386,6 @@ function ScopeChecklist({ required, missing }) {
             </div>
           )
         })}
-      </div>
-    </div>
-  )
-}
-
-function ZoomSetupCard({ envEntries, redirectUris }) {
-  const envMap = Object.fromEntries(envEntries)
-  const orderedKeys = [
-    'ZOOM_CLIENT_ID',
-    'ZOOM_CLIENT_SECRET',
-    'ZOOM_PHONE_REDIRECT_URI',
-    'ZOOM_REDIRECT_URI',
-  ]
-  return (
-    <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
-      <div className="flex items-start gap-3 mb-5">
-        <div className="w-9 h-9 rounded-lg bg-brand-bg-soft border border-brand-line text-brand-ink flex items-center justify-center">
-          <Settings2 size={17} />
-        </div>
-        <div>
-          <h3 className="text-brand-ink font-sans text-base font-bold">Operator setup</h3>
-          <p className="text-brand-ink-2 font-sans text-xs mt-1">
-            Clarity owns the Zoom OAuth app. Customer admins only grant access from the cards above.
-          </p>
-        </div>
-      </div>
-      <p className="text-brand-ink-2 font-sans text-xs mb-4">
-        Redacted setup status for Zoom Phone intake and optional Zoom meeting links.
-      </p>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Environment</h4>
-          <div className="space-y-2">
-            {orderedKeys.map((key) => {
-              const value = envMap[key]
-              const required = key === 'ZOOM_CLIENT_ID' || key === 'ZOOM_CLIENT_SECRET' || key === 'ZOOM_PHONE_REDIRECT_URI'
-              return (
-                <div key={key} className="flex items-center justify-between gap-3 bg-brand-bg rounded-lg px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-brand-ink truncate">{ENV_LABELS[key] || key}</div>
-                    <div className="text-[10px] font-mono text-brand-muted truncate">{key}</div>
-                  </div>
-                  <span className={`text-[10px] font-bold uppercase ${value?.configured ? 'text-green-700' : required ? 'text-red-600' : 'text-brand-muted'}`}>
-                    {value?.configured ? 'Set' : required ? 'Missing' : 'Optional'}
-                  </span>
-                </div>
-              )
-            })}
-            {orderedKeys.length === 0 && (
-              <div className="bg-brand-bg rounded-lg px-3 py-2 text-xs text-brand-muted">
-                No Zoom environment status reported.
-              </div>
-            )}
-          </div>
-        </div>
-        <div>
-          <h4 className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Redirect URIs</h4>
-          <div className="space-y-2">
-            {redirectUris.length > 0 ? (
-              redirectUris.map((uri) => (
-                <div key={uri} className="bg-brand-bg rounded-lg px-3 py-2">
-                  <div className="text-[11px] font-mono text-brand-ink break-all">{uri}</div>
-                </div>
-              ))
-            ) : (
-              <div className="bg-brand-bg rounded-lg px-3 py-2 text-xs text-brand-muted">
-                No Zoom redirect URI reported.
-              </div>
-            )}
-          </div>
-          <div className="mt-3 rounded-lg border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink-2">
-            Add these callback URLs to the Clarity-owned Zoom OAuth app before enabling tenant grants.
-          </div>
-        </div>
       </div>
     </div>
   )

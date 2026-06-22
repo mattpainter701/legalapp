@@ -52,6 +52,76 @@ def _require_platform_key(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid or missing platform key")
 
 
+# ── Operator integration readiness ────────────────────────────────────────────
+
+
+def _setting_configured(key: str) -> bool:
+    return bool(getattr(settings, key, ""))
+
+
+@router.get("/integrations/readiness")
+async def platform_integration_readiness(request: Request):
+    """Redacted operator-only readiness for shared integration app setup."""
+    _require_platform_key(request)
+
+    backend_url = settings.BACKEND_URL.rstrip("/")
+    zoom_callback = (
+        settings.ZOOM_REDIRECT_URI
+        or f"{backend_url}/api/integrations/zoom/callback"
+    )
+    zoom_phone_callback = (
+        settings.ZOOM_PHONE_REDIRECT_URI
+        or f"{backend_url}/api/integrations/zoom-phone/callback"
+    )
+    client_ready = _setting_configured("ZOOM_CLIENT_ID") and _setting_configured("ZOOM_CLIENT_SECRET")
+
+    return {
+        "zoom": {
+            "phone_oauth_ready": client_ready,
+            "meetings_oauth_ready": client_ready,
+            "env": {
+                "ZOOM_CLIENT_ID": {
+                    "label": "Zoom OAuth client ID",
+                    "configured": _setting_configured("ZOOM_CLIENT_ID"),
+                    "required": True,
+                },
+                "ZOOM_CLIENT_SECRET": {
+                    "label": "Zoom OAuth client secret",
+                    "configured": _setting_configured("ZOOM_CLIENT_SECRET"),
+                    "required": True,
+                },
+                "ZOOM_PHONE_REDIRECT_URI": {
+                    "label": "Phone intake callback override",
+                    "configured": _setting_configured("ZOOM_PHONE_REDIRECT_URI"),
+                    "required": False,
+                },
+                "ZOOM_REDIRECT_URI": {
+                    "label": "Meetings callback override",
+                    "configured": _setting_configured("ZOOM_REDIRECT_URI"),
+                    "required": False,
+                },
+            },
+            "expected_redirect_uris": {
+                "zoom_phone": [zoom_phone_callback],
+                "zoom": [zoom_callback],
+            },
+            "tenant_grant_flow": {
+                "phone_provider": "zoom_phone",
+                "meetings_provider": "zoom",
+                "description": (
+                    "Tenant admins grant customer Zoom access from Admin > Zoom. "
+                    "Clarity stores the returned OAuth tokens per tenant."
+                ),
+            },
+            "notes": [
+                "Customer tenants do not enter Zoom client credentials.",
+                "Add the callback URLs to the Clarity-owned Zoom OAuth app before tenant admins connect.",
+                "Zoom Phone scopes must be enabled in the same OAuth app for Phone intake grants.",
+            ],
+        }
+    }
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 

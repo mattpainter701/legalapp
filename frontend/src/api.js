@@ -804,6 +804,9 @@ export const getPlatformUsage = (key) =>
 export const getPlatformHealth = (key) =>
   platformApi(key).get('/platform/health').then((r) => r.data)
 
+export const getPlatformIntegrationReadiness = (key) =>
+  platformApi(key).get('/platform/integrations/readiness').then((r) => r.data)
+
 export const getPlatformLLMProviders = (key) =>
   platformApi(key).get('/platform/llm-providers').then((r) => r.data)
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
-import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save } from 'lucide-react'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -65,6 +65,187 @@ function LoginScreen({ onLogin }) {
             {loading ? 'Authenticating…' : 'Access Console'}
           </button>
         </form>
+      </div>
+    </div>
+  )
+}
+
+function PlatformIntegrationsTab({ platformKey, onAuthError }) {
+  const [readiness, setReadiness] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const loadReadiness = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setReadiness(await getPlatformIntegrationReadiness(platformKey))
+    } catch (e) {
+      if (e?.response?.status === 403) {
+        onAuthError?.()
+      } else {
+        setError(e?.response?.data?.detail || 'Failed to load integration readiness.')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [platformKey, onAuthError])
+
+  useEffect(() => { loadReadiness() }, [loadReadiness])
+
+  const zoom = readiness?.zoom
+  const env = zoom?.env || {}
+  const callbacks = zoom?.expected_redirect_uris || {}
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Operator integrations</p>
+            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Zoom app setup</h2>
+            <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
+              Clarity owns the shared Zoom OAuth app. Tenant admins only grant customer access from Admin &gt; Zoom once this platform setup is ready.
+            </p>
+          </div>
+          <button
+            onClick={loadReadiness}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-xs font-bold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-brand-rose/20 bg-brand-rose/10 text-brand-rose px-4 py-3 text-sm font-sans">
+          {error}
+        </div>
+      )}
+
+      {loading && !zoom ? (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-4 border-brand-ink border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-ink text-white flex items-center justify-center">
+                  <Settings2 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-brand-ink font-sans text-base font-bold">Global Zoom OAuth app</h3>
+                  <p className="text-brand-ink-2 font-sans text-sm mt-1">Redacted server readiness for the Clarity-owned app.</p>
+                </div>
+              </div>
+              <ReadinessBadge ready={zoom?.phone_oauth_ready} label={zoom?.phone_oauth_ready ? 'Ready' : 'Setup required'} />
+            </div>
+
+            <div className="space-y-2">
+              {['ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_PHONE_REDIRECT_URI', 'ZOOM_REDIRECT_URI'].map((key) => (
+                <EnvReadinessRow key={key} name={key} item={env[key]} />
+              ))}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink-2">
+              Client ID and secret are global operator settings. They are never entered by customer tenants.
+            </div>
+          </div>
+
+          <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
+            <div className="flex items-start gap-3 mb-5">
+              <div className="w-10 h-10 rounded-xl bg-brand-ink text-white flex items-center justify-center">
+                <Shield size={18} />
+              </div>
+              <div>
+                <h3 className="text-brand-ink font-sans text-base font-bold">Customer OAuth grant flow</h3>
+                <p className="text-brand-ink-2 font-sans text-sm mt-1">Customer Zoom admins approve access from the tenant Admin portal.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <GrantFlowCard icon={PhoneCall} title="Phone intake" ready={zoom?.phone_oauth_ready} provider={zoom?.tenant_grant_flow?.phone_provider || 'zoom_phone'} />
+              <GrantFlowCard icon={Video} title="Meetings" ready={zoom?.meetings_oauth_ready} provider={zoom?.tenant_grant_flow?.meetings_provider || 'zoom'} optional />
+            </div>
+
+            <CallbackList title="Phone callback" values={callbacks.zoom_phone || []} />
+            <CallbackList title="Meetings callback" values={callbacks.zoom || []} />
+
+            <div className="mt-4 space-y-2">
+              {(zoom?.notes || []).map((note) => (
+                <div key={note} className="flex gap-2 text-xs text-brand-ink-2 font-sans">
+                  <CheckCircle size={14} className="text-brand-accent shrink-0 mt-0.5" />
+                  <span>{note}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReadinessBadge({ ready, label }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold ${
+      ready
+        ? 'bg-green-50 text-green-700 border-green-200'
+        : 'bg-amber-50 text-amber-700 border-amber-200'
+    }`}>
+      <span className={`w-2 h-2 rounded-full ${ready ? 'bg-green-500' : 'bg-amber-500'}`} />
+      {label}
+    </span>
+  )
+}
+
+function EnvReadinessRow({ name, item }) {
+  const configured = Boolean(item?.configured)
+  const required = Boolean(item?.required)
+  return (
+    <div className="flex items-center justify-between gap-3 bg-brand-bg rounded-lg px-3 py-2">
+      <div className="min-w-0">
+        <div className="text-xs font-bold text-brand-ink truncate">{item?.label || name}</div>
+        <div className="text-[10px] font-mono text-brand-muted truncate">{name}</div>
+      </div>
+      <span className={`text-[10px] font-bold uppercase ${configured ? 'text-green-700' : required ? 'text-red-600' : 'text-brand-muted'}`}>
+        {configured ? 'Set' : required ? 'Missing' : 'Default'}
+      </span>
+    </div>
+  )
+}
+
+function GrantFlowCard({ icon: Icon, title, ready, provider, optional = false }) {
+  return (
+    <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-3">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="flex items-center gap-2">
+          <Icon size={15} className="text-brand-ink" />
+          <span className="text-xs font-bold text-brand-ink">{title}</span>
+        </div>
+        <ReadinessBadge ready={ready || optional} label={ready ? 'Available' : optional ? 'Optional' : 'Pending'} />
+      </div>
+      <p className="text-[11px] text-brand-muted font-sans">Tenant credential provider: <span className="font-mono">{provider}</span></p>
+    </div>
+  )
+}
+
+function CallbackList({ title, values }) {
+  return (
+    <div className="mt-3">
+      <h4 className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">{title}</h4>
+      <div className="space-y-2">
+        {values.length > 0 ? values.map((uri) => (
+          <div key={uri} className="bg-brand-bg rounded-lg px-3 py-2">
+            <div className="text-[11px] font-mono text-brand-ink break-all">{uri}</div>
+          </div>
+        )) : (
+          <div className="bg-brand-bg rounded-lg px-3 py-2 text-xs text-brand-muted">No callback reported.</div>
+        )}
       </div>
     </div>
   )
@@ -1921,6 +2102,7 @@ export default function PlatformPage() {
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'tenants', label: 'Tenants', icon: Users },
+    { id: 'integrations', label: 'Integrations', icon: Zap },
     { id: 'ai-routing', label: 'AI Routing', icon: Cpu },
     { id: 'logs', label: 'Logs', icon: FileText },
     { id: 'health', label: 'System', icon: Database },
@@ -2181,6 +2363,17 @@ export default function PlatformPage() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ── Integrations Tab ── */}
+        {tab === 'integrations' && (
+          <PlatformIntegrationsTab
+            platformKey={platformKey}
+            onAuthError={() => {
+              sessionStorage.removeItem('platform_key')
+              setPlatformKey(null)
+            }}
+          />
         )}
 
         {/* ── Logs Tab ── */}

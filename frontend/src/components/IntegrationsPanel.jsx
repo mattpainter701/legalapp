@@ -480,7 +480,7 @@ function ReadinessCard({ readiness }) {
     .filter(([key]) => CORE_READINESS_ENV_KEYS.has(key))
   const redirects = Object.fromEntries(
     Object.entries(readiness.expected_redirect_uris || {})
-      .filter(([provider]) => provider !== 'zoom')
+      .filter(([provider]) => !['zoom', 'zoom_phone'].includes(provider))
   )
 
   return (
