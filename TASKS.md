@@ -1,5 +1,19 @@
 # TASKS.md
 
+## Zoom Phone Intake Call History — 2026-06-22 (DONE)
+
+**Goal:** Bring customer Zoom Phone call history into the intake dashboard so receptionists and admins can review missed/completed calls later and create follow-up tasks or leads from those records.
+
+- [x] Add Zoom Phone ingestion foundations using current Call History/Call Element APIs rather than deprecated Call Log events
+- [x] Store each imported Zoom call as an idempotent `CommunicationLog` record with caller ID, direction/result, duration, recording/transcript links, and normalized phone metadata
+- [x] Add an intake-dashboard API/UI surface for recent Zoom Phone calls with quick access to the imported summary/transcript and the existing call-capture/task workflow
+- [x] Add focused backend coverage for dedupe and intake handoff behavior; local DB execution was blocked by unavailable Postgres, so compile/build/normalizer probes were run locally
+- [x] Verify and deploy to production
+
+Follow-up: add Zoom webhook CRC/signature handling so real-time call-element events feed the same importer; current production path is admin-triggered Call History sync.
+
+---
+
 ## Standalone Call Intake — Plan/Tier Framework — 2026-06-22 (DONE)
 
 **Goal:** Sell Call Intake as a standalone product — provision a tenant locked to the intake

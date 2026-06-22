@@ -985,6 +985,12 @@ export const searchIntakeDashboard = (params = {}) =>
 export const getRecentIntakeDashboardCallers = (params = {}) =>
   api.get('/intake/dashboard/recent-callers', { params }).then(r => r.data)
 
+export const getZoomPhoneIntakeCalls = (params = {}) =>
+  api.get('/intake/dashboard/zoom-phone/calls', { params }).then(r => r.data)
+
+export const syncZoomPhoneIntakeCalls = (params = {}) =>
+  api.post('/intake/dashboard/zoom-phone/sync', null, { params }).then(r => r.data)
+
 export const downloadIntakeDashboardCallsCsv = (params = {}) =>
   api.get('/intake/dashboard/calls/export', { params, responseType: 'blob' }).then(r => r.data)
 

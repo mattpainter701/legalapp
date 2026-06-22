@@ -22,6 +22,7 @@ from app.services.intake_archive_import import (
     normalize_phone,
     parse_legacy_call_csv,
 )
+from app.services.zoom_phone import import_zoom_phone_records
 
 
 def test_normalize_phone_strips_formatting_and_country_code():
@@ -319,6 +320,81 @@ async def test_dashboard_call_can_create_qualified_lead_and_log_call(
     assert lead.status == "qualified"
     assert lead.practice_area == "divorce"
     assert contact.display_name == "Jane Doe"
+
+
+@pytest.mark.asyncio
+async def test_zoom_phone_call_history_imports_idempotently_and_reuses_log(
+    client, db_session, test_tenant
+):
+    records = [
+        {
+            "id": "zoom-call-1",
+            "direction": "inbound",
+            "caller_name": "Rita Caller",
+            "caller_number": "+1 (701) 555-8181",
+            "callee_name": "Reception",
+            "callee_number": "+1 (701) 555-0100",
+            "start_time": "2026-06-22T14:15:00Z",
+            "duration": 93,
+            "result": "missed",
+            "summary": "Caller asked for a family-law consult.",
+            "transcript_download_url": "https://zoom.example/transcript",
+            "recording_download_url": "https://zoom.example/recording",
+            "transcript": "I need help with a custody issue.",
+        }
+    ]
+
+    first = await import_zoom_phone_records(
+        db_session, tenant_id=str(test_tenant.id), records=records
+    )
+    second = await import_zoom_phone_records(
+        db_session, tenant_id=str(test_tenant.id), records=records
+    )
+    await db_session.commit()
+
+    assert first.imported == 1
+    assert second.updated == 1
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(CommunicationLog)
+            .where(
+                CommunicationLog.tenant_id == test_tenant.id,
+                CommunicationLog.external_ref == "zoom_phone:call:zoom-call-1",
+            )
+        )
+        == 1
+    )
+
+    queue = await client.get("/api/intake/dashboard/zoom-phone/calls")
+    assert queue.status_code == 200
+    call_item = queue.json()["calls"][0]
+    assert call_item["caller_name"] == "Rita Caller"
+    assert call_item["normalized_phone"] == "7015558181"
+    assert call_item["transcript_url"] == "https://zoom.example/transcript"
+
+    capture = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "existing_communication_id": call_item["id"],
+            "caller_name": "Rita Caller",
+            "phone": "(701) 555-8181",
+            "practice_area": "family",
+            "purpose": "Needs custody consultation",
+            "outcome": "create_lead",
+            "task_mode": "none",
+            "qualified": True,
+        },
+    )
+    assert capture.status_code == 201
+    data = capture.json()
+    assert data["communication_id"] == call_item["id"]
+    assert data["created_lead"] is True
+
+    linked_log = await db_session.get(CommunicationLog, uuid.UUID(call_item["id"]))
+    assert linked_log.contact_id == uuid.UUID(data["contact_id"])
+    assert linked_log.external_ref == "zoom_phone:call:zoom-call-1"
+    assert "Original Zoom Phone details" in linked_log.body
 
 
 @pytest.mark.asyncio

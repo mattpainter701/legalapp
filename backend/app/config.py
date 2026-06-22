@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     ZOOM_CLIENT_SECRET: str = ""
     ZOOM_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
     ZOOM_WEBHOOK_SECRET_TOKEN: str = ""
+    # Optional Zoom Phone Server-to-Server OAuth app. The account ID is
+    # tenant-specific in multi-tenant installs; this default is for a single
+    # customer deployment until the admin credential UI lands.
+    ZOOM_PHONE_CLIENT_ID: str = ""
+    ZOOM_PHONE_CLIENT_SECRET: str = ""
+    ZOOM_PHONE_ACCOUNT_ID: str = ""
+    ZOOM_PHONE_SCOPES: str = (
+        "phone:read:list_call_logs:admin phone:read:call_log:admin "
+        "phone:read:list_call_recordings:admin phone:read:call_recording:admin "
+        "phone:read:recording_transcript:admin"
+    )
 
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
     # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")

@@ -91,6 +91,7 @@ class IntakeDashboardCallCreate(BaseModel):
     source: Optional[str] = Field("phone", max_length=50)
     existing_contact_id: Optional[uuid.UUID] = None
     existing_lead_id: Optional[uuid.UUID] = None
+    existing_communication_id: Optional[uuid.UUID] = None
     assigned_to_user_id: Optional[uuid.UUID] = None
     occurred_at: Optional[datetime] = None
     notes: Optional[str] = None
@@ -118,6 +119,33 @@ class IntakeDashboardCallResponse(BaseModel):
     task_id: Optional[uuid.UUID] = None
     created_lead: bool = False
     status: str
+
+
+class ZoomPhoneCallItem(BaseModel):
+    id: uuid.UUID
+    caller_name: str
+    phone: Optional[str] = None
+    normalized_phone: Optional[str] = None
+    direction: str
+    result: Optional[str] = None
+    duration_seconds: Optional[Any] = None
+    summary: Optional[str] = None
+    transcript_url: Optional[str] = None
+    recording_url: Optional[str] = None
+    occurred_at: datetime
+    contact_id: Optional[uuid.UUID] = None
+    lead_id: Optional[uuid.UUID] = None
+    external_ref: Optional[str] = None
+
+
+class ZoomPhoneCallsResponse(BaseModel):
+    calls: list[ZoomPhoneCallItem]
+
+
+class ZoomPhoneSyncResponse(BaseModel):
+    imported: int
+    updated: int
+    skipped: int
 
 
 class RotationRuleInput(BaseModel):

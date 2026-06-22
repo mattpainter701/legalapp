@@ -4,8 +4,10 @@ import {
   ArrowRight,
   ClipboardList,
   Download,
+  ExternalLink,
   History,
   PhoneCall,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -17,11 +19,13 @@ import {
   downloadIntakeDashboardCallsCsv,
   getIntakeAssignmentAvailability,
   getRecentIntakeDashboardCallers,
+  getZoomPhoneIntakeCalls,
   getPartnerLog,
   downloadPartnerLogCsv,
   getRotationRules,
   searchIntakeDashboard,
   searchUsers,
+  syncZoomPhoneIntakeCalls,
   triggerBlobDownload,
   updateRotationRules,
 } from '../api'
@@ -393,6 +397,118 @@ function RecentCallersPanel({
   )
 }
 
+function ZoomPhoneCallsPanel({
+  calls,
+  loading,
+  syncing,
+  canSync,
+  onRefresh,
+  onSync,
+  onSelect,
+}) {
+  const durationLabel = (seconds) => {
+    const value = Number(seconds)
+    if (!Number.isFinite(value) || value <= 0) return null
+    const minutes = Math.floor(value / 60)
+    const remaining = value % 60
+    return minutes ? `${minutes}m ${remaining}s` : `${remaining}s`
+  }
+
+  return (
+    <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+        <div className="flex items-center gap-2">
+          <PhoneCall size={18} className="text-brand-accent" />
+          <h2 className="font-serif text-lg font-bold text-brand-ink">Zoom Phone Calls</h2>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-brand-line bg-white px-3 py-2 text-xs font-bold text-brand-ink disabled:opacity-50"
+          >
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+          {canSync && (
+            <button
+              type="button"
+              onClick={onSync}
+              disabled={syncing}
+              className="inline-flex items-center gap-2 rounded-xl bg-brand-ink px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <RefreshCw size={14} />
+              {syncing ? 'Syncing...' : 'Sync Zoom'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          Loading Zoom Phone calls...
+        </div>
+      ) : calls.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-brand-line bg-brand-bg-soft p-5 text-center text-sm text-brand-muted">
+          No imported Zoom Phone calls yet.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {calls.map((call) => (
+            <button
+              key={call.id}
+              type="button"
+              onClick={() => onSelect(call)}
+              className="w-full rounded-2xl border border-brand-line bg-brand-bg-soft p-3 text-left transition hover:border-brand-accent/60 hover:bg-white"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-brand-ink">{call.caller_name}</p>
+                  <p className="mt-0.5 truncate text-xs text-brand-muted">
+                    {call.summary || call.result || 'Zoom Phone call'}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
+                  {call.occurred_at ? new Date(call.occurred_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-brand-muted">
+                {call.phone && <span>{call.phone}</span>}
+                <span className="font-bold text-brand-ink">{call.direction}</span>
+                {call.result && <span>{call.result}</span>}
+                {durationLabel(call.duration_seconds) && <span>{durationLabel(call.duration_seconds)}</span>}
+                {call.transcript_url && (
+                  <a
+                    href={call.transcript_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => event.stopPropagation()}
+                    className="inline-flex items-center gap-1 font-bold text-brand-accent"
+                  >
+                    Transcript <ExternalLink size={11} />
+                  </a>
+                )}
+                {call.recording_url && (
+                  <a
+                    href={call.recording_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => event.stopPropagation()}
+                    className="inline-flex items-center gap-1 font-bold text-brand-accent"
+                  >
+                    Recording <ExternalLink size={11} />
+                  </a>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function IntakeExportPanel({
   exportStart,
   exportEnd,
@@ -533,6 +649,9 @@ export default function IntakeDashboardPage() {
   const [recentCallers, setRecentCallers] = useState([])
   const [recentLoading, setRecentLoading] = useState(false)
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
+  const [zoomPhoneCalls, setZoomPhoneCalls] = useState([])
+  const [zoomPhoneLoading, setZoomPhoneLoading] = useState(false)
+  const [zoomPhoneSyncing, setZoomPhoneSyncing] = useState(false)
   const [exportStart, setExportStart] = useState('')
   const [exportEnd, setExportEnd] = useState('')
   const [exporting, setExporting] = useState(false)
@@ -556,6 +675,7 @@ export default function IntakeDashboardPage() {
     task_title: 'Call back caller',
     custom_task_title: '',
     auto_assign: true,
+    source_communication_id: null,
   })
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
@@ -574,6 +694,20 @@ export default function IntakeDashboardPage() {
   }, [recentLimit])
 
   useEffect(() => { loadRecentCallers(recentLimit) }, [loadRecentCallers, recentLimit])
+
+  const loadZoomPhoneCalls = useCallback(async () => {
+    setZoomPhoneLoading(true)
+    try {
+      const data = await getZoomPhoneIntakeCalls({ limit: 25 })
+      setZoomPhoneCalls(data.calls || [])
+    } catch {
+      setZoomPhoneCalls([])
+    } finally {
+      setZoomPhoneLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadZoomPhoneCalls() }, [loadZoomPhoneCalls])
 
   useEffect(() => {
     if (form.outcome !== 'create_lead' || form.task_mode !== 'partner_rotation') {
@@ -712,6 +846,40 @@ export default function IntakeDashboardPage() {
     await runSearchFor({ query: nextName, phoneValue: nextPhone })
   }
 
+  const selectZoomPhoneCall = async (call) => {
+    const nextName = call.caller_name || ''
+    const nextPhone = call.phone || ''
+    setQ(nextName)
+    setPhone(nextPhone)
+    setForm((current) => ({
+      ...current,
+      caller_name: nextName || current.caller_name,
+      purpose: call.summary || current.purpose,
+      notes: [
+        call.result ? `Zoom result: ${call.result}` : '',
+        call.recording_url ? `Recording: ${call.recording_url}` : '',
+        call.transcript_url ? `Transcript: ${call.transcript_url}` : '',
+      ].filter(Boolean).join('\n') || current.notes,
+      source_communication_id: call.id,
+    }))
+    setMessage('Zoom Phone call selected. Review the caller and create a lead or staff task from the call capture panel.')
+    await runSearchFor({ query: nextName, phoneValue: nextPhone })
+  }
+
+  const syncZoomPhoneCalls = async () => {
+    setZoomPhoneSyncing(true)
+    setMessage(null)
+    try {
+      const result = await syncZoomPhoneIntakeCalls({ days: 7 })
+      setMessage(`Zoom Phone sync imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped}.`)
+      await loadZoomPhoneCalls()
+    } catch (err) {
+      setMessage(err?.response?.data?.detail || 'Zoom Phone sync failed.')
+    } finally {
+      setZoomPhoneSyncing(false)
+    }
+  }
+
   const assignLead = async (leadId) => {
     setMessage(null)
     try {
@@ -761,6 +929,7 @@ export default function IntakeDashboardPage() {
         qualified: Boolean(form.qualified),
         existing_contact_id: selected?.contact_id || undefined,
         existing_lead_id: selected?.lead_id || undefined,
+        existing_communication_id: form.source_communication_id || undefined,
         assigned_to_user_id: form.task_mode === 'partner_rotation' ? searchData?.recommended_attorney_user_id || undefined : undefined,
       }
       if (form.task_mode === 'specific_staff' && !selectedStaff?.id) {
@@ -786,9 +955,10 @@ export default function IntakeDashboardPage() {
         }
       }
       setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
-      setForm((current) => ({ ...current, purpose: '', notes: '' }))
+      setForm((current) => ({ ...current, purpose: '', notes: '', source_communication_id: null }))
       await refreshSearchSilently()
       await loadRecentCallers()
+      await loadZoomPhoneCalls()
     } catch (err) {
       setMessage(err?.response?.data?.detail || 'Failed to log call.')
     }
@@ -837,6 +1007,16 @@ export default function IntakeDashboardPage() {
               selectedCaller={selectedRecentCaller}
               onLimitChange={setRecentLimit}
               onSelect={selectRecentCaller}
+            />
+
+            <ZoomPhoneCallsPanel
+              calls={zoomPhoneCalls}
+              loading={zoomPhoneLoading}
+              syncing={zoomPhoneSyncing}
+              canSync={user?.role === 'admin'}
+              onRefresh={loadZoomPhoneCalls}
+              onSync={syncZoomPhoneCalls}
+              onSelect={selectZoomPhoneCall}
             />
 
             <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
@@ -1121,6 +1301,12 @@ export default function IntakeDashboardPage() {
                   </div>
                 )}
 
+                {form.source_communication_id && (
+                  <div className="rounded-xl border border-brand-accent/30 bg-brand-accent/10 px-3 py-2 text-xs text-brand-ink">
+                    Linked to imported Zoom Phone call. Saving will update that call record with the selected lead/task context.
+                  </div>
+                )}
+
                 <button
                   type="submit"
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 py-3 text-sm font-bold text-white"
@@ -1139,7 +1325,7 @@ export default function IntakeDashboardPage() {
                 <div>
                   <h2 className="font-serif text-base font-bold text-brand-ink">MVP Boundary</h2>
                   <p className="mt-1 text-xs leading-5 text-brand-muted">
-                    Zoom Phone caller context is intentionally deferred. This screen stays manual-first so reception can work even when phone integrations are unavailable.
+                    Phone integrations add context to the same manual intake workflow. Reception can still log calls and route tasks when Zoom Phone is unavailable.
                   </p>
                 </div>
               </div>

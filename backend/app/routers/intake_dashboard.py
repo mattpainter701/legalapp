@@ -39,9 +39,16 @@ from app.schemas.intake_dashboard import (
     RotationRuleListResponse,
     RotationRuleResponse,
     RotationRuleUpsertRequest,
+    ZoomPhoneCallItem,
+    ZoomPhoneCallsResponse,
+    ZoomPhoneSyncResponse,
 )
 from app.services.intake_archive_import import normalize_phone
 from app.services.task_notifications import notify_task_created
+from app.services.zoom_phone import (
+    ZoomPhoneIntegrationError,
+    sync_zoom_phone_call_history,
+)
 
 router = APIRouter(prefix="/api/intake/dashboard", tags=["intake-dashboard"])
 
@@ -78,6 +85,36 @@ PARTNER_LOG_EXPORT_FIELDS = [
     "contact_id",
     "communication_id",
 ]
+
+
+def _zoom_phone_call_item(log: CommunicationLog) -> ZoomPhoneCallItem:
+    participants = log.participants or {}
+    caller_name = (
+        participants.get("caller_name")
+        or participants.get("phone")
+        or log.subject.replace("Zoom Phone inbound call: ", "").replace(
+            "Zoom Phone outbound call: ", ""
+        )
+        or "Unknown Zoom Phone caller"
+    )
+    return ZoomPhoneCallItem(
+        id=log.id,
+        caller_name=caller_name,
+        phone=participants.get("phone")
+        or participants.get("caller_number")
+        or participants.get("callee_number"),
+        normalized_phone=participants.get("normalized_phone"),
+        direction=participants.get("direction") or log.direction,
+        result=participants.get("result"),
+        duration_seconds=participants.get("duration_seconds"),
+        summary=log.summary,
+        transcript_url=participants.get("transcript_url"),
+        recording_url=participants.get("recording_url"),
+        occurred_at=log.occurred_at,
+        contact_id=log.contact_id,
+        lead_id=None,
+        external_ref=log.external_ref,
+    )
 
 
 async def record_partner_assignment(
@@ -1307,6 +1344,55 @@ async def search_dashboard(
     )
 
 
+@router.get("/zoom-phone/calls", response_model=ZoomPhoneCallsResponse)
+async def list_zoom_phone_calls(
+    limit: int = Query(25, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    result = await db.execute(
+        select(CommunicationLog)
+        .where(
+            CommunicationLog.tenant_id == tenant_id,
+            CommunicationLog.channel == "call",
+            or_(
+                CommunicationLog.external_ref.like("zoom_phone:call:%"),
+                CommunicationLog.participants["provider"].astext == "zoom_phone",
+            ),
+        )
+        .order_by(CommunicationLog.occurred_at.desc())
+        .limit(limit)
+    )
+    return ZoomPhoneCallsResponse(
+        calls=[_zoom_phone_call_item(log) for log in result.scalars().all()]
+    )
+
+
+@router.post("/zoom-phone/sync", response_model=ZoomPhoneSyncResponse)
+async def sync_zoom_phone_calls(
+    days: int = Query(7, ge=1, le=31),
+    current_user=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+    try:
+        result = await sync_zoom_phone_call_history(
+            db, tenant_id=str(tenant_id), days=days
+        )
+    except ZoomPhoneIntegrationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await db.commit()
+    return ZoomPhoneSyncResponse(
+        imported=result.imported,
+        updated=result.updated,
+        skipped=result.skipped,
+    )
+
+
 @router.post("/calls", response_model=IntakeDashboardCallResponse, status_code=201)
 async def create_dashboard_call(
     payload: IntakeDashboardCallCreate,
@@ -1322,6 +1408,19 @@ async def create_dashboard_call(
     assignment_task_id = None
     task = None
     caller_name = payload.caller_name or "Unknown caller"
+    source_log = None
+    if payload.existing_communication_id:
+        source_log = (
+            await db.execute(
+                select(CommunicationLog).where(
+                    CommunicationLog.id == payload.existing_communication_id,
+                    CommunicationLog.tenant_id == tenant_id,
+                    CommunicationLog.channel == "call",
+                )
+            )
+        ).scalar_one_or_none()
+        if not source_log:
+            raise HTTPException(status_code=404, detail="Source call record not found")
     lead_assignee = (
         await _resolve_active_user(db, tenant_id, payload.assigned_to_user_id)
         if payload.task_mode == "partner_rotation"
@@ -1413,24 +1512,47 @@ async def create_dashboard_call(
         f"Practice area: {payload.practice_area}" if payload.practice_area else "",
         f"Notes: {payload.notes}" if payload.notes else "",
     ]
-    log = CommunicationLog(
-        tenant_id=tenant_id,
-        direction="inbound",
-        channel="call",
-        status="logged",
-        subject=f"Inbound call: {caller_name}",
-        body="\n".join(bit for bit in body_bits if bit),
-        summary=payload.purpose,
-        contact_id=contact_id,
-        created_by_user_id=current_user.id,
-        occurred_at=occurred_at,
-        participants={
-            "caller_name": caller_name,
-            "phone": payload.phone,
-            "normalized_phone": normalize_phone(payload.phone),
-        },
-    )
-    db.add(log)
+    body = "\n".join(bit for bit in body_bits if bit)
+    participants = {
+        "caller_name": caller_name,
+        "phone": payload.phone,
+        "normalized_phone": normalize_phone(payload.phone),
+    }
+    if source_log:
+        existing_participants = source_log.participants or {}
+        participants = {
+            **existing_participants,
+            **{key: value for key, value in participants.items() if value is not None},
+        }
+        if source_log.body and body:
+            body = f"{body}\n\n--- Original Zoom Phone details ---\n{source_log.body}"
+        elif source_log.body:
+            body = source_log.body
+        log = source_log
+        log.direction = source_log.direction or "inbound"
+        log.status = "logged"
+        log.subject = f"Inbound call: {caller_name}"
+        log.body = body
+        log.summary = payload.purpose or source_log.summary
+        log.contact_id = contact_id
+        log.created_by_user_id = current_user.id
+        log.occurred_at = payload.occurred_at or source_log.occurred_at or occurred_at
+        log.participants = participants
+    else:
+        log = CommunicationLog(
+            tenant_id=tenant_id,
+            direction="inbound",
+            channel="call",
+            status="logged",
+            subject=f"Inbound call: {caller_name}",
+            body=body,
+            summary=payload.purpose,
+            contact_id=contact_id,
+            created_by_user_id=current_user.id,
+            occurred_at=occurred_at,
+            participants=participants,
+        )
+        db.add(log)
     await db.flush()
     if payload.task_mode == "specific_staff" and general_task_assignee:
         task = await _upsert_general_call_task(
