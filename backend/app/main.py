@@ -37,6 +37,7 @@ from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
 from app.routers.communications import router as communications_router
 from app.routers.intake_dashboard import router as intake_dashboard_router
+from app.routers.plan import router as plan_router
 from app.routers.intake import router as intake_router
 from app.routers.matter_parties import router as matter_parties_router
 from app.routers.matter_documents import router as matter_documents_router
@@ -281,6 +282,7 @@ app.include_router(contacts_router)
 app.include_router(tasks_router)
 app.include_router(communications_router)
 app.include_router(intake_dashboard_router)
+app.include_router(plan_router, prefix="/api")
 app.include_router(intake_router)
 app.include_router(matter_parties_router)
 app.include_router(matter_documents_router)
