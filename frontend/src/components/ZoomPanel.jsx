@@ -209,7 +209,7 @@ export default function ZoomPanel() {
               icon: Unplug,
             },
           ] : []}
-          footer={phoneConnected && phoneStatus?.expires_at ? `Token expires ${new Date(phoneStatus.expires_at).toLocaleString()}` : null}
+          footer={phoneConnected ? 'Access refreshes automatically during sync and connection tests.' : null}
         >
           {!phoneConfigured && (
             <SetupNotice
@@ -234,6 +234,13 @@ export default function ZoomPanel() {
               tone="warning"
               title="Re-authorization required"
               body="The current Zoom grant is missing Phone permissions. Re-authorize with the updated scope set."
+            />
+          )}
+          {phoneConnected && phoneMissingScopes.length === 0 && (
+            <SetupNotice
+              tone="info"
+              title="Authorization stays connected"
+              body="Zoom access tokens last about one hour, but Clarity uses the saved refresh token to get a new access token when syncing or testing. Re-authorize only if Zoom access is revoked, scopes change, or the grant goes unused long enough for Zoom to expire the refresh token."
             />
           )}
           <ScopeChecklist
