@@ -68,6 +68,7 @@ from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
 from app.routers.platform_llm import router as platform_llm_router
 from app.routers.external_imports import router as external_imports_router
+from app.routers.roles import router as roles_router  # noqa: E402
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -301,6 +302,7 @@ app.include_router(smb_router)
 app.include_router(portfolio_router)
 app.include_router(users_router)
 app.include_router(external_imports_router)
+app.include_router(roles_router)
 
 
 # ─────────────────────────────────────────────────────
