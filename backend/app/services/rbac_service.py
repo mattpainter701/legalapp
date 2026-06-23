@@ -58,6 +58,14 @@ async def provision_tenant_rbac(
 
     Idempotent: safe to call more than once. Flushes; caller commits.
     """
+    # Operate within the new tenant's RLS context so the role/user_role inserts
+    # satisfy the tenant_isolation policy. The email-registration path commits
+    # (and thus clears app.rls_bypass) BEFORE calling this, so we cannot rely on
+    # the auth bypass being active here; binding the tenant context explicitly
+    # makes provisioning correct for every caller. Transaction-local.
+    from app.database import set_tenant_context
+
+    await set_tenant_context(db, str(tenant_id))
     await seed_system_roles(db, tenant_id)
     admin_role_id = await db.scalar(
         select(Role.id).where(Role.tenant_id == tenant_id, Role.name == "Administrator")
