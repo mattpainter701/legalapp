@@ -12,6 +12,7 @@
 - [x] Two-pane layout in `IntakeDashboardPage` (left feed + right work panel); Export/Partner/Rotation tabbed
 - [x] Source-agnostic, multi-tenant gating: Sync + source filter only when the tenant has a connected call source
 - [x] Tests: backend feed-fields + batching regression (`test_intake_dashboard.py`, 23 passing); frontend `npm run build` clean
+- [x] Surface `answered_by` + `result` on History Matches call-log cards (was only on the live feed); regression in `test_dashboard_search_finds_log_only_callers_*`
 
 ---
 

@@ -102,6 +102,8 @@ function ResultCard({ item, selected, onSelect, onAssign }) {
           </span>
         )}
         {item.phone && <span>{item.phone}</span>}
+        {item.answered_by && <span>by {item.answered_by}</span>}
+        {item.result && <span className="font-bold capitalize">{item.result}</span>}
         {item.practice_area && <span>{item.practice_area}</span>}
         {item.prior_attorney_name && <span>Prior: {item.prior_attorney_name}</span>}
         {item.metadata?.matched_on?.length > 0 && (

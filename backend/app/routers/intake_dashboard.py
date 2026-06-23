@@ -1420,6 +1420,8 @@ async def search_dashboard(
                     practice_area=_log_field_from_body(log, "Practice area"),
                     contact_id=log.contact_id,
                     occurred_at=log.occurred_at,
+                    answered_by=_log_participant(log, "callee_name"),
+                    result=_log_participant(log, "result"),
                     score=score,
                     metadata=_match_metadata(
                         name_match=name_match,

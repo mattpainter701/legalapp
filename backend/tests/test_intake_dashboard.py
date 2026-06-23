@@ -75,10 +75,7 @@ def test_zoom_webhook_crc_and_signature_helpers():
 
     body = b'{"event":"phone.callee_call_history_completed"}'
     timestamp = "1710000000"
-    signature = (
-        "v0="
-        "ec914a6f28f9db2fdf91b4993df12354403b78ea150c45531c540726289afb4e"
-    )
+    signature = "v0=" "ec914a6f28f9db2fdf91b4993df12354403b78ea150c45531c540726289afb4e"
     assert verify_zoom_webhook_signature(
         body,
         timestamp,
@@ -350,6 +347,8 @@ async def test_dashboard_search_finds_log_only_callers_by_partial_name_and_phone
                 "caller_name": "Jan Patterson",
                 "phone": "(701) 555-3333",
                 "normalized_phone": "7015553333",
+                "callee_name": "Front Desk",
+                "result": "answered",
             },
             created_by_user_id=test_user.id,
             occurred_at=datetime.now(timezone.utc),
@@ -363,10 +362,15 @@ async def test_dashboard_search_finds_log_only_callers_by_partial_name_and_phone
     )
     assert full_name.status_code == 200
     full_name_results = full_name.json()["results"]
-    assert any(
-        item["result_type"] == "call_log" and item["title"] == "Jan Patterson"
+    match = next(
+        item
         for item in full_name_results
+        if item["result_type"] == "call_log" and item["title"] == "Jan Patterson"
     )
+    # History matches must surface who answered the call (callee_name), not just
+    # the caller-history name match.
+    assert match["answered_by"] == "Front Desk"
+    assert match["result"] == "answered"
 
     partial_name = await client.get(
         "/api/intake/dashboard/search",
@@ -1298,9 +1302,7 @@ async def test_recent_callers_exposes_source_and_call_facts(
     )
     await db_session.commit()
 
-    resp = await client.get(
-        "/api/intake/dashboard/recent-callers", params={"limit": 5}
-    )
+    resp = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 5})
     assert resp.status_code == 200
     data = resp.json()
     assert data["limit"] == 5
@@ -1325,43 +1327,66 @@ async def test_recent_callers_batched_enrichment_matches(
     client, db_session, test_tenant, test_user
 ):
     partner = User(
-        id=uuid.uuid4(), tenant_id=test_tenant.id, email="bq@f.com",
-        full_name="Batch Partner", role="user", is_active=True,
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="bq@f.com",
+        full_name="Batch Partner",
+        role="user",
+        is_active=True,
     )
     contact = Contact(
-        tenant_id=test_tenant.id, first_name="Bea", last_name="Quary",
-        phone="701-555-3333", created_by_user_id=test_user.id,
+        tenant_id=test_tenant.id,
+        first_name="Bea",
+        last_name="Quary",
+        phone="701-555-3333",
+        created_by_user_id=test_user.id,
     )
     db_session.add_all([partner, contact])
     await db_session.flush()
     lead = Lead(
-        tenant_id=test_tenant.id, contact_id=contact.id, status="qualified",
-        practice_area="divorce", assigned_to_user_id=partner.id,
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="qualified",
+        practice_area="divorce",
+        assigned_to_user_id=partner.id,
         created_by_user_id=test_user.id,
     )
     db_session.add(lead)
     await db_session.flush()
     log = CommunicationLog(
-        tenant_id=test_tenant.id, direction="inbound", channel="call",
-        status="logged", subject="Inbound call: Bea Quary", summary="Batched",
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="logged",
+        subject="Inbound call: Bea Quary",
+        summary="Batched",
         participants={"caller_name": "Bea Quary", "phone": "701-555-3333"},
-        contact_id=contact.id, created_by_user_id=test_user.id,
+        contact_id=contact.id,
+        created_by_user_id=test_user.id,
         occurred_at=datetime.now(timezone.utc),
     )
     db_session.add(log)
     db_session.add(
         Task(
-            tenant_id=test_tenant.id, title="Urgent intake follow-up: Bea Quary",
-            description="x", task_type="follow_up", status="pending",
-            priority="urgent", due_date=date.today(), contact_id=contact.id,
-            assigned_to_user_id=partner.id, created_by_user_id=test_user.id,
+            tenant_id=test_tenant.id,
+            title="Urgent intake follow-up: Bea Quary",
+            description="x",
+            task_type="follow_up",
+            status="pending",
+            priority="urgent",
+            due_date=date.today(),
+            contact_id=contact.id,
+            assigned_to_user_id=partner.id,
+            created_by_user_id=test_user.id,
             source="intake_dashboard",
             external_ref=f"intake-dashboard:lead:{lead.id}:follow-up",
         )
     )
     await db_session.commit()
 
-    resp = await client.get("/api/intake/dashboard/recent-callers", params={"limit": 10})
+    resp = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 10}
+    )
     assert resp.status_code == 200
     caller = resp.json()["callers"][0]
     assert caller["caller_name"] == "Bea Quary"

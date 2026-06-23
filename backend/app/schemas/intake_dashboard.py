@@ -20,6 +20,8 @@ class IntakeSearchResult(BaseModel):
     prior_attorney_name: Optional[str] = None
     prior_attorney_user_id: Optional[uuid.UUID] = None
     occurred_at: Optional[datetime] = None
+    answered_by: Optional[str] = None
+    result: Optional[str] = None
     contact_id: Optional[uuid.UUID] = None
     lead_id: Optional[uuid.UUID] = None
     matter_id: Optional[uuid.UUID] = None
