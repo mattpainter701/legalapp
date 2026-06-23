@@ -119,6 +119,12 @@ async def assign_roles(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_capability("manage_roles")),
 ):
+    from app.models.user import User
+
+    target = await db.get(User, target_user_id)
+    if target is None or target.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="User not found")
+
     # Replace the user's MANUAL assignments only; group_sync rows are untouched.
     existing = (
         (

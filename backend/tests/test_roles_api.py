@@ -80,3 +80,35 @@ async def test_create_role_rejects_unknown_capability(db_session, test_tenant):
         )
     app.dependency_overrides.clear()
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_assign_roles_rejects_cross_tenant_user(db_session, test_tenant):
+    import uuid as _uuid
+    from app.models.tenant import Tenant
+
+    client, _ = await _admin_client(db_session, test_tenant)
+    # A user in a DIFFERENT tenant
+    other_tenant = Tenant(
+        id=_uuid.uuid4(),
+        name="Other Firm",
+        domain="otherfirm.com",
+        billing_tier="flat",
+    )
+    db_session.add(other_tenant)
+    await db_session.flush()
+    victim = User(
+        id=_uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email="victim@otherfirm.com",
+        role="user",
+    )
+    db_session.add(victim)
+    await db_session.commit()
+
+    async with client:
+        resp = await client.put(
+            f"/api/admin/roles/assign/{victim.id}", json={"role_ids": []}
+        )
+    app.dependency_overrides.clear()
+    assert resp.status_code == 404
