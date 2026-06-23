@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getRecentIntakeDashboardCallers } from '../api'
 
-const POLL_MS = 15000
+const POLL_MS = 30000
 
 // Visibility-aware poll of the recent-callers feed. Returns the current callers,
 // the ids that are new since the last successful fetch (empty on first load),

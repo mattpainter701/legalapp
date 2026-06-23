@@ -46,7 +46,14 @@ SKIP_PREFIXES = (
 )
 
 TENANT_DAILY_LIMITS = {"flat": 1_000, "payg": 10_000}
-USER_HOURLY_LIMIT = 200
+USER_HOURLY_LIMIT = 600
+
+# Cheap, high-frequency read endpoints that the SPA polls in the background.
+# These must NOT count against the per-user hourly budget — a single dashboard
+# left open would otherwise exhaust it (e.g. the call feed polls every 30s) and
+# 429 every *other* request the user makes, including the admin tab. nginx still
+# rate-limits these by IP. Matched as path prefixes.
+USER_HOURLY_EXEMPT_PREFIXES = ("/api/intake/dashboard/recent-callers",)
 _fallback_auth_hits: dict[str, tuple[int, float]] = {}
 
 
@@ -167,7 +174,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         user_id, tenant_id, billing_tier = _extract_jwt_claims(request)
 
         # ── Per-user hourly limit ─────────────────────────────────────────────
-        if user_id:
+        exempt_from_user_limit = any(
+            path.startswith(p) for p in USER_HOURLY_EXEMPT_PREFIXES
+        )
+        if user_id and not exempt_from_user_limit:
             user_key = f"rate:user:{user_id}:{_current_hour_key()}"
             try:
                 if self._redis:
