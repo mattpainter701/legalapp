@@ -1,5 +1,5 @@
 import React from 'react'
-import { ExternalLink, PhoneIncoming, PhoneMissed } from 'lucide-react'
+import { Clock, ExternalLink, PhoneIncoming, PhoneMissed } from 'lucide-react'
 
 const STATUS = {
   missed: { label: 'missed', cls: 'bg-red-100 text-red-700' },
@@ -52,15 +52,14 @@ export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
           : 'border-brand-line bg-brand-bg-soft hover:border-brand-accent/60 hover:bg-white'
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon size={14} className="shrink-0 text-brand-muted" />
-          <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
-        </div>
-        <div className="shrink-0 text-right leading-tight">
-          <div className="text-xs font-bold text-brand-ink">{whenLabel(caller.occurred_at)}</div>
-          <div className="text-[10px] font-semibold text-brand-muted">{agoLabel(caller.occurred_at)}</div>
-        </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <Icon size={14} className="shrink-0 text-brand-muted" />
+        <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
+      </div>
+      <div className="mt-1 flex items-center gap-1.5 text-xs">
+        <Clock size={12} className="shrink-0 text-brand-accent" />
+        <span className="font-bold text-brand-ink">{whenLabel(caller.occurred_at)}</span>
+        <span className="font-semibold text-brand-muted">· {agoLabel(caller.occurred_at)}</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-brand-muted">
         {status && <span className={`rounded-full px-2 py-0.5 font-bold ${status.cls}`}>{status.label}</span>}
