@@ -58,6 +58,7 @@ class UserRole(Base):
         UniqueConstraint("user_id", "role_id", name="uq_user_roles_user_role"),
         Index("idx_user_roles_user_id", "user_id"),
         Index("idx_user_roles_role_id", "role_id"),
+        Index("idx_user_roles_tenant_id", "tenant_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -71,6 +72,11 @@ class UserRole(Base):
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("roles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
     )
     source: Mapped[str] = mapped_column(

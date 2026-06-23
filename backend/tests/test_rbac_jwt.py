@@ -26,7 +26,11 @@ async def test_issued_token_carries_caps(db_session, test_tenant):
     )
     db_session.add(role)
     await db_session.flush()
-    db_session.add(UserRole(user_id=user.id, role_id=role.id, source="manual"))
+    db_session.add(
+        UserRole(
+            user_id=user.id, role_id=role.id, source="manual", tenant_id=test_tenant.id
+        )
+    )
     await db_session.commit()
 
     tenant = await db_session.get(Tenant, test_tenant.id)

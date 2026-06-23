@@ -151,7 +151,14 @@ async def assign_roles(
         ).scalars()
     )
     for rid in valid_role_ids:
-        db.add(UserRole(user_id=target_user_id, role_id=rid, source="manual"))
+        db.add(
+            UserRole(
+                user_id=target_user_id,
+                role_id=rid,
+                source="manual",
+                tenant_id=user.tenant_id,
+            )
+        )
     await db.flush()
 
     # Last-admin guard: never let an assignment leave the tenant with zero admins.

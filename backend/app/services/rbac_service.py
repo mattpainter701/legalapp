@@ -70,7 +70,14 @@ async def provision_tenant_rbac(
         )
     )
     if existing is None:
-        db.add(UserRole(user_id=admin_user_id, role_id=admin_role_id, source="manual"))
+        db.add(
+            UserRole(
+                user_id=admin_user_id,
+                role_id=admin_role_id,
+                source="manual",
+                tenant_id=tenant_id,
+            )
+        )
     await db.flush()
 
 

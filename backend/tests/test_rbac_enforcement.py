@@ -55,7 +55,14 @@ async def test_require_capability_allows_and_denies(db_session, test_tenant):
     role = Role(tenant_id=test_tenant.id, name="Biller", capabilities=["view_billing"])
     db_session.add(role)
     await db_session.flush()
-    db_session.add(UserRole(user_id=allowed.id, role_id=role.id, source="manual"))
+    db_session.add(
+        UserRole(
+            user_id=allowed.id,
+            role_id=role.id,
+            source="manual",
+            tenant_id=test_tenant.id,
+        )
+    )
     await db_session.commit()
 
     transport = ASGITransport(app=app)

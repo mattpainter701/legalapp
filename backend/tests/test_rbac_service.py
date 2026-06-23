@@ -23,8 +23,18 @@ async def test_capabilities_union_across_roles(db_session, test_tenant):
     await db_session.flush()
     db_session.add_all(
         [
-            UserRole(user_id=user.id, role_id=r1.id, source="manual"),
-            UserRole(user_id=user.id, role_id=r2.id, source="group_sync"),
+            UserRole(
+                user_id=user.id,
+                role_id=r1.id,
+                source="manual",
+                tenant_id=test_tenant.id,
+            ),
+            UserRole(
+                user_id=user.id,
+                role_id=r2.id,
+                source="group_sync",
+                tenant_id=test_tenant.id,
+            ),
         ]
     )
     await db_session.commit()
@@ -60,7 +70,14 @@ async def test_count_admin_capable_users(db_session, test_tenant):
     )
     db_session.add(u)
     await db_session.flush()
-    db_session.add(UserRole(user_id=u.id, role_id=admin_role.id, source="manual"))
+    db_session.add(
+        UserRole(
+            user_id=u.id,
+            role_id=admin_role.id,
+            source="manual",
+            tenant_id=test_tenant.id,
+        )
+    )
     await db_session.commit()
 
     assert await count_admin_capable_users(db_session, test_tenant.id) == 1
