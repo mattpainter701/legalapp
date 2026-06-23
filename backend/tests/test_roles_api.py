@@ -112,3 +112,17 @@ async def test_assign_roles_rejects_cross_tenant_user(db_session, test_tenant):
         )
     app.dependency_overrides.clear()
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_users_list_includes_role_ids(db_session, test_tenant):
+    client, admin = await _admin_client(db_session, test_tenant)
+    # admin already has the "Admins" role assigned by _admin_client
+    async with client:
+        resp = await client.get("/api/admin/users")
+    app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    users = resp.json()["users"]
+    me = next(u for u in users if u["email"] == "admin@testfirm.com")
+    assert "role_ids" in me
+    assert len(me["role_ids"]) >= 1

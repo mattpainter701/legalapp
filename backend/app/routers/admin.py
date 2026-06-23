@@ -66,6 +66,22 @@ async def list_users(
     )
     users = result.scalars().all()
 
+    from app.models.rbac import UserRole
+
+    user_ids = [u.id for u in users]
+    role_map: dict = {}
+    if user_ids:
+        rows = (
+            await db.execute(
+                select(UserRole.user_id, UserRole.role_id).where(
+                    UserRole.user_id.in_(user_ids),
+                    UserRole.source == "manual",
+                )
+            )
+        ).all()
+        for uid, rid in rows:
+            role_map.setdefault(uid, []).append(str(rid))
+
     return UserList(
         users=[
             UserResponse(
@@ -73,6 +89,7 @@ async def list_users(
                 email=u.email,
                 full_name=u.full_name,
                 role=u.role,
+                role_ids=role_map.get(u.id, []),
                 is_active=u.is_active,
                 created_at=u.created_at,
             )
@@ -235,8 +252,7 @@ async def integration_readiness(
         "TEAMS_APP_ID",
     ]
     env_status = {
-        key: {"configured": bool(getattr(settings, key, ""))}
-        for key in env_keys
+        key: {"configured": bool(getattr(settings, key, ""))} for key in env_keys
     }
 
     creds_result = await db.execute(

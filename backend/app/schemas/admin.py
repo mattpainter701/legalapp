@@ -30,6 +30,7 @@ class UserResponse(BaseModel):
     email: str
     full_name: Optional[str] = None
     role: str
+    role_ids: list[str] = []
     is_active: bool
     created_at: datetime
 
