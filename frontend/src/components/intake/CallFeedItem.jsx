@@ -23,6 +23,20 @@ function whenLabel(iso) {
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
 }
 
+// Relative "12m ago" / "3h ago" / "2d ago" so reception sees recency at a glance.
+function agoLabel(iso) {
+  if (!iso) return ''
+  const diffMs = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(diffMs)) return ''
+  const sec = Math.round(diffMs / 1000)
+  if (sec < 45) return 'just now'
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return `${Math.round(hr / 24)}d ago`
+}
+
 export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
   const status = STATUS[(caller.result || '').toLowerCase()]
   const Icon = (caller.result || '').toLowerCase() === 'missed' ? PhoneMissed : PhoneIncoming
@@ -43,9 +57,10 @@ export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
           <Icon size={14} className="shrink-0 text-brand-muted" />
           <p className="truncate text-sm font-bold text-brand-ink">{caller.caller_name}</p>
         </div>
-        <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-brand-muted">
-          {whenLabel(caller.occurred_at)}
-        </span>
+        <div className="shrink-0 text-right leading-tight">
+          <div className="text-xs font-bold text-brand-ink">{whenLabel(caller.occurred_at)}</div>
+          <div className="text-[10px] font-semibold text-brand-muted">{agoLabel(caller.occurred_at)}</div>
+        </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-brand-muted">
         {status && <span className={`rounded-full px-2 py-0.5 font-bold ${status.cls}`}>{status.label}</span>}

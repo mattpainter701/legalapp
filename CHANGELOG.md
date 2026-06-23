@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Call feed time visibility:** each call-feed row now shows the call time prominently plus a relative "12m ago / 3h ago / 2d ago" recency line (feed remains ordered newest-first), so reception sees when each call came in without clicking into it.
 - **Intake history matches show who answered:** call-log results in the History Matches panel now surface `answered_by` (the staff member who answered, from the call's `callee_name`) and the `result` (answered/missed) alongside phone and timestamp — matching what the live call feed already shows — so reception can see who took the call, not just the caller-history name match.
 - **Zoom Phone intake call history:** sync now requests inbound Zoom Phone history only, the importer skips non-inbound call-history rows, nested caller/callee payloads are scanned for the actual caller phone number, and the Zoom Phone queue filters out previously imported outbound legs.
 - **Zoom Phone token expiry copy:** replaced the confusing one-hour access-token expiry footer with admin-facing copy explaining that Clarity refreshes Zoom access automatically during sync/test and only needs reauthorization if access is revoked, scopes change, or the refresh grant expires unused.
