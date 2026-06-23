@@ -45,3 +45,22 @@ async def test_seed_system_roles_idempotent(db_session, test_tenant):
         .where(Role.tenant_id == test_tenant.id, Role.is_system.is_(True))
     )
     assert count == 4
+
+
+@pytest.mark.asyncio
+async def test_count_admin_capable_users(db_session, test_tenant):
+    from app.services.rbac_service import count_admin_capable_users
+
+    admin_role = Role(
+        tenant_id=test_tenant.id, name="Admins", capabilities=["admin_settings"]
+    )
+    db_session.add(admin_role)
+    u = User(
+        id=uuid.uuid4(), tenant_id=test_tenant.id, email="a@testfirm.com", role="user"
+    )
+    db_session.add(u)
+    await db_session.flush()
+    db_session.add(UserRole(user_id=u.id, role_id=admin_role.id, source="manual"))
+    await db_session.commit()
+
+    assert await count_admin_capable_users(db_session, test_tenant.id) == 1

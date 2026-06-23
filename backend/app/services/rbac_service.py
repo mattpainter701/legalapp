@@ -49,3 +49,23 @@ async def seed_system_roles(db: AsyncSession, tenant_id: uuid.UUID) -> None:
             )
         )
     await db.flush()
+
+
+async def count_admin_capable_users(db: AsyncSession, tenant_id: uuid.UUID) -> int:
+    """Number of distinct active users in the tenant holding admin_settings."""
+    from app.models.user import User
+
+    rows = (
+        await db.execute(
+            select(UserRole.user_id)
+            .join(Role, Role.id == UserRole.role_id)
+            .join(User, User.id == UserRole.user_id)
+            .where(
+                Role.tenant_id == tenant_id,
+                User.is_active.is_(True),
+                Role.capabilities.contains(["admin_settings"]),
+            )
+            .distinct()
+        )
+    ).all()
+    return len(rows)
