@@ -156,15 +156,14 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
 
 async def require_admin(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    FastAPI dependency that enforces admin role.
-    Usage: admin = await require_admin(request, db)
-    Or inject via Depends in routers that need it.
-    """
+    """FastAPI dependency that enforces admin access (admin_settings capability)."""
+    from app.services.rbac_service import get_user_capabilities
+
     user = await get_current_user(request, db)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
+    caps = await get_user_capabilities(db, user.id)
+    if "admin_settings" in caps or user.role == "admin":  # legacy fallback
+        return user
+    raise HTTPException(status_code=403, detail="Admin access required")
 
 
 class PortalContext:
@@ -239,13 +238,18 @@ async def get_portal_context(
             redis = getattr(request.app.state, "redis", None)
             if redis:
                 if await redis.exists(f"jti:{jti}"):
-                    raise HTTPException(status_code=401, detail="Portal session has been revoked")
+                    raise HTTPException(
+                        status_code=401, detail="Portal session has been revoked"
+                    )
             else:
                 import time as _time
+
                 blacklist = getattr(request.app.state, "jti_blacklist", {})
                 ts = blacklist.get(jti)
                 if ts and _time.time() < ts:
-                    raise HTTPException(status_code=401, detail="Portal session has been revoked")
+                    raise HTTPException(
+                        status_code=401, detail="Portal session has been revoked"
+                    )
 
         tenant_id = payload.get("tenant_id")
         ctx = PortalContext(
