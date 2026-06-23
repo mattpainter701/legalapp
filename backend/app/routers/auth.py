@@ -160,13 +160,17 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 
 def _create_access_token(
-    user: User, tenant: Tenant, plan_id: str = "full-platform"
+    user: User,
+    tenant: Tenant,
+    plan_id: str = "full-platform",
+    caps: list[str] | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user.id),
         "tenant_id": str(user.tenant_id),
         "role": user.role,
+        "caps": caps or [],
         "email": user.email,
         "billing_tier": tenant.billing_tier,
         "plan": plan_id,
@@ -178,11 +182,13 @@ def _create_access_token(
 
 
 async def _issue_access_token(db: AsyncSession, user: User, tenant: Tenant) -> str:
-    """Resolve the tenant's plan and mint an access token carrying the plan claim."""
+    """Resolve the tenant's plan + user capabilities and mint an access token."""
     from app.services.module_visibility import resolve_plan_meta
+    from app.services.rbac_service import get_user_capabilities
 
     plan_id, _ = await resolve_plan_meta(db, user.tenant_id)
-    return _create_access_token(user, tenant, plan_id)
+    caps = sorted(await get_user_capabilities(db, user.id))
+    return _create_access_token(user, tenant, plan_id, caps)
 
 
 # ── Cookie + refresh-token helpers ─────────────────────────────────────────────
