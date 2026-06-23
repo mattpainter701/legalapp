@@ -80,6 +80,7 @@ from app.models.external_import import (
     ExternalRawRow,
     ExternalRecordLink,
 )
+from app.models.rbac import Role, UserRole
 
 __all__ = [
     "Tenant",
@@ -161,4 +162,6 @@ __all__ = [
     "ExternalImportRun",
     "ExternalRawRow",
     "ExternalRecordLink",
+    "Role",
+    "UserRole",
 ]
