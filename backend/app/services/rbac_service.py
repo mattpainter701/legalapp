@@ -51,6 +51,29 @@ async def seed_system_roles(db: AsyncSession, tenant_id: uuid.UUID) -> None:
     await db.flush()
 
 
+async def provision_tenant_rbac(
+    db: AsyncSession, tenant_id: uuid.UUID, admin_user_id: uuid.UUID
+) -> None:
+    """Seed system roles for a new tenant and assign the creator Administrator.
+
+    Idempotent: safe to call more than once. Flushes; caller commits.
+    """
+    await seed_system_roles(db, tenant_id)
+    admin_role_id = await db.scalar(
+        select(Role.id).where(Role.tenant_id == tenant_id, Role.name == "Administrator")
+    )
+    if admin_role_id is None:
+        return
+    existing = await db.scalar(
+        select(UserRole.id).where(
+            UserRole.user_id == admin_user_id, UserRole.role_id == admin_role_id
+        )
+    )
+    if existing is None:
+        db.add(UserRole(user_id=admin_user_id, role_id=admin_role_id, source="manual"))
+    await db.flush()
+
+
 async def count_admin_capable_users(db: AsyncSession, tenant_id: uuid.UUID) -> int:
     """Number of distinct active users in the tenant holding admin_settings."""
     from app.models.user import User

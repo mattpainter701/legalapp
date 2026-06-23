@@ -599,6 +599,15 @@ async def microsoft_callback(
             )
         await ensure_stripe_customer(tenant, db)
 
+        # New firm: the first user of a brand-new tenant is created as admin by
+        # _get_or_create_user. Seed system roles + assign Administrator so the
+        # minted JWT carries manage_roles/admin_settings caps. Inside db.begin()
+        # so provision flushes only; the transaction block commits on exit.
+        if not tenant_exists:
+            from app.services.rbac_service import provision_tenant_rbac
+
+            await provision_tenant_rbac(db, tenant.id, user.id)
+
     jwt_token = await _issue_access_token(db, user, tenant)
     callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
@@ -824,6 +833,15 @@ async def google_callback(
             )
         await ensure_stripe_customer(tenant, db)
 
+        # New firm: the first user of a brand-new tenant is created as admin by
+        # _get_or_create_user. Seed system roles + assign Administrator so the
+        # minted JWT carries manage_roles/admin_settings caps. Inside db.begin()
+        # so provision flushes only; the transaction block commits on exit.
+        if not tenant_exists:
+            from app.services.rbac_service import provision_tenant_rbac
+
+            await provision_tenant_rbac(db, tenant.id, user.id)
+
     jwt_token = await _issue_access_token(db, user, tenant)
     callback_code = await _save_callback_token(request, jwt_token)
     return RedirectResponse(
@@ -934,6 +952,13 @@ async def register(
     await db.refresh(user)
     await db.refresh(tenant)
 
+    # New firm: seed system roles + assign the founding admin the Administrator
+    # system role so the minted JWT carries manage_roles/admin_settings caps.
+    from app.services.rbac_service import provision_tenant_rbac
+
+    await provision_tenant_rbac(db, tenant.id, user.id)
+    await db.commit()
+
     jwt_token = await _issue_access_token(db, user, tenant)
     refresh_token = await _create_refresh_token(request, user)
     _set_auth_cookies(response, jwt_token, refresh_token)
@@ -1013,6 +1038,13 @@ async def signup_with_plan(
     await db.commit()
     await db.refresh(user)
     await db.refresh(tenant)
+
+    # New firm: seed system roles + assign the founding admin the Administrator
+    # system role so the minted JWT carries manage_roles/admin_settings caps.
+    from app.services.rbac_service import provision_tenant_rbac
+
+    await provision_tenant_rbac(db, tenant.id, user.id)
+    await db.commit()
 
     jwt_token = await _issue_access_token(db, user, tenant)
     refresh_token = await _create_refresh_token(request, user)

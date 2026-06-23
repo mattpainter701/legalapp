@@ -64,3 +64,43 @@ async def test_count_admin_capable_users(db_session, test_tenant):
     await db_session.commit()
 
     assert await count_admin_capable_users(db_session, test_tenant.id) == 1
+
+
+@pytest.mark.asyncio
+async def test_provision_tenant_rbac_assigns_administrator(db_session, test_tenant):
+    from app.services.rbac_service import provision_tenant_rbac, get_user_capabilities
+
+    admin = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="founder@testfirm.com",
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.flush()
+
+    await provision_tenant_rbac(db_session, test_tenant.id, admin.id)
+    await db_session.commit()
+
+    caps = await get_user_capabilities(db_session, admin.id)
+    # Administrator system role carries every capability, including manage_roles.
+    assert "manage_roles" in caps
+    assert "admin_settings" in caps
+
+    # Idempotent: calling again must not create duplicate Administrator assignments.
+    await provision_tenant_rbac(db_session, test_tenant.id, admin.id)
+    await db_session.commit()
+    from sqlalchemy import select, func
+    from app.models.rbac import Role, UserRole
+
+    admin_role_id = await db_session.scalar(
+        select(Role.id).where(
+            Role.tenant_id == test_tenant.id, Role.name == "Administrator"
+        )
+    )
+    assignment_count = await db_session.scalar(
+        select(func.count())
+        .select_from(UserRole)
+        .where(UserRole.user_id == admin.id, UserRole.role_id == admin_role_id)
+    )
+    assert assignment_count == 1
