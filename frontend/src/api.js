@@ -305,6 +305,15 @@ export const getAdminUsage = () =>
 
 export const getAdminTenant = () =>
   api.get('/admin/tenant').then((r) => r.data)
+
+// Roles (RBAC)
+export const listRoles = () => api.get('/admin/roles').then((r) => r.data)
+export const createRole = (body) => api.post('/admin/roles', body).then((r) => r.data)
+export const updateRole = (id, body) =>
+  api.put(`/admin/roles/${id}`, body).then((r) => r.data)
+export const deleteRole = (id) => api.delete(`/admin/roles/${id}`).then((r) => r.data)
+export const assignUserRoles = (userId, roleIds) =>
+  api.put(`/admin/roles/assign/${userId}`, { role_ids: roleIds }).then((r) => r.data)
 export const getAdminSettings = () =>
   api.get('/admin/settings').then((r) => r.data)
 export const updateAdminSettings = (body) =>

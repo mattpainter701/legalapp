@@ -14,10 +14,13 @@ import {
   updateAdminSettings,
   getAlertConfig,
   updateAlertConfig,
+  listRoles,
+  assignUserRoles,
 } from '../api'
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
+import RolesTab from './admin/RolesTab'
 import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
 import IntegrationsPanel from '../components/IntegrationsPanel'
@@ -51,6 +54,7 @@ function StatCard({ label, value, sub }) {
 
 const ADMIN_TABS = [
   { id: 'users', label: 'Users' },
+  { id: 'roles', label: 'Roles' },
   { id: 'licensing', label: 'Licensing' },
   { id: 'billing', label: 'Subscription' },
   { id: 'usage', label: 'Usage' },
@@ -344,6 +348,104 @@ function RateCell({ user, onSaved }) {
   )
 }
 
+// ── Per-user role assignment ─────────────────────────────────────────────────
+
+function RoleAssignCell({ user, roles, saving, disabled, onAssign }) {
+  const [open, setOpen] = useState(false)
+  const [selected, setSelected] = useState([])
+  const ref = useRef(null)
+
+  // Seed selection from any role_ids the backend may surface on the user row.
+  useEffect(() => {
+    if (Array.isArray(user.role_ids)) {
+      setSelected(user.role_ids.map((id) => String(id)))
+    } else if (Array.isArray(user.roles)) {
+      setSelected(user.roles.map((r) => String(r.id ?? r)))
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (!open) return
+    const onClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  const toggle = (id) =>
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+
+  const save = () => {
+    setOpen(false)
+    onAssign(selected)
+  }
+
+  if (disabled) {
+    return (
+      <span className="inline-flex px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide bg-brand-line/50 text-brand-muted border border-brand-line">
+        {user.role}
+      </span>
+    )
+  }
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={saving}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide cursor-pointer hover:opacity-80 transition-colors bg-brand-line/50 text-brand-muted border border-brand-line disabled:opacity-50"
+        title="Assign roles"
+      >
+        {saving ? '…' : user.role}
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-56 bg-brand-surface border border-brand-line rounded-lg shadow-lg p-2">
+          {roles.length === 0 ? (
+            <p className="text-xs text-brand-muted font-sans px-1 py-1">No roles defined yet.</p>
+          ) : (
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {roles.map((r) => {
+                const id = String(r.id)
+                return (
+                  <label key={id} className="flex items-center gap-2 text-xs font-sans px-1 py-1 hover:bg-brand-bg-soft rounded cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(id)}
+                      onChange={() => toggle(id)}
+                    />
+                    <span className="text-brand-ink">{r.name}{r.is_system ? ' (system)' : ''}</span>
+                  </label>
+                )
+              })}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-brand-line">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-xs font-sans text-brand-muted hover:text-brand-ink px-2 py-1"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              className="text-xs font-sans font-medium text-white bg-brand-ink rounded px-3 py-1 hover:bg-brand-ink/90"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Tab: Users ───────────────────────────────────────────────────────────────
 
 function UsersTab({ billingTier }) {
@@ -354,6 +456,7 @@ function UsersTab({ billingTier }) {
   const [deactivating, setDeactivating] = useState(null)
   const [reactivating, setReactivating] = useState(null)
   const [changingRole, setChangingRole] = useState(null)
+  const [availableRoles, setAvailableRoles] = useState([])
   const [showInvite, setShowInvite] = useState(false)
   const [showInactive, setShowInactive] = useState(false)
   const [successMsg, setSuccessMsg] = useState(null)
@@ -375,6 +478,9 @@ function UsersTab({ billingTier }) {
   }
 
   useEffect(() => { loadUsers() }, [])
+  useEffect(() => {
+    listRoles().then(setAvailableRoles).catch(() => {})
+  }, [])
 
   const flash = (msg) => {
     setSuccessMsg(msg)
@@ -424,17 +530,15 @@ function UsersTab({ billingTier }) {
     }
   }
 
-  const handleRoleToggle = async (u) => {
-    const roleCycle = { user: 'accountant', accountant: 'admin', admin: 'user' }
-    const newRole = roleCycle[u.role] || 'user'
-    if (!window.confirm(`Change ${u.email} to ${newRole}?`)) return
+  const handleAssignRoles = async (u, roleIds) => {
+    if (!window.confirm(`Update role assignments for ${u.email}?`)) return
     setChangingRole(u.id)
     try {
-      await updateUser(u.id, { role: newRole })
-      flash(`${u.email} is now a ${newRole}.`)
+      await assignUserRoles(u.id, roleIds)
+      flash(`Roles updated for ${u.email}.`)
       loadUsers()
     } catch (e) {
-      setError(e?.response?.data?.detail || 'Failed to update role')
+      setError(e?.response?.data?.detail || 'Failed to update roles')
     } finally {
       setChangingRole(null)
     }
@@ -519,28 +623,13 @@ function UsersTab({ billingTier }) {
                     {u.full_name && <p className="text-brand-muted font-sans text-xs">{u.email}</p>}
                   </td>
                   <td className="px-6 py-4">
-                    <button
-                      onClick={() => !isInactive && handleRoleToggle(u)}
-                      disabled={changingRole === u.id || isInactive}
-                      title={isInactive ? undefined : `Click to switch to ${
-                        (u.role === 'user' && 'accountant') ||
-                        (u.role === 'accountant' && 'admin') ||
-                        'user'
-                      }`}
-                      className={`inline-flex px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide transition-colors ${
-                        isInactive
-                          ? 'cursor-default'
-                          : 'cursor-pointer hover:opacity-80'
-                      } ${
-                        u.role === 'admin'
-                          ? 'bg-brand-ink/10 text-brand-ink border border-brand-ink/20'
-                          : u.role === 'accountant'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-brand-line/50 text-brand-muted border border-brand-line'
-                      }`}
-                    >
-                      {changingRole === u.id ? '…' : u.role}
-                    </button>
+                    <RoleAssignCell
+                      user={u}
+                      roles={availableRoles}
+                      saving={changingRole === u.id}
+                      disabled={isInactive}
+                      onAssign={(roleIds) => handleAssignRoles(u, roleIds)}
+                    />
                   </td>
                   <td className="px-6 py-4">
                     <RateCell
@@ -1196,6 +1285,7 @@ export default function AdminPage() {
         {/* Tab content */}
         <div className="animate-in fade-in duration-300">
           {activeTab === 'users' && <UsersTab billingTier={billingTier} />}
+          {activeTab === 'roles' && <RolesTab />}
           {activeTab === 'licensing' && <LicensingPanel />}
           {activeTab === 'billing' && <BillingPage embedded />}
           {activeTab === 'usage' && <UsageTab />}
