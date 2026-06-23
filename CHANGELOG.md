@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **Intake dashboard mobile + action feedback:** the call-logging/lead result banner is now sticky and auto-scrolls into view, so tapping "Create Lead"/"Log Call" at the bottom of a long mobile page shows the "Lead created…" confirmation instead of appearing to do nothing. Tightened mobile padding/heading sizes and removed the dev-only "MVP Boundary" panel to declutter the screen.
 - **Call feed time visibility:** each call-feed row now shows the call time prominently plus a relative "12m ago / 3h ago / 2d ago" recency line (feed remains ordered newest-first), so reception sees when each call came in without clicking into it.
 - **Intake history matches show who answered:** call-log results in the History Matches panel now surface `answered_by` (the staff member who answered, from the call's `callee_name`) and the `result` (answered/missed) alongside phone and timestamp — matching what the live call feed already shows — so reception can see who took the call, not just the caller-history name match.
 - **Zoom Phone intake call history:** sync now requests inbound Zoom Phone history only, the importer skips non-inbound call-history rows, nested caller/callee payloads are scanned for the actual caller phone number, and the Zoom Phone queue filters out previously imported outbound legs.

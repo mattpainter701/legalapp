@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle,
   ArrowRight,
   Bell,
   BellOff,
@@ -437,6 +436,14 @@ export default function IntakeDashboardPage() {
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
 
+  // Surface action feedback wherever the user is on a long mobile page.
+  const messageRef = useRef(null)
+  useEffect(() => {
+    if (message && messageRef.current) {
+      messageRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [message])
+
   const { callers: feedCallers, loading: feedLoading, newCallIds, refresh: refreshFeed } =
     useCallFeedPolling(20)
   const { toasts, notify, dismiss, muted, toggleMute, soundReady } = useCallAlerts(user?.tenant_id)
@@ -700,13 +707,13 @@ export default function IntakeDashboardPage() {
 
   return (
     <div className="min-h-full bg-gradient-to-br from-brand-bg via-white to-brand-bg-soft">
-      <div className="mx-auto max-w-7xl px-5 py-8">
-        <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+      <div className="mx-auto max-w-7xl px-3 py-5 sm:px-5 sm:py-8">
+        <div className="mb-5 flex flex-col justify-between gap-3 lg:flex-row lg:items-end sm:mb-6 sm:gap-4">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-brand-muted">
               <PhoneCall size={13} /> Reception desk
             </div>
-            <h1 className="mt-3 font-serif text-3xl font-black text-brand-ink">Local Intake Dashboard</h1>
+            <h1 className="mt-3 font-serif text-2xl font-black text-brand-ink sm:text-3xl">Local Intake Dashboard</h1>
             <p className="mt-1 max-w-2xl text-sm text-brand-muted">
               The call feed updates automatically every 15 seconds. Select a call to see its history and log or route it.
             </p>
@@ -729,8 +736,19 @@ export default function IntakeDashboardPage() {
         </div>
 
         {message && (
-          <div className="mb-5 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm text-brand-ink shadow-sm">
-            {message}
+          <div
+            ref={messageRef}
+            className="sticky top-2 z-30 mb-5 flex items-start justify-between gap-3 rounded-2xl border border-brand-accent/30 bg-white px-4 py-3 text-sm text-brand-ink shadow-md"
+          >
+            <span>{message}</span>
+            <button
+              type="button"
+              onClick={() => setMessage(null)}
+              className="shrink-0 text-xs font-bold text-brand-muted hover:text-brand-ink"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
           </div>
         )}
 
@@ -1040,18 +1058,6 @@ export default function IntakeDashboardPage() {
                     : (form.task_mode === 'specific_staff' ? 'Log Call + Staff Task' : 'Log Call Only')}
                 </button>
               </form>
-            </section>
-
-            <section className="rounded-3xl border border-brand-line bg-white p-5 shadow-sm">
-              <div className="flex items-start gap-3">
-                <AlertTriangle size={18} className="mt-0.5 text-brand-amber" />
-                <div>
-                  <h2 className="font-serif text-base font-bold text-brand-ink">MVP Boundary</h2>
-                  <p className="mt-1 text-xs leading-5 text-brand-muted">
-                    Phone integrations add context to the same manual intake workflow. Reception can still log calls and route tasks when a phone integration is unavailable.
-                  </p>
-                </div>
-              </div>
             </section>
 
             <RecordsTabs
