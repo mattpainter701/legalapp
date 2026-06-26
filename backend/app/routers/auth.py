@@ -186,6 +186,12 @@ async def _issue_access_token(db: AsyncSession, user: User, tenant: Tenant) -> s
     from app.services.module_visibility import resolve_plan_meta
     from app.services.rbac_service import get_user_capabilities
 
+    # Auth paths (OAuth callbacks, login) run _issue_access_token after their
+    # transaction commits, which resets all SET LOCAL GUCs including
+    # app.current_tenant_id back to '' — causing the RLS policy on user_roles
+    # to throw "invalid input syntax for type uuid: ''". Bind the tenant context
+    # here so the user_roles query always runs with the correct RLS context.
+    await set_tenant_context(db, str(user.tenant_id))
     plan_id, _ = await resolve_plan_meta(db, user.tenant_id)
     caps = sorted(await get_user_capabilities(db, user.id))
     return _create_access_token(user, tenant, plan_id, caps)
