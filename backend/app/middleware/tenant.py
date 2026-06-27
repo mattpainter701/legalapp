@@ -100,6 +100,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+import logging as _logging
+
+_gcu_log = _logging.getLogger("app.get_current_user")
+
+
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
     """Dependency that reads request.state and queries user from DB."""
     from app.models.user import User
@@ -110,6 +115,14 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         # Try to parse token directly for routes that bypass middleware
         # Try to get token from cookie first, then fall back to Authorization header
         token = request.cookies.get("access_token")
+        auth_hdr = request.headers.get("Authorization", "")
+        _gcu_log.warning(
+            "DEBUG get_current_user: path=%s cookie_present=%s auth_header_present=%s cookie_keys=%s",
+            request.url.path,
+            bool(token),
+            bool(auth_hdr),
+            list(request.cookies.keys()),
+        )
         if not token:
             auth_header = request.headers.get("Authorization")
             if not auth_header or not auth_header.startswith("Bearer "):
