@@ -126,6 +126,9 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         if not token:
             auth_header = request.headers.get("Authorization")
             if not auth_header or not auth_header.startswith("Bearer "):
+                _gcu_log.warning(
+                    "DEBUG get_current_user: RAISING 401 — no cookie AND no auth header"
+                )
                 raise HTTPException(status_code=401, detail="Not authenticated")
             token = auth_header.split(" ", 1)[1]
         try:
@@ -144,11 +147,23 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
                     ts = blacklist.get(jti)
                     blacklisted = ts and _time.time() < ts
                 if blacklisted:
+                    _gcu_log.warning(
+                        "DEBUG get_current_user: RAISING 401 — token blacklisted jti=%s",
+                        jti,
+                    )
                     raise HTTPException(
                         status_code=401, detail="Token has been revoked"
                     )
             user_id = payload.get("sub")
-        except JWTError:
+            _gcu_log.warning(
+                "DEBUG get_current_user: JWT decode OK user_id=%s", user_id
+            )
+        except JWTError as e:
+            _gcu_log.warning(
+                "DEBUG get_current_user: RAISING 401 — JWTError: %s token_prefix=%s",
+                e,
+                token[:20] if token else "NONE",
+            )
             raise HTTPException(status_code=401, detail="Invalid token")
 
     if not user_id:
