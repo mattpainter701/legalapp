@@ -100,35 +100,21 @@ class TenantMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-import logging as _logging
-
-_gcu_log = _logging.getLogger("app.get_current_user")
-
-
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
     """Dependency that reads request.state and queries user from DB."""
+    from app.database import set_tenant_context
     from app.models.user import User
 
     user_id = getattr(request.state, "user_id", None)
+    # TenantMiddleware sets tenant_id for non-auth routes; auth routes get it from JWT below.
+    tenant_id = getattr(request.state, "tenant_id", None)
 
     if not user_id:
-        # Try to parse token directly for routes that bypass middleware
-        # Try to get token from cookie first, then fall back to Authorization header
+        # /api/auth/* routes bypass TenantMiddleware — parse the token directly.
         token = request.cookies.get("access_token")
-        auth_hdr = request.headers.get("Authorization", "")
-        _gcu_log.warning(
-            "DEBUG get_current_user: path=%s cookie_present=%s auth_header_present=%s cookie_keys=%s",
-            request.url.path,
-            bool(token),
-            bool(auth_hdr),
-            list(request.cookies.keys()),
-        )
         if not token:
             auth_header = request.headers.get("Authorization")
             if not auth_header or not auth_header.startswith("Bearer "):
-                _gcu_log.warning(
-                    "DEBUG get_current_user: RAISING 401 — no cookie AND no auth header"
-                )
                 raise HTTPException(status_code=401, detail="Not authenticated")
             token = auth_header.split(" ", 1)[1]
         try:
@@ -147,27 +133,22 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
                     ts = blacklist.get(jti)
                     blacklisted = ts and _time.time() < ts
                 if blacklisted:
-                    _gcu_log.warning(
-                        "DEBUG get_current_user: RAISING 401 — token blacklisted jti=%s",
-                        jti,
-                    )
                     raise HTTPException(
                         status_code=401, detail="Token has been revoked"
                     )
             user_id = payload.get("sub")
-            _gcu_log.warning(
-                "DEBUG get_current_user: JWT decode OK user_id=%s", user_id
-            )
-        except JWTError as e:
-            _gcu_log.warning(
-                "DEBUG get_current_user: RAISING 401 — JWTError: %s token_prefix=%s",
-                e,
-                token[:20] if token else "NONE",
-            )
+            tenant_id = payload.get("tenant_id")
+        except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Set the tenant RLS context before querying the users table.
+    # clarity_app role has no BYPASSRLS, so without this the policy filters
+    # tenant_id against NULL and returns no rows → "User not found".
+    if tenant_id:
+        await set_tenant_context(db, str(tenant_id))
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
