@@ -56,7 +56,74 @@ appended.
   used instead of the client's. nginx must forward
   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (it does).
 
-## 4. Secrets
+## 4. Cloudflare tunnel — real-IP and rate limiting
+
+### The problem
+
+When using **cloudflared tunnel** (as in the current PoC), traffic does not arrive
+at nginx from Cloudflare's public edge IPs. Instead, cloudflared connects from inside
+the Docker network (e.g., `172.24.0.0/16`). The `set_real_ip_from` block lists
+only Cloudflare's public ranges, so nginx's `real_ip_module` never activates, and
+`$remote_addr` stays as the tunnel container's Docker IP.
+
+**Effect:** every user shares one rate-limit bucket. The `auth` zone (10 r/m, burst 5)
+and `oauth` zone (30 r/m, burst 15) are exhausted by a handful of concurrent logins,
+returning 429 to everyone.
+
+### Current fix (PoC / self-hosted)
+
+`nginx/nginx.conf` now adds the RFC-1918 Docker ranges to `set_real_ip_from`:
+
+```nginx
+set_real_ip_from 172.16.0.0/12;   # Docker bridge networks
+set_real_ip_from 10.0.0.0/8;      # Docker overlay / cloud VPC ranges
+real_ip_header CF-Connecting-IP;   # Cloudflare/cloudflared forwards this
+```
+
+cloudflared forwards `CF-Connecting-IP` with the real browser IP, so once nginx
+trusts the tunnel container nginx properly replaces `$remote_addr` and each user
+gets their own rate-limit bucket.
+
+**Security trade-off:** any container on the Docker network could forge
+`CF-Connecting-IP`. Acceptable in a single-host Docker Compose environment where
+only trusted containers share the bridge.
+
+### Cloud production — choose one
+
+| Deployment model | nginx config change |
+|-|-|
+| **cloudflared tunnel** (same arch, cloud VM) | Same fix — add the VPC/internal subnet to `set_real_ip_from`. Find it with `docker network inspect`. |
+| **Direct Cloudflare proxy** (no tunnel, public ingress port 80/443) | No change needed — traffic arrives from Cloudflare's public edge IPs already in `set_real_ip_from`. `CF-Connecting-IP` is real. |
+| **Cloud load balancer** (AWS ALB, GCP LB, etc.) | Replace `real_ip_header CF-Connecting-IP` with `real_ip_header X-Forwarded-For` and add the LB's subnet to `set_real_ip_from`. Also set `TRUSTED_PROXY_HOPS` to match the proxy depth. |
+
+### Verify the fix is working
+
+After deploy, hit an auth endpoint and check the nginx access log:
+
+```bash
+docker exec legalapp-nginx-1 tail -20 /var/log/nginx/access.log
+```
+
+The `$remote_addr` column in the log should show real client IPs (e.g., `1.2.3.4`),
+not the Docker bridge IP (`172.24.0.x`). If it still shows the bridge IP, the
+`set_real_ip_from` range doesn't cover your network.
+
+## 5. RLS-enabled runtime DB cutover
+
+RLS is already defined and forced in tables, but enforcement is only real when the
+app connects as a non-owner, no-`BYPASSRLS` role.
+
+- Run `backend/scripts/provision_app_role.sql` once as a superuser/DB owner.
+- Set `APP_DATABASE_URL` in production env to the `clarity_app` DSN:
+  - Example: `postgresql+asyncpg://clarity_app:...@localhost:5432/legalapp?ssl=require`
+- Deploy services. `backend` and `scheduler` in compose now read:
+  - `DATABASE_URL=${APP_DATABASE_URL:-${DATABASE_URL}}`
+- Keep migrations on owner role:
+  - `migrator` resolves `DATABASE_URL` from `MIGRATOR_DATABASE_URL` when set, else falls back to `DATABASE_URL`.
+- Confirm startup logs show `DB role check passed` and direct DB checks show:
+  - `rolsuper = false` and `rolbypassrls = false` for `clarity_app`.
+
+## 6. Secrets
 
 - Move secrets out of plaintext `.env` into Docker secrets / a secret manager.
 - Rotate `SECRET_KEY`, `PLATFORM_SECRET_KEY`, DB and Redis passwords; document the
