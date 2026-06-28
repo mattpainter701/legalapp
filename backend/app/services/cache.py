@@ -107,6 +107,7 @@ class ExpertiseCacheManager:
         tenant_id: str,
         user_id: str,
         skill: Optional[str] = None,
+        include_public: bool = True,
     ) -> Optional[Tuple[str, list]]:
         """
         Retrieve cached RAG results.
@@ -116,7 +117,9 @@ class ExpertiseCacheManager:
             return None
 
         try:
-            key = self._make_key("rag", tenant_id, user_id, question[:50])
+            public_scope = "public" if include_public else "private"
+            query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+            key = self._make_key("rag", tenant_id, user_id, public_scope, query_hash)
             cached = await self.redis_client.get(key)
             if cached:
                 data = json.loads(cached)
@@ -135,13 +138,16 @@ class ExpertiseCacheManager:
         chunks: list,
         expertise_level: str = "mid",
         skill: Optional[str] = None,
+        include_public: bool = True,
     ) -> bool:
         """Cache RAG results with expertise-aware TTL."""
         if not self.cache_enabled or not self.redis_client:
             return False
 
         try:
-            key = self._make_key("rag", tenant_id, user_id, question[:50])
+            public_scope = "public" if include_public else "private"
+            query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+            key = self._make_key("rag", tenant_id, user_id, public_scope, query_hash)
             ttl = self._get_ttl(expertise_level, "rag", skill)
             data = {"context": context_str, "chunks": chunks}
             await self.redis_client.setex(key, ttl, json.dumps(data, default=str))

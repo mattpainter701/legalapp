@@ -8,7 +8,7 @@ Limits:
   tenant:  flat tier  → 1 000 LLM calls / day
            payg tier  → 10 000 LLM calls / day  (they pay per call anyway)
 
-Only /api/conversations and /api/plugins paths count against tenant daily limit.
+Only LLM/tool-heavy conversation and plugin paths count against tenant daily limit.
 """
 
 from datetime import datetime, timezone
@@ -25,7 +25,6 @@ from app.config import get_settings
 
 settings = get_settings()
 
-RATE_LIMITED_PREFIXES = ("/api/conversations", "/api/plugins")
 AUTH_LIMITS = {
     "/api/auth/login": (10, 600),
     "/api/auth/register": (5, 600),
@@ -136,6 +135,21 @@ def _fallback_auth_increment(key: str, window_seconds: int) -> int:
     return count
 
 
+def _counts_against_tenant_daily(method: str, path: str) -> bool:
+    if path.startswith("/api/plugins"):
+        return True
+    if method != "POST":
+        return False
+    return (
+        path.startswith("/api/conversations/")
+        and (
+            path.endswith("/messages")
+            or path.endswith("/messages/stream")
+            or "/messages/" in path
+        )
+    )
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Reads Redis from request.app.state.redis at request time (set during lifespan)."""
 
@@ -196,7 +210,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 pass  # Redis unavailable — fail open
 
         # ── Per-tenant daily limit (LLM-heavy paths only) ─────────────────────
-        if tenant_id and any(path.startswith(p) for p in RATE_LIMITED_PREFIXES):
+        if tenant_id and _counts_against_tenant_daily(request.method, path):
             daily_limit = TENANT_DAILY_LIMITS.get(
                 billing_tier, TENANT_DAILY_LIMITS["payg"]
             )

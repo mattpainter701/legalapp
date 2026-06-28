@@ -241,6 +241,11 @@ def _message_to_response(msg: Message) -> MessageResponse:
     )
 
 
+def _conversation_belongs_to_user(conv: Conversation, user) -> bool:
+    """Chat conversations are private to their creator, including tenant admins."""
+    return str(conv.user_id) == str(user.id)
+
+
 async def _trigger_auto_memory_generation_bg(
     user_id: str,
     tenant_id: str,
@@ -386,8 +391,8 @@ async def create_conversation(
         matter_id=matter_uuid,
     )
     db.add(conv)
+    await db.flush()
     await db.commit()
-    await db.refresh(conv)
 
     return _conversation_to_response(conv, 0)
 
@@ -406,6 +411,7 @@ async def get_conversation(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.tenant_id == user.tenant_id,
+            Conversation.user_id == user.id,
         )
     )
     conv = result.scalar_one_or_none()
@@ -413,7 +419,7 @@ async def get_conversation(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
     msg_result = await db.execute(
@@ -444,6 +450,7 @@ async def update_conversation(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.tenant_id == user.tenant_id,
+            Conversation.user_id == user.id,
         )
     )
     conv = result.scalar_one_or_none()
@@ -451,7 +458,7 @@ async def update_conversation(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if body.title is not None:
@@ -486,13 +493,12 @@ async def update_conversation(
     if body.title is None and body.matter_id is None:
         raise HTTPException(status_code=400, detail="No conversation updates provided")
 
-    await db.commit()
-    await db.refresh(conv)
-
     count_result = await db.execute(
         select(func.count(Message.id)).where(Message.conversation_id == conv.id)
     )
-    return _conversation_to_response(conv, count_result.scalar() or 0)
+    message_count = count_result.scalar() or 0
+    await db.commit()
+    return _conversation_to_response(conv, message_count)
 
 
 @router.post(
@@ -521,6 +527,7 @@ async def upload_chat_attachment(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.tenant_id == user.tenant_id,
+            Conversation.user_id == user.id,
         )
     )
     conv = result.scalar_one_or_none()
@@ -528,7 +535,7 @@ async def upload_chat_attachment(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not file.filename:
@@ -596,8 +603,8 @@ async def upload_chat_attachment(
         expires_at=expires_at,
     )
     db.add(doc)
+    await db.flush()
     await db.commit()
-    await db.refresh(doc)
 
     return ChatAttachmentResponse.model_validate(doc)
 
@@ -616,6 +623,7 @@ async def delete_conversation(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.tenant_id == user.tenant_id,
+            Conversation.user_id == user.id,
         )
     )
     conv = result.scalar_one_or_none()
@@ -623,7 +631,7 @@ async def delete_conversation(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Remove attachment files from disk before the FK cascade deletes their rows.
@@ -667,6 +675,7 @@ async def send_message(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.tenant_id == user.tenant_id,
+            Conversation.user_id == user.id,
         )
     )
     conv = result.scalar_one_or_none()
@@ -674,7 +683,7 @@ async def send_message(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
     # 1a. Enforce daily token budget (fail fast before any work is done)
@@ -776,6 +785,7 @@ async def send_message(
             tenant_id=str(user.tenant_id),
             user_id=str(user.id),
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
         ),
     )
 
@@ -810,6 +820,7 @@ async def send_message(
                 chunks=chunks,
                 expertise_level=user.expertise_level,
                 skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                include_public=body.include_public,
             )
         except Exception as rag_exc:
             logger.exception("RAG query failed")
@@ -992,6 +1003,7 @@ async def send_message(
     skill_applied = (
         body.skill if hasattr(body, "skill") and body.skill else user.default_skill
     )
+    await set_tenant_context(db, str(user.tenant_id))
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -1048,8 +1060,8 @@ async def send_message(
     )
     db.add(usage)
 
+    await db.flush()
     await db.commit()
-    await db.refresh(assistant_msg)
 
     # Trigger auto-memory generation in background (non-blocking)
     background_tasks.add_task(
@@ -1088,6 +1100,7 @@ async def stream_message(
             select(Conversation).where(
                 Conversation.id == conversation_id,
                 Conversation.tenant_id == user.tenant_id,
+                Conversation.user_id == user.id,
             )
         )
         conv = result.scalar_one_or_none()
@@ -1104,7 +1117,7 @@ async def stream_message(
             media_type="text/event-stream",
         )
 
-    if conv.user_id != user.id and user.role != "admin":
+    if not _conversation_belongs_to_user(conv, user):
         return StreamingResponse(
             _error_stream("Access denied"),
             media_type="text/event-stream",
@@ -1214,6 +1227,7 @@ async def stream_message(
             tenant_id=str(user.tenant_id),
             user_id=str(user.id),
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
         ),
     )
 
@@ -1251,6 +1265,7 @@ async def stream_message(
             chunks=chunks,
             expertise_level=user.expertise_level,
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
         )
 
     # 4a. Combine attachment, matter, and RAG context
@@ -1366,6 +1381,7 @@ async def stream_message(
                 if hasattr(body, "skill") and body.skill
                 else user.default_skill
             )
+            await set_tenant_context(db, str(user.tenant_id))
             assistant_msg = Message(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,

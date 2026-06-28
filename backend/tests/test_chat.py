@@ -7,10 +7,12 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.routers.chat import _auto_tier, _join_context_sections
+from app.routers.chat import _auto_tier, _conversation_belongs_to_user, _join_context_sections
+from app.models.conversation import Conversation
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
+from app.models.user import User
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
 
@@ -60,6 +62,16 @@ def test_join_context_sections_omits_empty_sections():
 def test_auto_tier_respects_manual_premium_for_simple_queries():
     assert _auto_tier("2+2=?", user_requested_premium=True) is True
     assert _auto_tier("2+2=?", user_requested_premium=False) is False
+
+
+def test_conversation_belongs_to_user_does_not_grant_admin_override():
+    user_id = uuid.uuid4()
+    other_user_id = uuid.uuid4()
+
+    assert _conversation_belongs_to_user(
+        conv=type("Conv", (), {"user_id": other_user_id})(),
+        user=type("User", (), {"id": user_id, "role": "admin"})(),
+    ) is False
 
 
 @pytest.mark.asyncio
@@ -316,6 +328,64 @@ async def test_premium_message_uses_tenant_premium_route(
 async def test_conversation_not_found(client: AsyncClient):
     resp = await client.get("/api/conversations/00000000-0000-0000-0000-000000000099")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_open_same_tenant_user_conversation(
+    client: AsyncClient, db_session, test_tenant
+):
+    other_user = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email=f"other-{uuid.uuid4().hex[:8]}@testfirm.com",
+        full_name="Other User",
+        role="admin",
+        oauth_provider="google",
+        oauth_subject=f"other-{uuid.uuid4().hex}",
+        is_active=True,
+    )
+    other_conv = Conversation(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=other_user.id,
+        title="Other user's private chat",
+    )
+    db_session.add_all([other_user, other_conv])
+    await db_session.commit()
+
+    resp = await client.get(f"/api/conversations/{other_conv.id}")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_delete_same_tenant_user_conversation(
+    client: AsyncClient, db_session, test_tenant
+):
+    other_user = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email=f"other-{uuid.uuid4().hex[:8]}@testfirm.com",
+        full_name="Other User",
+        role="admin",
+        oauth_provider="google",
+        oauth_subject=f"other-{uuid.uuid4().hex}",
+        is_active=True,
+    )
+    other_conv = Conversation(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=other_user.id,
+        title="Other user's private chat",
+    )
+    db_session.add_all([other_user, other_conv])
+    await db_session.commit()
+
+    resp = await client.delete(f"/api/conversations/{other_conv.id}")
+
+    assert resp.status_code == 404
+    still_there = await db_session.get(Conversation, other_conv.id)
+    assert still_there is not None
 
 
 @pytest.mark.asyncio

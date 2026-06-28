@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import set_tenant_context
 from app.models.error_log import ErrorLog
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ async def capture_error(
         if tenant_id is None:
             logger.debug("Skipping error log without tenant context: %s", message)
             return None
+        await set_tenant_context(db, str(tenant_id))
 
         endpoint = None
         method = None

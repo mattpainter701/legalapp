@@ -1,14 +1,14 @@
 model_list:
   # Standard profile: cost-effective query routing.
-  # Primary: OpenCode zen DeepSeek V4 Flash Free (opencode.ai/zen/v1)
+  # Primary: OpenRouter Gemma free. Live smoke on 2026-06-27 showed this is
+  # materially faster than the OpenCode free models with LegalApp's full prompt.
   - model_name: clarity-standard
     litellm_params:
-      model: openai/deepseek-v4-flash-free
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
+      model: openrouter/google/gemma-4-31b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
       timeout: 15  # fast failover to next model
 
-  # Standard fallback: OpenCode zen Nemotron free (often faster for simple queries)
+  # Standard fallback: OpenCode zen Nemotron free.
   - model_name: clarity-standard-zen-nemotron
     litellm_params:
       model: openai/nemotron-3-ultra-free
@@ -16,17 +16,12 @@ model_list:
       api_key: os.environ/DEEPSEEK_API_KEY
       timeout: 15
 
-  # Standard fallbacks: OpenRouter free models
-  - model_name: clarity-standard-openrouter-gemma
+  # Standard fallback: OpenCode zen DeepSeek V4 Flash Free.
+  - model_name: clarity-standard-deepseek-flash-free
     litellm_params:
-      model: openrouter/google/gemma-4-31b-it:free
-      api_key: os.environ/OPENROUTER_API_KEY
-      timeout: 15
-
-  - model_name: clarity-standard-openrouter-qwen
-    litellm_params:
-      model: openrouter/qwen/qwen3-235b-a22b:free
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: openai/deepseek-v4-flash-free
+      api_base: https://opencode.ai/zen/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
       timeout: 15
 
   # Premium profile: highest-quality drafting/reasoning.
@@ -38,21 +33,7 @@ model_list:
       api_key: os.environ/DEEPSEEK_API_KEY
       timeout: 30
 
-  # Premium fallback: OpenCode zen DeepSeek V4 Flash (paid, fast)
-  - model_name: clarity-premium-zen-flash
-    litellm_params:
-      model: openai/deepseek-v4-flash
-      api_base: https://opencode.ai/zen/v1
-      api_key: os.environ/DEEPSEEK_API_KEY
-      timeout: 20
-
-  # Premium OpenRouter fallbacks
-  - model_name: clarity-premium-openrouter-qwen
-    litellm_params:
-      model: openrouter/qwen/qwen3-235b-a22b:free
-      api_key: os.environ/OPENROUTER_API_KEY
-      timeout: 20
-
+  # Premium fallback: fast free model for availability if premium provider stalls.
   - model_name: clarity-premium-openrouter-gemma
     litellm_params:
       model: openrouter/google/gemma-4-31b-it:free
@@ -71,15 +52,6 @@ litellm_settings:
 
 router_settings:
   routing_strategy: cost-based-routing
-  fallbacks:
-    - clarity-standard:
-        - clarity-standard-zen-nemotron
-        - clarity-standard-openrouter-gemma
-        - clarity-standard-openrouter-qwen
-    - clarity-premium:
-        - clarity-premium-zen-flash
-        - clarity-premium-openrouter-qwen
-        - clarity-premium-openrouter-gemma
 
 general_settings:
   master_key: os.environ/LITELLM_API_KEY

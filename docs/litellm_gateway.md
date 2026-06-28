@@ -61,6 +61,10 @@ LiteLLM database on localhost port `5435`.
 Production should run LiteLLM behind the internal Docker network only. Do not
 expose port 4000 publicly. Nginx should not route public traffic to LiteLLM.
 
+CourtListener MCP resale is handled by the LegalApp backend MCP product gateway,
+not public LiteLLM exposure. See `docs/mcp_product_gateway.md` for the
+`X-MCP-API-Key` product-key surface, usage logging, and quota controls.
+
 ### Docker Image Pinning
 
 The Dockerfile pins `ghcr.io/berriai/litellm:main-v1.72.6`. To upgrade:

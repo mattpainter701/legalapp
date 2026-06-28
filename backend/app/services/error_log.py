@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 
-from app.database import async_session_maker
+from app.database import async_session_maker, set_tenant_context
 from app.models.error_log import ErrorLog
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ async def log_error(
 
         # Create async session
         async with async_session_maker() as session:
+            await set_tenant_context(session, str(tenant_id))
             error_log = ErrorLog(
                 tenant_id=tenant_id,
                 user_id=user_id,

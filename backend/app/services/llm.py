@@ -10,6 +10,13 @@ from app.config import get_settings
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+STANDARD_GATEWAY_FALLBACKS = (
+    "clarity-standard-fb-0",
+    "clarity-standard-zen-nemotron",
+    "clarity-standard-fb-1",
+    "clarity-standard-deepseek-flash-free",
+)
+
 
 def _record_latency(model_alias: str, latency_ms: float) -> None:
     """Record model latency for speed-based cooldown (non-fatal)."""
@@ -124,6 +131,17 @@ class LLMService:
             else settings.LITELLM_STANDARD_MODEL
         )
 
+    def _gateway_candidates(
+        self,
+        gateway_model: str,
+        *,
+        use_premium: bool,
+        customer_api_key: str | None,
+    ) -> list[str]:
+        if customer_api_key or use_premium or gateway_model != settings.LITELLM_STANDARD_MODEL:
+            return [gateway_model]
+        return [gateway_model, *STANDARD_GATEWAY_FALLBACKS]
+
     def _build_system_prompt(
         self,
         *,
@@ -197,37 +215,55 @@ class LLMService:
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)
-        request_id = str(uuid.uuid4())
-        logger.debug("LLM complete request_id=%s model=%s", request_id, gateway_model)
         all_messages = [_build_system_message(system_prompt)] + messages
-
-        create_kwargs: dict = dict(
-            model=gateway_model,
-            messages=all_messages,
-            temperature=0.1,
-            max_tokens=4096,
-            extra_headers={"x-request-id": request_id},
-        )
-        if response_format:
-            create_kwargs["response_format"] = response_format
 
         client = self._client_for(
             customer_api_key, customer_provider, customer_endpoint
         )
-        t0 = time.monotonic()
-        try:
-            response = await client.chat.completions.create(**create_kwargs)
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            _record_latency(gateway_model, elapsed_ms)
-            response_text = response.choices[0].message.content or ""
-            tokens_in = response.usage.prompt_tokens if response.usage else 0
-            tokens_out = response.usage.completion_tokens if response.usage else 0
-            return response_text, tokens_in, tokens_out
-        except (APIError, APIConnectionError) as e:
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            _record_latency(gateway_model, elapsed_ms)
-            logger.error("LiteLLM Gateway API error: %s", _clean_llm_error(e))
-            raise RuntimeError(_llm_error_msg(e)) from e
+        candidates = self._gateway_candidates(
+            gateway_model,
+            use_premium=use_premium,
+            customer_api_key=customer_api_key,
+        )
+        last_error: APIError | APIConnectionError | None = None
+        for candidate in candidates:
+            request_id = str(uuid.uuid4())
+            logger.debug("LLM complete request_id=%s model=%s", request_id, candidate)
+            create_kwargs: dict = dict(
+                model=candidate,
+                messages=all_messages,
+                temperature=0.1,
+                max_tokens=4096,
+                extra_headers={"x-request-id": request_id},
+            )
+            if response_format:
+                create_kwargs["response_format"] = response_format
+
+            t0 = time.monotonic()
+            try:
+                response = await client.chat.completions.create(**create_kwargs)
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                _record_latency(candidate, elapsed_ms)
+                response_text = response.choices[0].message.content or ""
+                tokens_in = response.usage.prompt_tokens if response.usage else 0
+                tokens_out = response.usage.completion_tokens if response.usage else 0
+                return response_text, tokens_in, tokens_out
+            except (APIError, APIConnectionError) as e:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                _record_latency(candidate, elapsed_ms)
+                last_error = e
+                if candidate != candidates[-1]:
+                    logger.warning(
+                        "LiteLLM model %s failed before completion, trying fallback: %s",
+                        candidate,
+                        _clean_llm_error(e),
+                    )
+                    continue
+                logger.error("LiteLLM Gateway API error: %s", _clean_llm_error(e))
+                raise RuntimeError(_llm_error_msg(e)) from e
+        if last_error:
+            raise RuntimeError(_llm_error_msg(last_error)) from last_error
+        raise RuntimeError("LiteLLM Gateway API error: no model candidates configured")
 
     async def stream_complete(
         self,
@@ -251,38 +287,53 @@ class LLMService:
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)
-        request_id = str(uuid.uuid4())
-        logger.debug(
-            "LLM stream_complete request_id=%s model=%s", request_id, gateway_model
-        )
         all_messages = [_build_system_message(system_prompt)] + messages
 
         client = self._client_for(
             customer_api_key, customer_provider, customer_endpoint
         )
-        t0 = time.monotonic()
-        first_token_recorded = False
-        try:
-            stream = await client.chat.completions.create(
-                model=gateway_model,
-                messages=all_messages,
-                temperature=0.1,
-                max_tokens=4096,
-                stream=True,
-                extra_headers={"x-request-id": request_id},
+        candidates = self._gateway_candidates(
+            gateway_model,
+            use_premium=use_premium,
+            customer_api_key=customer_api_key,
+        )
+        for candidate in candidates:
+            request_id = str(uuid.uuid4())
+            logger.debug(
+                "LLM stream_complete request_id=%s model=%s", request_id, candidate
             )
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    if not first_token_recorded:
-                        ttft_ms = (time.monotonic() - t0) * 1000
-                        _record_latency(gateway_model, ttft_ms)
-                        first_token_recorded = True
-                    yield chunk.choices[0].delta.content
-            if not first_token_recorded:
-                # Empty response — still record latency
-                _record_latency(gateway_model, (time.monotonic() - t0) * 1000)
-        except (APIError, APIConnectionError) as e:
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            _record_latency(gateway_model, elapsed_ms)
-            logger.error("LiteLLM Gateway streaming error: %s", _clean_llm_error(e))
-            raise RuntimeError(_llm_error_msg(e)) from e
+            t0 = time.monotonic()
+            first_token_recorded = False
+            try:
+                stream = await client.chat.completions.create(
+                    model=candidate,
+                    messages=all_messages,
+                    temperature=0.1,
+                    max_tokens=4096,
+                    stream=True,
+                    extra_headers={"x-request-id": request_id},
+                )
+                async for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        if not first_token_recorded:
+                            ttft_ms = (time.monotonic() - t0) * 1000
+                            _record_latency(candidate, ttft_ms)
+                            first_token_recorded = True
+                        yield chunk.choices[0].delta.content
+                if not first_token_recorded:
+                    # Empty response — still record latency
+                    _record_latency(candidate, (time.monotonic() - t0) * 1000)
+                return
+            except (APIError, APIConnectionError) as e:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                _record_latency(candidate, elapsed_ms)
+                if first_token_recorded or candidate == candidates[-1]:
+                    logger.error(
+                        "LiteLLM Gateway streaming error: %s", _clean_llm_error(e)
+                    )
+                    raise RuntimeError(_llm_error_msg(e)) from e
+                logger.warning(
+                    "LiteLLM model %s failed before first token, trying fallback: %s",
+                    candidate,
+                    _clean_llm_error(e),
+                )
