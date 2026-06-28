@@ -36,6 +36,10 @@ from app.database import get_db
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
 from app.services.llm_routing import LITELLM_PROVIDER, upsert_platform_llm_config
+from app.services.operator_audit import (
+    operator_debug_mode_audit_payload,
+    record_operator_audit,
+)
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
@@ -189,7 +193,9 @@ def _capacity(value: Any) -> int:
     return max(1, min(parsed, 1000))
 
 
-def _tokens_per_second(output_tokens: int | None, elapsed_ms: int | None) -> float | None:
+def _tokens_per_second(
+    output_tokens: int | None, elapsed_ms: int | None
+) -> float | None:
     if not output_tokens or not elapsed_ms or elapsed_ms <= 0:
         return None
     return round(output_tokens / (elapsed_ms / 1000), 2)
@@ -210,6 +216,54 @@ def _usage_payload(
         "completion_tokens": completion,
         "total_tokens": total,
         "tokens_per_second": _tokens_per_second(completion, elapsed_ms),
+    }
+
+
+def _route_audit_payload(
+    config: dict[str, Any], reload_result: dict[str, Any]
+) -> dict[str, Any]:
+    def _target_payload(target: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "provider_id": target.get("provider_id"),
+            "key_id": target.get("key_id"),
+            "model": target.get("model"),
+            "capacity": target.get("capacity"),
+            "alternates": [
+                _target_payload(alternate) for alternate in target.get("alternates", [])
+            ],
+            "fallbacks": [
+                _target_payload(fallback) for fallback in target.get("fallbacks", [])
+            ],
+        }
+
+    return {
+        "standard": _target_payload(config.get("standard", {})),
+        "premium": _target_payload(config.get("premium", {})),
+        "litellm_updated": bool(reload_result.get("litellm_updated")),
+        "litellm_error": reload_result.get("litellm_error"),
+    }
+
+
+def _model_test_audit_payload(
+    *,
+    body: RouteTestRequest,
+    key: LLMProviderKey,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "route": body.route,
+        "provider_id": body.provider_id,
+        "key_id": str(key.id),
+        "key_hint": key.key_hint,
+        "model": body.model,
+        "ok": bool(result.get("ok")),
+        "model_used": result.get("model_used"),
+        "provider_latency_ms": result.get("provider_latency_ms"),
+        "server_elapsed_ms": result.get("server_elapsed_ms"),
+        "prompt_tokens": result.get("prompt_tokens"),
+        "completion_tokens": result.get("completion_tokens"),
+        "total_tokens": result.get("total_tokens"),
+        "error": result.get("error"),
     }
 
 
@@ -260,8 +314,7 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     if any(kw in model_id for kw in ("vision", "/vl", "-vl", "multimodal", "vl-")):
         caps.add("vision")
     if any(
-        kw in model_id
-        for kw in ("instruct", "-it", "_it", "/it", "chat", "assistant")
+        kw in model_id for kw in ("instruct", "-it", "_it", "/it", "chat", "assistant")
     ):
         caps.add("instruction")
     if any(
@@ -537,7 +590,9 @@ def _legal_model_eligibility(
         "tool_use",
     }
     score += min(5, len(caps.intersection(preferred_caps)))
-    if caps.intersection({"reasoning", "rag", "large_context", "ultra_context", "structured_output"}):
+    if caps.intersection(
+        {"reasoning", "rag", "large_context", "ultra_context", "structured_output"}
+    ):
         badges.append("Legal-ready")
     if "vision" in caps:
         badges.append("Document-capable")
@@ -610,17 +665,19 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         "provider_id": provider_id,
         "description": item.get("description"),
         "context_length": ctx,
-        "pricing": item.get("pricing")
-        if isinstance(item.get("pricing"), dict)
-        else None,
+        "pricing": (
+            item.get("pricing") if isinstance(item.get("pricing"), dict) else None
+        ),
         "is_free": is_free,
-        "modality": architecture.get("modality")
-        if isinstance(architecture, dict)
-        else None,
+        "modality": (
+            architecture.get("modality") if isinstance(architecture, dict) else None
+        ),
         "max_completion_tokens": max_completion_tokens,
-        "supported_parameters": item.get("supported_parameters")
-        if isinstance(item.get("supported_parameters"), list)
-        else [],
+        "supported_parameters": (
+            item.get("supported_parameters")
+            if isinstance(item.get("supported_parameters"), list)
+            else []
+        ),
         "capabilities": capabilities,
         **eligibility,
     }
@@ -842,7 +899,10 @@ async def _call_litellm_config_update(
                 resp.status_code,
                 detail[:200],
             )
-            return False, f"LiteLLM /config/update returned {resp.status_code}: {detail}"
+            return (
+                False,
+                f"LiteLLM /config/update returned {resp.status_code}: {detail}",
+            )
     except Exception as exc:
         logger.warning("LiteLLM config update failed: %s", exc)
         return False, f"LiteLLM config update failed: {exc}"
@@ -932,7 +992,9 @@ async def _reload_litellm_routes(
             new_models, fallback_settings
         )
     else:
-        litellm_error = "No complete provider/key/model targets were available to register"
+        litellm_error = (
+            "No complete provider/key/model targets were available to register"
+        )
 
     return {
         "litellm_updated": litellm_updated,
@@ -1000,7 +1062,12 @@ async def _check_litellm_gateway() -> dict[str, Any]:
                 if not isinstance(items, list):
                     items = []
                 names = {
-                    str(item.get("id") or item.get("model_name") or item.get("model") or "")
+                    str(
+                        item.get("id")
+                        or item.get("model_name")
+                        or item.get("model")
+                        or ""
+                    )
                     for item in items
                     if isinstance(item, dict)
                 }
@@ -1013,7 +1080,9 @@ async def _check_litellm_gateway() -> dict[str, Any]:
                         for alias, present in status["aliases"].items()
                         if not present
                     ]
-                    status["detail"] = f"Missing alias registration: {', '.join(missing)}"
+                    status["detail"] = (
+                        f"Missing alias registration: {', '.join(missing)}"
+                    )
             except Exception as model_exc:
                 status["status"] = "degraded"
                 status["models_error"] = str(model_exc)[:300]
@@ -1179,6 +1248,18 @@ async def delete_provider_key(
     key = result.scalar_one_or_none()
     if not key:
         raise HTTPException(status_code=404, detail="Key not found")
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.provider_disabled",
+        resource_type="llm_provider_key",
+        resource_id=str(key.id),
+        metadata={
+            "provider_id": key.provider_id,
+            "key_name": key.name,
+            "key_hint": key.key_hint,
+        },
+    )
     await db.delete(key)
     await db.commit()
     return {"deleted": key_id}
@@ -1405,7 +1486,9 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
         "model_count": len(models),
         "free_count": sum(1 for model in models if model.get("is_free")),
         "free_legal_count": sum(
-            1 for model in models if model.get("is_free") and model.get("legal_eligible")
+            1
+            for model in models
+            if model.get("is_free") and model.get("legal_eligible")
         ),
         "recommended_count": sum(
             1 for model in models if model.get("legal_tier") == "recommended"
@@ -1632,6 +1715,14 @@ async def save_routes(
     )
 
     reload_result = await _reload_litellm_routes(config, keys_by_id)
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.routes_saved",
+        resource_type="llm_route_config",
+        resource_id=LLM_ROUTE_CONFIG_KEY,
+        metadata=_route_audit_payload(config, reload_result),
+    )
     await db.commit()
     return {
         "saved": True,
@@ -1755,7 +1846,7 @@ async def test_route(
                 if isinstance(part, dict) and part.get("type") == "text"
             ).strip()
             usage = payload.get("usage") or {}
-            return _timing_response(
+            result = _timing_response(
                 ok=True,
                 provider_latency_ms=elapsed_ms,
                 model_used=payload.get("model") or body.model,
@@ -1766,6 +1857,16 @@ async def test_route(
                     elapsed_ms=elapsed_ms,
                 ),
             )
+            await record_operator_audit(
+                db,
+                request,
+                action="llm.model_tested",
+                resource_type="llm_provider_key",
+                resource_id=str(key.id),
+                metadata=_model_test_audit_payload(body=body, key=key, result=result),
+            )
+            await db.commit()
+            return result
 
         from openai import AsyncOpenAI
 
@@ -1780,7 +1881,7 @@ async def test_route(
         text = (resp.choices[0].message.content or "").strip()
         model_used = resp.model or body.model
         usage = resp.usage
-        return _timing_response(
+        result = _timing_response(
             ok=True,
             provider_latency_ms=elapsed_ms,
             model_used=model_used,
@@ -1792,10 +1893,30 @@ async def test_route(
                 elapsed_ms=elapsed_ms,
             ),
         )
+        await record_operator_audit(
+            db,
+            request,
+            action="llm.model_tested",
+            resource_type="llm_provider_key",
+            resource_id=str(key.id),
+            metadata=_model_test_audit_payload(body=body, key=key, result=result),
+        )
+        await db.commit()
+        return result
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
-        return _timing_response(
+        result = _timing_response(
             ok=False,
             provider_latency_ms=elapsed_ms,
             error=str(exc)[:300],
         )
+        await record_operator_audit(
+            db,
+            request,
+            action="llm.model_tested",
+            resource_type="llm_provider_key",
+            resource_id=str(key.id),
+            metadata=_model_test_audit_payload(body=body, key=key, result=result),
+        )
+        await db.commit()
+        return result

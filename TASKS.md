@@ -727,14 +727,14 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [ ] Add short-retention debug mode toggle per tenant/conversation with explicit audit entry
 - [ ] Add CI-safe DB-backed regression for platform LLM route saves covering `llm_route_config_v2`, app alias sync, and LiteLLM hot-reload payload shape
 
-### 1204. Gateway Audit, Privacy, and Retention (P0, MEDIUM) — PENDING
+### 1204. Gateway Audit, Privacy, and Retention (P0, MEDIUM) — DONE
 - [x] Disable raw prompt/response logging in LiteLLM by default
 - [x] Send metadata only: tenant_id, user_id, conversation_id, operation_type, matter_id, plugin, skill, premium flag
 - [x] Define retention windows for gateway logs, spend logs, and debug logs
-- [ ] Add operator audit entries for route changes, provider disables, tenant debug mode, and model tests
+- [x] Add operator audit entries for route changes, provider disables, tenant debug mode, and model tests
 - [x] Document legal-data handling rules for LiteLLM logs and callbacks
 
-Privacy slice complete: LiteLLM callbacks are disabled by default, app-side gateway usage/debug records suppress raw query text unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`, chat sends metadata-only LiteLLM request metadata, and `docs/litellm_gateway.md` documents handling and retention defaults. Remaining audit-entry work depends on the operator-console route-change/model-test/provider-disable/debug-mode workflows.
+Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug records suppress raw query text unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`, chat sends metadata-only LiteLLM request metadata, and `docs/litellm_gateway.md` documents handling and retention defaults. Operator audit logs now capture metadata-only `llm.routes_saved`, `llm.provider_disabled`, and `llm.model_tested` entries. The tenant debug-mode UI remains part of task 1203, but the metadata-only `operator_debug_mode_audit_payload()` contract is in place for its `llm.debug_mode_changed` event.
 
 ### 1205. Cutover and Rollback (P1, MEDIUM) — PENDING
 - [ ] Add shadow route logging to compare current direct-provider path vs LiteLLM alias

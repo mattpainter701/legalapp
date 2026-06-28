@@ -71,6 +71,21 @@ Retention defaults:
 If a tenant-specific debug mode is added, it must be short-retention, explicit,
 audited, and visible in operator logs.
 
+## Operator Audit
+
+Operator LLM actions write metadata-only entries to `operator_audit_logs`.
+Current audited actions:
+
+- `llm.routes_saved`: global standard/premium route changes and LiteLLM reload result.
+- `llm.provider_disabled`: provider key removal/disablement.
+- `llm.model_tested`: synthetic provider/model test result, latency, and token counts.
+
+Future tenant debug-mode controls should call
+`operator_debug_mode_audit_payload()` and record an `llm.debug_mode_changed`
+entry. The payload must include only tenant/conversation IDs, enabled state,
+retention days, and an operator reason. Never log prompt, response, context,
+attachment, API key, or raw customer content in operator audit metadata.
+
 ## Deployment Notes
 
 Local development exposes LiteLLM on `http://localhost:4000` and the dedicated
