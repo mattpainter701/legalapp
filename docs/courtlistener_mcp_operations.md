@@ -95,6 +95,19 @@ bring-up, `docker compose run` was convenient but created project/orphan noise.
 Avoid `--remove-orphans` with the CourtListener compose file because the main
 LegalApp services are not defined there and must not be removed.
 
+The reverse is also true: do not run the main `docker-compose.hypervisor.yml`
+deploy with `--remove-orphans` unless the CourtListener compose file is included
+in the same command. `courtlistener-db` and `courtlistener-mcp` are sidecar
+services in the same `legalapp` project/network, so a main-stack-only orphan
+cleanup removes them and breaks `MCP_SERVER_URL=http://courtlistener-mcp:8021`.
+If that happens, confirm `COURTLISTENER_DB_PASSWORD` exists in
+`/home/varta/legalapp/.env`, then restart the sidecar with:
+
+```bash
+cd /home/varta/legalapp
+docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --env-file .env up -d courtlistener-db courtlistener-mcp
+```
+
 Current MVP filter behavior:
 
 - State focus: ND, MT, MN, SD.

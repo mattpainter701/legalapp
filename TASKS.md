@@ -21,6 +21,9 @@ Streaming chat now persists cloud source citations/usage IDs, cloud metadata
 index fallback is folder-scoped for matter searches, matter context service
 accepts an explicit tenant filter, and cloud-backed matter document deletion
 fails closed instead of deleting only the DB row and orphaning the customer file.
+Deployment also restored the CourtListener sidecar after a main-stack
+`--remove-orphans` cleanup removed it, and the runbook now warns to keep the
+sidecar compose file in scope or restart it separately.
 Verification: Python compile gate passed; focused RAG/cloud/MCP tests passed.
 Local chat endpoint tests were added but local `legalapp_test` Postgres was not
 listening during this session, so production smoke covers deployed endpoint

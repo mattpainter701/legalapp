@@ -36,6 +36,10 @@
   document deletion now fails closed instead of orphaning provider files, and
   MCP product-key tool listings stay aligned with the remote CourtListener tool
   catalog when the remote manifest is temporarily unavailable.
+- **CourtListener MCP deployment guard:** documented that main-stack-only
+  `--remove-orphans` deploys remove the separate CourtListener sidecar services
+  from the shared `legalapp` project/network, and recorded the restart command
+  plus required `COURTLISTENER_DB_PASSWORD` env source of truth.
 - **Alembic migration chain:** corrected the MCP product gateway migration to
   depend on revision `069` instead of the filename-like `069_rbac_rls`, which
   prevented production backend startup from resolving the migration graph.
