@@ -1,11 +1,12 @@
 # Tabs3 / PracticeMaster ODBC Schema Dump
 
-Schema-only dump parsed from installed vendor ODBC help files on `T:\STI\Help`.
+Schema-only dump parsed from installed vendor ODBC help files. Concrete customer
+paths/endpoints are env-owned and must stay in local env files.
 No customer rows from `.dat` / `.idx` files were read or exported.
 
 - Generated: `2026-06-17T17:01:26.981015+00:00`
-- Source data path: `T:\STI\Database`
-- Tabs3 server endpoint: `2K16APPS:1779`
+- Source data path: `LEGACY_TABS3_DATABASE_PATH`
+- Tabs3 server endpoint: `LEGACY_TABS3_SERVER_ENDPOINT`
 - Products: `6`
 - ODBC tables/files: `91`
 - Documented fields: `2128`

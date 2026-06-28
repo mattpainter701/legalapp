@@ -152,7 +152,11 @@ LegalApp backend, separate from LiteLLM. Tenant admins can create scoped
 `clmcp_` keys, see 30-day usage, and revoke keys from `/mcp`; external calls
 use `X-MCP-API-Key` and are quota/tool-scope checked before proxying. Chat
 continues to use internal MCP access and records `internal_chat` usage events
-under the tenant for billing/monitoring.
+under the tenant for billing/monitoring. Pre-merge hardening added validation
+that product-key scopes only reference supported MCP tools, serialized monthly
+quota checks per key with a transaction advisory lock, and moved internal chat
+MCP usage logging onto an isolated DB session so RAG retrieval cannot commit the
+caller transaction.
 
 ---
 
@@ -171,6 +175,8 @@ Summary: production chat now returns 201 for conversation/message creation,
 uses CourtListener MCP when `include_public=true`, stores source citations, and
 tags `context_used`/`context_relevance_scores` with `courtlistener:<chunk_id>`.
 The same query with `include_public=false` stores no CourtListener context.
+Pre-merge hardening keeps internal MCP usage logging out of the chat request
+transaction.
 
 ---
 
@@ -757,6 +763,7 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Hardware smoke: Jetson 3 SSH, CUDA/PyTorch, SSD-backed worker directory, reverse-tunnel DB path, and LAN query-embedding service verified from the hypervisor.
 - [x] Production embedding completion: Jetson 3 embedded all 5,024 expanded chunks with 1024-dim mxbai vectors; live MCP and chat retrieval smokes passed after embeddings reached 100%.
 - [x] Vector search wiring: `search_caselaw` now uses Jetson-backed query embeddings plus pgvector/FTS hybrid ranking when `MCP_QUERY_EMBEDDING_URL` is configured, with FTS fallback when unavailable.
+- [x] Pre-merge compose hardening: CourtListener DB password is required and the default bind address is local-only; LAN exposure must be explicit via env.
 - [ ] Multi-Jetson expansion: add/confirm Jetson 1/2 env, SSH keys, CUDA/PyTorch, SSD/cache paths, and LAN reachability, then relaunch dispatcher with all workers.
 
 ---

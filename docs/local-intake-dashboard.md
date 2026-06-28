@@ -135,7 +135,7 @@ Server, and maps `dbo.Calls` into the canonical CSV:
 powershell -NoProfile -ExecutionPolicy Bypass `
   -File .\backend\scripts\export_professional_services_dashboard.ps1 `
   -AppDirectory "C:\Program Files (x86)\Armor Interactive\Professional Services Dashboard" `
-  -ServerOverride "100.123.115.50,1433" `
+  -ServerOverride "$env:LEGACY_SQLSERVER_HOST" `
   -OutCsv .\legacy-dashboard-calls.csv `
   -SchemaOutJson .\legacy-dashboard-schema.json `
   -IncludeEmployeesCsv
@@ -143,7 +143,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 Discovered schema notes for this customer database:
 
-- SQL Server is `2K16APPS\SQLEXPRESS`, SQL Server 2016 Express, database `ProfessionalServicesDashboard`.
+- SQL Server endpoint and database name are env-owned (`LEGACY_SQLSERVER_HOST`, `LEGACY_SQLSERVER_DATABASE`); observed engine was SQL Server 2016 Express.
 - `dbo.Calls` contains 26,100 rows dated from April 12, 2010 through June 16, 2026.
 - `dbo.Calls` has `CallId`, `IntendedToId`, `AssignedToId`, `AnsweredById`, `CallTime`, `CallLast`, `CallFirst`, `CallReason`, `AssignedReason`, `IntendedToId2`, and `AssignedToId2`.
 - There is no structured caller phone column in the legacy `Calls` table. Some phone numbers appear to be embedded inside `CallReason`; keep the raw reason text in the archive and do not treat it as normalized phone data unless a later extraction pass is approved.

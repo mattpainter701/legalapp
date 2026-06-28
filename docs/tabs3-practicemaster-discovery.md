@@ -1,21 +1,21 @@
 # Tabs3 / PracticeMaster Discovery
 
-Read-only discovery for the Tabs3 / PracticeMaster backend on `2k16apps`.
+Read-only discovery for the Tabs3 / PracticeMaster backend. Concrete hostnames
+and endpoints are env-owned and must stay in local env files.
 
 ## Scope
 
 This discovery inspected server metadata only:
 
-- SQL Server database list on `2K16APPS\SQLEXPRESS`.
-- SMB filesystem metadata for `T:\STI` and `T:\STI\Database`.
+- SQL Server database list via `LEGACY_SQLSERVER_HOST`.
+- SMB filesystem metadata for `LEGACY_TABS3_ROOT` and `LEGACY_TABS3_DATABASE_PATH`.
 - Installed vendor help/config files related to ODBC and backend access.
 
 No Tabs3/PracticeMaster client, billing, ledger, contact, or matter records were dumped.
 
 ## Environment Findings
 
-- Server: `2k16apps` over Tailscale IP `100.123.115.50`.
-- Legacy intake SQL instance: `2K16APPS\SQLEXPRESS` on TCP `1433`.
+- Server and SQL endpoint: env-owned (`LEGACY_TABS3_HOST`, `LEGACY_SQLSERVER_HOST`).
 - SQL Server only exposed the dashboard DB plus system DBs:
   - `ProfessionalServicesDashboard`
   - `master`
@@ -23,9 +23,9 @@ No Tabs3/PracticeMaster client, billing, ledger, contact, or matter records were
   - `msdb`
   - `tempdb`
 - Tabs3 / PracticeMaster data is not a SQL Server database on that instance.
-- Tabs3 / PracticeMaster backend path exists at `T:\STI\Database`.
-- Tabs3 server config points to `2K16APPS:1779`.
-- TCP `1779` is reachable from this workstation over Tailscale.
+- Tabs3 / PracticeMaster backend path exists at `LEGACY_TABS3_DATABASE_PATH`.
+- Tabs3 server endpoint is env-owned (`LEGACY_TABS3_SERVER_ENDPOINT`).
+- Tabs3 server port reachability should be checked from the operator workstation before export.
 
 ## Storage Format
 
@@ -175,6 +175,6 @@ Do not merge this directly into `legacy_call_records`; Tabs3/PracticeMaster is a
 
 - Confirm whether the firm owns an ODBC license for Tabs3/PracticeMaster.
 - Confirm whether ODBC dictionaries have already been initialized.
-- Use a Windows integration host over Tailscale to configure a read-only ODBC DSN against `2K16APPS:1779`.
+- Use a Windows integration host to configure a read-only ODBC DSN against `LEGACY_TABS3_SERVER_ENDPOINT`.
 - Generate schema-only reports for Tabs3 Billing and PracticeMaster.
 - Only after schema review, export limited sample rows with explicit approval and redaction rules.

@@ -11,6 +11,8 @@ services:
       postgres:
         condition: service_healthy
     env_file: .env
+    environment:
+      DATABASE_URL: ${MIGRATOR_DATABASE_URL:-${DATABASE_URL}}
     command: alembic upgrade head
     restart: "no"
     deploy:
@@ -27,6 +29,9 @@ services:
       # API workers must NOT run the scheduler — the dedicated `scheduler`
       # service below owns it. Otherwise each of the 4 workers fires every cron
       # job, causing duplicate invoices/emails.
+      DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       RUN_SCHEDULER: "false"
     volumes:
       - /data/legalapp/uploads:/app/uploads   # host-mounted encrypted volume
@@ -55,6 +60,9 @@ services:
         condition: service_completed_successfully
     env_file: .env
     environment:
+      DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       RUN_SCHEDULER: "true"
     volumes:
       - /data/legalapp/uploads:/app/uploads
