@@ -84,6 +84,7 @@ export default function AppShell({ children, title }) {
       }
     } catch (err) {
       console.error('Failed to delete conversation', err)
+      throw err
     }
   }, [activeConvId])
 

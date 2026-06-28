@@ -104,11 +104,19 @@ export default function ChatPage() {
       }
     } catch (err) {
       console.error('Failed to load conversation', err)
+      const status = err?.response?.status
+      if (status === 403 || status === 404) {
+        setConversations((prev) => prev.filter((conv) => conv.id !== id))
+        setActiveConvId(null)
+        setMessages([])
+        setActiveConvTitle('')
+        navigate('/chat', { replace: true })
+      }
       showErrorNotice('Conversation could not be loaded', 'Select another conversation or retry.', err)
     } finally {
       setIsLoadingMessages(false)
     }
-  }, [setActiveConvId, showErrorNotice])
+  }, [navigate, setActiveConvId, setConversations, showErrorNotice])
 
   useEffect(() => {
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
@@ -161,17 +169,27 @@ export default function ChatPage() {
         setActiveConvId(null)
         setMessages([])
         setActiveConvTitle('')
+        navigate('/chat', { replace: true })
       }
     },
-    [activeConvId, setActiveConvId]
+    [activeConvId, navigate, setActiveConvId]
   )
 
   const handleRailDeleteConversation = useCallback(
-    (id) => {
-      onConversationDeleted(id)
+    async (id) => {
+      try {
+        await onConversationDeleted(id)
+      } catch (err) {
+        const status = err?.response?.status
+        if (status !== 403 && status !== 404) {
+          showErrorNotice('Conversation could not be deleted', 'Please try again.', err)
+          return
+        }
+        setConversations((prev) => prev.filter((conv) => conv.id !== id))
+      }
       handleConversationDeleted(id)
     },
-    [onConversationDeleted, handleConversationDeleted]
+    [onConversationDeleted, handleConversationDeleted, setConversations, showErrorNotice]
   )
 
   const handleRailSelectConversation = useCallback(
@@ -264,6 +282,21 @@ export default function ChatPage() {
           title: 'Response could not be completed',
           message: streamError || 'The assistant stopped before finishing the response.',
         })
+      } else {
+        try {
+          const refreshed = await getConversation(convId)
+          setMessages(refreshed.messages || [])
+          setActiveConvTitle(refreshed.conversation?.title || activeConvTitle)
+          if (refreshed.conversation) {
+            setConversations((prev) =>
+              prev.some((conv) => conv.id === refreshed.conversation.id)
+                ? prev.map((conv) => (conv.id === refreshed.conversation.id ? { ...conv, ...refreshed.conversation } : conv))
+                : [refreshed.conversation, ...prev]
+            )
+          }
+        } catch (refreshErr) {
+          console.error('Failed to refresh streamed message metadata', refreshErr)
+        }
       }
 
       setConversations((prev) =>
@@ -287,7 +320,7 @@ export default function ChatPage() {
     } finally {
       setIsSending(false)
     }
-  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, showErrorNotice])
+  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, activeConvTitle, showErrorNotice])
 
   const handleExportConversation = () => {
     if (messages.length === 0) {
