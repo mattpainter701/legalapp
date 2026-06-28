@@ -38,6 +38,7 @@ class RecordingCursor:
         self.sql = ""
         self.params = []
         self.description = []
+        self.executions = []
 
     def __enter__(self):
         return self
@@ -48,6 +49,7 @@ class RecordingCursor:
     def execute(self, sql, params=None):
         self.sql = sql
         self.params = params or []
+        self.executions.append((sql, self.params))
 
     def fetchall(self):
         return []
@@ -87,11 +89,44 @@ def test_manifest_exposes_domain_scoped_legal_tools():
     assert names == [
         "search_caselaw",
         "get_case_details",
+        "get_full_opinion",
+        "find_similar_cases",
         "search_by_citation",
+        "validate_citation",
+        "normalize_citation",
         "get_citation_network",
+        "get_authority_treatment",
         "search_by_jurisdiction",
         "search_recent_authority",
         "get_court_info",
+        "get_court_coverage",
+        "search_dockets",
+        "export_research_bundle",
+        "sync_status",
+        "corpus_status",
+    ]
+
+
+def test_case_details_contract_requires_exactly_one_identifier():
+    manifest = build_tool_manifest()
+    details_tool = next(tool for tool in manifest["tools"] if tool["name"] == "get_case_details")
+    schema = details_tool["inputSchema"]
+
+    assert schema["oneOf"] == [
+        {"required": ["opinion_id"], "not": {"required": ["cluster_id"]}},
+        {"required": ["cluster_id"], "not": {"required": ["opinion_id"]}},
+    ]
+    assert schema["required"] == []
+
+
+def test_full_opinion_contract_requires_exactly_one_identifier():
+    manifest = build_tool_manifest()
+    full_tool = next(tool for tool in manifest["tools"] if tool["name"] == "get_full_opinion")
+    schema = full_tool["inputSchema"]
+
+    assert schema["oneOf"] == [
+        {"required": ["opinion_id"], "not": {"required": ["cluster_id"]}},
+        {"required": ["cluster_id"], "not": {"required": ["opinion_id"]}},
     ]
 
 
@@ -129,6 +164,60 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
 
     assert "embedding <=>" not in sql
     assert "websearch_to_tsquery" in sql
+
+
+def test_repository_normalizes_messy_citation_before_lookup():
+    conn = RecordingConnection()
+
+    result = CourtListenerRepository(conn).normalize_citation("  410   N.W. 2d   123  ")
+
+    assert result["valid"] is True
+    assert result["canonical"] == "410 N.W.2d 123"
+    assert result["volume"] == "410"
+    assert result["reporter"] == "N.W.2d"
+    assert result["page"] == "123"
+    assert conn.cursor_obj.params == ["410", "N.W.2d", "123"]
+
+
+def test_repository_search_dockets_targets_docket_metadata():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).search_dockets(
+        query="chapter 13 farm",
+        court_id="ndb",
+        jurisdiction="F",
+        date_from="2020-01-01",
+        top_k=10,
+    )
+
+    sql = conn.cursor_obj.sql
+    assert "FROM dockets d" in sql
+    assert "opinion_clusters" in sql
+    assert "d.docket_number ILIKE" in sql
+    assert "c.jurisdiction = %s" in sql
+
+
+def test_repository_court_coverage_reports_loaded_ranges():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).court_coverage(jurisdiction="S")
+
+    sql = conn.cursor_obj.sql
+    assert "COUNT(DISTINCT d.docket_id)" in sql
+    assert "COUNT(DISTINCT oc.cluster_id)" in sql
+    assert "MIN(oc.date_filed)" in sql
+    assert "GROUP BY c.court_id" in sql
+
+
+def test_repository_status_tools_read_ingest_and_embedding_progress():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).sync_status()
+
+    statements = "\n".join(sql for sql, _ in conn.cursor_obj.executions)
+    assert "FROM ingest_runs" in statements
+    assert "embedding IS NULL" in statements
+    assert "embedding IS NOT NULL" in statements
 
 
 def test_query_embedding_client_posts_to_configured_provider(monkeypatch):

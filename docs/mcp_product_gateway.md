@@ -40,6 +40,28 @@ Tenant admins manage product keys from `/mcp`:
 Raw keys are shown only once. The database stores `key_hash` and `key_prefix`,
 not raw secrets.
 
+## Tool Catalog
+
+The current sellable CourtListener MCP scope list is:
+
+- `search_caselaw`: hybrid keyword/vector search over locally loaded authority.
+- `get_case_details`: metadata and chunks for one `opinion_id` or `cluster_id`.
+- `get_full_opinion`: complete locally loaded opinion text.
+- `find_similar_cases`: similar-case lookup from a query, opinion, cluster, or chunk.
+- `search_by_citation`: local citation table lookup.
+- `validate_citation`: parse and report whether a citation resolves locally.
+- `normalize_citation`: canonical citation fields for messy user input.
+- `get_citation_network`: local cited/citing edges.
+- `get_authority_treatment`: citation-history signal; not a Shepard's substitute.
+- `search_by_jurisdiction`: search constrained by court/jurisdiction.
+- `search_recent_authority`: search after a filing date.
+- `get_court_info`: one court's metadata and local counts.
+- `get_court_coverage`: loaded court/date/count coverage.
+- `search_dockets`: local docket metadata search.
+- `export_research_bundle`: structured cases/citations bundle for drafting workflows.
+- `sync_status`: ingest and embedding progress.
+- `corpus_status`: global corpus counts and coverage.
+
 ## Billing And Quotas
 
 `mcp_usage_events` is the billing/monitoring source:
@@ -64,4 +86,3 @@ Recommended public DNS shape:
 
 - `mcp.legalapp.example.com` -> nginx/cloudflare route -> backend `/api/mcp`
 - keep `courtlistener-mcp`, `courtlistener-db`, and LiteLLM private
-

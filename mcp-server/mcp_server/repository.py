@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from .database import dict_rows
@@ -12,6 +13,23 @@ _CITATION_RE = re.compile(r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\
 class CourtListenerRepository:
     def __init__(self, conn):
         self.conn = conn
+
+    def _parse_citation(self, citation: str) -> dict[str, str] | None:
+        normalized = re.sub(r"\s+", " ", (citation or "").strip())
+        match = _CITATION_RE.match(normalized)
+        if not match:
+            return None
+        reporter = match.group("reporter").strip()
+        if re.match(r"^(?:[NS]\.[EW]\.|P\.)\s+\d+d$", reporter):
+            reporter = reporter.replace(" ", "")
+        else:
+            reporter = re.sub(r"\s+", " ", reporter)
+        return {
+            "volume": match.group("volume"),
+            "reporter": reporter,
+            "page": match.group("page"),
+            "canonical": f"{match.group('volume')} {reporter} {match.group('page')}",
+        }
 
     def _search_filters(
         self,
@@ -176,8 +194,8 @@ class CourtListenerRepository:
             return dict_rows(cur)
 
     def case_details(self, opinion_id: int | None = None, cluster_id: int | None = None) -> dict[str, Any] | None:
-        if not opinion_id and not cluster_id:
-            raise ValueError("opinion_id or cluster_id is required")
+        if bool(opinion_id) == bool(cluster_id):
+            raise ValueError("exactly one of opinion_id or cluster_id is required")
         where = "o.opinion_id = %s" if opinion_id else "o.cluster_id = %s"
         value = opinion_id or cluster_id
         with self.conn.cursor() as cur:
@@ -210,9 +228,72 @@ class CourtListenerRepository:
             detail["chunks"] = dict_rows(cur)
             return detail
 
+    def get_full_opinion(
+        self,
+        opinion_id: int | None = None,
+        cluster_id: int | None = None,
+        include_chunks: bool = False,
+    ) -> dict[str, Any] | None:
+        detail = self.case_details(opinion_id=opinion_id, cluster_id=cluster_id)
+        if not detail:
+            return None
+        chunks = detail.get("chunks") or []
+        full_text = "\n\n".join(chunk.get("content") or "" for chunk in chunks).strip()
+        result = {
+            key: value
+            for key, value in detail.items()
+            if key != "chunks"
+        }
+        result["full_text"] = full_text
+        result["chunk_count"] = len(chunks)
+        if include_chunks:
+            result["chunks"] = chunks
+        return result
+
+    def find_similar_cases(
+        self,
+        query: str | None = None,
+        opinion_id: int | None = None,
+        cluster_id: int | None = None,
+        chunk_id: str | None = None,
+        top_k: int = 8,
+        jurisdiction: str | None = None,
+        query_embedding: list[float] | None = None,
+    ) -> list[dict[str, Any]]:
+        source_opinion_id = opinion_id
+        source_text = (query or "").strip()
+        if not source_text and chunk_id:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT opinion_id, content FROM opinion_chunks WHERE id = %s LIMIT 1",
+                    [chunk_id],
+                )
+                rows = dict_rows(cur)
+                if rows:
+                    source_opinion_id = rows[0].get("opinion_id")
+                    source_text = rows[0].get("content") or ""
+        if not source_text and (opinion_id or cluster_id):
+            detail = self.get_full_opinion(opinion_id=opinion_id, cluster_id=cluster_id)
+            if detail:
+                source_opinion_id = detail.get("opinion_id")
+                source_text = detail.get("full_text") or detail.get("case_name") or ""
+        if not source_text:
+            raise ValueError("query, opinion_id, cluster_id, or chunk_id is required")
+        results = self.search_caselaw(
+            query=source_text[:4000],
+            top_k=min(top_k + 3, 50),
+            jurisdiction=jurisdiction,
+            query_embedding=query_embedding,
+        )
+        filtered = [
+            row for row in results
+            if not source_opinion_id or row.get("opinion_id") != source_opinion_id
+        ]
+        return filtered[:top_k]
+
     def search_by_citation(self, citation: str) -> list[dict[str, Any]]:
-        match = _CITATION_RE.match(citation)
-        if not match:
+        parsed = self._parse_citation(citation)
+        if not parsed:
             return []
         with self.conn.cursor() as cur:
             cur.execute(
@@ -227,9 +308,38 @@ class CourtListenerRepository:
                 WHERE cit.cited_volume = %s AND cit.cited_reporter = %s AND cit.cited_page = %s
                 LIMIT 20
                 """,
-                [match.group("volume"), match.group("reporter"), match.group("page")],
+                [parsed["volume"], parsed["reporter"], parsed["page"]],
             )
             return dict_rows(cur)
+
+    def normalize_citation(self, citation: str) -> dict[str, Any]:
+        parsed = self._parse_citation(citation)
+        if not parsed:
+            return {
+                "input": citation,
+                "valid": False,
+                "canonical": None,
+                "volume": None,
+                "reporter": None,
+                "page": None,
+                "matches": [],
+            }
+        matches = self.search_by_citation(parsed["canonical"])
+        return {
+            "input": citation,
+            "valid": True,
+            "canonical": parsed["canonical"],
+            "volume": parsed["volume"],
+            "reporter": parsed["reporter"],
+            "page": parsed["page"],
+            "matches": matches,
+        }
+
+    def validate_citation(self, citation: str) -> dict[str, Any]:
+        normalized = self.normalize_citation(citation)
+        normalized["is_known_locally"] = bool(normalized["matches"])
+        normalized["source"] = "local_citation_tables"
+        return normalized
 
     def citation_network(self, opinion_id: int) -> dict[str, list[dict[str, Any]]]:
         with self.conn.cursor() as cur:
@@ -244,6 +354,23 @@ class CourtListenerRepository:
             )
             citing = dict_rows(cur)
             return {"cited": cited, "citing": citing}
+
+    def authority_treatment(self, opinion_id: int) -> dict[str, Any]:
+        network = self.citation_network(opinion_id)
+        return {
+            "opinion_id": opinion_id,
+            "cited_authorities": network.get("cited", []),
+            "citing_authorities": network.get("citing", []),
+            "cited_count": len(network.get("cited", [])),
+            "citing_count": len(network.get("citing", [])),
+            "positive_signal_count": 0,
+            "negative_signal_count": 0,
+            "treatment_signal": "unknown",
+            "limitations": (
+                "Local MVP corpus tracks citation edges but does not classify "
+                "positive or negative treatment like a Shepard's service."
+            ),
+        }
 
     def court_info(self, court_id: str) -> dict[str, Any] | None:
         with self.conn.cursor() as cur:
@@ -263,3 +390,166 @@ class CourtListenerRepository:
             )
             rows = dict_rows(cur)
             return rows[0] if rows else None
+
+    def court_coverage(
+        self,
+        court_id: str | None = None,
+        jurisdiction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["TRUE"]
+        params: list[Any] = []
+        if court_id:
+            filters.append("c.court_id = %s")
+            params.append(court_id)
+        if jurisdiction:
+            filters.append("c.jurisdiction = %s")
+            params.append(jurisdiction)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT c.court_id, c.short_name, c.full_name, c.jurisdiction,
+                       COUNT(DISTINCT d.docket_id) AS docket_count,
+                       COUNT(DISTINCT oc.cluster_id) AS cluster_count,
+                       COUNT(DISTINCT o.opinion_id) AS opinion_count,
+                       COUNT(DISTINCT ch.id) AS chunk_count,
+                       MIN(oc.date_filed) AS first_date,
+                       MAX(oc.date_filed) AS last_date
+                FROM courts c
+                LEFT JOIN dockets d ON d.court_id = c.court_id
+                LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
+                LEFT JOIN opinions o ON o.cluster_id = oc.cluster_id
+                LEFT JOIN opinion_chunks ch ON ch.opinion_id = o.opinion_id
+                WHERE {' AND '.join(filters)}
+                GROUP BY c.court_id, c.short_name, c.full_name, c.jurisdiction
+                ORDER BY opinion_count DESC, c.full_name
+                LIMIT 500
+                """,
+                params,
+            )
+            return dict_rows(cur)
+
+    def search_dockets(
+        self,
+        query: str,
+        court_id: str | None = None,
+        jurisdiction: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        top_k: int = 20,
+    ) -> list[dict[str, Any]]:
+        filters = ["(d.docket_number ILIKE %s OR d.case_name ILIKE %s OR oc.case_name ILIKE %s)"]
+        pattern = f"%{query}%"
+        params: list[Any] = [pattern, pattern, pattern]
+        if court_id:
+            filters.append("d.court_id = %s")
+            params.append(court_id)
+        if jurisdiction:
+            filters.append("c.jurisdiction = %s")
+            params.append(jurisdiction)
+        if date_from:
+            filters.append("oc.date_filed >= %s")
+            params.append(date_from)
+        if date_to:
+            filters.append("oc.date_filed <= %s")
+            params.append(date_to)
+        params.append(top_k)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT d.docket_id, d.docket_number, d.case_name, d.court_id, c.full_name AS court_name,
+                       c.jurisdiction, COUNT(DISTINCT oc.cluster_id) AS cluster_count,
+                       COALESCE(MIN(oc.date_filed), MIN(d.date_filed)) AS first_date,
+                       COALESCE(MAX(oc.date_filed), MAX(d.date_filed)) AS last_date,
+                       (ARRAY_REMOVE(ARRAY_AGG(DISTINCT oc.case_name), NULL))[1:5] AS case_names
+                FROM dockets d
+                LEFT JOIN courts c ON c.court_id = d.court_id
+                LEFT JOIN opinion_clusters oc ON oc.docket_id = d.docket_id
+                WHERE {' AND '.join(filters)}
+                GROUP BY d.docket_id, d.docket_number, d.case_name, d.court_id, c.full_name, c.jurisdiction
+                ORDER BY last_date DESC NULLS LAST, cluster_count DESC
+                LIMIT %s
+                """,
+                params,
+            )
+            return dict_rows(cur)
+
+    def export_research_bundle(
+        self,
+        query: str | None = None,
+        opinion_ids: list[int] | None = None,
+        cluster_ids: list[int] | None = None,
+        top_k: int = 5,
+        query_embedding: list[float] | None = None,
+    ) -> dict[str, Any]:
+        selected_opinion_ids = list(dict.fromkeys(opinion_ids or []))
+        selected_cluster_ids = list(dict.fromkeys(cluster_ids or []))
+        if query and not selected_opinion_ids and not selected_cluster_ids:
+            hits = self.search_caselaw(query=query, top_k=top_k, query_embedding=query_embedding)
+            for hit in hits:
+                opinion_id = hit.get("opinion_id")
+                if opinion_id and opinion_id not in selected_opinion_ids:
+                    selected_opinion_ids.append(opinion_id)
+        cases = []
+        for oid in selected_opinion_ids[:top_k]:
+            detail = self.get_full_opinion(opinion_id=oid, include_chunks=True)
+            if detail:
+                cases.append(detail)
+        remaining = max(top_k - len(cases), 0)
+        for cid in selected_cluster_ids[:remaining]:
+            detail = self.get_full_opinion(cluster_id=cid, include_chunks=True)
+            if detail:
+                cases.append(detail)
+        citations = []
+        for case in cases:
+            opinion_id = case.get("opinion_id")
+            if opinion_id:
+                citations.append({"opinion_id": opinion_id, "network": self.citation_network(opinion_id)})
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query": query,
+            "case_count": len(cases),
+            "cases": cases,
+            "citations": citations,
+        }
+
+    def sync_status(self) -> dict[str, Any]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, source, snapshot_date, started_at, completed_at, status,
+                       rows_processed, chunks_created, errors
+                FROM ingest_runs
+                ORDER BY started_at DESC
+                LIMIT 10
+                """
+            )
+            ingest_runs = dict_rows(cur)
+            cur.execute("SELECT COUNT(*) AS embedded_chunks FROM opinion_chunks WHERE embedding IS NOT NULL")
+            embedded = dict_rows(cur)
+            cur.execute("SELECT COUNT(*) AS pending_chunks FROM opinion_chunks WHERE embedding IS NULL")
+            pending = dict_rows(cur)
+        return {
+            "ingest_runs": ingest_runs,
+            "embedded_chunks": embedded[0]["embedded_chunks"] if embedded else 0,
+            "pending_chunks": pending[0]["pending_chunks"] if pending else 0,
+        }
+
+    def corpus_status(self) -> dict[str, Any]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM courts) AS courts,
+                    (SELECT COUNT(*) FROM dockets) AS dockets,
+                    (SELECT COUNT(*) FROM opinion_clusters) AS clusters,
+                    (SELECT COUNT(*) FROM opinions) AS opinions,
+                    (SELECT COUNT(*) FROM opinion_chunks) AS chunks,
+                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NOT NULL) AS embedded_chunks,
+                    (SELECT MIN(date_filed) FROM opinion_clusters) AS first_date,
+                    (SELECT MAX(date_filed) FROM opinion_clusters) AS last_date
+                """
+            )
+            rows = dict_rows(cur)
+        status = rows[0] if rows else {}
+        status["coverage"] = self.court_coverage()
+        return status

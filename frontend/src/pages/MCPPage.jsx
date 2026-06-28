@@ -43,11 +43,21 @@ function CodeBlock({ value, label }) {
 const TOOL_DOCS = [
   ['search_caselaw', 'Hybrid vector and keyword search across CourtListener authority'],
   ['get_case_details', 'Fetch opinion and docket metadata for a case'],
+  ['get_full_opinion', 'Return complete locally loaded opinion text'],
+  ['find_similar_cases', 'Find factually similar cases from a query or known opinion'],
   ['search_by_citation', 'Resolve a citation into local CourtListener authority'],
+  ['validate_citation', 'Parse a citation and report whether it resolves locally'],
+  ['normalize_citation', 'Return canonical citation fields for messy user input'],
   ['get_citation_network', 'Inspect bounded local citation relationships'],
+  ['get_authority_treatment', 'Show local citation-history and treatment signals'],
   ['search_by_jurisdiction', 'Filter authority by court or jurisdiction'],
   ['search_recent_authority', 'Find newer authority in the local corpus'],
   ['get_court_info', 'Return court metadata'],
+  ['get_court_coverage', 'Show loaded courts, date ranges, and local corpus limits'],
+  ['search_dockets', 'Search locally loaded docket metadata'],
+  ['export_research_bundle', 'Package selected cases and citations for drafting workflows'],
+  ['sync_status', 'Show ingest and embedding progress'],
+  ['corpus_status', 'Show global local corpus counts and coverage'],
 ]
 
 export default function MCPPage() {
@@ -331,4 +341,3 @@ export default function MCPPage() {
     </div>
   )
 }
-

@@ -14,11 +14,21 @@ from app.models.tenant import Tenant
 DEFAULT_ALLOWED_TOOLS = [
     "search_caselaw",
     "get_case_details",
+    "get_full_opinion",
+    "find_similar_cases",
     "search_by_citation",
+    "validate_citation",
+    "normalize_citation",
     "get_citation_network",
+    "get_authority_treatment",
     "search_by_jurisdiction",
     "search_recent_authority",
     "get_court_info",
+    "get_court_coverage",
+    "search_dockets",
+    "export_research_bundle",
+    "sync_status",
+    "corpus_status",
 ]
 
 

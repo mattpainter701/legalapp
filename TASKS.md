@@ -764,6 +764,8 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [x] Production embedding completion: Jetson 3 embedded all 5,024 expanded chunks with 1024-dim mxbai vectors; live MCP and chat retrieval smokes passed after embeddings reached 100%.
 - [x] Vector search wiring: `search_caselaw` now uses Jetson-backed query embeddings plus pgvector/FTS hybrid ranking when `MCP_QUERY_EMBEDDING_URL` is configured, with FTS fallback when unavailable.
 - [x] Pre-merge compose hardening: CourtListener DB password is required and the default bind address is local-only; LAN exposure must be explicit via env.
+- [x] MCP tool expansion: expose full opinion retrieval, similar-case search, citation validation/normalization, authority treatment, court coverage, docket search, research bundle export, and sync/corpus status tools.
+- [x] MCP contract fix: require exactly one of `opinion_id` or `cluster_id` for `get_case_details`.
 - [ ] Multi-Jetson expansion: add/confirm Jetson 1/2 env, SSH keys, CUDA/PyTorch, SSD/cache paths, and LAN reachability, then relaunch dispatcher with all workers.
 
 ---

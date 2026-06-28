@@ -25,6 +25,14 @@ def test_product_key_scope_rejects_unknown_tools():
     assert exc.value.status_code == 400
 
 
+def test_product_key_scope_accepts_expanded_courtlistener_tools():
+    tools = mcp_product.normalize_allowed_tools(
+        ["get_full_opinion", "find_similar_cases", "sync_status", "corpus_status"]
+    )
+
+    assert tools == ["get_full_opinion", "find_similar_cases", "sync_status", "corpus_status"]
+
+
 @pytest.mark.asyncio
 async def test_external_product_key_rejects_disallowed_tool_before_proxy(monkeypatch):
     tenant_id = uuid.uuid4()
