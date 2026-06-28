@@ -81,6 +81,7 @@ from app.models.external_import import (
     ExternalRecordLink,
 )
 from app.models.rbac import Role, UserRole
+from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 
 __all__ = [
     "Tenant",
@@ -164,4 +165,6 @@ __all__ = [
     "ExternalRecordLink",
     "Role",
     "UserRole",
+    "MCPProductKey",
+    "MCPUsageEvent",
 ]

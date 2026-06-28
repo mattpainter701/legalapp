@@ -791,6 +791,10 @@ export const createPortalSession = () => api.post('/billing/portal').then((r) =>
 // MCP
 export const getMcpInfo = () => api.get('/mcp/api-key').then((r) => r.data)
 export const regenerateMcpApiKey = () => api.post('/mcp/api-key').then((r) => r.data)
+export const getMcpProductKeys = () => api.get('/mcp/product-keys').then((r) => r.data)
+export const createMcpProductKey = (data) => api.post('/mcp/product-keys', data).then((r) => r.data)
+export const revokeMcpProductKey = (keyId) => api.delete(`/mcp/product-keys/${keyId}`).then((r) => r.data)
+export const getMcpUsage = (days = 30) => api.get('/mcp/usage', { params: { days } }).then((r) => r.data)
 
 // Platform (uses platform key header — passed explicitly)
 const platformApi = (platformKey) =>

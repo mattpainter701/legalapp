@@ -131,6 +131,7 @@ class Settings(BaseSettings):
     # Optional separate vectorDB for public CourtListener chunks (BGE embeddings)
     # If empty, public_chunks table lives in main DATABASE_URL
     VECTORDB_URL: str = ""
+    MCP_SERVER_URL: str = ""
 
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.
@@ -189,7 +190,7 @@ class Settings(BaseSettings):
     SMB_TASK_POLL_INTERVAL: int = 30  # Seconds between agent task polls
     SMB_CONTENT_FETCH_TIMEOUT: int = 120  # Seconds to wait for content fetch
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 def validate_token_encryption_key(settings: Settings) -> None:

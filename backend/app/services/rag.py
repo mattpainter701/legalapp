@@ -1,13 +1,20 @@
 import asyncio
+import json
+import logging
 import uuid
-from typing import List, Tuple
+from typing import Any, List, Tuple
+
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func as sa_func
 
 from app.config import get_settings
+from app.database import async_session_maker, set_tenant_context
 from app.services.embeddings import EmbeddingService
+from app.services.mcp_product import record_internal_chat_mcp_usage
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 async def _connected_providers(
@@ -169,7 +176,7 @@ async def search_chunks(
     Search chunks by cosine similarity using pgvector.
     Returns top_k most similar private chunks for the given tenant.
     Public CourtListener chunks use a separate BGE embedding space and are
-    searched by search_public_chunks().
+    searched by search_public_chunks() when the MCP server is not configured.
     """
     # Format embedding as a Postgres vector literal
     vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
@@ -259,6 +266,90 @@ async def search_public_chunks(
     ]
 
 
+def _mcp_json_items(response_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract JSON tool content from an MCP tools/call response."""
+    items: list[dict[str, Any]] = []
+    for content in response_data.get("content", []):
+        payload = None
+        if isinstance(content, dict) and content.get("type") == "json":
+            payload = content.get("json")
+        elif isinstance(content, dict) and content.get("type") == "text":
+            try:
+                payload = json.loads(content.get("text") or "null")
+            except json.JSONDecodeError:
+                payload = None
+
+        if isinstance(payload, list):
+            items.extend(item for item in payload if isinstance(item, dict))
+        elif isinstance(payload, dict):
+            items.append(payload)
+    return items
+
+
+def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
+    """Map a CourtListener MCP search hit to the chat/RAG chunk contract."""
+    chunk_id = str(item.get("chunk_id") or item.get("id") or f"mcp_{rank_index}")
+    rank_score = item.get("similarity", item.get("rank"))
+    try:
+        similarity = float(rank_score)
+    except (TypeError, ValueError):
+        similarity = 0.0
+    if similarity <= 0.0 or similarity > 1.0:
+        similarity = max(0.1, 1.0 - (rank_index * 0.05))
+
+    return {
+        "id": f"courtlistener:{chunk_id}",
+        "content": item.get("content") or "",
+        "case_name": item.get("case_name") or "Unknown Case",
+        "citation": item.get("citation") or "",
+        "court": item.get("court_name") or item.get("court_id") or "",
+        "decision_date": str(item.get("date_filed")) if item.get("date_filed") else None,
+        "chunk_index": item.get("chunk_index") or 0,
+        "section_path": "CourtListener",
+        "clause_type": "public_authority",
+        "similarity": similarity,
+        "relevance_score": similarity,
+        "source": "courtlistener_mcp",
+        "retrieval_mode": item.get("search_source") or "unknown",
+        "opinion_id": item.get("opinion_id"),
+        "cluster_id": item.get("cluster_id"),
+    }
+
+
+async def search_courtlistener_mcp(
+    query: str,
+    top_k: int = 8,
+) -> list[dict]:
+    """Search public authority through the configured CourtListener MCP server."""
+    if not settings.MCP_SERVER_URL:
+        return []
+
+    url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/mcp/tools/call"
+    payload = {
+        "name": "search_caselaw",
+        "arguments": {"query": query, "top_k": top_k},
+    }
+    try:
+        timeout = httpx.Timeout(12.0, connect=3.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            response_data = response.json()
+    except Exception:
+        logger.exception("CourtListener MCP search failed")
+        return []
+
+    if response_data.get("isError"):
+        logger.warning("CourtListener MCP returned an error response")
+        return []
+
+    return [
+        _mcp_item_to_chunk(item, index)
+        for index, item in enumerate(_mcp_json_items(response_data))
+        if item.get("content")
+    ]
+
+
 async def build_rag_context(chunks: List[dict]) -> str:
     """Format retrieved chunks into a context string with citation and clause metadata."""
     if not chunks:
@@ -305,18 +396,21 @@ async def full_rag_query(
     embedding_service: EmbeddingService,
     question: str,
     tenant_id: str,
+    user_id: str | None = None,
     include_public: bool = True,
 ) -> Tuple[str, List[dict]]:
     """
     Hybrid RAG pipeline: dense (pgvector cosine) + FTS (PostgreSQL tsvector)
     fused via Reciprocal Rank Fusion, plus optional public CourtListener chunks.
 
-    Embedding calls (private + public) and FTS search all run concurrently.
+    Embedding calls and FTS search run concurrently. Public authority is retrieved
+    through CourtListener MCP when MCP_SERVER_URL is set; otherwise the legacy
+    public_chunks/BGE path is used.
     Results are fused per-source: private dense + private FTS via RRF, then
     public chunks are appended (they live in a different embedding space).
     """
-    # Launch all retrieval tasks in parallel
-    if include_public:
+    use_mcp_public = include_public and bool(settings.MCP_SERVER_URL)
+    if include_public and not use_mcp_public:
         query_embedding, public_embedding, fts_results = await asyncio.gather(
             embedding_service.embed_text(question),
             embedding_service.embed_public_query(question),
@@ -349,14 +443,35 @@ async def full_rag_query(
         )
         if query_embedding is not None
         else _empty_chunks(),
-        search_public_chunks(
-            db=db,
-            query_embedding=public_embedding,
+        search_courtlistener_mcp(
+            query=question,
             top_k=settings.PUBLIC_RAG_TOP_K,
         )
-        if public_embedding is not None
-        else _empty_chunks(),
+        if use_mcp_public
+        else (
+            search_public_chunks(
+                db=db,
+                query_embedding=public_embedding,
+                top_k=settings.PUBLIC_RAG_TOP_K,
+            )
+            if public_embedding is not None
+            else _empty_chunks()
+        ),
     )
+    if use_mcp_public:
+        try:
+            async with async_session_maker() as usage_db:
+                await set_tenant_context(usage_db, str(tenant_id))
+                await record_internal_chat_mcp_usage(
+                    db=usage_db,
+                    tenant_id=uuid.UUID(str(tenant_id)),
+                    user_id=uuid.UUID(str(user_id)) if user_id else None,
+                    tool_name="search_caselaw",
+                    status_code=200,
+                    result_count=len(public_chunks),
+                )
+        except Exception:
+            logger.exception("Failed to record internal CourtListener MCP usage")
 
     # Fuse private dense + FTS results via RRF
     fused_private = reciprocal_rank_fusion(
@@ -438,6 +553,7 @@ async def hybrid_rag_query(
         embedding_service=embedding_service,
         question=question,
         tenant_id=tenant_id,
+        user_id=user_id,
         include_public=include_public,
     )
 

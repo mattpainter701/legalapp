@@ -1,0 +1,211 @@
+import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from app.routers import mcp
+from app.routers.mcp import ToolCallRequest
+from app.services import mcp_product
+
+
+def test_product_key_is_distinct_from_legacy_tenant_key():
+    raw = mcp_product.generate_product_key()
+
+    assert raw.startswith("clmcp_")
+    assert len(mcp_product.hash_key(raw)) == 64
+    assert mcp_product.mask_key(raw).startswith("clmcp_")
+
+
+def test_product_key_scope_rejects_unknown_tools():
+    with pytest.raises(HTTPException) as exc:
+        mcp_product.normalize_allowed_tools(["search_caselaw", "not_a_tool"])
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_external_product_key_rejects_disallowed_tool_before_proxy(monkeypatch):
+    tenant_id = uuid.uuid4()
+    product_key = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        allowed_tools=["search_caselaw"],
+        monthly_call_limit=None,
+    )
+    request = SimpleNamespace(
+        headers={"X-MCP-API-Key": "clmcp_test"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    body = ToolCallRequest(name="get_case_details", arguments={"id": "abc"})
+
+    async def resolve_key(*args, **kwargs):
+        return product_key, SimpleNamespace(id=tenant_id)
+
+    async def proxy_should_not_run(*args, **kwargs):
+        raise AssertionError("proxy should not run when tool is outside key scope")
+
+    async def set_context(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(mcp, "resolve_product_key", resolve_key)
+    monkeypatch.setattr(mcp, "set_tenant_context", set_context)
+    monkeypatch.setattr(mcp, "_proxy_post", proxy_should_not_run)
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp.call_tool(body, request, object())
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_external_product_key_records_usage_after_proxy(monkeypatch):
+    tenant_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    product_key = SimpleNamespace(
+        id=key_id,
+        tenant_id=tenant_id,
+        allowed_tools=["search_caselaw"],
+        monthly_call_limit=100,
+    )
+    request = SimpleNamespace(
+        headers={"X-MCP-API-Key": "clmcp_test"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    body = ToolCallRequest(name="search_caselaw", arguments={"query": "oil", "top_k": 2})
+    calls = []
+
+    async def resolve_key(*args, **kwargs):
+        return product_key, SimpleNamespace(id=tenant_id)
+
+    async def quota_ok(*args, **kwargs):
+        calls.append(("quota", args, kwargs))
+
+    async def proxy(path, req, payload):
+        return {"content": [{"type": "json", "json": {"results": [{}, {}]}}], "isError": False}
+
+    async def record_usage(**kwargs):
+        calls.append(("usage", kwargs))
+
+    async def set_context(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(mcp, "resolve_product_key", resolve_key)
+    monkeypatch.setattr(mcp, "set_tenant_context", set_context)
+    monkeypatch.setattr(mcp, "enforce_product_key_quota", quota_ok)
+    monkeypatch.setattr(mcp, "_proxy_post", proxy)
+    monkeypatch.setattr(mcp, "record_mcp_usage", record_usage)
+
+    result = await mcp.call_tool(body, request, object())
+
+    assert result["isError"] is False
+    assert calls[0][0] == "quota"
+    assert calls[1][0] == "usage"
+    usage = calls[1][1]
+    assert usage["tenant_id"] == tenant_id
+    assert usage["product_key_id"] == key_id
+    assert usage["auth_type"] == "product_key"
+    assert usage["tool_name"] == "search_caselaw"
+    assert usage["result_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_internal_chat_usage_logging_has_internal_auth_type(monkeypatch):
+    calls = []
+
+    async def record_usage(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(mcp_product, "record_mcp_usage", record_usage)
+
+    await mcp_product.record_internal_chat_mcp_usage(
+        db=object(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        tool_name="search_caselaw",
+        status_code=200,
+        result_count=4,
+        latency_ms=42,
+    )
+
+    assert calls[0]["auth_type"] == "internal_chat"
+    assert calls[0]["product_key_id"] is None
+
+
+def test_mcp_messages_accepts_jsonrpc_tools_call_shape():
+    body = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "method": "tools/call",
+        "params": {"name": "search_caselaw", "arguments": {"query": "tax"}},
+    }
+
+    parsed = mcp.parse_mcp_message_body(body)
+
+    assert parsed.name == "search_caselaw"
+    assert parsed.arguments == {"query": "tax"}
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_create_product_key(monkeypatch):
+    tenant_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")
+    created_key = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Partner API",
+        allowed_tools=["search_caselaw"],
+        monthly_call_limit=250,
+        is_active=True,
+    )
+
+    async def current_user(*args, **kwargs):
+        return user
+
+    async def create_key(*args, **kwargs):
+        assert kwargs["tenant_id"] == tenant_id
+        assert kwargs["user_id"] == user.id
+        assert kwargs["name"] == "Partner API"
+        return created_key, "clmcp_rawsecret"
+
+    monkeypatch.setattr(mcp, "get_current_user", current_user)
+    monkeypatch.setattr(mcp, "create_product_key", create_key)
+
+    result = await mcp.create_mcp_product_key(
+        mcp.ProductKeyCreateRequest(
+            name="Partner API",
+            monthly_call_limit=250,
+            allowed_tools=["search_caselaw"],
+        ),
+        SimpleNamespace(headers={}),
+        object(),
+    )
+
+    assert result["api_key"] == "clmcp_rawsecret"
+    assert result["api_key_masked"].startswith("clmcp_")
+    assert result["monthly_call_limit"] == 250
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_revoke_product_key(monkeypatch):
+    tenant_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")
+    calls = []
+
+    async def current_user(*args, **kwargs):
+        return user
+
+    async def revoke_key(*args, **kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(mcp, "get_current_user", current_user)
+    monkeypatch.setattr(mcp, "revoke_product_key", revoke_key)
+
+    result = await mcp.revoke_mcp_product_key(key_id, SimpleNamespace(headers={}), object())
+
+    assert result == {"revoked": True}
+    assert calls[0] == {"tenant_id": tenant_id, "key_id": key_id}

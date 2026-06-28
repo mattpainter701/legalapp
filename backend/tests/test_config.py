@@ -45,3 +45,14 @@ def test_token_encryption_key_invalid_raises():
     ):
         settings = Settings()
         validate_token_encryption_key(settings)
+
+
+def test_mcp_server_url_defaults_to_empty_for_local_fallback():
+    os.environ["TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+    os.environ["DATABASE_URL"] = "postgresql://test"
+    os.environ["SECRET_KEY"] = "test-secret"
+    os.environ.pop("MCP_SERVER_URL", None)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.MCP_SERVER_URL == ""
