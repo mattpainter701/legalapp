@@ -108,6 +108,7 @@ class ExpertiseCacheManager:
         user_id: str,
         skill: Optional[str] = None,
         include_public: bool = True,
+        scope_key: Optional[str] = None,
     ) -> Optional[Tuple[str, list]]:
         """
         Retrieve cached RAG results.
@@ -118,8 +119,18 @@ class ExpertiseCacheManager:
 
         try:
             public_scope = "public" if include_public else "private"
+            retrieval_scope = scope_key or "global"
+            skill_scope = skill or "default"
             query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
-            key = self._make_key("rag", tenant_id, user_id, public_scope, query_hash)
+            key = self._make_key(
+                "rag",
+                tenant_id,
+                user_id,
+                public_scope,
+                skill_scope,
+                retrieval_scope,
+                query_hash,
+            )
             cached = await self.redis_client.get(key)
             if cached:
                 data = json.loads(cached)
@@ -139,6 +150,7 @@ class ExpertiseCacheManager:
         expertise_level: str = "mid",
         skill: Optional[str] = None,
         include_public: bool = True,
+        scope_key: Optional[str] = None,
     ) -> bool:
         """Cache RAG results with expertise-aware TTL."""
         if not self.cache_enabled or not self.redis_client:
@@ -146,8 +158,18 @@ class ExpertiseCacheManager:
 
         try:
             public_scope = "public" if include_public else "private"
+            retrieval_scope = scope_key or "global"
+            skill_scope = skill or "default"
             query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
-            key = self._make_key("rag", tenant_id, user_id, public_scope, query_hash)
+            key = self._make_key(
+                "rag",
+                tenant_id,
+                user_id,
+                public_scope,
+                skill_scope,
+                retrieval_scope,
+                query_hash,
+            )
             ttl = self._get_ttl(expertise_level, "rag", skill)
             data = {"context": context_str, "chunks": chunks}
             await self.redis_client.setex(key, ttl, json.dumps(data, default=str))

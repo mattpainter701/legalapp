@@ -222,7 +222,14 @@ class CloudSearchService:
         # Always include the locally-synced metadata index. It is a reliable
         # fallback when live tokens are limited and gives the sync subsystem a
         # consumer.
-        tasks.append(self.search_index(db, plan, tenant_id))
+        tasks.append(
+            self.search_index(
+                db,
+                plan,
+                tenant_id,
+                matter_cloud_folder=matter_cloud_folder,
+            )
+        )
 
         for batch in tasks:
             try:
@@ -249,6 +256,7 @@ class CloudSearchService:
         db: AsyncSession,
         plan: dict,
         tenant_id: str,
+        matter_cloud_folder: dict | None = None,
     ) -> list[CloudHit]:
         """Search the locally-synced ``cloud_metadata_index`` for matching items.
 
@@ -257,7 +265,12 @@ class CloudSearchService:
         ``fetch_content`` when needed — only metadata is read here.
         """
         try:
-            return await self._search_index_impl(db, plan, tenant_id)
+            return await self._search_index_impl(
+                db,
+                plan,
+                tenant_id,
+                matter_cloud_folder=matter_cloud_folder,
+            )
         except Exception:
             logger.exception("search_index failed for tenant %s", tenant_id)
             return []
@@ -267,6 +280,7 @@ class CloudSearchService:
         db: AsyncSession,
         plan: dict,
         tenant_id: str,
+        matter_cloud_folder: dict | None = None,
     ) -> list[CloudHit]:
         keywords = [k for k in plan.get("keywords", []) if k]
         date_after = plan.get("date_after") or ""
@@ -283,6 +297,8 @@ class CloudSearchService:
 
         await set_tenant_context(db, tenant_id)
 
+        matter_folder_ids = _cloud_metadata_scope_folder_ids(matter_cloud_folder)
+
         stmt = select(CloudMetadata).where(CloudMetadata.tenant_id == tenant_id)
         stmt = stmt.where(
             or_(
@@ -292,6 +308,13 @@ class CloudSearchService:
                 ]
             )
         )
+        if matter_cloud_folder is not None:
+            if not matter_folder_ids:
+                return []
+            stmt = stmt.where(
+                CloudMetadata.object_type == "file",
+                CloudMetadata.parent_id.in_(matter_folder_ids),
+            )
         if keywords:
             kw_clauses = []
             for kw in keywords:
@@ -1167,6 +1190,29 @@ def _cloud_folder_refs_for_provider(
         if key not in seen:
             seen.add(key)
             deduped.append(ref)
+    return deduped
+
+
+def _cloud_metadata_scope_folder_ids(matter_cloud_folder: dict | None) -> list[str]:
+    if not isinstance(matter_cloud_folder, dict):
+        return []
+
+    ids = []
+    ids.extend(_cloud_folder_ids_for_provider(matter_cloud_folder, "google_drive"))
+    ids.extend(_cloud_folder_ids_for_provider(matter_cloud_folder, "onedrive"))
+    ids.extend(
+        ref["folder_id"]
+        for ref in _cloud_folder_refs_for_provider(matter_cloud_folder, "sharepoint")
+        if ref.get("folder_id")
+    )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for folder_id in ids:
+        if folder_id in seen:
+            continue
+        seen.add(folder_id)
+        deduped.append(folder_id)
     return deduped
 
 

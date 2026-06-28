@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -137,6 +138,75 @@ def _premium_for_user(user, query: str, user_requested_premium: bool) -> bool:
     return bool(
         getattr(user, "premium_ai_enabled", False)
         and _auto_tier(query, user_requested_premium)
+    )
+
+
+async def _matter_for_tenant_or_400(
+    db: AsyncSession,
+    user,
+    matter_id: str | uuid.UUID,
+) -> MatterModel:
+    try:
+        matter_uuid = (
+            matter_id
+            if isinstance(matter_id, uuid.UUID)
+            else uuid.UUID(str(matter_id).strip())
+        )
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Matter ID is invalid")
+
+    result = await db.execute(
+        select(MatterModel).where(
+            MatterModel.id == matter_uuid,
+            MatterModel.tenant_id == user.tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if matter is None:
+        raise HTTPException(status_code=400, detail="Matter not found")
+    return matter
+
+
+async def _effective_message_matter(
+    db: AsyncSession,
+    user,
+    conv: Conversation,
+    body: MessageCreate,
+) -> MatterModel | None:
+    requested = body.matter_id.strip() if getattr(body, "matter_id", None) else ""
+    if requested:
+        matter = await _matter_for_tenant_or_400(db, user, requested)
+        if conv.matter_id and matter.id != conv.matter_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Message matter does not match linked conversation matter",
+            )
+        return matter
+
+    if conv.matter_id:
+        return await _matter_for_tenant_or_400(db, user, conv.matter_id)
+    return None
+
+
+def _rag_scope_key(matter_id: str | None, matter_cloud_folder: dict | None) -> str:
+    return json.dumps(
+        {
+            "matter_id": matter_id or "none",
+            "matter_cloud_folder": matter_cloud_folder or None,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _cloud_hit_dict(hit) -> dict:
+    return hit.to_dict() if hasattr(hit, "to_dict") else dict(hit)
+
+
+def _cloud_hit_context_id(hit_dict: dict) -> str:
+    return (
+        f"cloud:{hit_dict.get('provider')}:{hit_dict.get('source')}:"
+        f"{hit_dict.get('object_id')}"
     )
 
 
@@ -366,20 +436,9 @@ async def create_conversation(
     matter_uuid = None
     matter_name = None
     if body.matter_id:
-        try:
-            matter_uuid = uuid.UUID(body.matter_id)
-            # Load matter name for auto-title
-            m_result = await db.execute(
-                select(MatterModel.matter_name).where(
-                    MatterModel.id == matter_uuid,
-                    MatterModel.tenant_id == user.tenant_id,
-                )
-            )
-            row = m_result.one_or_none()
-            if row:
-                matter_name = row[0]
-        except (ValueError, TypeError):
-            matter_uuid = None
+        matter = await _matter_for_tenant_or_400(db, user, body.matter_id)
+        matter_uuid = matter.id
+        matter_name = matter.matter_name
 
     title = body.title or (
         f"Chat: {matter_name}" if matter_name else "New Conversation"
@@ -477,19 +536,8 @@ async def update_conversation(
         if not matter_id:
             conv.matter_id = None
         else:
-            try:
-                matter_uuid = uuid.UUID(matter_id)
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="Matter ID is invalid")
-            matter_result = await db.execute(
-                select(MatterModel.id).where(
-                    MatterModel.id == matter_uuid,
-                    MatterModel.tenant_id == user.tenant_id,
-                )
-            )
-            if matter_result.scalar_one_or_none() is None:
-                raise HTTPException(status_code=400, detail="Matter not found")
-            conv.matter_id = matter_uuid
+            matter = await _matter_for_tenant_or_400(db, user, matter_id)
+            conv.matter_id = matter.id
 
     if body.title is None and body.matter_id is None:
         raise HTTPException(status_code=400, detail="No conversation updates provided")
@@ -687,6 +735,13 @@ async def send_message(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    effective_matter = await _effective_message_matter(db, user, conv, body)
+    effective_matter_id = str(effective_matter.id) if effective_matter else None
+    effective_matter_cloud_folder = (
+        effective_matter.cloud_folder if effective_matter else None
+    )
+    rag_scope_key = _rag_scope_key(effective_matter_id, effective_matter_cloud_folder)
+
     # 1a. Enforce daily token budget (fail fast before any work is done)
     await _check_token_budget(db, user)
 
@@ -725,35 +780,28 @@ async def send_message(
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
     async def _load_matter_context_nonstream():
-        if not (hasattr(body, "matter_id") and body.matter_id):
+        if not effective_matter_id:
             return "", [], None, False
-        _matter_result = await db.execute(
-            select(MatterModel.cloud_folder).where(
-                MatterModel.id == body.matter_id,
-                MatterModel.tenant_id == user.tenant_id,
-            )
-        )
-        _matter_row = _matter_result.first()
-        _mf = _matter_row[0] if _matter_row else None
 
         cached = await cache_manager.get_cached_matter_context(
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
         )
         if cached:
-            return cached, [], _mf, True
+            return cached, [], effective_matter_cloud_folder, True
         mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
             db=db,
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
+            tenant_id=user.tenant_id,
             privacy_mode=user.privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
         )
-        return mcs, mpf if mpf else [], _mf, False
+        return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
 
     (
         (
@@ -787,6 +835,7 @@ async def send_message(
             user_id=str(user.id),
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
             include_public=body.include_public,
+            scope_key=rag_scope_key,
         ),
     )
 
@@ -809,7 +858,7 @@ async def send_message(
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
-                matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_id=effective_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
             # Cache RAG results
@@ -822,6 +871,7 @@ async def send_message(
                 expertise_level=user.expertise_level,
                 skill=body.skill if hasattr(body, "skill") else user.default_skill,
                 include_public=body.include_public,
+                scope_key=rag_scope_key,
             )
         except Exception as rag_exc:
             logger.exception("RAG query failed")
@@ -885,7 +935,7 @@ async def send_message(
                     user_id=user.id,
                     conversation_id=conv.id,
                     operation_type="chat",
-                    matter_id=body.matter_id or conv.matter_id,
+                    matter_id=effective_matter_id,
                     skill=body.skill if hasattr(body, "skill") else user.default_skill,
                     premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 ),
@@ -947,7 +997,7 @@ async def send_message(
                 user_id=user.id,
                 conversation_id=conv.id,
                 operation_type="chat_retry",
-                matter_id=body.matter_id or conv.matter_id,
+                matter_id=effective_matter_id,
                 skill=body.skill if hasattr(body, "skill") else user.default_skill,
                 premium=_premium_for_user(user, body.content, body.use_premium_llm),
             ),
@@ -982,11 +1032,8 @@ async def send_message(
         )
 
     for hit in cloud_hits:
-        hit_dict = hit.to_dict() if hasattr(hit, "to_dict") else dict(hit)
-        cloud_id = (
-            f"cloud:{hit_dict.get('provider')}:{hit_dict.get('source')}:"
-            f"{hit_dict.get('object_id')}"
-        )
+        hit_dict = _cloud_hit_dict(hit)
+        cloud_id = _cloud_hit_context_id(hit_dict)
         if cloud_id in seen_citations:
             continue
         seen_citations.add(cloud_id)
@@ -996,15 +1043,18 @@ async def send_message(
             {
                 "case_name": hit_dict.get("title") or "Cloud result",
                 "citation": hit_dict.get("url") or cloud_id,
-                "court": f"{hit_dict.get('provider', 'cloud')}/{hit_dict.get('source', 'unknown')}",
+                "court": (
+                    f"{hit_dict.get('provider', 'cloud')}/"
+                    f"{hit_dict.get('source', 'unknown')}"
+                ),
                 "excerpt": (hit_dict.get("snippet") or "")[:300],
             }
         )
 
     # Track matter context usage if provided
-    if hasattr(body, "matter_id") and body.matter_id:
-        context_used.insert(0, f"matter:{body.matter_id}")
-        context_scores[f"matter:{body.matter_id}"] = 1.0
+    if effective_matter_id:
+        context_used.insert(0, f"matter:{effective_matter_id}")
+        context_scores[f"matter:{effective_matter_id}"] = 1.0
 
     # Combine PII findings from input, response, and matter context
     all_pii_flags = []
@@ -1053,6 +1103,9 @@ async def send_message(
             billing_tier=user.tenant.billing_tier if user.tenant else "payg",
         )
     )
+    cloud_source_ids = [
+        _cloud_hit_context_id(_cloud_hit_dict(hit)) for hit in cloud_hits
+    ]
     usage = UsageRecord(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -1070,7 +1123,8 @@ async def send_message(
         operation_type="chat",
         query_text=retained_gateway_query_text(body.content),
         rag_chunks_retrieved=len(chunks),
-        rag_source_ids=[c["id"] for c in chunks if c.get("id")],
+        rag_source_ids=[c["id"] for c in chunks if c.get("id")]
+        + cloud_source_ids,
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
         cache_hit_rag=cache_hit_rag,
@@ -1142,6 +1196,19 @@ async def stream_message(
             media_type="text/event-stream",
         )
 
+    try:
+        effective_matter = await _effective_message_matter(db, user, conv, body)
+    except HTTPException as matter_exc:
+        return StreamingResponse(
+            _error_stream(matter_exc.detail),
+            media_type="text/event-stream",
+        )
+    effective_matter_id = str(effective_matter.id) if effective_matter else None
+    effective_matter_cloud_folder = (
+        effective_matter.cloud_folder if effective_matter else None
+    )
+    rag_scope_key = _rag_scope_key(effective_matter_id, effective_matter_cloud_folder)
+
     # 1a. Enforce daily token budget
     try:
         await _check_token_budget(db, user)
@@ -1185,35 +1252,28 @@ async def stream_message(
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
     async def _load_matter_context():
-        if not (hasattr(body, "matter_id") and body.matter_id):
+        if not effective_matter_id:
             return "", [], None, False
-        _matter_result = await db.execute(
-            select(MatterModel.cloud_folder).where(
-                MatterModel.id == body.matter_id,
-                MatterModel.tenant_id == user.tenant_id,
-            )
-        )
-        _matter_row = _matter_result.first()
-        _mf = _matter_row[0] if _matter_row else None
 
         cached = await cache_manager.get_cached_matter_context(
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
         )
         if cached:
-            return cached, [], _mf, True
+            return cached, [], effective_matter_cloud_folder, True
         mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
             db=db,
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
+            tenant_id=user.tenant_id,
             privacy_mode=user.privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
-            matter_id=body.matter_id,
+            matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
         )
-        return mcs, mpf if mpf else [], _mf, False
+        return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
 
     (
         (
@@ -1247,17 +1307,19 @@ async def stream_message(
             user_id=str(user.id),
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
             include_public=body.include_public,
+            scope_key=rag_scope_key,
         ),
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
+    cloud_hits = []
     if cached_rag:
         context_str, chunks = cached_rag
         cache_hit_rag = True
     else:
         try:
-            context_str, chunks, _ = await hybrid_rag_query(
+            context_str, chunks, cloud_hits = await hybrid_rag_query(
                 db=db,
                 embedding_service=embedding_service,
                 question=body.content,
@@ -1268,7 +1330,7 @@ async def stream_message(
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=user.tenant.name if user.tenant else "Legal",
                 matter_context_str=matter_context_str,
-                matter_id=body.matter_id if hasattr(body, "matter_id") else None,
+                matter_id=effective_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
         except Exception:
@@ -1285,6 +1347,7 @@ async def stream_message(
             expertise_level=user.expertise_level,
             skill=body.skill if hasattr(body, "skill") else user.default_skill,
             include_public=body.include_public,
+            scope_key=rag_scope_key,
         )
 
     # 4a. Combine attachment, matter, and RAG context
@@ -1320,7 +1383,7 @@ async def stream_message(
                     user_id=user.id,
                     conversation_id=conv.id,
                     operation_type="chat_stream",
-                    matter_id=body.matter_id or conv.matter_id,
+                    matter_id=effective_matter_id,
                     skill=body.skill if hasattr(body, "skill") else user.default_skill,
                     premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 ),
@@ -1358,7 +1421,7 @@ async def stream_message(
                         user_id=user.id,
                         conversation_id=conv.id,
                         operation_type="chat_stream_retry",
-                        matter_id=body.matter_id or conv.matter_id,
+                        matter_id=effective_matter_id,
                         skill=body.skill if hasattr(body, "skill") else user.default_skill,
                         premium=_premium_for_user(user, body.content, body.use_premium_llm),
                     ),
@@ -1393,10 +1456,30 @@ async def stream_message(
                     }
                 )
 
+            for hit in cloud_hits:
+                hit_dict = _cloud_hit_dict(hit)
+                cloud_id = _cloud_hit_context_id(hit_dict)
+                if cloud_id in seen_citations:
+                    continue
+                seen_citations.add(cloud_id)
+                context_used.append(cloud_id)
+                context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
+                source_dicts.append(
+                    {
+                        "case_name": hit_dict.get("title") or "Cloud result",
+                        "citation": hit_dict.get("url") or cloud_id,
+                        "court": (
+                            f"{hit_dict.get('provider', 'cloud')}/"
+                            f"{hit_dict.get('source', 'unknown')}"
+                        ),
+                        "excerpt": (hit_dict.get("snippet") or "")[:300],
+                    }
+                )
+
             # Track matter context usage if provided
-            if hasattr(body, "matter_id") and body.matter_id:
-                context_used.insert(0, f"matter:{body.matter_id}")
-                context_scores[f"matter:{body.matter_id}"] = 1.0
+            if effective_matter_id:
+                context_used.insert(0, f"matter:{effective_matter_id}")
+                context_scores[f"matter:{effective_matter_id}"] = 1.0
 
             # Combine PII findings
             all_pii_flags = []
@@ -1451,6 +1534,9 @@ async def stream_message(
                     billing_tier=user.tenant.billing_tier if user.tenant else "payg",
                 )
             )
+            cloud_source_ids = [
+                _cloud_hit_context_id(_cloud_hit_dict(hit)) for hit in cloud_hits
+            ]
             usage = UsageRecord(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,
@@ -1468,7 +1554,8 @@ async def stream_message(
                 operation_type="chat_stream",
                 query_text=retained_gateway_query_text(body.content),
                 rag_chunks_retrieved=len(chunks),
-                rag_source_ids=[c["id"] for c in chunks if c.get("id")],
+                rag_source_ids=[c["id"] for c in chunks if c.get("id")]
+                + cloud_source_ids,
                 ip_address=request.client.host if request.client else None,
                 user_agent=(request.headers.get("user-agent") or "")[:500] or None,
                 cache_hit_rag=cache_hit_rag,

@@ -1,5 +1,33 @@
 # TASKS.md
 
+## Chat/MCP Matter And Cloud Context Hardening — 2026-06-28 (DONE)
+
+**Goal:** Resolve the chat/MCP review findings around matter-linked chat
+validation, context injection, cache isolation, streaming source persistence,
+and cloud metadata scoping before production deploy.
+
+- [x] Reject invalid or cross-tenant `matter_id` on conversation creation
+- [x] Use validated linked matter context for matter-linked chat messages
+- [x] Scope RAG cache entries by matter/cloud retrieval context
+- [x] Preserve cloud source citations for streaming chat responses
+- [x] Scope cloud metadata index fallback to matter folders when available
+- [x] Add focused regression tests and deploy
+
+Summary: chat conversation creation now rejects invalid or cross-tenant matters,
+linked conversations inject the validated conversation matter into chat context
+without requiring the frontend to resend `matter_id`, and RAG cache keys include
+retrieval scope so same-question matter chats cannot reuse each other's context.
+Streaming chat now persists cloud source citations/usage IDs, cloud metadata
+index fallback is folder-scoped for matter searches, matter context service
+accepts an explicit tenant filter, and cloud-backed matter document deletion
+fails closed instead of deleting only the DB row and orphaning the customer file.
+Verification: Python compile gate passed; focused RAG/cloud/MCP tests passed.
+Local chat endpoint tests were added but local `legalapp_test` Postgres was not
+listening during this session, so production smoke covers deployed endpoint
+behavior.
+
+---
+
 ## Platform AI Route Drift After Latency Fix — 2026-06-27 (DONE)
 
 **Goal:** Resolve the mismatch where the deployed LiteLLM config/backend

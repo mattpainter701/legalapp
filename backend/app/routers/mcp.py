@@ -134,10 +134,10 @@ async def _proxied_tool_names(request: Request) -> list[str]:
     try:
         manifest = await _proxy_get("/api/mcp", request)
     except Exception:
-        return [t["name"] for t in _TOOLS]
+        return list(DEFAULT_ALLOWED_TOOLS)
     tools = manifest.get("tools") if isinstance(manifest, dict) else None
     if not isinstance(tools, list):
-        return [t["name"] for t in _TOOLS]
+        return list(DEFAULT_ALLOWED_TOOLS)
     return [tool.get("name") for tool in tools if isinstance(tool, dict) and tool.get("name")]
 
 

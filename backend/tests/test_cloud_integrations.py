@@ -11,6 +11,7 @@ import pytest
 from app.services import cloud_search
 from app.services.cloud_search import (
     _INDEX_SOURCE_MAP,
+    _cloud_metadata_scope_folder_ids,
     _parse_index_date,
     CloudHit,
     CloudSearchService,
@@ -171,6 +172,35 @@ def test_source_enabled_accepts_provider_aliases():
     assert cloud_search._source_enabled(["microsoft"], "outlook")
     assert cloud_search._source_enabled(["microsoft"], "sharepoint")
     assert not cloud_search._source_enabled(["google"], "outlook")
+
+
+def test_cloud_metadata_scope_folder_ids_extracts_all_matter_folders():
+    assert _cloud_metadata_scope_folder_ids(
+        {
+            "google_drive": {"matter_folder_id": "gd-primary"},
+            "onedrive": {"matter_folder_id": "od-primary"},
+            "sharepoint": {
+                "matter_folder_id": "sp-primary",
+                "drive_id": "drive-1",
+            },
+            "context_folders": [
+                {"provider": "google_drive", "matter_folder_id": "gd-context"},
+                {"provider": "onedrive", "matter_folder_id": "od-context"},
+                {
+                    "provider": "sharepoint",
+                    "matter_folder_id": "sp-context",
+                    "drive_id": "drive-1",
+                },
+            ],
+        }
+    ) == [
+        "gd-primary",
+        "gd-context",
+        "od-primary",
+        "od-context",
+        "sp-primary",
+        "sp-context",
+    ]
 
 
 @pytest.mark.asyncio

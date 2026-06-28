@@ -13,6 +13,7 @@ from app.models.document import Chunk, Document
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
 from app.models.user import User
+from app.services.cloud_search import CloudHit
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
 
@@ -183,6 +184,31 @@ async def test_update_conversation_rejects_cross_tenant_matter(
 
 
 @pytest.mark.asyncio
+async def test_create_conversation_rejects_cross_tenant_matter(
+    client: AsyncClient, db_session, test_user
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        user_id=test_user.id,
+        slug=f"cross-tenant-create-{uuid.uuid4().hex[:8]}",
+        matter_name="Other Tenant Matter",
+        matter_type="general",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/conversations",
+        json={"matter_id": str(matter.id), "title": "Bad link"},
+    )
+
+    assert resp.status_code == 400
+    assert "Matter not found" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_send_message_returns_assistant(
     client: AsyncClient, mock_llm, mock_embeddings
 ):
@@ -205,6 +231,50 @@ async def test_send_message_returns_assistant(
         "role": "user",
         "content": "What is the standard for preliminary injunctions?",
     }
+
+
+@pytest.mark.asyncio
+async def test_send_message_uses_linked_conversation_matter_context(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    test_user,
+    mock_llm,
+    mock_embeddings,
+):
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"linked-context-{uuid.uuid4().hex[:8]}",
+        matter_name="North Dakota Probate File",
+        matter_type="probate",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+
+    conv = (
+        await client.post(
+            "/api/conversations",
+            json={"title": "Probate chat", "matter_id": str(matter.id)},
+        )
+    ).json()
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = ("", [], [])
+        resp = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={
+                "content": "What should we do next?",
+                "include_public": False,
+                "use_premium_llm": False,
+            },
+        )
+
+    assert resp.status_code == 201
+    assert rag.call_args.kwargs["matter_id"] == str(matter.id)
+    assert "North Dakota Probate File" in mock_llm.call_args.kwargs["context"]
 
 
 @pytest.mark.asyncio
@@ -287,6 +357,49 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
     assert "active-attachment.txt" in context
     assert "OTHER_CONVERSATION_ATTACHMENT_TEXT" not in context
     assert "other-attachment.txt" not in context
+
+
+@pytest.mark.asyncio
+async def test_stream_message_persists_cloud_sources(
+    client: AsyncClient,
+    mock_embeddings,
+):
+    conv = (await client.post("/api/conversations", json={})).json()
+    cloud_hit = CloudHit(
+        provider="google",
+        source="drive",
+        object_id="drive-file-1",
+        title="Client Closing Checklist",
+        snippet="Closing checklist text",
+        url="https://drive.example/file/1",
+        modified_time="2026-06-28T00:00:00Z",
+        mime_type="text/plain",
+        relevance_score=0.82,
+    )
+
+    async def stream_tokens(*args, **kwargs):
+        yield "Cloud source answer."
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = ("Cloud context", [], [cloud_hit])
+        with patch("app.services.llm.LLMService.stream_complete", stream_tokens):
+            async with client.stream(
+                "POST",
+                f"/api/conversations/{conv['id']}/messages/stream",
+                json={
+                    "content": "Summarize the checklist",
+                    "include_public": False,
+                    "use_premium_llm": False,
+                },
+            ) as resp:
+                body = "".join([part async for part in resp.aiter_text()])
+
+    assert resp.status_code == 200
+    assert "[STREAM_COMPLETE]" in body
+    detail = (await client.get(f"/api/conversations/{conv['id']}")).json()
+    assistant = [m for m in detail["messages"] if m["role"] == "assistant"][0]
+    assert assistant["sources"][0]["case_name"] == "Client Closing Checklist"
+    assert assistant["sources"][0]["citation"] == "https://drive.example/file/1"
 
 
 @pytest.mark.asyncio

@@ -1355,6 +1355,7 @@ async def execute_skill(
         ) = await matter_context_service.get_safe_matter_context(
             db=db,
             matter_id=body.matter_id,
+            tenant_id=user.tenant_id,
             privacy_mode=getattr(user, "privacy_mode", False),
         )
         if matter_context:

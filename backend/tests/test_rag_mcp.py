@@ -201,3 +201,49 @@ async def test_rag_cache_splits_public_and_private_contexts():
         "same question", "tenant", "user", include_public=False
     )
     assert cached == ("private only", [])
+
+
+@pytest.mark.asyncio
+async def test_rag_cache_splits_matter_scopes():
+    class FakeRedis:
+        def __init__(self):
+            self.values = {}
+
+        async def get(self, key):
+            return self.values.get(key)
+
+        async def setex(self, key, ttl, value):
+            self.values[key] = value
+
+    manager = ExpertiseCacheManager()
+    manager.cache_enabled = True
+    manager.redis_client = FakeRedis()
+
+    await manager.set_cached_rag_results(
+        question="same question",
+        tenant_id="tenant",
+        user_id="user",
+        context_str="matter one context",
+        chunks=[],
+        include_public=True,
+        scope_key="matter:one",
+    )
+
+    assert (
+        await manager.get_cached_rag_results(
+            "same question",
+            "tenant",
+            "user",
+            include_public=True,
+            scope_key="matter:two",
+        )
+        is None
+    )
+    cached = await manager.get_cached_rag_results(
+        "same question",
+        "tenant",
+        "user",
+        include_public=True,
+        scope_key="matter:one",
+    )
+    assert cached == ("matter one context", [])

@@ -195,6 +195,15 @@ async def delete_matter_document(
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
 
+    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Cloud-backed document deletion requires provider object IDs; "
+                "the database record was not removed."
+            ),
+        )
+
     if doc.storage_path and os.path.exists(doc.storage_path):
         try:
             os.remove(doc.storage_path)

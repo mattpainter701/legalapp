@@ -24,6 +24,18 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat/MCP matter and cloud context hardening:** conversation creation now
+  rejects invalid or cross-tenant `matter_id` values instead of persisting an
+  unvalidated FK. Chat message handling computes one validated effective matter
+  from the message body or linked conversation, uses it for matter context,
+  RAG retrieval, LiteLLM metadata, context tags, and usage records, and scopes
+  RAG cache keys by skill plus matter/cloud retrieval scope. Streaming chat now
+  persists cloud source citations and cloud source IDs like non-streaming chat.
+  Cloud metadata index fallback is folder-scoped for matter searches, matter
+  context loading supports an explicit tenant filter, cloud-backed matter
+  document deletion now fails closed instead of orphaning provider files, and
+  MCP product-key tool listings stay aligned with the remote CourtListener tool
+  catalog when the remote manifest is temporarily unavailable.
 - **Alembic migration chain:** corrected the MCP product gateway migration to
   depend on revision `069` instead of the filename-like `069_rbac_rls`, which
   prevented production backend startup from resolving the migration graph.

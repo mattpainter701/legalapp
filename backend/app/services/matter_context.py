@@ -1,5 +1,6 @@
 """Matter context loading and PII-safe context injection for LLM conversations."""
 
+import uuid
 from typing import Optional, Tuple
 
 from sqlalchemy import select, func
@@ -28,15 +29,19 @@ class MatterContextService:
         self,
         db: AsyncSession,
         matter_id: str,
+        tenant_id: str | uuid.UUID | None = None,
     ) -> Tuple[Optional[dict], bool, list]:
         """Load matter and return full context data with PII detection."""
+        conditions = [Matter.id == matter_id]
+        if tenant_id is not None:
+            conditions.append(Matter.tenant_id == tenant_id)
         result = await db.execute(
             select(Matter)
             .options(
                 selectinload(Matter.assignments).selectinload(MatterAssignment.user),
                 selectinload(Matter.client),
             )
-            .where(Matter.id == matter_id)
+            .where(*conditions)
         )
         matter = result.unique().scalar_one_or_none()
 
@@ -375,11 +380,12 @@ class MatterContextService:
         self,
         db: AsyncSession,
         matter_id: str,
+        tenant_id: str | uuid.UUID | None = None,
         privacy_mode: bool = False,
     ) -> Tuple[str, bool, list]:
         """Load matter context and prepare it safely for LLM injection."""
         matter_data, has_pii, pii_findings = await self.get_matter_context(
-            db, matter_id
+            db, matter_id, tenant_id=tenant_id
         )
 
         if not matter_data:
