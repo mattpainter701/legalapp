@@ -1,5 +1,206 @@
 # TASKS.md
 
+## Platform AI Route Drift After Latency Fix — 2026-06-27 (DONE)
+
+**Goal:** Resolve the mismatch where the deployed LiteLLM config/backend
+fallback path was updated for faster standard chat, but Platform -> AI Routing
+still shows the saved `clarity-standard` route with Llama primary and Gemma
+fallback.
+
+- [x] Inspect saved platform route config and live LiteLLM route state
+- [x] Align standard route source of truth with the deployed latency fix
+- [x] Verify Platform UI/API reports Gemma primary with Nemotron/DeepSeek fallback
+- [x] Update changelog and task summary
+
+Summary: the earlier latency fix updated the file-backed LiteLLM config,
+LiteLLM DB `router_settings`, and backend fallback behavior, but missed the
+Platform AI Routing route-builder row `llm_route_config_v2`. That row still had
+OpenRouter Llama as the `clarity-standard` primary and Gemma as its fallback,
+which is what the UI correctly displayed. Production is now aligned: the saved
+standard route uses OpenRouter `google/gemma-4-31b-it:free` as primary and
+OpenCode Zen `nemotron-3-ultra-free` then `deepseek-v4-flash-free` as
+fallbacks. A missing `opencode-zen` provider key was created from the existing
+environment key material, and the backend fallback list now accepts both the
+platform route-builder `clarity-standard-fb-*` aliases and the file-backed
+named fallback aliases. Verification: `/api/platform/llm/routes` reports Gemma
+primary with two OpenCode Zen fallbacks. Follow-up: the current LiteLLM image no
+longer accepts our legacy `/config/update` `model_list` payload, so the route
+reload button needs an endpoint migration to the newer LiteLLM model-management
+API.
+
+---
+
+## LiteLLM Route Reload Endpoint Migration — 2026-06-27 (DONE)
+
+**Goal:** Update Platform -> AI Routing reload behavior for the current LiteLLM
+API. The deployed LiteLLM OpenAPI exposes `/model/new`, `/model/update`,
+`/model/delete`, and fallback read/delete endpoints, while our backend still
+posts `model_list` to legacy `/config/update`, which now returns 401
+`model_list is not allowed in the request body`.
+
+- [x] Replace or wrap `_call_litellm_config_update` with the supported current LiteLLM model-management API
+- [x] Preserve alias/fallback reload semantics for `clarity-standard` and `clarity-premium`
+- [x] Add tests for the new reload payload and failure modes
+- [x] Run production reload smoke from the Platform AI Routing page
+
+Summary: the AI Routing reload button now uses LiteLLM's current
+model-management API instead of posting a rejected legacy `model_list` to
+`/config/update`. The backend reads `/model/info`, skips matching file-backed
+aliases, upserts DB-backed route-builder fallback aliases through
+`/model/new` or `/model/{id}/update`, and sends only `router_settings` to
+`/config/update`. Production premium route drift was also corrected: saved
+`clarity-premium` now matches the file-backed OpenCode Go `deepseek-v4-pro`
+alias, with a stored `opencode-go` key derived from the existing OpenCode key
+material. Verification: production reload returned `reloaded=true`,
+`models_registered=4`, `fallbacks_registered=2`; LiteLLM reports
+`clarity-standard-fb-0` and `clarity-standard-fb-1` as DB-backed aliases and
+`/fallback/clarity-standard` returns both fallback aliases.
+
+---
+
+## Chat MCP Latency And AI Router Speed — 2026-06-27 (DONE)
+
+**Goal:** Reduce perceived chat latency and make routing decisions aware of
+real provider/model speed rather than static model preferences. Measure the
+production chat path end to end before patching so MCP retrieval, LiteLLM, and
+frontend streaming bottlenecks are separated.
+
+- [x] Measure production timings for conversation create, MCP search, chat stream first-token, and full response
+- [x] Audit AI route selection and existing model-latency tracking
+- [x] Patch the highest-impact slow boundary without weakening legal quality
+- [x] Add focused tests for routing/latency behavior
+- [x] Deploy scoped changes and run live latency smokes
+
+Summary: MCP retrieval was not the bottleneck; authenticated
+`search_caselaw` measured about 245ms. The standard LLM route was the slow
+boundary: OpenCode free aliases took roughly 25-30s to first token with the full
+LegalApp prompt, while OpenRouter Gemma can stream much faster but sometimes
+429s on the shared free provider. The deployed fix makes `clarity-standard`
+use Gemma as the fast primary, adds backend-owned fallback to Nemotron then
+DeepSeek before first token, removes dead Qwen/insufficient-balance fallback
+aliases, and clears the stale LiteLLM DB-backed `clarity-standard-fb-0`
+fallback. Post-cleanup production smoke passed with `POST /api/conversations`
+201 and MCP-enabled `/messages/stream` 200, first SSE data at 1.105s, complete
+at 14.145s, no stream error, and no recurring `clarity-standard-fb-0` log noise.
+
+---
+
+## Production Chat Isolation And Rate-Limit Regression — 2026-06-27 (DONE)
+
+**Goal:** Fix the production chat failure where conversation creation returns
+500, conversation load/delete returns 429, and users can see conversations that
+appear to belong to other users. Perform a security-focused audit of
+conversation isolation, RLS context, cache keys, rate limiting, and deployed
+code drift before applying fixes.
+
+- [x] Reproduce and capture backend/nginx/Postgres evidence for the 500 and 429 errors
+- [x] Verify conversation list/detail/delete queries are scoped to current tenant and user where required
+- [x] Audit RLS context binding and post-commit refresh paths in chat endpoints
+- [x] Audit frontend conversation state/cache behavior for stale cross-user display
+- [x] Add regression tests for conversation ownership isolation and rate-limit behavior
+- [x] Patch root cause, deploy, and run live production smokes
+
+Summary: production chat creation was failing from stale RLS-sensitive
+post-commit refresh code in the deployed backend, nginx was rate-limiting on
+the shared cloudflared/Docker peer instead of the public client IP, and same
+tenant admins could fetch/delete another user's conversation by ID. The deployed
+fix removes the refresh path, scopes conversation detail/update/upload/delete
+and message routes to `Conversation.user_id`, binds error-log writes to tenant
+RLS context, changes nginx real-IP handling to `X-Forwarded-For`, stops tenant
+daily metering from counting conversation reads/deletes, and makes the chat UI
+drop stale 403/404 conversation IDs instead of retrying them.
+
+Live smoke: `POST /api/conversations` 201, own `GET` 200, `DELETE` 204,
+deleted `GET` 404, same-tenant other-user `GET` 404, public `/health` 200, and
+nginx public access log shows the real client IP instead of `172.24.0.1`.
+
+---
+
+## MCP Endpoint Wiring And RLS Hardening — 2026-06-26 (DONE)
+
+**Goal:** Finish hardening the external MCP endpoints and remaining RLS-sensitive endpoint response paths after the chat integration smoke, including API-key MCP calls and proxy/fallback behavior.
+
+- [x] Fix MCP endpoint path/proxy wiring for external clients
+- [x] Fix remaining endpoint RLS refresh/read-after-commit failures in touched chat/MCP paths
+- [x] Add focused endpoint tests for MCP proxy/API-key paths and RLS-safe response construction
+- [x] Redeploy changed services to the hypervisor
+- [x] Run live production MCP/chat endpoint smokes
+- [x] Update changelog/docs with the final endpoint behavior
+
+Summary: backend MCP tool calls now authenticate and bind tenant RLS context
+before proxying to CourtListener MCP, API-key auth binds tenant context before
+the admin-user lookup, admin MCP config shows the live proxied 7-tool
+CourtListener manifest, and production smokes passed for unauthenticated 401,
+authenticated tool call 200, admin config metadata, and chat source/context
+persistence.
+
+---
+
+## MCP Product Gateway And Tenant API Keys — 2026-06-26 (DONE)
+
+**Goal:** Turn CourtListener MCP into a sellable external product surface while keeping LegalApp chat on an internal, tenant-logged path.
+
+- [x] Add MCP product keys separate from the legacy tenant MCP key
+- [x] Add MCP usage-event logging for tool calls, internal chat calls, and external API-key calls
+- [x] Enforce per-key monthly call limits and per-tool scopes before proxying
+- [x] Support both existing REST tool-call clients and MCP streamable/SSE-compatible entrypoints over the same auth/metering layer
+- [x] Add tenant-admin UI to create, view usage, revoke, and manage MCP product keys
+- [x] Keep platform chat access internal, unfettered by customer API keys, but logged under tenant for billing/monitoring
+
+Summary: CourtListener MCP now has a sellable product-gateway layer in the
+LegalApp backend, separate from LiteLLM. Tenant admins can create scoped
+`clmcp_` keys, see 30-day usage, and revoke keys from `/mcp`; external calls
+use `X-MCP-API-Key` and are quota/tool-scope checked before proxying. Chat
+continues to use internal MCP access and records `internal_chat` usage events
+under the tenant for billing/monitoring.
+
+---
+
+## Chat MCP Pipeline And UX Audit — 2026-06-25 (DONE)
+
+**Goal:** Make LegalApp chat actually use the CourtListener MCP-backed corpus when tenant/user settings allow it, fix the RLS refresh failures found in production chat smoke tests, and audit the tenant MCP/chat-context UX for release readiness.
+
+- [x] Fix chat conversation/message response refresh failures under RLS
+- [x] Wire chat public legal-research context to the new CourtListener MCP path instead of stale `public_chunks`
+- [x] Verify tenant/user MCP enablement and chat context tagging behavior
+- [x] Add focused tests for chat MCP context injection and RLS-safe response construction
+- [x] Run live smoke through the chat endpoint and MCP endpoint
+- [x] Capture UX/code-review findings and update docs/changelog
+
+Summary: production chat now returns 201 for conversation/message creation,
+uses CourtListener MCP when `include_public=true`, stores source citations, and
+tags `context_used`/`context_relevance_scores` with `courtlistener:<chunk_id>`.
+The same query with `include_public=false` stores no CourtListener context.
+
+---
+
+## Jetson CourtListener Embedding Bring-Up — 2026-06-25 (DONE)
+
+**Goal:** Make the Jetson embedding worker setup repeatable and robust enough to embed the CourtListener MVP corpus from the hypervisor-owned pgvector database.
+
+- [x] Verified `skynet` can reach Jetson wired SSH at `192.168.1.203`
+- [x] Installed/updated the current MCP worker package on the Jetson under `/data/legalapp-embeddings`
+- [x] Created a Jetson-local venv/dependency setup using SSD-backed `/data/pip_packages`
+- [x] Verified CUDA/PyTorch availability on Orin (`torch.cuda.is_available() == True`)
+- [x] Added dispatcher reverse-tunnel mode for blocked Jetson-to-hypervisor DB paths
+- [x] Ran the embedding dispatcher against `opinion_chunks`
+- [x] Verified all 237 smoke chunks embedded with 1024-dim mxbai vectors
+
+---
+
+## Production Recovery And CourtListener MCP Wiring — 2026-06-25 (DONE)
+
+**Goal:** Restore the public LegalApp deployment after Compose project drift and connect the backend MCP proxy to the CourtListener MCP stack.
+
+- [x] Restored the production `legalapp` Compose project from `/home/varta/legalapp/docker-compose.hypervisor.yml`
+- [x] Removed accidental `work-*` containers without deleting volumes
+- [x] Recreated `courtlistener-db` and `courtlistener-mcp` under project `legalapp`
+- [x] Set hypervisor `MCP_SERVER_URL=http://courtlistener-mcp:8021` with an `.env.backup.*` first, then recreated backend
+- [x] Verified public `/health`, OAuth redirects, `/api/mcp`, and a live `search_caselaw` tool call
+- [x] Documented the production CourtListener command shape and env source-of-truth notes
+
+---
+
 ## Call Inbox Dashboard Redesign — 2026-06-22 (DONE)
 
 **Goal:** Rework the receptionist intake dashboard into a functional two-pane "Call Inbox" with a live, auto-refreshing call feed and an in-page sound + nudge when a new call (manual or webhook-imported) lands. Framed source-agnostically so any tenant's call integration lights up the same feed. Spec/plan in `docs/superpowers/specs/2026-06-22-call-inbox-redesign-design.md` and `docs/superpowers/plans/2026-06-22-call-inbox-redesign.md`.
@@ -534,9 +735,29 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [ ] Add rollback playbook: switch global route to direct provider or emergency alias
 - [ ] Remove direct-provider default once LiteLLM stability is proven
 
-## Backlog — Legal MCP Database & CourtListener Ingest Pipeline
+## Backlog — Legal MCP Database & CourtListener Ingest Pipeline — IN PROGRESS
 
-**Status:** Design-only. Full architecture spec in `docs/legal_rag.md`. A minimal 2-tool MCP REST endpoint exists in `backend/app/routers/mcp.py` (search_caselaw, get_chunk). The mcp-server/ package, 7 domain-scoped tools, vectordb schema, CourtListener ingest, mxbai-1024 embeddings, nightly scheduler, usage metering, SSE transport, and admin dashboard are not yet built. Tasks tabled until post-Sprint-12.
+**Status:** Implementation scaffold complete. Full architecture spec in `docs/legal_rag.md`; operational runbook in `docs/courtlistener_mcp_jetson.md`. A standalone `mcp-server/` package now provides MCP-owned schema, seven domain-scoped tools, S3 bulk snapshot staging/loading, opinion chunking, a low-volume sync placeholder, Jetson embedding dispatcher, and an mxbai-1024 `opinion_chunks` worker. `docker-compose.courtlistener-mcp.yml` defines the separate `courtlistener-db`, `courtlistener-mcp`, loader, sync, and embedding dispatcher stack for `skynet` Docker storage. The main backend MCP router proxies to `MCP_SERVER_URL` when configured and keeps local API-key management/fallback behavior.
+
+- [x] Standalone MCP/vector stack scaffolded separately from the main LegalApp compose
+- [x] MCP-owned schema: `courts`, `dockets`, `opinion_clusters`, `opinions`, `opinion_citations`, `opinion_chunks`, `ingest_runs`, `embedding_jobs`
+- [x] Seven tool manifest/handlers: search, details, citation lookup/network, jurisdiction, recent authority, court info
+- [x] CourtListener S3 staging + core CSV load + opinion chunk creation commands
+- [x] MVP corpus filter for release: ND/MT/MN/SD state authority, SCOTUS, U.S. Tax Court, BIA, and regional bankruptcy/BAP courts; `--load-mvp` keeps published/precedential clusters by default
+- [x] Production kickoff: `courtlistener-db` schema initialized on `skynet`, `courtlistener-mcp` started healthy, S3 snapshot staged into the Docker bulk volume, and the loader image rebuilt with partial-download validation
+- [x] Production smoke import: loaded 1,000 MVP dockets, 130 clusters, 20 real opinions, and 237 chunks from the staged S3 corpus; live MCP `search_caselaw` returns regional case-law chunks
+- [x] MVP corpus expansion: loaded 50,000 dockets, 2,103 clusters, 500 opinions, and 5,024 chunks; live search now returns ND/MT/MN/SD, SCOTUS, and Tax Court hits
+- [x] Loader fixes from production smoke: CourtListener bulk CSV parsing now handles backslash-escaped multiline fields, uses Harvard XML/html fallback text, supports table-specific smoke limits, and prefers `lbzip2` for faster `.bz2` streams
+- [x] Loader citation-map filter fixed so trimmed citation imports require both local opinion endpoints before inserting FK-constrained citation edges
+- [x] Jetson worker refactored to mxbai-1024 and `opinion_chunks`; legacy launcher kept as compatibility wrapper
+- [x] Jetson 3 embedding dispatcher relaunched against the expanded chunk set through reverse-tunnel mode
+- [x] Operator handoff documented in `docs/courtlistener_mcp_operations.md` with live topology, load/embedding commands, counts, recovery steps, and known CourtListener pitfalls
+- [x] Backend proxy setting `MCP_SERVER_URL`
+- [x] Env/memory hygiene: concrete hypervisor, Jetson, and legacy-source connection details moved behind env-variable names; memory docs scrubbed
+- [x] Hardware smoke: Jetson 3 SSH, CUDA/PyTorch, SSD-backed worker directory, reverse-tunnel DB path, and LAN query-embedding service verified from the hypervisor.
+- [x] Production embedding completion: Jetson 3 embedded all 5,024 expanded chunks with 1024-dim mxbai vectors; live MCP and chat retrieval smokes passed after embeddings reached 100%.
+- [x] Vector search wiring: `search_caselaw` now uses Jetson-backed query embeddings plus pgvector/FTS hybrid ranking when `MCP_QUERY_EMBEDDING_URL` is configured, with FTS fallback when unavailable.
+- [ ] Multi-Jetson expansion: add/confirm Jetson 1/2 env, SSH keys, CUDA/PyTorch, SSD/cache paths, and LAN reachability, then relaunch dispatcher with all workers.
 
 ---
 

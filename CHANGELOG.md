@@ -19,6 +19,41 @@
 - **M365 group sync (Phase 2):** not started — separate plan to be written after Phase 1 merges.
 
 ### Fixed
+- **Platform AI route reload button:** migrated the Platform -> AI Routing
+  reload path off LiteLLM's rejected legacy `/config/update` `model_list`
+  payload. The backend now reads `/model/info`, preserves matching file-backed
+  aliases, upserts DB-backed route-builder fallbacks through `/model/new` or
+  `/model/{id}/update`, and sends only `router_settings` to `/config/update`.
+  Production reload smoke returned `reloaded=true` with four models and two
+  fallbacks registered; saved `clarity-premium` was aligned to the live
+  OpenCode Go `deepseek-v4-pro` file-backed alias.
+- **Platform AI route source drift:** aligned the saved Platform -> AI Routing
+  `clarity-standard` route with the deployed latency fix. The route-builder row
+  still had OpenRouter Llama as primary and Gemma as fallback, even though the
+  file-backed LiteLLM config and backend fallback path had been changed. The
+  platform API now reports OpenRouter `google/gemma-4-31b-it:free` as primary
+  with OpenCode Zen `nemotron-3-ultra-free` and `deepseek-v4-flash-free`
+  fallbacks, and the backend fallback list accepts both platform-generated
+  `clarity-standard-fb-*` aliases and file-backed named aliases.
+- **Chat MCP latency and LLM route resilience:** measured the production chat
+  path and found MCP retrieval was fast (~245ms) while the standard LLM route
+  was the bottleneck. `clarity-standard` now uses the faster OpenRouter Gemma
+  model as primary, with backend-owned pre-token fallback to Nemotron then
+  DeepSeek when the free provider 429s. Removed dead Qwen/insufficient-balance
+  aliases and cleared the stale LiteLLM DB-backed `clarity-standard-fb-0`
+  fallback. Production MCP-enabled chat smoke returned 200 with first SSE data
+  at 1.105s, complete at 14.145s, and no stream error.
+- **Production chat creation/isolation/rate limiting:** fixed the deployed
+  conversation-create 500 by keeping chat response construction RLS-safe after
+  commit, removed same-tenant admin override access from conversation
+  detail/update/upload/delete/message routes, and made stale/unauthorized chat
+  IDs drop out of the frontend instead of looping on GET/DELETE. nginx now
+  keys API rate limits on the cloudflared `X-Forwarded-For` client instead of
+  the shared Docker peer, tenant daily metering counts only LLM/tool-heavy
+  conversation/plugin paths, and error-log writes bind tenant RLS context before
+  inserting. Production smoke verified conversation create/load/delete, deleted
+  404, same-tenant other-user 404, public `/health`, nginx real-client-IP logs,
+  and no recurring error-log RLS failures.
 - **OAuth login 401 (RLS):** `get_current_user` now calls `set_tenant_context()` before querying the `users` table. With `clarity_app` (no BYPASSRLS), the `tenant_isolation_users` RLS policy previously filtered the user query against `NULL`, returning no rows and raising 401 "User not found" on every authenticated request including the `/api/auth/me` call immediately after OAuth exchange. Fix reads `tenant_id` from `request.state` (TenantMiddleware routes) or the JWT payload (auth-bypassed routes). Production nginx also now trusts Docker bridge CIDRs (`172.16.0.0/12`, `10.0.0.0/8`) for `CF-Connecting-IP` so per-user rate limiting works correctly through the cloudflared tunnel.
 - **MCP endpoint auth/RLS hardening:** `POST /api/mcp/tools/call` now authenticates and binds tenant context before proxying to CourtListener MCP, API-key auth sets tenant RLS context before looking up the tenant admin user, fallback `get_chunk` uses an explicit UUID cast for tenant filtering, and admin MCP configuration now reports the live proxied CourtListener tool list instead of the stale fallback list. Production smoke verified unauthenticated tool calls return 401, authenticated tool calls return 200, `/api/mcp` exposes `clarity-courtlistener` with 7 tools, admin `/api/mcp/api-key` exposes the same tool list, and chat persists CourtListener context tags.
 - **Chat CourtListener vector relevance:** chat now maps CourtListener MCP `similarity` scores into source relevance instead of treating small RRF rank values as user-facing percentages, while preserving the retrieval mode. Production chat smoke stored CourtListener context tags and vector similarity scores for the returned sources.

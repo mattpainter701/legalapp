@@ -726,25 +726,117 @@ def _build_litellm_model_entry(
     return entry
 
 
+def _litellm_model_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model_name": entry["model_name"],
+        "litellm_params": dict(entry.get("litellm_params") or {}),
+        "model_info": dict(entry.get("model_info") or {}),
+    }
+
+
+def _litellm_models_by_name(payload: Any) -> dict[str, dict[str, Any]]:
+    items = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return {}
+    models: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("model_name") or "").strip()
+        if name:
+            models[name] = item
+    return models
+
+
+def _litellm_static_alias_matches(
+    existing: dict[str, Any], desired: dict[str, Any]
+) -> bool:
+    existing_params = existing.get("litellm_params") or {}
+    desired_params = desired.get("litellm_params") or {}
+    return existing_params.get("model") == desired_params.get("model")
+
+
+def _litellm_error_detail(resp: httpx.Response) -> str:
+    return (resp.text or "").strip()[:300]
+
+
 async def _call_litellm_config_update(
     new_model_list: list[dict], fallbacks: list[dict]
 ) -> tuple[bool, str | None]:
-    """Hot-reload LiteLLM router via /config/update with the updated model list."""
+    """Hot-reload LiteLLM aliases with current model-management endpoints."""
     if not settings.LITELLM_BASE_URL or not settings.LITELLM_API_KEY:
         return False, "LiteLLM base URL or API key is not configured"
-    payload: dict[str, Any] = {"model_list": new_model_list}
-    if fallbacks:
-        payload["router_settings"] = {"fallbacks": fallbacks}
+    base_url = settings.LITELLM_BASE_URL.rstrip("/")
+    headers = {"Authorization": f"Bearer {settings.LITELLM_API_KEY}"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            info_resp = await client.get(f"{base_url}/model/info", headers=headers)
+            if info_resp.status_code not in (200, 204):
+                detail = _litellm_error_detail(info_resp)
+                return (
+                    False,
+                    f"LiteLLM /model/info returned {info_resp.status_code}: {detail}",
+                )
+            existing_by_name = _litellm_models_by_name(info_resp.json())
+
+            for entry in new_model_list:
+                name = str(entry.get("model_name") or "").strip()
+                if not name:
+                    return False, "LiteLLM model entry is missing model_name"
+                payload = _litellm_model_payload(entry)
+                existing = existing_by_name.get(name)
+                if existing:
+                    model_info = existing.get("model_info") or {}
+                    if not model_info.get("db_model"):
+                        if _litellm_static_alias_matches(existing, entry):
+                            continue
+                        return (
+                            False,
+                            (
+                                f"LiteLLM alias {name} is file-backed and differs "
+                                "from the saved route; update the LiteLLM config "
+                                "file or convert the alias before reloading"
+                            ),
+                        )
+                    model_id = str(model_info.get("id") or "").strip()
+                    if not model_id:
+                        return False, f"LiteLLM DB-backed alias {name} has no model id"
+                    resp = await client.patch(
+                        f"{base_url}/model/{model_id}/update",
+                        headers=headers,
+                        json=payload,
+                    )
+                else:
+                    resp = await client.post(
+                        f"{base_url}/model/new",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if resp.status_code not in (200, 201, 204):
+                    detail = _litellm_error_detail(resp)
+                    logger.warning(
+                        "LiteLLM model upsert for %s returned %s: %s",
+                        name,
+                        resp.status_code,
+                        detail[:200],
+                    )
+                    return (
+                        False,
+                        f"LiteLLM model upsert for {name} returned {resp.status_code}: {detail}",
+                    )
+
+            router_settings: dict[str, Any] = {"routing_strategy": "cost-based-routing"}
+            if fallbacks:
+                router_settings["fallbacks"] = fallbacks
             resp = await client.post(
-                f"{settings.LITELLM_BASE_URL}/config/update",
-                headers={"Authorization": f"Bearer {settings.LITELLM_API_KEY}"},
-                json=payload,
+                f"{base_url}/config/update",
+                headers=headers,
+                json={"router_settings": router_settings},
             )
             if resp.status_code in (200, 204):
                 return True, None
-            detail = resp.text[:300]
+            detail = _litellm_error_detail(resp)
             logger.warning(
                 "LiteLLM /config/update returned %s: %s",
                 resp.status_code,
