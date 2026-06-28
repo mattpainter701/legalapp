@@ -6,6 +6,7 @@ from typing import AsyncGenerator, List, Tuple
 from openai import APIConnectionError, APIError, AsyncOpenAI
 
 from app.config import get_settings
+from app.services.gateway_privacy import gateway_metadata as sanitized_gateway_metadata
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -196,6 +197,7 @@ class LLMService:
         customer_api_key: str | None = None,
         customer_provider: str | None = None,
         customer_endpoint: str | None = None,
+        gateway_metadata: dict | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
@@ -236,6 +238,9 @@ class LLMService:
                 max_tokens=4096,
                 extra_headers={"x-request-id": request_id},
             )
+            metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
+            if metadata and not customer_api_key:
+                create_kwargs["extra_body"] = {"metadata": metadata}
             if response_format:
                 create_kwargs["response_format"] = response_format
 
@@ -278,6 +283,7 @@ class LLMService:
         customer_api_key: str | None = None,
         customer_provider: str | None = None,
         customer_endpoint: str | None = None,
+        gateway_metadata: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream a completion through LiteLLM."""
         system_prompt = self._build_system_prompt(
@@ -305,7 +311,7 @@ class LLMService:
             t0 = time.monotonic()
             first_token_recorded = False
             try:
-                stream = await client.chat.completions.create(
+                create_kwargs: dict = dict(
                     model=candidate,
                     messages=all_messages,
                     temperature=0.1,
@@ -313,6 +319,10 @@ class LLMService:
                     stream=True,
                     extra_headers={"x-request-id": request_id},
                 )
+                metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
+                if metadata and not customer_api_key:
+                    create_kwargs["extra_body"] = {"metadata": metadata}
+                stream = await client.chat.completions.create(**create_kwargs)
                 async for chunk in stream:
                     if chunk.choices[0].delta.content:
                         if not first_token_recorded:

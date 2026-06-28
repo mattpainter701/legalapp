@@ -78,3 +78,82 @@ def test_standard_stream_retries_gateway_fallback_before_first_token():
         "clarity-standard-fb-0",
     ]
     assert "".join(chunks) == "fallback answer"
+
+
+def test_complete_sends_metadata_without_prompt_content():
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        async def create(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content="answer"))
+                ],
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2),
+            )
+
+    async def run():
+        service = LLMService()
+        completions = FakeCompletions()
+        service.client = SimpleNamespace(
+            chat=SimpleNamespace(completions=completions)
+        )
+        await service.complete(
+            [{"role": "user", "content": "privileged prompt"}],
+            tenant_name="Tenant",
+            context="confidential context",
+            model=settings.LITELLM_STANDARD_MODEL,
+            gateway_metadata={
+                "tenant_id": "tenant-1",
+                "operation_type": "chat",
+                "prompt": "privileged prompt",
+            },
+        )
+        return completions.kwargs
+
+    kwargs = asyncio.run(run())
+
+    assert kwargs["extra_body"] == {
+        "metadata": {"tenant_id": "tenant-1", "operation_type": "chat"}
+    }
+
+
+def test_customer_byok_complete_does_not_send_gateway_metadata():
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        async def create(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content="answer"))
+                ],
+                usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2),
+            )
+
+    async def run():
+        service = LLMService()
+        completions = FakeCompletions()
+        service._client_for = lambda *args, **kwargs: SimpleNamespace(
+            chat=SimpleNamespace(completions=completions)
+        )
+        await service.complete(
+            [{"role": "user", "content": "tenant byok prompt"}],
+            tenant_name="Tenant",
+            context="confidential context",
+            model="customer-model",
+            customer_api_key="tenant-key",
+            customer_provider="gemini",
+            gateway_metadata={
+                "tenant_id": "tenant-1",
+                "operation_type": "chat",
+            },
+        )
+        return completions.kwargs
+
+    kwargs = asyncio.run(run())
+
+    assert "extra_body" not in kwargs

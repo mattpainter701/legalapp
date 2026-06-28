@@ -77,8 +77,8 @@ async def test_log_error_without_tenant_skips():
 
 
 @pytest.mark.asyncio
-async def test_log_error_trims_query_text(db_session, test_tenant):
-    """Verify that query_text is trimmed to 1000 characters."""
+async def test_log_error_drops_query_text_by_default(db_session, test_tenant):
+    """Verify that raw query_text is not retained in debug logs by default."""
     long_query = "x" * 2000
 
     await log_error(
@@ -97,7 +97,7 @@ async def test_log_error_trims_query_text(db_session, test_tenant):
         error_logs = result.scalars().all()
 
     assert len(error_logs) > 0
-    assert len(error_logs[0].query_text) == 1000
+    assert error_logs[0].query_text is None
 
 
 @pytest.mark.asyncio

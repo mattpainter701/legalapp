@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.database import async_session_maker, set_tenant_context
 from app.models.error_log import ErrorLog
+from app.services.gateway_privacy import retained_debug_text
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,7 @@ async def log_error(
                 user_agent=user_agent,
                 request_id=request_id,
                 conversation_id=conversation_id,
-                query_text=query_text[:1000]
-                if query_text
-                else None,  # Trim to 1000 chars
+                query_text=retained_debug_text(query_text, max_chars=1000),
             )
             session.add(error_log)
             await session.commit()

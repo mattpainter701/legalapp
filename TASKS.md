@@ -728,11 +728,13 @@ Files: `backend/app/routers/platform_llm.py`, `backend/app/models/llm_provider_k
 - [ ] Add CI-safe DB-backed regression for platform LLM route saves covering `llm_route_config_v2`, app alias sync, and LiteLLM hot-reload payload shape
 
 ### 1204. Gateway Audit, Privacy, and Retention (P0, MEDIUM) — PENDING
-- [ ] Disable raw prompt/response logging in LiteLLM by default
-- [ ] Send metadata only: tenant_id, user_id, conversation_id, operation_type, matter_id, plugin, skill, premium flag
-- [ ] Define retention windows for gateway logs, spend logs, and debug logs
+- [x] Disable raw prompt/response logging in LiteLLM by default
+- [x] Send metadata only: tenant_id, user_id, conversation_id, operation_type, matter_id, plugin, skill, premium flag
+- [x] Define retention windows for gateway logs, spend logs, and debug logs
 - [ ] Add operator audit entries for route changes, provider disables, tenant debug mode, and model tests
-- [ ] Document legal-data handling rules for LiteLLM logs and callbacks
+- [x] Document legal-data handling rules for LiteLLM logs and callbacks
+
+Privacy slice complete: LiteLLM callbacks are disabled by default, app-side gateway usage/debug records suppress raw query text unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`, chat sends metadata-only LiteLLM request metadata, and `docs/litellm_gateway.md` documents handling and retention defaults. Remaining audit-entry work depends on the operator-console route-change/model-test/provider-disable/debug-mode workflows.
 
 ### 1205. Cutover and Rollback (P1, MEDIUM) — PENDING
 - [ ] Add shadow route logging to compare current direct-provider path vs LiteLLM alias

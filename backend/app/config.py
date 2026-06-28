@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     LITELLM_EMBEDDING_MODEL: str = ""
     LITELLM_DB_PASSWORD: str = ""
     LITELLM_DATABASE_URL: str = ""
+    GATEWAY_RAW_TEXT_RETENTION_ENABLED: bool = False
+    GATEWAY_LOG_RETENTION_DAYS: int = 30
+    GATEWAY_DEBUG_LOG_RETENTION_DAYS: int = 7
+    GATEWAY_SPEND_LOG_RETENTION_DAYS: int = 365
 
     # QuickBooks Online OAuth2
     QBO_CLIENT_ID: str = ""

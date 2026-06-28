@@ -49,6 +49,7 @@ from app.services.billing import calculate_cost
 from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
+from app.services.gateway_privacy import gateway_metadata, retained_gateway_query_text
 from app.utils.guardrails import apply_guardrails, check_pii_in_input
 from app.services.error_tracker import capture_chat_error
 
@@ -879,6 +880,15 @@ async def send_message(
                 customer_api_key=route.customer_api_key,
                 customer_provider=route.customer_provider,
                 customer_endpoint=route.customer_endpoint,
+                gateway_metadata=gateway_metadata(
+                    tenant_id=user.tenant_id,
+                    user_id=user.id,
+                    conversation_id=conv.id,
+                    operation_type="chat",
+                    matter_id=body.matter_id or conv.matter_id,
+                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                    premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                ),
             )
             # Cache LLM response
             await cache_manager.set_cached_llm_response(
@@ -932,6 +942,15 @@ async def send_message(
             customer_api_key=route.customer_api_key,
             customer_provider=route.customer_provider,
             customer_endpoint=route.customer_endpoint,
+            gateway_metadata=gateway_metadata(
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                conversation_id=conv.id,
+                operation_type="chat_retry",
+                matter_id=body.matter_id or conv.matter_id,
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            ),
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -1049,7 +1068,7 @@ async def send_message(
         tokens_out=tokens_out,
         cost_usd=cost,
         operation_type="chat",
-        query_text=body.content[:2000] if body.content else None,
+        query_text=retained_gateway_query_text(body.content),
         rag_chunks_retrieved=len(chunks),
         rag_source_ids=[c["id"] for c in chunks if c.get("id")],
         ip_address=request.client.host if request.client else None,
@@ -1296,6 +1315,15 @@ async def stream_message(
                 customer_api_key=route.customer_api_key,
                 customer_provider=route.customer_provider,
                 customer_endpoint=route.customer_endpoint,
+                gateway_metadata=gateway_metadata(
+                    tenant_id=user.tenant_id,
+                    user_id=user.id,
+                    conversation_id=conv.id,
+                    operation_type="chat_stream",
+                    matter_id=body.matter_id or conv.matter_id,
+                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                    premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                ),
             ):
                 accumulated_text += token
                 yield f"data: {token}\n\n"
@@ -1325,6 +1353,15 @@ async def stream_message(
                     customer_api_key=route.customer_api_key,
                     customer_provider=route.customer_provider,
                     customer_endpoint=route.customer_endpoint,
+                    gateway_metadata=gateway_metadata(
+                        tenant_id=user.tenant_id,
+                        user_id=user.id,
+                        conversation_id=conv.id,
+                        operation_type="chat_stream_retry",
+                        matter_id=body.matter_id or conv.matter_id,
+                        skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                        premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                    ),
                 ):
                     accumulated_text += token
                     yield f"data: {token}\n\n"
@@ -1429,7 +1466,7 @@ async def stream_message(
                 tokens_out=int(tokens_out),
                 cost_usd=cost,
                 operation_type="chat_stream",
-                query_text=body.content[:2000] if body.content else None,
+                query_text=retained_gateway_query_text(body.content),
                 rag_chunks_retrieved=len(chunks),
                 rag_source_ids=[c["id"] for c in chunks if c.get("id")],
                 ip_address=request.client.host if request.client else None,

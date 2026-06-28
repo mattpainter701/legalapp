@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.tenant import Tenant
+from app.services.gateway_privacy import retained_gateway_query_text
 
 DEFAULT_ALLOWED_TOOLS = [
     "search_caselaw",
@@ -208,7 +209,7 @@ async def record_mcp_usage(
         ip_address=ip_address,
         user_agent=user_agent,
         error_class=error_class,
-        query_text=query_text,
+        query_text=retained_gateway_query_text(query_text),
         metadata_json=metadata_json,
     )
     db.add(event)

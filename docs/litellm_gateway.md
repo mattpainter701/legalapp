@@ -45,10 +45,28 @@ aliases by setting provider `litellm` and model `clarity-standard` /
 
 ## Privacy Defaults
 
-`litellm_config.yaml` sets `turn_off_message_logging: true`. Keep raw
-prompt/response logging disabled by default for legal customer data. Prefer
-metadata-only observability: tenant ID, user ID, operation type, route, model,
-tokens, latency, cost, error class, and gateway request ID.
+`litellm_config.yaml` sets `turn_off_message_logging: true` and does not enable
+success/failure callbacks by default. Keep raw prompt/response logging disabled
+for legal customer data unless there is a short, explicit, audited support
+exception.
+
+LegalApp gateway telemetry is metadata-only by default. `LLMService` accepts a
+`gateway_metadata` dict and strips it to these fields before sending it to
+LiteLLM: `tenant_id`, `user_id`, `conversation_id`, `operation_type`,
+`matter_id`, `plugin`, `skill`, and `premium`. Do not add prompt, response,
+message, context, attachment text, or document content to this metadata.
+
+App-side usage and debug tables also suppress raw prompt text by default:
+
+- `usage_records.query_text`: null unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`
+- `mcp_usage_events.query_text`: null unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`
+- `error_logs.query_text`: null unless `GATEWAY_RAW_TEXT_RETENTION_ENABLED=true`
+
+Retention defaults:
+
+- `GATEWAY_LOG_RETENTION_DAYS=30`
+- `GATEWAY_DEBUG_LOG_RETENTION_DAYS=7`
+- `GATEWAY_SPEND_LOG_RETENTION_DAYS=365`
 
 If a tenant-specific debug mode is added, it must be short-retention, explicit,
 audited, and visible in operator logs.
@@ -86,11 +104,13 @@ the connection error if LiteLLM is unreachable. Startup continues either way.
 ### Per-Tenant Spend Tracking
 
 LiteLLM records token counts, costs, model names, and latency in its spend
-tables (`LITELLM_DATABASE_URL`). Each request is tagged with the tenant ID via
-the OpenAI `user` field. You can query `litellm_spendlogs` to get cost and
-usage breakdowns per tenant without enabling raw prompt logging.
+tables (`LITELLM_DATABASE_URL`). LegalApp records tenant/user/conversation
+metadata in `usage_records` and sends the metadata-only payload above to
+LiteLLM for gateway-side correlation. Query LiteLLM spend tables plus
+LegalApp usage records for cost and usage breakdowns without enabling raw
+prompt logging.
 
-To get real-time cost visibility, add `success_callback` and `failure_callback`
-to `litellm_settings` in `litellm_config.yaml` (e.g., pointing at a logging
-endpoint or Langfuse). Raw prompt/response logging (`turn_off_message_logging`)
-must remain `true` for legal customer data.
+Do not add `success_callback` or `failure_callback` to the default
+`litellm_settings`. If callback telemetry is introduced later, it must be
+metadata-only, keep `turn_off_message_logging: true`, and follow the retention
+windows above.

@@ -47,8 +47,6 @@ litellm_settings:
   num_retries: 0
   allowed_fails: 1
   cooldown_time: 15
-  success_callback: ["langfuse"]
-  failure_callback: ["langfuse"]
 
 router_settings:
   routing_strategy: cost-based-routing

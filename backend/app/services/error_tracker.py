@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import set_tenant_context
 from app.models.error_log import ErrorLog
+from app.services.gateway_privacy import retained_debug_text
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ async def capture_error(
             user_agent=user_agent,
             request_id=request_id,
             conversation_id=conversation_id,
-            query_text=query_text[:2000] if query_text else None,
+            query_text=retained_debug_text(query_text),
         )
         db.add(error_log)
         await db.commit()

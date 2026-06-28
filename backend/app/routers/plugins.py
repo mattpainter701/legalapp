@@ -73,6 +73,7 @@ from app.services.billing import calculate_cost
 from app.services.cache import ExpertiseCacheManager
 from app.services.conflict_check import run_conflict_check
 from app.services.cloud_search import CloudSearchService
+from app.services.gateway_privacy import retained_gateway_query_text
 from app.services.llm import LLMService
 from app.services.matter_context import MatterContextService
 from app.services.plugins.executor import PluginExecutor
@@ -1297,7 +1298,7 @@ async def cold_start_interview(
         tokens_out=tokens_out_val,
         cost_usd=cost,
         operation_type="cold_start",
-        query_text=body.input_text[:2000] if body.input_text else None,
+        query_text=retained_gateway_query_text(body.input_text),
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
@@ -1421,7 +1422,7 @@ async def execute_skill(
         tokens_out=tokens_out_val,
         cost_usd=cost,
         operation_type="plugin_skill",
-        query_text=body.input_text[:2000] if body.input_text else None,
+        query_text=retained_gateway_query_text(body.input_text),
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
