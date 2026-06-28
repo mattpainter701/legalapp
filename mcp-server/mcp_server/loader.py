@@ -1,0 +1,587 @@
+from __future__ import annotations
+
+import argparse
+import bz2
+import csv
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+from collections.abc import Callable
+from pathlib import Path
+
+from .database import connect
+from .bulk_manifest import choose_latest_snapshot
+from .schema import SCHEMA_SQL
+
+S3_BUCKET_XML = "https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/?list-type=2&prefix=bulk-data/&max-keys=1000"
+S3_OBJECT_URL = "https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/{key}"
+csv.field_size_limit(min(sys.maxsize, 256 * 1024 * 1024))
+
+DEFAULT_MVP_STATES = ("ND", "MT", "MN", "SD")
+_STATE_ALIASES = {
+    "ND": ("north dakota",),
+    "MT": ("montana",),
+    "MN": ("minnesota",),
+    "SD": ("south dakota",),
+}
+_STATE_COURT_IDS = {
+    "ND": {"nd", "ndctapp"},
+    "MT": {"mont", "montag", "monttc"},
+    "MN": {"minn", "minnctapp", "minnag"},
+    "SD": {"sd"},
+}
+_REGIONAL_BANKRUPTCY_IDS = {
+    "ND": {"ndb"},
+    "MT": {"mtb", "bap9"},
+    "MN": {"mnb", "bap8"},
+    "SD": {"sdb", "bap8"},
+}
+_STATE_NAME_TO_CODE = {
+    "north dakota": "ND",
+    "dakota north": "ND",
+    "montana": "MT",
+    "minnesota": "MN",
+    "south dakota": "SD",
+    "dakota south": "SD",
+}
+_PRECEDENTIAL_STATUSES = {"published", "precedential"}
+
+
+def init_schema(db_url: str | None = None) -> None:
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA_SQL)
+        conn.commit()
+
+
+def list_bulk_keys() -> list[str]:
+    import xml.etree.ElementTree as ET
+
+    with urllib.request.urlopen(S3_BUCKET_XML, timeout=60) as response:
+        root = ET.fromstring(response.read())
+    ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+    return [node.text or "" for node in root.findall(".//s3:Contents/s3:Key", ns)]
+
+
+def _remote_content_length(key: str) -> int | None:
+    request = urllib.request.Request(S3_OBJECT_URL.format(key=key), method="HEAD")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        value = response.headers.get("Content-Length")
+    return int(value) if value else None
+
+
+def _download_object(key: str, path: Path, expected_size: int | None) -> None:
+    tmp_path = path.with_name(f"{path.name}.part")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    with urllib.request.urlopen(S3_OBJECT_URL.format(key=key), timeout=300) as src:
+        with tmp_path.open("wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+    if expected_size is not None and tmp_path.stat().st_size != expected_size:
+        actual_size = tmp_path.stat().st_size
+        tmp_path.unlink(missing_ok=True)
+        raise IOError(f"Incomplete download for {key}: expected {expected_size}, got {actual_size}")
+    tmp_path.replace(path)
+
+
+def bz2_decompress_command(path: Path) -> list[str] | None:
+    lbzip2 = shutil.which("lbzip2")
+    if lbzip2:
+        return [lbzip2, "-dc", str(path)]
+    return None
+
+
+def stage_latest_snapshot(target_dir: Path) -> list[Path]:
+    snapshot = choose_latest_snapshot(list_bulk_keys())
+    target_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for key in snapshot.keys:
+        path = target_dir / Path(key).name
+        paths.append(path)
+        expected_size = _remote_content_length(key)
+        if path.exists() and expected_size is not None and path.stat().st_size == expected_size:
+            continue
+        _download_object(key, path, expected_size)
+    return paths
+
+
+def _open_csv(path: Path):
+    if path.suffix == ".bz2":
+        command = bz2_decompress_command(path)
+        if command:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+            if process.stdout is None:
+                raise RuntimeError(f"Unable to read decompressor output for {path}")
+            return process.stdout
+        return bz2.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def iter_bulk_csv_rows(path: Path):
+    with _open_csv(path) as handle:
+        yield from csv.DictReader(handle, escapechar="\\")
+
+
+def _value(row: dict, *names: str):
+    for name in names:
+        value = row.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def best_opinion_text(row: dict) -> str | None:
+    return _value(row, "plain_text", "html_with_citations", "html", "xml_harvard", "html_lawbox", "html_columbia")
+
+
+def parse_mvp_states(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return DEFAULT_MVP_STATES
+    states: list[str] = []
+    for raw_part in value.split(","):
+        part = raw_part.strip().lower()
+        if not part:
+            continue
+        code = part.upper() if len(part) == 2 else _STATE_NAME_TO_CODE.get(part)
+        if code in _STATE_ALIASES and code not in states:
+            states.append(code)
+    return tuple(states) or DEFAULT_MVP_STATES
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _row_text(row: dict) -> str:
+    return " ".join(
+        str(row.get(field) or "")
+        for field in ("id", "court_id", "short_name", "full_name", "jurisdiction")
+    ).lower()
+
+
+def _matches_state(text: str, states: tuple[str, ...]) -> bool:
+    for state in states:
+        for alias in _STATE_ALIASES[state]:
+            if len(alias) == 2:
+                if re.search(rf"\b{re.escape(alias)}\b", text):
+                    return True
+            elif alias in text:
+                return True
+    return False
+
+
+def court_matches_mvp(
+    row: dict,
+    *,
+    states: tuple[str, ...] = DEFAULT_MVP_STATES,
+    include_specialty: bool = True,
+    include_scotus: bool = True,
+) -> bool:
+    text = _row_text(row)
+    court_id = str(_value(row, "id", "court_id") or "").lower()
+    if include_scotus and (court_id == "scotus" or "supreme court of the united states" in text):
+        return True
+    if court_id in {id_ for state in states for id_ in _STATE_COURT_IDS[state]}:
+        return True
+    if _matches_state(text, states) and any(token in text for token in ("supreme court", "court of appeals", "attorney general", "tax appeal board")):
+        return True
+    if not include_specialty:
+        return False
+    regional_bankruptcy_ids = {id_ for state in states for id_ in _REGIONAL_BANKRUPTCY_IDS[state]}
+    if court_id == "tax" or "united states tax court" in text:
+        return True
+    if "board of immigration appeals" in text or "immigration appeals" in text:
+        return True
+    if court_id in regional_bankruptcy_ids:
+        return True
+    if "bankruptcy" in text and _matches_state(text, states):
+        return True
+    return False
+
+
+def should_keep_cluster(row: dict, *, precedential_only: bool = True) -> bool:
+    if not precedential_only:
+        return True
+    status = str(_value(row, "precedential_status") or "").strip().lower()
+    return status in _PRECEDENTIAL_STATUSES
+
+
+def resolved_table_limit(default_limit: int | None, table_limit: int | None) -> int | None:
+    return table_limit if table_limit is not None else default_limit
+
+
+def _id_set(conn, table_name: str, id_column: str) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {id_column} FROM {table_name}")
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _target_court_ids(
+    conn,
+    *,
+    states: tuple[str, ...],
+    include_specialty: bool,
+    include_scotus: bool,
+) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT court_id, short_name, full_name, jurisdiction, metadata FROM courts")
+        rows = cur.fetchall()
+    ids: set[str] = set()
+    for court_id, short_name, full_name, jurisdiction, metadata in rows:
+        row = dict(metadata or {})
+        row.update(
+            {
+                "id": court_id,
+                "short_name": short_name,
+                "full_name": full_name,
+                "jurisdiction": jurisdiction,
+            }
+        )
+        if court_matches_mvp(
+            row,
+            states=states,
+            include_specialty=include_specialty,
+            include_scotus=include_scotus,
+        ):
+            ids.add(str(court_id))
+    return ids
+
+
+def _load_csv(
+    conn,
+    path: Path,
+    table_name: str,
+    limit: int | None = None,
+    row_filter: Callable[[dict], bool] | None = None,
+) -> int:
+    count = 0
+    with conn.cursor() as cur:
+        for row in iter_bulk_csv_rows(path):
+            if row_filter and not row_filter(row):
+                continue
+            if table_name == "courts":
+                cur.execute(
+                    """
+                    INSERT INTO courts (court_id, short_name, full_name, jurisdiction, metadata)
+                    VALUES (%s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (court_id) DO UPDATE
+                    SET short_name = EXCLUDED.short_name,
+                        full_name = EXCLUDED.full_name,
+                        jurisdiction = EXCLUDED.jurisdiction,
+                        metadata = EXCLUDED.metadata
+                    """,
+                    [
+                        _value(row, "id", "court_id"),
+                        _value(row, "short_name"),
+                        _value(row, "full_name") or _value(row, "id"),
+                        _value(row, "jurisdiction"),
+                        json.dumps(row),
+                    ],
+                )
+            elif table_name == "dockets":
+                cur.execute(
+                    """
+                    INSERT INTO dockets (docket_id, court_id, docket_number, case_name, date_filed, date_terminated, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (docket_id) DO NOTHING
+                    """,
+                    [
+                        _value(row, "id"),
+                        _value(row, "court_id", "court"),
+                        _value(row, "docket_number"),
+                        _value(row, "case_name"),
+                        _value(row, "date_filed"),
+                        _value(row, "date_terminated"),
+                        json.dumps(row),
+                    ],
+                )
+            elif table_name == "opinion_clusters":
+                citations = _value(row, "citations")
+                cur.execute(
+                    """
+                    INSERT INTO opinion_clusters (cluster_id, docket_id, case_name, date_filed, precedential_status, citations, metadata)
+                    VALUES (%s, %s, %s, %s, %s, COALESCE(%s::jsonb, '[]'::jsonb), %s::jsonb)
+                    ON CONFLICT (cluster_id) DO NOTHING
+                    """,
+                    [
+                        _value(row, "id"),
+                        _value(row, "docket_id"),
+                        _value(row, "case_name"),
+                        _value(row, "date_filed"),
+                        _value(row, "precedential_status"),
+                        citations if citations else None,
+                        json.dumps(row),
+                    ],
+                )
+            elif table_name == "opinions":
+                cur.execute(
+                    """
+                    INSERT INTO opinions (opinion_id, cluster_id, type, author_id, html_with_citations, plain_text, sha1, source_url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (opinion_id) DO UPDATE
+                    SET plain_text = EXCLUDED.plain_text,
+                        html_with_citations = EXCLUDED.html_with_citations
+                    """,
+                    [
+                        _value(row, "id"),
+                        _value(row, "cluster_id"),
+                        _value(row, "type"),
+                        _value(row, "author_id"),
+                        _value(row, "html_with_citations", "html", "xml_harvard"),
+                        _value(row, "plain_text"),
+                        _value(row, "sha1"),
+                        _value(row, "download_url", "local_path"),
+                    ],
+                )
+            elif table_name == "citation_map":
+                cur.execute(
+                    """
+                    INSERT INTO opinion_citations (citing_opinion_id, cited_opinion_id, depth)
+                    VALUES (%s, %s, COALESCE(%s, 0))
+                    """,
+                    [
+                        _value(row, "citing_opinion_id"),
+                        _value(row, "cited_opinion_id"),
+                        _value(row, "depth"),
+                    ],
+                )
+            elif table_name == "citations":
+                cur.execute(
+                    """
+                    INSERT INTO opinion_citations (cited_cluster_id, cited_reporter, cited_volume, cited_page)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    [
+                        _value(row, "cluster_id"),
+                        _value(row, "reporter"),
+                        _value(row, "volume"),
+                        _value(row, "page"),
+                    ],
+                )
+            count += 1
+            if limit and count >= limit:
+                break
+    conn.commit()
+    return count
+
+
+def load_staged_core(bulk_dir: Path, db_url: str | None = None, limit: int | None = None) -> dict[str, int]:
+    load_order = [
+        ("courts-*.csv.bz2", "courts"),
+        ("dockets-*.csv.bz2", "dockets"),
+        ("opinion-clusters-*.csv.bz2", "opinion_clusters"),
+        ("opinions-*.csv.bz2", "opinions"),
+        ("citations-*.csv.bz2", "citations"),
+        ("citation-map-*.csv.bz2", "citation_map"),
+    ]
+    counts: dict[str, int] = {}
+    with connect(db_url) as conn:
+        for pattern, table_name in load_order:
+            matches = sorted(bulk_dir.glob(pattern))
+            if not matches:
+                continue
+            counts[table_name] = _load_csv(conn, matches[-1], table_name, limit=limit)
+    return counts
+
+
+def load_mvp_corpus(
+    bulk_dir: Path,
+    db_url: str | None = None,
+    limit: int | None = None,
+    docket_limit: int | None = None,
+    cluster_limit: int | None = None,
+    opinion_limit: int | None = None,
+    citation_limit: int | None = None,
+    states: tuple[str, ...] = DEFAULT_MVP_STATES,
+    include_specialty: bool = True,
+    include_scotus: bool = True,
+    precedential_only: bool = True,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    with connect(db_url) as conn:
+        courts = sorted(bulk_dir.glob("courts-*.csv.bz2"))
+        if courts:
+            counts["courts"] = _load_csv(conn, courts[-1], "courts")
+
+        target_courts = _target_court_ids(
+            conn,
+            states=states,
+            include_specialty=include_specialty,
+            include_scotus=include_scotus,
+        )
+        if not target_courts:
+            raise RuntimeError(f"No MVP CourtListener courts matched states={states!r}")
+        counts["target_courts"] = len(target_courts)
+
+        dockets = sorted(bulk_dir.glob("dockets-*.csv.bz2"))
+        if dockets:
+            counts["dockets"] = _load_csv(
+                conn,
+                dockets[-1],
+                "dockets",
+                limit=resolved_table_limit(limit, docket_limit),
+                row_filter=lambda row: str(_value(row, "court_id", "court") or "") in target_courts,
+            )
+        docket_ids = _id_set(conn, "dockets", "docket_id")
+
+        clusters = sorted(bulk_dir.glob("opinion-clusters-*.csv.bz2"))
+        if clusters:
+            counts["opinion_clusters"] = _load_csv(
+                conn,
+                clusters[-1],
+                "opinion_clusters",
+                limit=resolved_table_limit(limit, cluster_limit),
+                row_filter=lambda row: (
+                    str(_value(row, "docket_id") or "") in docket_ids
+                    and should_keep_cluster(row, precedential_only=precedential_only)
+                ),
+            )
+        cluster_ids = _id_set(conn, "opinion_clusters", "cluster_id")
+
+        opinions = sorted(bulk_dir.glob("opinions-*.csv.bz2"))
+        if opinions:
+            counts["opinions"] = _load_csv(
+                conn,
+                opinions[-1],
+                "opinions",
+                limit=resolved_table_limit(limit, opinion_limit),
+                row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+            )
+        opinion_ids = _id_set(conn, "opinions", "opinion_id")
+
+        citations = sorted(bulk_dir.glob("citations-*.csv.bz2"))
+        if citations:
+            counts["citations"] = _load_csv(
+                conn,
+                citations[-1],
+                "citations",
+                limit=resolved_table_limit(limit, citation_limit),
+                row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
+            )
+
+        citation_maps = sorted(bulk_dir.glob("citation-map-*.csv.bz2"))
+        if citation_maps:
+            counts["citation_map"] = _load_csv(
+                conn,
+                citation_maps[-1],
+                "citation_map",
+                limit=resolved_table_limit(limit, citation_limit),
+                row_filter=lambda row: (
+                    str(_value(row, "citing_opinion_id") or "") in opinion_ids
+                    and str(_value(row, "cited_opinion_id") or "") in opinion_ids
+                ),
+            )
+    return counts
+
+
+def chunk_text(text: str, max_chars: int = 2400, overlap_chars: int = 240) -> list[str]:
+    text = " ".join((text or "").split())
+    if not text:
+        return []
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        chunks.append(text[start:end])
+        if end == len(text):
+            break
+        start = max(0, end - overlap_chars)
+    return chunks
+
+
+def create_chunks(db_url: str | None = None, limit: int | None = None) -> int:
+    created = 0
+    with connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.opinion_id, o.cluster_id, d.court_id,
+                       COALESCE(NULLIF(o.plain_text, ''), NULLIF(o.html_with_citations, '')) AS text
+                FROM opinions o
+                JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
+                LEFT JOIN dockets d ON d.docket_id = cl.docket_id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM opinion_chunks oc WHERE oc.opinion_id = o.opinion_id
+                )
+                ORDER BY o.opinion_id
+                LIMIT %s
+                """,
+                [limit or 1000000],
+            )
+            rows = cur.fetchall()
+            for opinion_id, cluster_id, court_id, text in rows:
+                for idx, content in enumerate(chunk_text(text or "")):
+                    cur.execute(
+                        """
+                        INSERT INTO opinion_chunks (opinion_id, cluster_id, court_id, chunk_index, content)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (opinion_id, chunk_index) DO NOTHING
+                        """,
+                        [opinion_id, cluster_id, court_id, idx, content],
+                    )
+                    created += cur.rowcount
+        conn.commit()
+    return created
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="CourtListener MCP bulk loader")
+    parser.add_argument("--init-schema", action="store_true")
+    parser.add_argument("--stage-latest", action="store_true")
+    parser.add_argument("--load-staged", action="store_true")
+    parser.add_argument("--load-mvp", action="store_true")
+    parser.add_argument("--chunk-opinions", action="store_true")
+    parser.add_argument("--bulk-dir", default="/data/courtlistener")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--docket-limit", type=int)
+    parser.add_argument("--cluster-limit", type=int)
+    parser.add_argument("--opinion-limit", type=int)
+    parser.add_argument("--citation-limit", type=int)
+    parser.add_argument("--db-url")
+    parser.add_argument("--mvp-states", default=os.getenv("COURTLISTENER_MVP_STATES", ",".join(DEFAULT_MVP_STATES)))
+    parser.add_argument("--no-specialty", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SPECIALTY", True))
+    parser.add_argument("--no-scotus", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SCOTUS", True))
+    parser.add_argument("--include-unpublished", action="store_true")
+    args = parser.parse_args()
+    if args.init_schema:
+        init_schema(args.db_url)
+    if args.stage_latest:
+        paths = stage_latest_snapshot(Path(args.bulk_dir))
+        print("\n".join(str(path) for path in paths))
+    if args.load_staged:
+        print(load_staged_core(Path(args.bulk_dir), args.db_url, args.limit))
+    if args.load_mvp:
+        print(
+            load_mvp_corpus(
+                Path(args.bulk_dir),
+                args.db_url,
+                args.limit,
+                docket_limit=args.docket_limit,
+                cluster_limit=args.cluster_limit,
+                opinion_limit=args.opinion_limit,
+                citation_limit=args.citation_limit,
+                states=parse_mvp_states(args.mvp_states),
+                include_specialty=not args.no_specialty,
+                include_scotus=not args.no_scotus,
+                precedential_only=not args.include_unpublished,
+            )
+        )
+    if args.chunk_opinions:
+        print({"chunks_created": create_chunks(args.db_url, args.limit)})
+    if not (args.init_schema or args.stage_latest or args.load_staged or args.load_mvp or args.chunk_opinions):
+        raise SystemExit("Use --init-schema, --stage-latest, --load-staged, --load-mvp, or --chunk-opinions")
+
+
+if __name__ == "__main__":
+    main()

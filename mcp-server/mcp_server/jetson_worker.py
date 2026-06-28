@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from typing import Iterable
+
+import psycopg2.extras
+
+from .database import connect
+from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
+
+UPDATE_SQL = """
+    UPDATE opinion_chunks
+    SET embedding = %s::vector,
+        embedding_model = %s,
+        embedding_version = 1
+    WHERE id = %s
+"""
+
+
+def format_embedding(values: Iterable[float]) -> str:
+    return "[" + ",".join(f"{float(v):.8f}" for v in values) + "]"
+
+
+def load_model(model_name: str):
+    try:
+        from sentence_transformers import SentenceTransformer
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("sentence-transformers and torch are required on Jetson workers") from exc
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    return SentenceTransformer(model_name, device=device)
+
+
+def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
+    prefixed = ["Represent this sentence for searching relevant passages: " + text for text in texts]
+    vectors = model.encode(
+        prefixed,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    )
+    return [vector.tolist() for vector in vectors]
+
+
+def process_once(config: WorkerConfig, model) -> int:
+    config.validate()
+    with connect(config.db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("BEGIN")
+            cur.execute(partition_sql(), [config.total_workers, config.worker_id, config.batch_size])
+            rows = cur.fetchall()
+            if not rows:
+                conn.rollback()
+                return 0
+            ids = [row[0] for row in rows]
+            texts = [row[1] for row in rows]
+            vectors = embed_batch(model, texts, config.batch_size)
+            updates = [
+                (format_embedding(vector), config.model, chunk_id)
+                for chunk_id, vector in zip(ids, vectors)
+            ]
+            psycopg2.extras.execute_batch(cur, UPDATE_SQL, updates, page_size=100)
+            conn.commit()
+            return len(updates)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="CourtListener mxbai embedding worker")
+    parser.add_argument("--worker-id", type=int, required=True)
+    parser.add_argument("--total-workers", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--db-url", default=os.environ.get("VECTORDB_URL") or os.environ.get("DATABASE_URL"))
+    parser.add_argument("--model", default="mxbai")
+    parser.add_argument("--dim", type=int, default=1024)
+    parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--loop-interval", type=int, default=30)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    model_name = DEFAULT_MODEL if args.model == "mxbai" else args.model
+    config = WorkerConfig(
+        worker_id=args.worker_id,
+        total_workers=args.total_workers,
+        batch_size=args.batch_size,
+        model=model_name,
+        dim=args.dim,
+        db_url=args.db_url,
+    )
+    if not config.db_url:
+        raise SystemExit("--db-url, VECTORDB_URL, or DATABASE_URL is required")
+    config.validate()
+    model = load_model(config.model)
+    while True:
+        count = process_once(config, model)
+        print(f"worker={config.worker_id} embedded={count}", flush=True)
+        if not args.loop or count == 0:
+            break
+        time.sleep(args.loop_interval)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise

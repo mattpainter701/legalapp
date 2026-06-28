@@ -1,0 +1,98 @@
+services:
+  courtlistener-db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${COURTLISTENER_DB_USER:-courtlistener}
+      POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}
+      POSTGRES_DB: ${COURTLISTENER_DB_NAME:-courtlistener}
+    volumes:
+      - courtlistener_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${COURTLISTENER_DB_BIND:-127.0.0.1}:${COURTLISTENER_DB_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${COURTLISTENER_DB_USER:-courtlistener} -d ${COURTLISTENER_DB_NAME:-courtlistener}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  courtlistener-mcp:
+    build: ./mcp-server
+    depends_on:
+      courtlistener-db:
+        condition: service_healthy
+    environment:
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
+      COURTLISTENER_API_KEY: ${COURTLISTENER_API_KEY:-}
+      MCP_QUERY_EMBEDDING_URL: ${MCP_QUERY_EMBEDDING_URL:-}
+      MCP_QUERY_EMBEDDING_MODEL: ${MCP_QUERY_EMBEDDING_MODEL:-mixedbread-ai/mxbai-embed-large-v1}
+      MCP_QUERY_EMBEDDING_TIMEOUT_SECONDS: ${MCP_QUERY_EMBEDDING_TIMEOUT_SECONDS:-5}
+    ports:
+      - "${COURTLISTENER_MCP_PORT:-8021}:8021"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8021/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  courtlistener-loader:
+    build: ./mcp-server
+    profiles: ["loader"]
+    depends_on:
+      courtlistener-db:
+        condition: service_healthy
+    environment:
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
+      COURTLISTENER_MVP_STATES: ${COURTLISTENER_MVP_STATES:-ND,MT,MN,SD}
+      COURTLISTENER_MVP_SPECIALTY: ${COURTLISTENER_MVP_SPECIALTY:-true}
+      COURTLISTENER_MVP_SCOTUS: ${COURTLISTENER_MVP_SCOTUS:-true}
+    volumes:
+      - courtlistener_bulk:/data/courtlistener
+    command: ["python", "-m", "mcp_server.loader", "--init-schema"]
+
+  courtlistener-sync:
+    build: ./mcp-server
+    profiles: ["sync"]
+    depends_on:
+      courtlistener-db:
+        condition: service_healthy
+    environment:
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
+      COURTLISTENER_API_KEY: ${COURTLISTENER_API_KEY:-}
+    command: ["python", "-m", "mcp_server.sync", "--interval-seconds", "${COURTLISTENER_SYNC_INTERVAL_SECONDS:-3600}"]
+
+  embedding-dispatcher:
+    build: ./mcp-server
+    profiles: ["embedding"]
+    depends_on:
+      courtlistener-db:
+        condition: service_healthy
+    environment:
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@${COURTLISTENER_DB_HOST_FOR_JETSON:-172.16.16.202}:${COURTLISTENER_DB_PORT:-5434}/${COURTLISTENER_DB_NAME:-courtlistener}
+      JETSON_HOSTS: ${JETSON_HOSTS:-}
+      JETSON_0_HOST: ${JETSON_0_HOST:-}
+      JETSON_1_HOST: ${JETSON_1_HOST:-}
+      JETSON_2_HOST: ${JETSON_2_HOST:-}
+      JETSON_3_HOST: ${JETSON_3_HOST:-}
+      JETSON0_HOST: ${JETSON0_HOST:-}
+      JETSON1_HOST: ${JETSON1_HOST:-}
+      JETSON2_HOST: ${JETSON2_HOST:-}
+      JETSON3_HOST: ${JETSON3_HOST:-}
+      JETSON_USER: ${JETSON_USER:-jetson}
+      JETSON_0_USER: ${JETSON_0_USER:-}
+      JETSON_1_USER: ${JETSON_1_USER:-}
+      JETSON_2_USER: ${JETSON_2_USER:-}
+      JETSON_3_USER: ${JETSON_3_USER:-}
+      JETSON_3_PASSWORD: ${JETSON_3_PASSWORD:-}
+      JETSON0_USER: ${JETSON0_USER:-}
+      JETSON1_USER: ${JETSON1_USER:-}
+      JETSON2_USER: ${JETSON2_USER:-}
+      JETSON3_USER: ${JETSON3_USER:-}
+      JETSON_SCRIPT_DIR: ${JETSON_SCRIPT_DIR:-/home/jetson/legalapp/scripts}
+      BATCH_SIZE: ${BATCH_SIZE:-32}
+      JETSON_DB_REVERSE_TUNNEL: ${JETSON_DB_REVERSE_TUNNEL:-false}
+      JETSON_DB_TUNNEL_REMOTE_PORT_BASE: ${JETSON_DB_TUNNEL_REMOTE_PORT_BASE:-15434}
+    command: ["python", "-m", "mcp_server.dispatcher"]
+
+volumes:
+  courtlistener_pgdata:
+  courtlistener_bulk:
