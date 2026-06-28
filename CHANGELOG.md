@@ -24,6 +24,9 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Alembic migration chain:** corrected the MCP product gateway migration to
+  depend on revision `069` instead of the filename-like `069_rbac_rls`, which
+  prevented production backend startup from resolving the migration graph.
 - **Platform AI route reload button:** migrated the Platform -> AI Routing
   reload path off LiteLLM's rejected legacy `/config/update` `model_list`
   payload. The backend now reads `/model/info`, preserves matching file-backed
