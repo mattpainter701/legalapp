@@ -41,6 +41,9 @@ class SourceCitation(BaseModel):
     citation: str
     court: Optional[str] = None
     excerpt: str
+    url: Optional[str] = None
+    source_type: Optional[str] = None
+    source_label: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

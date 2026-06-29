@@ -23,6 +23,26 @@ const CITATION_PATTERNS = [
     classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20',
   },
   {
+    regex: /\[model reasoning\]/gi,
+    label: 'model reasoning',
+    classes: 'bg-brand-accent/10 text-brand-accent-2 border-brand-accent/20',
+  },
+  {
+    regex: /\[well[-\s]known fact\]/gi,
+    label: 'well known fact',
+    classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20',
+  },
+  {
+    regex: /\[cited by context\]/gi,
+    label: 'cited by context',
+    classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+  },
+  {
+    regex: /\[firm context\]/gi,
+    label: 'firm context',
+    classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+  },
+  {
     regex: /\[UNCERTAIN:\s*([^\]]*)\]/g,
     label: null, // dynamic
     classes: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',

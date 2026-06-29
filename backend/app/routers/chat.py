@@ -1,7 +1,9 @@
 import asyncio
+import html
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -57,6 +59,104 @@ from app.services.error_tracker import capture_chat_error
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_ANCHOR_TEXT_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _clean_source_text(value, max_length: int | None = None) -> str:
+    """Normalize CourtListener/html source fragments for API display."""
+    if value is None:
+        return ""
+    text = str(value)
+    anchor_match = _ANCHOR_TEXT_RE.search(text)
+    if anchor_match:
+        text = anchor_match.group(1)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_length and len(text) > max_length:
+        return text[: max_length - 1].rstrip() + "…"
+    return text
+
+
+def _normalize_source_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    url = html.unescape(str(value).strip())
+    if not url:
+        return None
+    if url.startswith("//"):
+        return f"https:{url}"
+    if url.startswith("/"):
+        return f"https://www.courtlistener.com{url}"
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return None
+
+
+def _source_url_from_chunk(chunk: dict) -> str | None:
+    for key in ("url", "source_url", "absolute_url"):
+        url = _normalize_source_url(chunk.get(key))
+        if url:
+            return url
+    opinion_id = chunk.get("opinion_id")
+    if opinion_id:
+        return f"https://www.courtlistener.com/opinion/{opinion_id}/"
+    for key in ("citation", "content", "excerpt"):
+        raw = chunk.get(key)
+        if not raw:
+            continue
+        href_match = _HREF_RE.search(str(raw))
+        if href_match:
+            url = _normalize_source_url(href_match.group(1))
+            if url:
+                return url
+    return None
+
+
+def _source_label(source_type: str | None) -> str:
+    labels = {
+        "public_authority": "Cited authority",
+        "courtlistener_mcp": "Cited authority",
+        "cloud": "Cloud context",
+        "matter_context": "Matter context",
+        "tenant_document": "Firm context",
+    }
+    return labels.get(source_type or "", "Context")
+
+
+def _source_dict_from_chunk(chunk: dict) -> dict:
+    source_type = chunk.get("clause_type") or chunk.get("source") or "public_authority"
+    if source_type == "courtlistener_mcp":
+        source_type = "public_authority"
+    return {
+        "case_name": _clean_source_text(chunk.get("case_name"), 180) or "Unknown Case",
+        "citation": _clean_source_text(chunk.get("citation"), 120),
+        "court": _clean_source_text(chunk.get("court"), 120) or None,
+        "excerpt": _clean_source_text(chunk.get("content") or chunk.get("excerpt"), 300),
+        "url": _source_url_from_chunk(chunk),
+        "source_type": source_type,
+        "source_label": _source_label(source_type),
+    }
+
+
+def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
+    source_type = "cloud"
+    cloud_id = _cloud_hit_context_id(hit_dict)
+    return {
+        "case_name": _clean_source_text(hit_dict.get("title"), 180) or "Cloud result",
+        "citation": _clean_source_text(hit_dict.get("url") or cloud_id, 140),
+        "court": _clean_source_text(
+            f"{hit_dict.get('provider', 'cloud')}/{hit_dict.get('source', 'unknown')}",
+            120,
+        ),
+        "excerpt": _clean_source_text(hit_dict.get("snippet"), 300),
+        "url": _normalize_source_url(hit_dict.get("url")),
+        "source_type": source_type,
+        "source_label": _source_label(source_type),
+    }
 
 
 async def _safe_cache_op(db, user, request, conv_id, query_text, op_name, coro):
@@ -294,12 +394,18 @@ def _message_to_response(msg: Message) -> MessageResponse:
     sources = []
     if msg.sources:
         for s in msg.sources:
+            source_type = s.get("source_type") or (
+                "public_authority" if s.get("case_name") or s.get("court") else None
+            )
             sources.append(
                 SourceCitation(
-                    case_name=s.get("case_name", "Unknown"),
-                    citation=s.get("citation", ""),
-                    court=s.get("court"),
-                    excerpt=s.get("excerpt", ""),
+                    case_name=_clean_source_text(s.get("case_name"), 180) or "Unknown",
+                    citation=_clean_source_text(s.get("citation"), 120),
+                    court=_clean_source_text(s.get("court"), 120) or None,
+                    excerpt=_clean_source_text(s.get("excerpt"), 300),
+                    url=_source_url_from_chunk(s),
+                    source_type=source_type,
+                    source_label=s.get("source_label") or _source_label(source_type),
                 )
             )
     return MessageResponse(
@@ -1022,14 +1128,7 @@ async def send_message(
         chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
         context_used.append(chunk_id)
         context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
-        source_dicts.append(
-            {
-                "case_name": chunk.get("case_name") or "Unknown Case",
-                "citation": chunk.get("citation") or "",
-                "court": chunk.get("court"),
-                "excerpt": (chunk.get("content") or "")[:300],
-            }
-        )
+        source_dicts.append(_source_dict_from_chunk(chunk))
 
     for hit in cloud_hits:
         hit_dict = _cloud_hit_dict(hit)
@@ -1039,17 +1138,7 @@ async def send_message(
         seen_citations.add(cloud_id)
         context_used.append(cloud_id)
         context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
-        source_dicts.append(
-            {
-                "case_name": hit_dict.get("title") or "Cloud result",
-                "citation": hit_dict.get("url") or cloud_id,
-                "court": (
-                    f"{hit_dict.get('provider', 'cloud')}/"
-                    f"{hit_dict.get('source', 'unknown')}"
-                ),
-                "excerpt": (hit_dict.get("snippet") or "")[:300],
-            }
-        )
+        source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
     # Track matter context usage if provided
     if effective_matter_id:
@@ -1447,14 +1536,7 @@ async def stream_message(
                 chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
                 context_used.append(chunk_id)
                 context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
-                source_dicts.append(
-                    {
-                        "case_name": chunk.get("case_name") or "Unknown Case",
-                        "citation": chunk.get("citation") or "",
-                        "court": chunk.get("court"),
-                        "excerpt": (chunk.get("content") or "")[:300],
-                    }
-                )
+                source_dicts.append(_source_dict_from_chunk(chunk))
 
             for hit in cloud_hits:
                 hit_dict = _cloud_hit_dict(hit)
@@ -1464,17 +1546,7 @@ async def stream_message(
                 seen_citations.add(cloud_id)
                 context_used.append(cloud_id)
                 context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
-                source_dicts.append(
-                    {
-                        "case_name": hit_dict.get("title") or "Cloud result",
-                        "citation": hit_dict.get("url") or cloud_id,
-                        "court": (
-                            f"{hit_dict.get('provider', 'cloud')}/"
-                            f"{hit_dict.get('source', 'unknown')}"
-                        ),
-                        "excerpt": (hit_dict.get("snippet") or "")[:300],
-                    }
-                )
+                source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
             # Track matter context usage if provided
             if effective_matter_id:

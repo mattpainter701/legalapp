@@ -7,7 +7,13 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.routers.chat import _auto_tier, _conversation_belongs_to_user, _join_context_sections
+from app.routers.chat import (
+    _auto_tier,
+    _clean_source_text,
+    _conversation_belongs_to_user,
+    _join_context_sections,
+    _source_dict_from_chunk,
+)
 from app.models.conversation import Conversation
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
@@ -58,6 +64,44 @@ def test_join_context_sections_omits_empty_sections():
         _join_context_sections("Attachment context", "Matter context", "RAG context")
         == "Attachment context\n\nMatter context\n\nRAG context"
     )
+
+
+def test_clean_source_text_strips_courtlistener_html():
+    raw = (
+        '<extracted-citation><span class="citation">'
+        '<a href="/opinion/4347183/state-v-kaarma/">386 Mont. 243</a>'
+        "</span></extracted-citation>"
+    )
+
+    assert _clean_source_text(raw) == "386 Mont. 243"
+
+
+def test_source_dict_from_chunk_links_and_cleans_public_authority():
+    source = _source_dict_from_chunk(
+        {
+            "id": "courtlistener:chunk-1",
+            "source": "courtlistener_mcp",
+            "opinion_id": 4347183,
+            "case_name": "State v. Robertson",
+            "citation": (
+                '<span class="citation" data-id="1">'
+                '<a href="/opinion/4347183/state-v-kaarma/">386 Mont. 243</a>'
+                "</span>"
+            ),
+            "court": "Montana Supreme Court",
+            "content": "<p>Evidence rulings are reviewed for abuse of discretion.</p>",
+        }
+    )
+
+    assert source == {
+        "case_name": "State v. Robertson",
+        "citation": "386 Mont. 243",
+        "court": "Montana Supreme Court",
+        "excerpt": "Evidence rulings are reviewed for abuse of discretion.",
+        "url": "https://www.courtlistener.com/opinion/4347183/",
+        "source_type": "public_authority",
+        "source_label": "Cited authority",
+    }
 
 
 def test_auto_tier_respects_manual_premium_for_simple_queries():

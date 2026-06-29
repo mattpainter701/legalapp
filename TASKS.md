@@ -1,5 +1,33 @@
 # TASKS.md
 
+## Chat UX Source Attribution Polish — 2026-06-29 (DONE)
+
+**Goal:** Fix chat transcript and attribution regressions: preserve the visible
+user question after submit, clean CourtListener citation/source display, and
+restore visible context-source tagging for answer provenance.
+
+- [x] Keep submitted user queries visible in the transcript during and after streaming
+- [x] Strip raw HTML from authority/source citations and excerpts
+- [x] Link case-law authorities to CourtListener/citation URLs when available
+- [x] Restore context source tags for model/context/fact provenance
+- [x] Add focused frontend/backend regression coverage
+
+Summary: streaming chat now preserves the optimistic user question and streamed
+answer if the post-stream conversation refresh returns stale data. CourtListener
+sources are normalized through one backend source formatter that strips raw HTML,
+preserves MCP `source_url`/opinion links, emits `source_type` and `source_label`,
+and cleans old persisted source rows on read. The authority ledger now renders
+clean citations as external links where possible and shows color-coded context
+badges for cited authority, cloud context, matter context, and firm context.
+Markdown provenance aliases for model reasoning, well known fact, cited by
+context, and firm context now render as colored inline tags.
+Verification: focused chat/RAG source tests passed, `backend/app` and
+`mcp-server/mcp_server` compiled, and frontend production build passed. The
+local endpoint chat tests that require Postgres still could not run because the
+local test database refused connections.
+
+---
+
 ## Chat/MCP Matter And Cloud Context Hardening — 2026-06-28 (DONE)
 
 **Goal:** Resolve the chat/MCP review findings around matter-linked chat

@@ -62,6 +62,24 @@ def test_mcp_item_to_chunk_prefers_vector_similarity_over_rrf_rank():
     assert chunk["retrieval_mode"] == "hybrid"
 
 
+def test_mcp_item_to_chunk_preserves_case_links():
+    chunk = rag._mcp_item_to_chunk(
+        {
+            "chunk_id": "abc",
+            "case_name": "State v. Example",
+            "court_name": "North Dakota Supreme Court",
+            "date_filed": "2024-01-01",
+            "content": "Relevant authority",
+            "source_url": "https://www.courtlistener.com/opinion/123/state-v-example/",
+            "citation": "2024 ND 1",
+        },
+        0,
+    )
+
+    assert chunk["citation"] == "2024 ND 1"
+    assert chunk["url"] == "https://www.courtlistener.com/opinion/123/state-v-example/"
+
+
 @pytest.mark.asyncio
 async def test_full_rag_query_uses_mcp_without_legacy_public_embedding(monkeypatch):
     class Embeddings:

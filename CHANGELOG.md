@@ -24,6 +24,13 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat source attribution UX:** chat now keeps the submitted question visible
+  if the post-stream conversation refresh returns stale data, strips raw
+  CourtListener HTML from source citations/excerpts, carries MCP case URLs into
+  chat source records, and renders authority citations as external links with
+  color-coded provenance badges for cited authority, cloud context, matter
+  context, and firm context. Inline provenance tags now also recognize model
+  reasoning, well known fact, cited by context, and firm context aliases.
 - **Chat/MCP matter and cloud context hardening:** conversation creation now
   rejects invalid or cross-tenant `matter_id` values instead of persisting an
   unvalidated FK. Chat message handling computes one validated effective matter

@@ -15,6 +15,36 @@ import {
 } from '../api'
 import { AlertBanner } from '../components/ui'
 
+function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbackAssistantMessage) {
+  const next = Array.isArray(serverMessages) ? [...serverMessages] : []
+  const submittedAt = Date.parse(optimisticUserMessage.created_at)
+  const hasSubmittedQuestion = next.some(
+    (msg) => msg.role === 'user' && msg.content === optimisticUserMessage.content
+  )
+  const hasFreshAssistant = next.some((msg) => {
+    if (msg.role !== 'assistant') return false
+    const createdAt = Date.parse(msg.created_at)
+    return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
+  })
+
+  if (!hasSubmittedQuestion) {
+    const assistantIndex = hasFreshAssistant
+      ? next.findIndex((msg) => {
+          if (msg.role !== 'assistant') return false
+          const createdAt = Date.parse(msg.created_at)
+          return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
+        })
+      : -1
+    next.splice(assistantIndex >= 0 ? assistantIndex : next.length, 0, optimisticUserMessage)
+  }
+
+  if (!hasFreshAssistant && fallbackAssistantMessage?.content) {
+    next.push(fallbackAssistantMessage)
+  }
+
+  return next
+}
+
 export default function ChatPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -285,7 +315,12 @@ export default function ChatPage() {
       } else {
         try {
           const refreshed = await getConversation(convId)
-          setMessages(refreshed.messages || [])
+          setMessages(
+            mergeRefreshedTranscript(refreshed.messages, userMessage, {
+              ...assistantMsg,
+              content: accumulatedText,
+            })
+          )
           setActiveConvTitle(refreshed.conversation?.title || activeConvTitle)
           if (refreshed.conversation) {
             setConversations((prev) =>

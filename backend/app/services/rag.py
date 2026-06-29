@@ -313,6 +313,8 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "retrieval_mode": item.get("search_source") or "unknown",
         "opinion_id": item.get("opinion_id"),
         "cluster_id": item.get("cluster_id"),
+        "url": item.get("url") or item.get("source_url"),
+        "source_url": item.get("source_url") or item.get("url"),
     }
 
 

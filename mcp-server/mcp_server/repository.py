@@ -89,12 +89,15 @@ class CourtListenerRepository:
             SELECT oc.id::text AS chunk_id, oc.opinion_id, oc.cluster_id, oc.chunk_index,
                    cl.case_name,
                    cl.date_filed, oc.court_id, c.full_name AS court_name, oc.content,
+                   COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
+                   COALESCE(cl.citations #>> '{0,cite}', cl.citations #>> '{0}', '') AS citation,
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS rank,
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS keyword_rank,
                    NULL::float AS similarity,
                    'fts' AS search_source
             FROM opinion_chunks oc
             JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
+            LEFT JOIN opinions o ON o.opinion_id = oc.opinion_id
             LEFT JOIN courts c ON c.court_id = oc.court_id
             WHERE oc.fts @@ websearch_to_tsquery('english', %s)
               AND {' AND '.join(filters)}
@@ -122,9 +125,13 @@ class CourtListenerRepository:
             WITH filtered AS (
                 SELECT oc.id::text AS chunk_id, oc.opinion_id, oc.cluster_id,
                        oc.chunk_index, cl.case_name, cl.date_filed, oc.court_id,
-                       c.full_name AS court_name, oc.content, oc.fts, oc.embedding
+                       c.full_name AS court_name, oc.content,
+                       COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
+                       COALESCE(cl.citations #>> '{0,cite}', cl.citations #>> '{0}', '') AS citation,
+                       oc.fts, oc.embedding
                 FROM opinion_chunks oc
                 JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id
+                LEFT JOIN opinions o ON o.opinion_id = oc.opinion_id
                 LEFT JOIN courts c ON c.court_id = oc.court_id
                 WHERE {' AND '.join(filters)}
             ),
@@ -159,7 +166,7 @@ class CourtListenerRepository:
                 SELECT * FROM fts
             )
             SELECT chunk_id, opinion_id, cluster_id, chunk_index, case_name, date_filed,
-                   court_id, court_name, content,
+                   court_id, court_name, content, source_url, citation,
                    COALESCE(MAX(similarity), 0.0) AS similarity,
                    COALESCE(MAX(keyword_rank), 0.0) AS keyword_rank,
                    (
@@ -173,7 +180,7 @@ class CourtListenerRepository:
                    END AS search_source
             FROM combined
             GROUP BY chunk_id, opinion_id, cluster_id, chunk_index, case_name,
-                     date_filed, court_id, court_name, content
+                     date_filed, court_id, court_name, content, source_url, citation
             ORDER BY rank DESC, similarity DESC, date_filed DESC NULLS LAST
             LIMIT %s
         """
