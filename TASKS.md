@@ -1,6 +1,6 @@
 # TASKS.md
 
-## Chat Context Language And Upload Repair — 2026-06-29 — IN PROGRESS
+## Chat Context Language And Upload Repair — 2026-06-29 (DONE)
 
 **Goal:** Stop internal prompt/source bucket language from leaking into chat
 answers and repair chat/document upload 500s in production.
@@ -9,7 +9,7 @@ answers and repair chat/document upload 500s in production.
 - [x] Normalize legacy/custom `[FIRM CONTEXT: ...]` tags out of assistant output
 - [x] Restore chat/document upload success path
 - [x] Add focused prompt/output/upload regression coverage
-- [ ] Deploy and smoke test production
+- [x] Deploy and smoke test production
 
 Summary: chat prompts now use `SOURCE MATERIALS` instead of the internal
 `FIRM CONTEXT` label and instruct the model not to expose internal source bucket
@@ -18,8 +18,11 @@ labels. Guardrails rewrite old/custom `[FIRM CONTEXT: ...]` tags to
 provenance badges. General document upload now flushes and refreshes before
 commit while tenant RLS context is still active, and the background document
 processor binds tenant context in its fresh session.
-Verification so far: focused prompt/guardrail/upload tests passed, backend
-compile passed, and frontend production build passed.
+Verification: focused prompt/guardrail/upload tests passed, backend compile
+passed, frontend production build passed, production deploy reached healthy
+backend/frontend containers on commit `7679a9f`, production document upload
+smoke returned 201, background processing moved the smoke document to `ready`,
+and the smoke document was deleted with 204.
 
 ---
 
