@@ -1,5 +1,22 @@
 # TASKS.md
 
+## CourtListener MVP Scheduler Runtime Posture — 2026-06-29 (DONE)
+
+**Goal:** Keep the built embedding scheduler available but not actively running
+on MVP/test hardware unless a bounded import creates new chunks.
+
+- [x] Stop the live embedding scheduler sidecar
+- [x] Document that full CourtListener sync is out of scope for current storage
+- [x] Record that scheduler startup is intentional/manual during MVP
+
+Summary: `legalapp-embedding-scheduler-1` was stopped and removed from the
+hypervisor after validation. The runbook and project memory now state that the
+current hardware is not sized for a full CourtListener corpus sync, corpus
+growth must remain bounded, and the scheduler should only be started after a
+deliberate bounded import creates unembedded chunks.
+
+---
+
 ## CourtListener Embedding Scheduler — 2026-06-29 (DONE)
 
 **Goal:** Add a production-safe scheduler that periodically checks for

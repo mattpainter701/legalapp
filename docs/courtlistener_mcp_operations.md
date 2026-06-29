@@ -48,6 +48,10 @@ The 58 GB staged archive is not the live searchable corpus. It is compressed
 source input. Searchable rows exist only after the loader imports opinions and
 `--chunk-opinions` creates `opinion_chunks`.
 
+MVP/test-hardware constraint: do not attempt a full CourtListener corpus sync
+on the current hypervisor. Load bounded regional/specialty batches only after
+checking projected Docker-volume growth.
+
 ## Start And Health Checks
 
 Use the `legalapp` Compose project name so volume names match production:
@@ -189,6 +193,17 @@ Preferred scheduled launch:
 cd /home/varta/legalapp
 docker compose -f docker-compose.courtlistener-mcp.yml --profile embedding-scheduler up -d embedding-scheduler
 docker compose -f docker-compose.courtlistener-mcp.yml logs -f embedding-scheduler
+```
+
+MVP runtime posture: the scheduler is built and validated but should normally
+remain stopped on current test hardware. Start it intentionally only after a
+bounded import creates new `embedding IS NULL` chunks, then stop it again after
+the queue drains.
+
+```bash
+cd /home/varta/legalapp
+docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --profile embedding-scheduler stop embedding-scheduler
+docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --profile embedding-scheduler rm -f embedding-scheduler
 ```
 
 Scheduler behavior:

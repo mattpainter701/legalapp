@@ -29,6 +29,12 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **CourtListener scheduler runtime posture:** stopped the live
+  `embedding-scheduler` sidecar after validation and documented that, during
+  MVP/test-hardware operation, the scheduler should remain off unless a bounded
+  import intentionally creates unembedded chunks. The runbook and project
+  memory now warn not to attempt a full CourtListener corpus sync on current
+  storage.
 - **Chat streaming progress metadata:** chat streaming now emits typed
   `[PROGRESS]` SSE events with live counts for matter context, uploads,
   firm/cloud/private retrieval, and CourtListener MCP authority. The frontend
