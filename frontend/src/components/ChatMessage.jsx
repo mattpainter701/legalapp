@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { format } from 'date-fns'
-import { Book, Scale, Copy, Check, ExternalLink } from 'lucide-react'
+import { Book, Scale, Copy, Check, ExternalLink, Search, BookOpen, PenLine } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
 
 function cleanSourceText(value) {
@@ -137,36 +137,78 @@ function SourcesLedger({ sources }) {
   )
 }
 
+function AssistantWorkingState() {
+  const steps = [
+    { icon: Search, label: 'Searching relevant sources' },
+    { icon: BookOpen, label: 'Checking cited authority' },
+    { icon: PenLine, label: 'Drafting answer' },
+  ]
+
+  return (
+    <div className="border border-brand-line bg-brand-bg p-4">
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-brand-line bg-brand-surface-2">
+          <Scale className="h-4 w-4 text-brand-gold" strokeWidth={2} />
+        </div>
+        <div className="min-w-0 text-left">
+          <p className="font-sans text-sm font-semibold text-brand-ink">Clarity Legal is working</p>
+          <p className="text-xs text-brand-muted">Retrieving context and preparing a cited response</p>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5" aria-label="Working">
+          <span className="h-1.5 w-1.5 animate-bounce bg-brand-muted" style={{ animationDelay: '0ms' }} />
+          <span className="h-1.5 w-1.5 animate-bounce bg-brand-muted" style={{ animationDelay: '150ms' }} />
+          <span className="h-1.5 w-1.5 animate-bounce bg-brand-muted" style={{ animationDelay: '300ms' }} />
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        {steps.map(({ icon: Icon, label }) => (
+          <div key={label} className="flex items-center gap-2 border border-brand-line bg-brand-surface px-3 py-2 text-xs text-brand-ink-2">
+            <Icon className="h-3.5 w-3.5 text-brand-muted" strokeWidth={2} />
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function ChatMessage({ message }) {
   const isUser = message.role === 'user'
+  const content = message.content || ''
+  const hasAssistantContent = content.trim().length > 0
   const timestamp = message.created_at
     ? format(new Date(message.created_at), 'h:mm a')
     : ''
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content)
+    navigator.clipboard.writeText(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   if (isUser) {
     return (
-      <div className="flex justify-end mb-8 group">
-        <div className="bg-brand-ink text-brand-bg p-5 max-w-2xl border-l-4 border-brand-accent shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center gap-2 mb-2 text-xs font-mono text-brand-bg/60 uppercase tracking-wider">
-            <span className="font-bold text-brand-accent">Q</span>
-            <span>Query</span>
-            {timestamp && <span className="ml-auto">{timestamp}</span>}
+      <div className="flex justify-end mb-7 group">
+        <div className="bg-brand-ink text-brand-bg p-4 max-w-2xl border-l-4 border-brand-accent shadow-sm hover:shadow-md transition-shadow">
+          <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-widest text-brand-bg/55">
+            <span className="font-bold text-brand-accent">You</span>
+            {timestamp && (
+              <>
+                <span className="text-brand-bg/30">·</span>
+                <span>{timestamp}</span>
+              </>
+            )}
+            <button
+              onClick={handleCopy}
+              className="ml-auto flex items-center gap-1 text-brand-bg/40 opacity-0 transition-opacity hover:text-brand-bg/85 group-hover:opacity-100"
+              title="Copy query"
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              <span className="sr-only">{copied ? 'Copied' : 'Copy query'}</span>
+            </button>
           </div>
-          <p className="text-base leading-relaxed font-sans whitespace-pre-wrap">{message.content}</p>
-          <button
-            onClick={handleCopy}
-            className="mt-2 text-brand-bg/40 hover:text-brand-bg/80 opacity-0 group-hover:opacity-100 transition-opacity text-xs flex items-center gap-1"
-          >
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
+          <p className="text-base leading-relaxed font-sans whitespace-pre-wrap">{content}</p>
         </div>
       </div>
     )
@@ -194,10 +236,14 @@ export default function ChatMessage({ message }) {
 
         {/* Body */}
         <div className="text-brand-ink text-[15px]">
-          <ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
+          {hasAssistantContent ? (
+            <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
+          ) : (
+            <AssistantWorkingState />
+          )}
         </div>
 
-        <SourcesLedger sources={message.sources} />
+        {hasAssistantContent && <SourcesLedger sources={message.sources} />}
       </div>
     </div>
   )

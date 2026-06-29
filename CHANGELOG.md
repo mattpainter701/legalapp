@@ -24,6 +24,10 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat transcript active state:** simplified the user query card header to
+  `You · time`, moved query copy into a small hover control, and replaced the
+  duplicate streaming typing card with a single assistant working state that
+  shows source search, authority check, and drafting status until tokens arrive.
 - **Chat start page source copy:** updated the empty chat state to describe
   source-material behavior accurately: sources are used when available,
   citations appear where retrieved materials are used, and outputs are prepared

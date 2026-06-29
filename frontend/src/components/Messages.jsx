@@ -3,25 +3,6 @@ import { Scale } from 'lucide-react'
 import ChatMessage from './ChatMessage'
 import { MessageSkeleton } from './LoadingSkeleton'
 
-function TypingIndicator() {
-  return (
-    <div className="flex justify-start mb-8 animate-fade-in">
-      <div className="bg-brand-surface border border-brand-line p-8 max-w-3xl w-full shadow-sm relative">
-        <div className="absolute top-0 left-0 w-full h-1 bg-brand-gold"></div>
-        <div className="flex items-center gap-2 text-xs font-mono text-brand-muted uppercase tracking-wider">
-          <Scale className="w-4 h-4 text-brand-gold" strokeWidth={2} />
-          <span className="font-bold text-brand-ink">Clarity Legal Analysis</span>
-          <span className="ml-auto flex gap-1.5 items-center">
-            <span className="w-1.5 h-1.5 bg-brand-muted animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1.5 h-1.5 bg-brand-muted animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1.5 h-1.5 bg-brand-muted animate-bounce" style={{ animationDelay: '300ms' }} />
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center min-h-full text-center max-w-2xl mx-auto py-10">
@@ -115,7 +96,6 @@ export default function Messages({ messages, isLoading, isSending, onMessageScro
                   <ChatMessage message={msg} />
                 </div>
               ))}
-              {isSending && <TypingIndicator />}
               <div ref={messagesEndRef} />
             </div>
           )}
