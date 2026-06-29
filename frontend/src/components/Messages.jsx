@@ -33,18 +33,18 @@ function EmptyState() {
         Clarity Legal · Case Ledger
       </div>
       <h3 className="font-serif text-3xl font-semibold text-brand-ink mb-4 tracking-tight">
-        Your legal-safe AI coworker
+        Your legal research coworker
       </h3>
       <p className="text-brand-ink-2 text-base max-w-lg leading-relaxed font-sans mb-8">
-        Clarity Legal researches, drafts, and analyzes alongside you — grounded in your firm's documents and public case law, with every answer cited and ready for attorney review.
+        Clarity Legal researches, drafts, and analyzes alongside you using firm documents, matter context, uploaded files, cloud sources, and public case law when available. Legal answers include source references and review tags so attorneys can verify before relying.
       </p>
 
       {/* Trust signals */}
       <div className="grid sm:grid-cols-3 gap-3 w-full mb-8">
         {[
-          { icon: '🛡️', title: 'Grounded answers', text: 'Drawn from your documents + public case law' },
-          { icon: '✓', title: 'Cited & verifiable', text: 'Every claim tagged by confidence level' },
-          { icon: '⚖️', title: 'Attorney-reviewed', text: 'Work product gated for sign-off' },
+          { icon: '🛡️', title: 'Grounded research', text: 'Uses firm materials, matter context, uploads, cloud files, and public case law when available' },
+          { icon: '✓', title: 'Cited where sourced', text: 'Authorities and retrieved materials are shown when used' },
+          { icon: '⚖️', title: 'Attorney review ready', text: 'Drafts and analysis are prepared for attorney verification before reliance' },
         ].map(({ icon, title, text }) => (
           <div
             key={title}
@@ -65,9 +65,9 @@ function EmptyState() {
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {[
-            { label: 'settled', text: 'Well-established law', classes: 'bg-brand-green/10 text-brand-green border-brand-green/20' },
-            { label: 'verify', text: 'Confirm before relying', classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' },
-            { label: 'model knowledge', text: 'General reasoning, not a source', classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20' },
+            { label: 'settled', text: 'Black-letter or well-established legal rule', classes: 'bg-brand-green/10 text-brand-green border-brand-green/20' },
+            { label: 'verify', text: 'Confirm before relying or filing', classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' },
+            { label: 'model knowledge', text: 'General reasoning, not drawn from retrieved source materials', classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20' },
           ].map(({ label, text, classes }) => (
             <div key={label} className="flex items-center gap-2 px-3 py-1.5 bg-brand-surface border border-brand-line">
               <span className={`text-[9px] font-bold uppercase tracking-widest font-mono px-1.5 py-0.5 border ${classes}`}>

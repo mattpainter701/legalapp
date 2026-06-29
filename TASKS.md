@@ -1,5 +1,22 @@
 # TASKS.md
 
+## Chat Start Page Source Copy — 2026-06-29 — IN PROGRESS
+
+**Goal:** Align the empty chat start page with the deployed source-material and
+attorney-review behavior.
+
+- [x] Replace overstated "every answer cited" and sign-off language
+- [x] Describe source materials accurately
+- [ ] Build and deploy the frontend copy change
+
+Summary: the empty chat start page now describes source materials as available
+inputs rather than guaranteed sources for every answer, says citations appear
+where retrieved materials are used, and frames outputs as attorney-verification
+ready instead of attorney-approved or sign-off gated. Verification so far:
+frontend production build passed.
+
+---
+
 ## Chat Context Language And Upload Repair — 2026-06-29 (DONE)
 
 **Goal:** Stop internal prompt/source bucket language from leaking into chat

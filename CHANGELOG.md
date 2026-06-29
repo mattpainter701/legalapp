@@ -24,6 +24,10 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat start page source copy:** updated the empty chat state to describe
+  source-material behavior accurately: sources are used when available,
+  citations appear where retrieved materials are used, and outputs are prepared
+  for attorney verification rather than represented as attorney-approved.
 - **Chat context language and document upload:** replaced model-visible
   `FIRM CONTEXT` prompt wording with source-material language, added guardrails
   that rewrite old/custom `[FIRM CONTEXT: ...]` tags to user-safe cited-context
