@@ -1,19 +1,21 @@
 # TASKS.md
 
-## Chat Transcript Active State Polish — 2026-06-29 — IN PROGRESS
+## Chat Transcript Active State Polish — 2026-06-29 (DONE)
 
 **Goal:** Remove duplicate-looking active chat cards and make in-progress
 assistant responses clearer during streaming.
 
 - [x] Simplify user query card timestamp/header
 - [x] Replace duplicate typing card with one assistant working state
-- [ ] Build and deploy frontend update
+- [x] Build and deploy frontend update
 
 Summary: user messages now use a quieter `You · time` header with copy hidden
 behind a small hover button. Streaming no longer renders a separate duplicate
 typing card; the empty assistant message itself shows a working state with
 source-search, authority-check, and drafting status labels until content
 arrives. Verification so far: frontend production build passed.
+Production deploy reached healthy frontend on commit `f40244f`, and public
+`/health` returned 200.
 
 ---
 
