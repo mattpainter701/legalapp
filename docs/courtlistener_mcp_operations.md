@@ -183,7 +183,31 @@ JETSON_DB_TUNNEL_REMOTE_PORT_BASE=15434
 BATCH_SIZE=32
 ```
 
-Preferred long-running launch used during bring-up:
+Preferred scheduled launch:
+
+```bash
+cd /home/varta/legalapp
+docker compose -f docker-compose.courtlistener-mcp.yml --profile embedding-scheduler up -d embedding-scheduler
+docker compose -f docker-compose.courtlistener-mcp.yml logs -f embedding-scheduler
+```
+
+Scheduler behavior:
+
+- Runs every `EMBEDDING_SCHEDULER_INTERVAL_SECONDS` seconds, default 900.
+- Schedules embeddings for chunks already present in `opinion_chunks`; it does
+  not download or import new CourtListener bulk/API data.
+- Uses `SCHEDULER_DB_URL` for its own lock/count queries inside Docker and
+  passes `VECTORDB_URL`/`EMBEDDING_WORKER_DB_URL` to Jetson workers.
+- Takes Postgres advisory lock `EMBEDDING_SCHEDULER_LOCK_ID`, default
+  `2026062901`, so duplicate scheduler containers or manual runs do not launch
+  overlapping Jetson workers.
+- Counts `opinion_chunks WHERE embedding IS NULL`.
+- Skips when the count is below `EMBEDDING_SCHEDULER_MINIMUM_UNEMBEDDED`,
+  default 1.
+- Launches the existing Jetson dispatcher when there is queued work, then sleeps
+  and checks again.
+
+Manual one-shot dispatcher launch for bounded backfills or recovery:
 
 ```bash
 docker run -d --name legalapp-embedding-dispatcher-expand \
@@ -197,6 +221,7 @@ docker run -d --name legalapp-embedding-dispatcher-expand \
 Monitor progress:
 
 ```bash
+docker compose -f /home/varta/legalapp/docker-compose.courtlistener-mcp.yml ps embedding-scheduler
 docker ps --filter name=legalapp-embedding-dispatcher-expand --format "{{.Names}} {{.Status}}"
 docker exec -i legalapp-courtlistener-db-1 psql -U courtlistener -d courtlistener -P pager=off -c \
   "SELECT COUNT(*) chunks,
@@ -207,12 +232,15 @@ docker exec -i legalapp-courtlistener-db-1 psql -U courtlistener -d courtlistene
 
 If embedding stalls:
 
-- Check dispatcher container logs.
+- Check scheduler and dispatcher container logs.
 - Check Jetson SSH reachability from the hypervisor, not from the workstation.
 - Check Jetson worker logs in `~/clarity-legal-logs`.
 - Confirm the reverse tunnel is active if the Jetson cannot initiate DB traffic.
 - Confirm `VECTORDB_URL` points to the externally bound CourtListener DB port
   for dispatcher launch, and to the tunnel local port for the worker command.
+- Confirm the scheduler is not reporting `lock_held`; if it is, another
+  scheduler/dispatcher run is active or a stale advisory lock is held by a live
+  connection.
 
 ## Query Embedding Service
 

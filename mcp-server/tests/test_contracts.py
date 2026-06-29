@@ -16,6 +16,7 @@ from mcp_server.dispatcher import (
     jetson_user_from_env,
     tunneled_db_url,
 )
+from mcp_server.embedding_scheduler import SchedulerConfig, run_scheduler_once
 from mcp_server.loader import (
     DEFAULT_MVP_STATES,
     best_opinion_text,
@@ -63,6 +64,52 @@ class RecordingConnection:
         return self.cursor_obj
 
 
+class SchedulerCursor:
+    def __init__(self, lock_acquired=True, unembedded=0):
+        self.lock_acquired = lock_acquired
+        self.unembedded = unembedded
+        self.executions = []
+        self._last = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        self.executions.append((sql, params or []))
+        if "pg_try_advisory_lock" in sql:
+            self._last = "lock"
+        elif "COUNT(*)" in sql and "embedding IS NULL" in sql:
+            self._last = "count"
+        elif "pg_advisory_unlock" in sql:
+            self._last = "unlock"
+
+    def fetchone(self):
+        if self._last == "lock":
+            return [self.lock_acquired]
+        if self._last == "count":
+            return [self.unembedded]
+        return [None]
+
+
+class SchedulerConnection:
+    def __init__(self, lock_acquired=True, unembedded=0):
+        self.cursor_obj = SchedulerCursor(lock_acquired=lock_acquired, unembedded=unembedded)
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self):
+        return self.cursor_obj
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
 def test_schema_defines_mcp_owned_opinion_chunks_with_mxbai_vectors():
     assert "CREATE TABLE IF NOT EXISTS opinion_chunks" in SCHEMA_SQL
     assert "embedding vector(1024)" in SCHEMA_SQL
@@ -79,6 +126,69 @@ def test_courtlistener_compose_requires_password_and_local_bind_by_default():
     assert "${COURTLISTENER_DB_BIND:-127.0.0.1}" in compose
     assert "POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:-courtlistener}" not in compose
     assert "${COURTLISTENER_DB_BIND:-0.0.0.0}" not in compose
+
+
+def test_courtlistener_compose_defines_embedding_scheduler_profile():
+    compose = (REPO_ROOT / "docker-compose.courtlistener-mcp.yml").read_text()
+    scheduler_section = compose.split("  embedding-scheduler:", 1)[1]
+
+    assert "embedding-scheduler:" in compose
+    assert 'profiles: ["embedding-scheduler"]' in compose
+    assert "SCHEDULER_DB_URL:" in scheduler_section
+    assert "python" in scheduler_section
+    assert "mcp_server.embedding_scheduler" in scheduler_section
+
+
+def test_embedding_scheduler_dispatches_when_unembedded_chunks_exist():
+    conn = SchedulerConnection(lock_acquired=True, unembedded=42)
+    dispatches = []
+
+    result = run_scheduler_once(
+        conn,
+        SchedulerConfig(
+            db_url="postgresql://courtlistener:secret@db:5432/courtlistener",
+            worker_db_url="postgresql://courtlistener:secret@192.168.1.10:5434/courtlistener",
+            hosts="192.168.1.203",
+            user="varta",
+            script_dir="/data/legalapp-embeddings/scripts",
+            batch_size=32,
+            minimum_unembedded=1,
+        ),
+        dispatch=lambda targets, script_dir, db_url, batch_size, reverse_tunnel, tunnel_remote_port_base: dispatches.append(
+            (targets, script_dir, db_url, batch_size, reverse_tunnel, tunnel_remote_port_base)
+        ),
+    )
+
+    assert result.dispatched is True
+    assert result.unembedded_count == 42
+    assert len(dispatches) == 1
+    assert dispatches[0][0][0].host == "192.168.1.203"
+    assert dispatches[0][1] == "/data/legalapp-embeddings/scripts"
+    assert dispatches[0][2] == "postgresql://courtlistener:secret@192.168.1.10:5434/courtlistener"
+    assert dispatches[0][3] == 32
+    assert any("pg_advisory_unlock" in sql for sql, _ in conn.cursor_obj.executions)
+
+
+def test_embedding_scheduler_skips_when_lock_is_held_or_queue_is_empty():
+    held = SchedulerConnection(lock_acquired=False, unembedded=42)
+    empty = SchedulerConnection(lock_acquired=True, unembedded=0)
+    dispatches = []
+    config = SchedulerConfig(
+        db_url="postgresql://courtlistener:secret@db:5432/courtlistener",
+        hosts="192.168.1.203",
+        user="varta",
+        script_dir="/data/legalapp-embeddings/scripts",
+        minimum_unembedded=1,
+    )
+
+    held_result = run_scheduler_once(held, config, dispatch=lambda *args, **kwargs: dispatches.append(args))
+    empty_result = run_scheduler_once(empty, config, dispatch=lambda *args, **kwargs: dispatches.append(args))
+
+    assert held_result.dispatched is False
+    assert held_result.reason == "lock_held"
+    assert empty_result.dispatched is False
+    assert empty_result.reason == "below_threshold"
+    assert dispatches == []
 
 
 def test_manifest_exposes_domain_scoped_legal_tools():

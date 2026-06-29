@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **CourtListener embedding scheduler:** added `mcp_server.embedding_scheduler`
+  and a profile-gated `embedding-scheduler` compose service. The scheduler
+  periodically counts `opinion_chunks` with missing embeddings, uses a Postgres
+  advisory lock to prevent overlapping Jetson dispatches, and launches the
+  existing dispatcher only when queued chunks meet the configured threshold.
 - **CourtListener MCP + Jetson embedding stack:** added a standalone `mcp-server/` package and `docker-compose.courtlistener-mcp.yml` for a separate `courtlistener-db` pgvector service, REST MCP server, loader, low-volume sync placeholder, and Jetson embedding dispatcher. The MCP schema owns `courts`, `dockets`, `opinion_clusters`, `opinions`, `opinion_citations`, `opinion_chunks`, `ingest_runs`, and `embedding_jobs`, with `opinion_chunks.embedding vector(1024)` for local `mixedbread-ai/mxbai-embed-large-v1` embeddings. The loader can stage the latest CourtListener S3 quarterly snapshot, load core CSVs, and create chunks; the Jetson worker now targets `opinion_chunks` with mxbai-1024 and batch size 32. Backend `/api/mcp` now proxies to `MCP_SERVER_URL` when configured while preserving the existing local fallback/API-key endpoints. Runbook: `docs/courtlistener_mcp_jetson.md`.
   - **Release corpus filter:** added `--load-mvp` for the first app-backed corpus: ND/MT/MN/SD state authority, SCOTUS, U.S. Tax Court, BIA, and regional bankruptcy/BAP courts. The default keeps published/precedential clusters and avoids broad federal/IP loading for the small-town firm MVP.
   - **S3 staging hardening:** bulk snapshot staging now validates S3 `Content-Length` and downloads through `.part` files before renaming, so interrupted archives are not treated as complete on retry. Production staging completed on the hypervisor Docker bulk volume.

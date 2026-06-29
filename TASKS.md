@@ -1,5 +1,26 @@
 # TASKS.md
 
+## CourtListener Embedding Scheduler — 2026-06-29 (DONE)
+
+**Goal:** Add a production-safe scheduler that periodically checks for
+unembedded CourtListener chunks and launches Jetson embedding workers only when
+there is queued vector work.
+
+- [x] Add advisory-lock guarded scheduler logic
+- [x] Wire scheduler into the CourtListener compose stack
+- [x] Document scheduler operation and monitoring
+- [x] Add focused tests and verification
+
+Summary: added `mcp_server.embedding_scheduler`, a profile-gated
+`embedding-scheduler` CourtListener sidecar service, and operations runbook
+coverage. The scheduler periodically checks `opinion_chunks WHERE embedding IS
+NULL`, uses a Postgres advisory lock to avoid overlapping dispatches, and
+launches the existing Jetson dispatcher only when queued chunks meet the
+configured threshold. Verification: MCP contract tests passed, MCP server
+compile passed, and compose config renders the `embedding-scheduler` service.
+
+---
+
 ## Chat Streaming Progress Metadata — 2026-06-29 (DONE)
 
 **Goal:** Make the in-progress assistant card reflect live source retrieval
