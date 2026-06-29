@@ -13,6 +13,8 @@ from app.routers.chat import (
     _conversation_belongs_to_user,
     _join_context_sections,
     _source_dict_from_chunk,
+    _stream_progress_event,
+    _stream_source_counts,
 )
 from app.models.conversation import Conversation
 from app.models.document import Chunk, Document
@@ -102,6 +104,53 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
         "source_type": "public_authority",
         "source_label": "Cited authority",
     }
+
+
+def test_stream_source_counts_classifies_local_and_public_context():
+    counts = _stream_source_counts(
+        chunks=[
+            {"id": "tenant-1", "source": "tenant_document"},
+            {"id": "cloud-1", "source": "cloud"},
+            {
+                "id": "courtlistener:1",
+                "source": "courtlistener_mcp",
+                "clause_type": "public_authority",
+            },
+            {
+                "id": "courtlistener:2",
+                "source_label": "Cited authority",
+                "source_type": "public_authority",
+            },
+        ],
+        cloud_hits=[{"id": "drive-hit"}],
+        has_matter_context=True,
+        attachment_count=2,
+    )
+
+    assert counts == {
+        "matter": 1,
+        "uploads": 2,
+        "firm": 3,
+        "courtlistener": 2,
+        "total": 8,
+    }
+
+
+def test_stream_progress_event_encodes_typed_sse_payload():
+    line = _stream_progress_event(
+        "sources_done",
+        {
+            "counts": {"matter": 1, "uploads": 0, "firm": 2, "courtlistener": 4},
+            "status": "Preparing answer with retrieved authority",
+        },
+    )
+
+    assert line.startswith("data: [PROGRESS]")
+    assert line.endswith("\n\n")
+    payload = line.removeprefix("data: [PROGRESS]").strip()
+    assert '"type": "progress"' in payload
+    assert '"event": "sources_done"' in payload
+    assert '"courtlistener": 4' in payload
 
 
 def test_auto_tier_respects_manual_premium_for_simple_queries():

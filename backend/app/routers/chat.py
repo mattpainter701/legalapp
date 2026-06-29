@@ -217,6 +217,45 @@ def _join_context_sections(*sections: str | None) -> str:
     )
 
 
+def _is_public_authority_chunk(chunk: dict) -> bool:
+    return (
+        chunk.get("source") == "courtlistener_mcp"
+        or chunk.get("source_type") == "public_authority"
+        or chunk.get("clause_type") == "public_authority"
+        or chunk.get("source_label") == "Cited authority"
+    )
+
+
+def _stream_source_counts(
+    *,
+    chunks: list[dict] | None,
+    cloud_hits: list | None,
+    has_matter_context: bool,
+    attachment_count: int,
+) -> dict:
+    public_count = 0
+    firm_chunk_count = 0
+    for chunk in chunks or []:
+        if _is_public_authority_chunk(chunk):
+            public_count += 1
+        else:
+            firm_chunk_count += 1
+
+    counts = {
+        "matter": 1 if has_matter_context else 0,
+        "uploads": max(0, int(attachment_count or 0)),
+        "firm": firm_chunk_count + len(cloud_hits or []),
+        "courtlistener": public_count,
+    }
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def _stream_progress_event(event: str, payload: dict | None = None) -> str:
+    data = {"type": "progress", "event": event, **(payload or {})}
+    return f"data: [PROGRESS]{json.dumps(data)}\n\n"
+
+
 def _auto_tier(query: str, user_requested_premium: bool) -> bool:
     """Determine whether to use the premium tier based on query complexity.
 
@@ -1445,6 +1484,13 @@ async def stream_message(
         matter_context_str,
         context_str,
     )
+    attachment_count = len(body.attachment_ids or [])
+    progress_counts = _stream_source_counts(
+        chunks=chunks,
+        cloud_hits=cloud_hits,
+        has_matter_context=bool(matter_context_str and matter_context_str.strip()),
+        attachment_count=attachment_count,
+    )
 
     # Create the streaming generator
     stream_user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
@@ -1452,6 +1498,20 @@ async def stream_message(
     async def stream_generator():
         try:
             tenant_name = user.tenant.name if user.tenant else "Legal"
+            yield _stream_progress_event(
+                "sources_done",
+                {
+                    "counts": progress_counts,
+                    "status": "Source retrieval complete",
+                },
+            )
+            yield _stream_progress_event(
+                "generation_started",
+                {
+                    "counts": progress_counts,
+                    "status": "Composing answer with retrieved authority",
+                },
+            )
 
             # Stream tokens from the LLM
             accumulated_text = ""

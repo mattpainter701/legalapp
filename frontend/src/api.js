@@ -205,19 +205,27 @@ export const streamMessage = async function* (conversationId, content, includePu
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
+  let buffer = ''
 
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
 
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const data = line.slice(6)
-          if (data && data !== '[STREAM_COMPLETE]' && !data.startsWith('[ERROR]')) {
+          if (data.startsWith('[PROGRESS]')) {
+            try {
+              yield JSON.parse(data.slice('[PROGRESS]'.length))
+            } catch {
+              // Ignore malformed progress metadata; token streaming should continue.
+            }
+          } else if (data && data !== '[STREAM_COMPLETE]' && !data.startsWith('[ERROR]')) {
             yield data
           } else if (data === '[STREAM_COMPLETE]' || data.startsWith('[ERROR]')) {
             yield data

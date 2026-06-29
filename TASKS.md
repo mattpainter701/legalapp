@@ -1,5 +1,27 @@
 # TASKS.md
 
+## Chat Streaming Progress Metadata — 2026-06-29 (DONE)
+
+**Goal:** Make the in-progress assistant card reflect live source retrieval
+state instead of static labels.
+
+- [x] Emit structured streaming progress metadata from chat SSE
+- [x] Count local matter/upload/cloud/private sources and CourtListener MCP sources
+- [x] Render dynamic source counts and safe generation status in the chat working card
+- [x] Build, test, commit, push, and deploy
+
+Summary: streaming chat now emits typed `[PROGRESS]` SSE events with source
+counts for matter context, uploads, firm/cloud/private retrieval, and
+CourtListener MCP authority. The frontend parser consumes progress metadata
+separately from text tokens, keeps per-message progress state, and renders live
+source counters plus safe query-focus wording before and during answer
+streaming. Verification: focused backend progress tests passed, backend chat
+router compiled, and the frontend production build passed. The existing
+endpoint-level streaming test still could not run locally because the test
+Postgres connection was refused.
+
+---
+
 ## Chat Transcript Active State Polish — 2026-06-29 (DONE)
 
 **Goal:** Remove duplicate-looking active chat cards and make in-progress

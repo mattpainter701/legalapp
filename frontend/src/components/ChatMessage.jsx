@@ -1,7 +1,18 @@
 import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { format } from 'date-fns'
-import { Book, Scale, Copy, Check, ExternalLink, Search, BookOpen, PenLine } from 'lucide-react'
+import {
+  Book,
+  Scale,
+  Copy,
+  Check,
+  ExternalLink,
+  Search,
+  BookOpen,
+  PenLine,
+  FileText,
+  FolderSearch,
+} from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
 
 function cleanSourceText(value) {
@@ -137,12 +148,61 @@ function SourcesLedger({ sources }) {
   )
 }
 
-function AssistantWorkingState() {
-  const steps = [
-    { icon: Search, label: 'Searching relevant sources' },
-    { icon: BookOpen, label: 'Checking cited authority' },
-    { icon: PenLine, label: 'Drafting answer' },
+function formatCount(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : 0
+}
+
+function AssistantWorkingState({ progress, compact = false }) {
+  const counts = progress?.counts || {}
+  const matterCount = formatCount(counts.matter)
+  const uploadCount = formatCount(counts.uploads)
+  const firmCount = formatCount(counts.firm)
+  const courtlistenerCount = formatCount(counts.courtlistener)
+  const localCount = matterCount + uploadCount + firmCount
+  const focusTerms = Array.isArray(progress?.keyphrases)
+    ? progress.keyphrases.filter(Boolean).slice(0, 4)
+    : []
+  const status = progress?.status || 'Retrieving context and preparing a cited response'
+  const sourceTiles = [
+    { icon: Scale, label: 'Matter', value: matterCount },
+    { icon: FileText, label: 'Uploads', value: uploadCount },
+    { icon: FolderSearch, label: 'Firm/cloud', value: firmCount },
+    { icon: BookOpen, label: 'CourtListener', value: courtlistenerCount },
   ]
+  const steps = [
+    {
+      icon: Search,
+      label: localCount > 0 ? `${localCount} local source${localCount === 1 ? '' : 's'} found` : 'Searching local sources',
+    },
+    {
+      icon: BookOpen,
+      label: courtlistenerCount > 0 ? `${courtlistenerCount} CourtListener source${courtlistenerCount === 1 ? '' : 's'} found` : 'Checking CourtListener authority',
+    },
+    {
+      icon: PenLine,
+      label: focusTerms.length ? `Streaming answer focus: ${focusTerms.join(', ')}` : status,
+    },
+  ]
+
+  if (compact) {
+    return (
+      <div className="mb-4 border border-brand-line bg-brand-bg px-3 py-2 text-xs text-brand-ink-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono font-bold uppercase tracking-widest text-brand-muted">
+            {status}
+          </span>
+          <span className="text-brand-line-2">|</span>
+          <span>{localCount} local</span>
+          <span>{courtlistenerCount} CourtListener</span>
+          {focusTerms.length > 0 && (
+            <span className="min-w-0 truncate text-brand-muted">
+              Focus: {focusTerms.join(', ')}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="border border-brand-line bg-brand-bg p-4">
@@ -152,7 +212,7 @@ function AssistantWorkingState() {
         </div>
         <div className="min-w-0 text-left">
           <p className="font-sans text-sm font-semibold text-brand-ink">Clarity Legal is working</p>
-          <p className="text-xs text-brand-muted">Retrieving context and preparing a cited response</p>
+          <p className="text-xs text-brand-muted">{status}</p>
         </div>
         <div className="ml-auto flex items-center gap-1.5" aria-label="Working">
           <span className="h-1.5 w-1.5 animate-bounce bg-brand-muted" style={{ animationDelay: '0ms' }} />
@@ -160,11 +220,22 @@ function AssistantWorkingState() {
           <span className="h-1.5 w-1.5 animate-bounce bg-brand-muted" style={{ animationDelay: '300ms' }} />
         </div>
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+      <div className="mt-4 grid gap-2 sm:grid-cols-4">
+        {sourceTiles.map(({ icon: Icon, label, value }) => (
+          <div key={label} className="flex items-center justify-between gap-2 border border-brand-line bg-brand-surface px-3 py-2 text-xs">
+            <span className="flex min-w-0 items-center gap-2 text-brand-ink-2">
+              <Icon className="h-3.5 w-3.5 shrink-0 text-brand-muted" strokeWidth={2} />
+              <span className="truncate">{label}</span>
+            </span>
+            <span className="font-mono font-bold text-brand-ink">{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
         {steps.map(({ icon: Icon, label }) => (
           <div key={label} className="flex items-center gap-2 border border-brand-line bg-brand-surface px-3 py-2 text-xs text-brand-ink-2">
             <Icon className="h-3.5 w-3.5 text-brand-muted" strokeWidth={2} />
-            <span>{label}</span>
+            <span className="min-w-0 truncate" title={label}>{label}</span>
           </div>
         ))}
       </div>
@@ -237,9 +308,14 @@ export default function ChatMessage({ message }) {
         {/* Body */}
         <div className="text-brand-ink text-[15px]">
           {hasAssistantContent ? (
-            <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
+            <>
+              {message.progress && !message.progress.complete && (
+                <AssistantWorkingState progress={message.progress} compact />
+              )}
+              <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
+            </>
           ) : (
-            <AssistantWorkingState />
+            <AssistantWorkingState progress={message.progress} />
           )}
         </div>
 

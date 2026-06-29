@@ -24,6 +24,12 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat streaming progress metadata:** chat streaming now emits typed
+  `[PROGRESS]` SSE events with live counts for matter context, uploads,
+  firm/cloud/private retrieval, and CourtListener MCP authority. The frontend
+  stream parser consumes those events separately from text tokens, and the
+  assistant working state now renders dynamic source counters plus safe
+  query-focus wording before and during answer streaming.
 - **Chat transcript active state:** simplified the user query card header to
   `You · time`, moved query copy into a small hover control, and replaced the
   duplicate streaming typing card with a single assistant working state that

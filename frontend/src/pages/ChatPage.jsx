@@ -45,6 +45,51 @@ function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbac
   return next
 }
 
+function deriveKeyphrases(text) {
+  const stopWords = new Set([
+    'about', 'after', 'before', 'case', 'cases', 'could', 'from', 'have',
+    'legal', 'need', 'that', 'their', 'there', 'this', 'what', 'when',
+    'where', 'which', 'with', 'would',
+  ])
+  return String(text || '')
+    .split(/[^A-Za-z0-9]+/)
+    .map((word) => word.trim())
+    .filter((word) => word && (word.length > 2 || /^[A-Z]{2}$/.test(word)))
+    .filter((word) => !stopWords.has(word.toLowerCase()))
+    .slice(0, 5)
+}
+
+function initialStreamProgress(content, attachmentCount) {
+  const uploads = Number.isFinite(attachmentCount) ? attachmentCount : 0
+  return {
+    type: 'progress',
+    event: 'retrieving',
+    status: 'Retrieving source material',
+    keyphrases: deriveKeyphrases(content),
+    counts: {
+      matter: 0,
+      uploads,
+      firm: 0,
+      courtlistener: 0,
+      total: uploads,
+    },
+  }
+}
+
+function mergeStreamProgress(current, event, content) {
+  if (!event || event.type !== 'progress') return current
+  const counts = {
+    ...(current?.counts || {}),
+    ...(event.counts || {}),
+  }
+  return {
+    ...(current || {}),
+    ...event,
+    counts,
+    keyphrases: event.keyphrases || current?.keyphrases || deriveKeyphrases(content),
+  }
+}
+
 export default function ChatPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -269,11 +314,13 @@ export default function ChatPage() {
 
     try {
       const assistantMsgId = `stream-${Date.now()}`
+      let streamProgress = initialStreamProgress(content, attachmentIds.length)
       const assistantMsg = {
         id: assistantMsgId,
         role: 'assistant',
         content: '',
         sources: [],
+        progress: streamProgress,
         created_at: new Date().toISOString(),
       }
       setMessages((prev) => [...prev, assistantMsg])
@@ -282,12 +329,31 @@ export default function ChatPage() {
       let streamError = null
 
       for await (const token of streamMessage(convId, content, includePublic, usePremium, attachmentIds)) {
+        if (token?.type === 'progress') {
+          streamProgress = mergeStreamProgress(streamProgress, token, content)
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId
+                ? { ...msg, progress: streamProgress }
+                : msg
+            )
+          )
+          continue
+        }
         if (token === '[STREAM_COMPLETE]') {
+          streamProgress = { ...streamProgress, complete: true, status: 'Response complete' }
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId
+                ? { ...msg, progress: streamProgress }
+                : msg
+            )
+          )
           break
-        } else if (token.startsWith('[ERROR]')) {
+        } else if (typeof token === 'string' && token.startsWith('[ERROR]')) {
           streamError = token.slice(7)
           break
-        } else {
+        } else if (typeof token === 'string') {
           accumulatedText += token
           setMessages((prev) =>
             prev.map((msg) =>
@@ -303,7 +369,7 @@ export default function ChatPage() {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMsgId
-              ? { ...msg, content: `An error occurred: ${streamError}` }
+              ? { ...msg, content: `An error occurred: ${streamError}`, progress: { ...streamProgress, complete: true } }
               : msg
           )
         )
@@ -319,6 +385,7 @@ export default function ChatPage() {
             mergeRefreshedTranscript(refreshed.messages, userMessage, {
               ...assistantMsg,
               content: accumulatedText,
+              progress: { ...streamProgress, complete: true },
             })
           )
           setActiveConvTitle(refreshed.conversation?.title || activeConvTitle)
