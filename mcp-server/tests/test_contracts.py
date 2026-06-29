@@ -148,6 +148,9 @@ def test_repository_hybrid_search_uses_vector_and_fts_when_embedding_available()
     assert "websearch_to_tsquery" in sql
     assert "dense_rank" in sql
     assert "fts_rank" in sql
+    assert "source_url" in sql
+    assert "{{0,cite}}" not in sql
+    assert "{0,cite}" in sql
     assert any(isinstance(param, str) and param.startswith("[0.001") for param in params)
 
 
@@ -164,6 +167,8 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
 
     assert "embedding <=>" not in sql
     assert "websearch_to_tsquery" in sql
+    assert "source_url" in sql
+    assert "{0,cite}" in sql
 
 
 def test_repository_normalizes_messy_citation_before_lookup():

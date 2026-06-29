@@ -90,7 +90,7 @@ class CourtListenerRepository:
                    cl.case_name,
                    cl.date_filed, oc.court_id, c.full_name AS court_name, oc.content,
                    COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
-                   COALESCE(cl.citations #>> '{0,cite}', cl.citations #>> '{0}', '') AS citation,
+                   COALESCE(cl.citations #>> '{{0,cite}}', cl.citations #>> '{{0}}', '') AS citation,
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS rank,
                    ts_rank_cd(oc.fts, websearch_to_tsquery('english', %s)) AS keyword_rank,
                    NULL::float AS similarity,
@@ -127,7 +127,7 @@ class CourtListenerRepository:
                        oc.chunk_index, cl.case_name, cl.date_filed, oc.court_id,
                        c.full_name AS court_name, oc.content,
                        COALESCE(NULLIF(o.source_url, ''), '/opinion/' || oc.opinion_id::text || '/') AS source_url,
-                       COALESCE(cl.citations #>> '{0,cite}', cl.citations #>> '{0}', '') AS citation,
+                       COALESCE(cl.citations #>> '{{0,cite}}', cl.citations #>> '{{0}}', '') AS citation,
                        oc.fts, oc.embedding
                 FROM opinion_chunks oc
                 JOIN opinion_clusters cl ON cl.cluster_id = oc.cluster_id

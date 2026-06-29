@@ -30,7 +30,9 @@
   chat source records, and renders authority citations as external links with
   color-coded provenance badges for cited authority, cloud context, matter
   context, and firm context. Inline provenance tags now also recognize model
-  reasoning, well known fact, cited by context, and firm context aliases.
+  reasoning, well known fact, cited by context, and firm context aliases. MCP
+  search SQL now escapes JSON-path braces correctly while returning source URL
+  and citation metadata.
 - **Chat/MCP matter and cloud context hardening:** conversation creation now
   rejects invalid or cross-tenant `matter_id` values instead of persisting an
   unvalidated FK. Chat message handling computes one validated effective matter

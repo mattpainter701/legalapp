@@ -22,7 +22,9 @@ badges for cited authority, cloud context, matter context, and firm context.
 Markdown provenance aliases for model reasoning, well known fact, cited by
 context, and firm context now render as colored inline tags.
 Verification: focused chat/RAG source tests passed, `backend/app` and
-`mcp-server/mcp_server` compiled, and frontend production build passed. The
+`mcp-server/mcp_server` compiled, MCP contract tests passed, frontend
+production build passed, and production deploy smoke caught and fixed the MCP
+SQL JSON-path f-string escaping issue before handoff. The
 local endpoint chat tests that require Postgres still could not run because the
 local test database refused connections.
 
