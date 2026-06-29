@@ -1912,19 +1912,24 @@ function ClientPortalTab({ matterId, matter }) {
   const [email, setEmail] = useState(matter?.client?.email || '')
   const [creating, setCreating] = useState(false)
   const [lastUrl, setLastUrl] = useState('')
+  const [deliveryWarning, setDeliveryWarning] = useState('')
   const [err, setErr] = useState('')
 
   const load = useCallback(() => {
-    listMatterPortalInvites(matterId).then(setInvites).catch(() => {})
+    setErr('')
+    listMatterPortalInvites(matterId)
+      .then(setInvites)
+      .catch(() => setErr('Unable to load portal invitations. Please refresh and try again.'))
   }, [matterId])
   useEffect(() => { load() }, [load])
 
   const invite = async (e) => {
     e.preventDefault()
-    setErr(''); setLastUrl(''); setCreating(true)
+    setErr(''); setLastUrl(''); setDeliveryWarning(''); setCreating(true)
     try {
       const res = await createMatterPortalInvite(matterId, email ? { email } : {})
       setLastUrl(res.invite_url || '')
+      setDeliveryWarning(res.email_sent === false ? (res.delivery_error || 'Email delivery was not confirmed. Copy and share the invite link manually.') : '')
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create invite')
@@ -1934,8 +1939,13 @@ function ClientPortalTab({ matterId, matter }) {
   }
 
   const revoke = async (inviteId) => {
-    await revokeMatterPortalInvite(matterId, inviteId).catch(() => {})
-    load()
+    setErr('')
+    try {
+      await revokeMatterPortalInvite(matterId, inviteId)
+      load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Failed to revoke invite')
+    }
   }
 
   return (
@@ -1974,8 +1984,11 @@ function ClientPortalTab({ matterId, matter }) {
         {err && <p className="text-sm text-brand-rose">{err}</p>}
         {lastUrl && (
           <div className="bg-brand-green/10 border border-brand-green/20 rounded-lg px-4 py-3 text-sm">
-            <p className="text-brand-ink font-medium mb-1">Invite sent. Shareable link:</p>
+            <p className="text-brand-ink font-medium mb-1">
+              {deliveryWarning ? 'Invite created. Shareable link:' : 'Invite sent. Shareable link:'}
+            </p>
             <code className="text-xs text-brand-ink-2 break-all">{lastUrl}</code>
+            {deliveryWarning && <p className="text-xs text-brand-rose mt-2">{deliveryWarning}</p>}
           </div>
         )}
 

@@ -1,5 +1,27 @@
 # TASKS.md
 
+## Client Portal Security And UX Remediation — 2026-06-29 (DONE)
+
+**Goal:** Close the customer portal gaps found in review before broader rollout.
+
+- [x] Revoke active client-portal sessions when an invite is revoked
+- [x] Bind portal signature actions to the invited contact/email
+- [x] Isolate client-portal auth from firm-app auth cookies
+- [x] Surface invite/email/load/upload failures in the portal UX
+- [x] Add focused regression tests and verification
+
+Summary: client portal sessions now use a dedicated `client_portal_token`
+cookie and JWTs are bound to the accepted invite ID. Protected portal requests
+fail closed when the invite is revoked/expired/missing or when a legacy token
+has no invite scope. Portal signature listing/signing is limited to pending
+signers matching the portal contact or invite email. Client-facing portal tabs
+and the firm-side portal panel now show load/send/upload/revoke/email-delivery
+failures instead of silent empty states. Verification: focused portal security
+tests passed, targeted backend compile passed, and frontend production build
+passed.
+
+---
+
 ## CourtListener MVP Scheduler Runtime Posture — 2026-06-29 (DONE)
 
 **Goal:** Keep the built embedding scheduler available but not actively running

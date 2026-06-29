@@ -37,7 +37,12 @@ def create_portal_token(
 
 
 def create_matter_portal_token(
-    *, tenant_id: str, matter_id: str, contact_id: str | None, email: str | None
+    *,
+    tenant_id: str,
+    matter_id: str,
+    contact_id: str | None,
+    email: str | None,
+    invite_id: str | None = None,
 ) -> str:
     """Short-lived, matter-scoped JWT for a firm client accessing the portal.
 
@@ -52,6 +57,7 @@ def create_matter_portal_token(
         "matter_id": str(matter_id),
         "contact_id": str(contact_id) if contact_id else None,
         "email": email,
+        "invite_id": str(invite_id) if invite_id else None,
         "iat": now,
         "jti": str(uuid.uuid4()),
         "exp": now + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),

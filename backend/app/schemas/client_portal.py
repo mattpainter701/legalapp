@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-
 # ── Invite acceptance (client side) ─────────────────────────────────────────
 
 
@@ -98,6 +97,8 @@ class FirmInviteResponse(BaseModel):
     matter_id: str
     email: str | None = None
     invite_url: str | None = None
+    email_sent: bool | None = None
+    delivery_error: str | None = None
     expires_at: datetime
     accepted_at: datetime | None = None
     revoked: bool

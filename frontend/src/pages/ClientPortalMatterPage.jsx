@@ -176,9 +176,16 @@ function MessagesTab() {
   const [messages, setMessages] = useState([])
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
 
   const load = useCallback(() => {
-    listClientPortalMessages().then(setMessages).catch(() => {})
+    setLoading(true)
+    setErr('')
+    listClientPortalMessages()
+      .then(setMessages)
+      .catch(() => setErr('Unable to load messages. Please retry or contact your legal team.'))
+      .finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -186,10 +193,13 @@ function MessagesTab() {
     e.preventDefault()
     if (!body.trim()) return
     setSending(true)
+    setErr('')
     try {
       await sendClientPortalMessage({ body })
       setBody('')
       load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Unable to send your message. Please try again.')
     } finally {
       setSending(false)
     }
@@ -197,8 +207,11 @@ function MessagesTab() {
 
   return (
     <div className="space-y-4">
+      {err && <p className="text-sm text-brand-rose">{err}</p>}
       <Card>
-        {messages.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-brand-ink-2">Loading messages…</p>
+        ) : messages.length === 0 ? (
           <p className="text-sm text-brand-ink-2">No messages yet. Send your legal team a message below.</p>
         ) : (
           <ul className="space-y-3">
@@ -243,9 +256,16 @@ function MessagesTab() {
 function DocumentsTab() {
   const [docs, setDocs] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
 
   const load = useCallback(() => {
-    listClientPortalDocuments().then(setDocs).catch(() => {})
+    setLoading(true)
+    setErr('')
+    listClientPortalDocuments()
+      .then(setDocs)
+      .catch(() => setErr('Unable to load documents. Please retry or contact your legal team.'))
+      .finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -253,9 +273,12 @@ function DocumentsTab() {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
+    setErr('')
     try {
       await uploadClientPortalDocument(file)
       load()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'Upload failed. Please try again.')
     } finally {
       setUploading(false)
       e.target.value = ''
@@ -264,6 +287,7 @@ function DocumentsTab() {
 
   return (
     <div className="space-y-4">
+      {err && <p className="text-sm text-brand-rose">{err}</p>}
       <div className="flex justify-end">
         <label className="px-4 py-2.5 bg-brand-ink text-white text-sm font-sans font-medium rounded-xl hover:bg-brand-ink-2 transition-all cursor-pointer flex items-center gap-2">
           <Upload size={16} /> {uploading ? 'Uploading…' : 'Upload document'}
@@ -271,7 +295,9 @@ function DocumentsTab() {
         </label>
       </div>
       <Card>
-        {docs.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-brand-ink-2">Loading documents…</p>
+        ) : docs.length === 0 ? (
           <p className="text-sm text-brand-ink-2">No shared documents yet.</p>
         ) : (
           <ul className="divide-y divide-brand-line">
@@ -306,9 +332,15 @@ function SignaturesTab() {
   const [signing, setSigning] = useState(null) // request id being signed
   const [typed, setTyped] = useState('')
   const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
-    listClientPortalSignatures().then(setRequests).catch(() => {})
+    setLoading(true)
+    setErr('')
+    listClientPortalSignatures()
+      .then(setRequests)
+      .catch(() => setErr('Unable to load signature requests. Please retry or contact your legal team.'))
+      .finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -327,9 +359,18 @@ function SignaturesTab() {
     }
   }
 
+  if (loading) {
+    return (
+      <Card>
+        <p className="text-sm text-brand-ink-2">Loading signature requests…</p>
+      </Card>
+    )
+  }
+
   if (requests.length === 0) {
     return (
       <Card>
+        {err && <p className="text-sm text-brand-rose mb-2">{err}</p>}
         <p className="text-sm text-brand-ink-2">No documents are awaiting your signature.</p>
       </Card>
     )
@@ -356,7 +397,7 @@ function SignaturesTab() {
           </ul>
           <div className="flex gap-2">
             <input
-              value={signing === req.id ? typed : typed}
+              value={typed}
               onChange={(e) => setTyped(e.target.value)}
               placeholder="Type your full name to sign"
               className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
@@ -377,13 +418,23 @@ function SignaturesTab() {
 
 function InvoicesTab() {
   const [invoices, setInvoices] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
   useEffect(() => {
-    listClientPortalInvoices().then(setInvoices).catch(() => {})
+    setLoading(true)
+    setErr('')
+    listClientPortalInvoices()
+      .then(setInvoices)
+      .catch(() => setErr('Unable to load invoices. Please retry or contact your legal team.'))
+      .finally(() => setLoading(false))
   }, [])
 
   return (
     <Card>
-      {invoices.length === 0 ? (
+      {err && <p className="text-sm text-brand-rose mb-2">{err}</p>}
+      {loading ? (
+        <p className="text-sm text-brand-ink-2">Loading invoices…</p>
+      ) : invoices.length === 0 ? (
         <p className="text-sm text-brand-ink-2">No invoices to show.</p>
       ) : (
         <ul className="divide-y divide-brand-line">

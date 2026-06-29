@@ -21,7 +21,7 @@ from app.middleware.tenant import get_current_user
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
 from app.models.signature import SignatureRequest, SignatureSigner
-from app.routers.client_portal import get_client_portal_context
+from app.routers.client_portal import ClientPortalContext, get_client_portal_context
 from app.schemas.signature import (
     PortalSignRequest,
     SignatureRequestCreate,
@@ -95,6 +95,20 @@ async def _load_request(
     if req is None:
         raise HTTPException(status_code=404, detail="Signature request not found")
     return req
+
+
+def _portal_signer_matches_context(
+    signer: SignatureSigner, ctx: ClientPortalContext
+) -> bool:
+    if (
+        ctx.contact_id
+        and signer.contact_id
+        and str(signer.contact_id) == str(ctx.contact_id)
+    ):
+        return True
+    if ctx.email and signer.email:
+        return signer.email.strip().lower() == ctx.email.strip().lower()
+    return False
 
 
 # ── Firm side ───────────────────────────────────────────────────────────────
@@ -271,7 +285,15 @@ async def portal_list_signatures(
         )
         .order_by(SignatureRequest.created_at.desc())
     )
-    return [await _to_response(db, r) for r in result.scalars().all()]
+    requests = [
+        r
+        for r in result.scalars().all()
+        if any(
+            s.status == "pending" and _portal_signer_matches_context(s, ctx)
+            for s in r.signers
+        )
+    ]
+    return [await _to_response(db, r) for r in requests]
 
 
 @portal_router.post(
@@ -310,15 +332,25 @@ async def portal_sign(
         signer = next((s for s in req.signers if str(s.id) == body.signer_id), None)
         if signer is None:
             raise HTTPException(status_code=404, detail="Signer not found")
+        if not _portal_signer_matches_context(signer, ctx):
+            raise HTTPException(
+                status_code=403, detail="Signer does not match portal session"
+            )
         if signer.status != "pending":
             raise HTTPException(status_code=409, detail="Signer already actioned")
     else:
         pending = sorted(
-            (s for s in req.signers if s.status == "pending"),
+            (
+                s
+                for s in req.signers
+                if s.status == "pending" and _portal_signer_matches_context(s, ctx)
+            ),
             key=lambda s: s.sign_order,
         )
         if not pending:
-            raise HTTPException(status_code=409, detail="No pending signers")
+            raise HTTPException(
+                status_code=403, detail="No pending signer for this portal session"
+            )
         signer = pending[0]
 
     ip = request.client.host if request.client else None

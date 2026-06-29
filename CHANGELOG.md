@@ -29,6 +29,14 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Client portal security and UX:** client portal sessions now use a dedicated
+  `client_portal_token` cookie instead of overwriting firm-app auth, portal JWTs
+  carry the accepted invite ID, and portal requests fail closed if the invite is
+  revoked, expired, missing, or from a legacy token without invite scope. Portal
+  signature requests now list/sign only pending signers matching the portal
+  contact or invite email. Client and firm portal screens now surface message,
+  document, signature, invoice, invite-load, revoke, upload, and email-delivery
+  failures instead of silently showing empty states.
 - **CourtListener scheduler runtime posture:** stopped the live
   `embedding-scheduler` sidecar after validation and documented that, during
   MVP/test-hardware operation, the scheduler should remain off unless a bounded
@@ -151,6 +159,13 @@
 - **Subscription billing placement:** moved Clarity/Stripe subscription billing into the Admin portal as a Subscription tab, removed it from the workspace accounting sidebar, and redirects legacy `/billing` visits to `/admin?tab=billing` for admins.
 - **Chat/assistant not falling back to general reasoning or indicating confidence tags (v2):** Second pass on `SYSTEM_PROMPT_TEMPLATE` in `app/services/llm.py`. Added negative examples (WRONG vs RIGHT), explicit "do NOT explain your reasoning process" rule, "greet in 1-2 words then answer" simplification, and a direct "if user types 2+2, reply 4" non-legal-query example. The free-tier models were reading the old prompt as rules to explain rather than follow.
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
+
+### Tests
+- **Client portal remediation:** added unit regressions for invite-bound portal
+  JWTs, dedicated portal cookie naming, revoked invite rejection, legacy token
+  rejection, and contact/email-bound portal signer matching. Verification:
+  `py -m pytest backend/tests/test_client_portal_security.py -q`, targeted
+  backend compile, and `npm run build`.
 
 ### Added
 - **Call Inbox dashboard redesign:** reworked the intake dashboard into a two-pane "Call Inbox" — a left-hand unified call feed that auto-refreshes every 15s (visibility-aware polling) and a right-hand work panel (caller facts → auto-searched history → pre-filled capture/route form). New calls (manual or webhook-imported) surface within ~15s with an in-page toast + WebAudio chime; mute toggle persisted per tenant. The `recent-callers` feed now exposes `source`, `answered_by`, `result`, `duration_seconds`, and recording/transcript URLs, accepts `limit=5`, and batches its enrichment queries (was N+1 per row). Source-agnostic framing: integration controls (Sync, source filter) appear only when the tenant has a connected call source, so a manual-only tenant sees a clean inbox. New `frontend/src/hooks/useCallFeedPolling.js`, `useCallAlerts.js`, and `components/intake/` (CallFeed, CallFeedItem, CallFacts, NewCallToasts, RecordsTabs).

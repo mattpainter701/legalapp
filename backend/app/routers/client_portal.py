@@ -68,6 +68,7 @@ settings = get_settings()
 matter_file_store = MatterFileStore()
 
 INVITE_TTL_DAYS = 14
+CLIENT_PORTAL_COOKIE_NAME = "client_portal_token"
 
 router = APIRouter(prefix="/api/portal/client", tags=["client-portal"])
 firm_router = APIRouter(prefix="/api/matters", tags=["client-portal-admin"])
@@ -79,13 +80,27 @@ firm_router = APIRouter(prefix="/api/matters", tags=["client-portal-admin"])
 class ClientPortalContext:
     """Resolved identity for a client-portal request (magic-link, no User row)."""
 
-    def __init__(self, *, tenant_id: str, matter_id: str, contact_id: str | None):
+    def __init__(
+        self,
+        *,
+        tenant_id: str,
+        matter_id: str,
+        contact_id: str | None,
+        email: str | None = None,
+        invite_id: str | None = None,
+    ):
         self.tenant_id = tenant_id
         self.matter_id = matter_id
         self.contact_id = contact_id
+        self.email = email
+        self.invite_id = invite_id
 
 
 def _read_token(request: Request) -> str | None:
+    token = request.cookies.get(CLIENT_PORTAL_COOKIE_NAME)
+    if token:
+        return token
+    # Compatibility for portal sessions minted before the dedicated cookie.
     token = request.cookies.get("access_token")
     if token:
         return token
@@ -119,34 +134,58 @@ async def get_client_portal_context(
         redis = getattr(request.app.state, "redis", None)
         if redis:
             if await redis.exists(f"jti:{jti}"):
-                raise HTTPException(status_code=401, detail="Portal session has been revoked")
+                raise HTTPException(
+                    status_code=401, detail="Portal session has been revoked"
+                )
         else:
             blacklist = getattr(request.app.state, "jti_blacklist", {})
             ts = blacklist.get(jti)
             if ts and _time.time() < ts:
-                raise HTTPException(status_code=401, detail="Portal session has been revoked")
+                raise HTTPException(
+                    status_code=401, detail="Portal session has been revoked"
+                )
 
     tenant_id = payload.get("tenant_id")
     matter_id = payload.get("matter_id")
     if not tenant_id or not matter_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     await set_tenant_context(db, str(tenant_id))
+
+    invite_id = payload.get("invite_id")
+    if not invite_id:
+        raise HTTPException(status_code=401, detail="Portal session must be renewed")
+    result = await db.execute(
+        select(ClientPortalInvite).where(
+            ClientPortalInvite.id == invite_id,
+            ClientPortalInvite.tenant_id == tenant_id,
+            ClientPortalInvite.matter_id == matter_id,
+        )
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None or invite.revoked:
+        raise HTTPException(status_code=401, detail="Portal session has been revoked")
+    if invite.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Portal session has expired")
+
     return ClientPortalContext(
         tenant_id=str(tenant_id),
         matter_id=str(matter_id),
         contact_id=payload.get("contact_id"),
+        email=payload.get("email"),
+        invite_id=str(invite_id) if invite_id else None,
     )
 
 
 def _set_cookie(response: Response, token: str) -> None:
     is_production = settings.BACKEND_URL.startswith("https://")
     response.set_cookie(
-        key="access_token",
+        key=CLIENT_PORTAL_COOKIE_NAME,
         value=token,
         httponly=True,
         secure=is_production,
         samesite="Lax",
         max_age=PORTAL_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
     )
 
 
@@ -193,6 +232,7 @@ async def accept_invite(
         matter_id=str(invite.matter_id),
         contact_id=str(invite.contact_id) if invite.contact_id else None,
         email=invite.email,
+        invite_id=str(invite.id),
     )
     await db.commit()
     _set_cookie(response, token)
@@ -512,6 +552,8 @@ async def create_portal_invite(
     invite_url = (
         f"{settings.FRONTEND_URL.rstrip('/')}/portal/client/accept?token={raw_token}"
     )
+    email_sent = True
+    delivery_error = None
     try:
         await send_client_portal_invite(
             to_email=email,
@@ -519,13 +561,18 @@ async def create_portal_invite(
             invite_url=invite_url,
         )
     except Exception:  # pragma: no cover - email best-effort
-        pass
+        email_sent = False
+        delivery_error = (
+            "Email delivery was not confirmed. Copy and share the invite link manually."
+        )
 
     return FirmInviteResponse(
         id=str(invite.id),
         matter_id=str(matter.id),
         email=invite.email,
         invite_url=invite_url,
+        email_sent=email_sent,
+        delivery_error=delivery_error,
         expires_at=invite.expires_at,
         accepted_at=invite.accepted_at,
         revoked=invite.revoked,
