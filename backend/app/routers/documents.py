@@ -42,6 +42,21 @@ def _document_to_response(doc: Document) -> DocumentResponse:
     )
 
 
+async def _persist_uploaded_document(db: AsyncSession, doc: Document) -> DocumentResponse:
+    """Persist upload row while tenant RLS context is still active."""
+    db.add(doc)
+    await db.flush()
+    await db.refresh(doc)
+    response = _document_to_response(doc)
+    await db.commit()
+    return response
+
+
+async def _commit_and_restore_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    await db.commit()
+    await set_tenant_context(db, tenant_id)
+
+
 async def _process_document(document_id: str, tenant_id: str) -> None:
     """
     Background task: extract text, chunk, embed, and store chunks.
@@ -50,6 +65,7 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
     """
     async with async_session_maker() as db:
         try:
+            await set_tenant_context(db, tenant_id)
             # Fetch the document
             result = await db.execute(
                 select(Document).where(Document.id == document_id)
@@ -61,7 +77,7 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
 
             # Update status to processing
             doc.status = "processing"
-            await db.commit()
+            await _commit_and_restore_tenant_context(db, tenant_id)
 
             # Read file bytes
             if not doc.storage_path or not os.path.exists(doc.storage_path):
@@ -125,6 +141,7 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             await db.rollback()
             # Attempt to mark document as errored
             try:
+                await set_tenant_context(db, tenant_id)
                 result = await db.execute(
                     select(Document).where(Document.id == document_id)
                 )
@@ -214,9 +231,7 @@ async def upload_document(
         status="pending",
         chunk_count=0,
     )
-    db.add(doc)
-    await db.commit()
-    await db.refresh(doc)
+    response = await _persist_uploaded_document(db, doc)
 
     # Launch background processing task
     background_tasks.add_task(
@@ -225,7 +240,7 @@ async def upload_document(
         tenant_id=str(user.tenant_id),
     )
 
-    return _document_to_response(doc)
+    return response
 
 
 @router.delete("/{document_id}", status_code=204)

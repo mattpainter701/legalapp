@@ -38,6 +38,13 @@ const CITATION_PATTERNS = [
     classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
   },
   {
+    regex: /\[cited by context:\s*([^\]]*)\]/gi,
+    label: null,
+    classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+    dynamic: true,
+    prefix: 'cited by context: ',
+  },
+  {
     regex: /\[firm context\]/gi,
     label: 'firm context',
     classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',

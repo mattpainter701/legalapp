@@ -24,6 +24,12 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Chat context language and document upload:** replaced model-visible
+  `FIRM CONTEXT` prompt wording with source-material language, added guardrails
+  that rewrite old/custom `[FIRM CONTEXT: ...]` tags to user-safe cited-context
+  provenance tags, and renders those tags as colored badges. General document
+  upload now refreshes before commit while tenant RLS context is active, and
+  background document processing binds tenant context in its worker session.
 - **Chat source attribution UX:** chat now keeps the submitted question visible
   if the post-stream conversation refresh returns stale data, strips raw
   CourtListener HTML from source citations/excerpts, carries MCP case URLs into

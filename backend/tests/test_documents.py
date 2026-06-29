@@ -1,9 +1,49 @@
 """Tests for document upload and listing."""
 
 import io
+import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+
+from app.routers.documents import _persist_uploaded_document
+
+
+class RecordingSession:
+    def __init__(self):
+        self.calls = []
+
+    def add(self, doc):
+        self.calls.append("add")
+
+    async def flush(self):
+        self.calls.append("flush")
+
+    async def refresh(self, doc):
+        self.calls.append("refresh")
+
+    async def commit(self):
+        self.calls.append("commit")
+
+
+@pytest.mark.asyncio
+async def test_upload_persistence_refreshes_before_commit_for_rls_context():
+    session = RecordingSession()
+    doc = SimpleNamespace(
+        id=uuid.uuid4(),
+        filename="test.txt",
+        content_type="text/plain",
+        file_size=4,
+        status="pending",
+        chunk_count=0,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    await _persist_uploaded_document(session, doc)
+
+    assert session.calls == ["add", "flush", "refresh", "commit"]
 
 
 @pytest.mark.asyncio

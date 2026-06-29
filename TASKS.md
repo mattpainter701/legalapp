@@ -1,5 +1,28 @@
 # TASKS.md
 
+## Chat Context Language And Upload Repair — 2026-06-29 — IN PROGRESS
+
+**Goal:** Stop internal prompt/source bucket language from leaking into chat
+answers and repair chat/document upload 500s in production.
+
+- [x] Replace model-visible `FIRM CONTEXT` wording with user-safe source language
+- [x] Normalize legacy/custom `[FIRM CONTEXT: ...]` tags out of assistant output
+- [x] Restore chat/document upload success path
+- [x] Add focused prompt/output/upload regression coverage
+- [ ] Deploy and smoke test production
+
+Summary: chat prompts now use `SOURCE MATERIALS` instead of the internal
+`FIRM CONTEXT` label and instruct the model not to expose internal source bucket
+labels. Guardrails rewrite old/custom `[FIRM CONTEXT: ...]` tags to
+`[cited by context: ...]`, and the markdown renderer displays those as
+provenance badges. General document upload now flushes and refreshes before
+commit while tenant RLS context is still active, and the background document
+processor binds tenant context in its fresh session.
+Verification so far: focused prompt/guardrail/upload tests passed, backend
+compile passed, and frontend production build passed.
+
+---
+
 ## Chat UX Source Attribution Polish — 2026-06-29 (DONE)
 
 **Goal:** Fix chat transcript and attribution regressions: preserve the visible

@@ -53,3 +53,16 @@ def test_guardrails_triggers_retry():
     text = "As an AI language model, I think the contract is fine."
     _, needs_retry, _ = apply_guardrails(text)
     assert needs_retry is True
+
+
+def test_guardrails_rewrites_internal_context_tags():
+    text = (
+        "State v. Robertson discusses search warrants. "
+        "[FIRM CONTEXT: State v. Robertson]"
+    )
+
+    cleaned, needs_retry, _ = apply_guardrails(text)
+
+    assert needs_retry is False
+    assert "FIRM CONTEXT" not in cleaned
+    assert "[cited by context: State v. Robertson]" in cleaned

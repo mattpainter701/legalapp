@@ -36,6 +36,11 @@ PHRASE_REPLACEMENTS = {
     "artificial intelligence": "legal research technology",
 }
 
+INTERNAL_CONTEXT_TAG_RE = re.compile(
+    r"\[\s*FIRM\s+CONTEXT\s*(?::\s*([^\]]+?))?\s*\]",
+    re.IGNORECASE,
+)
+
 # Legal citation pattern: Smith v. Jones, 123 F.3d 456, (2023), No. 22-1234
 CITATION_PATTERN = re.compile(
     r"""
@@ -66,7 +71,20 @@ def sanitize_response(text: str) -> str:
         # Case-insensitive replacement preserving sentence structure
         pattern = re.compile(re.escape(phrase), re.IGNORECASE)
         result = pattern.sub(replacement, result)
+    result = sanitize_internal_context_tags(result)
     return result
+
+
+def sanitize_internal_context_tags(text: str) -> str:
+    """Rewrite old/internal prompt source tags into user-safe provenance tags."""
+
+    def repl(match: re.Match) -> str:
+        label = (match.group(1) or "").strip()
+        if label:
+            return f"[cited by context: {label}]"
+        return "[cited by context]"
+
+    return INTERNAL_CONTEXT_TAG_RE.sub(repl, text)
 
 
 def check_has_citation(text: str) -> bool:
@@ -91,10 +109,10 @@ def apply_guardrails(
     """
     # Check for prohibited phrases
     has_prohibited = check_prohibited_phrases(text)
-    cleaned = text
+    cleaned = sanitize_internal_context_tags(text)
 
     if has_prohibited:
-        cleaned = sanitize_response(text)
+        cleaned = sanitize_response(cleaned)
         needs_retry = True
     else:
         needs_retry = False

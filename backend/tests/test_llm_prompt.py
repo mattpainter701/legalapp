@@ -25,6 +25,19 @@ def test_disclaimer_footer_is_conditional_for_legal_work_only():
     assert "End every response with" not in prompt
 
 
+def test_system_prompt_does_not_expose_firm_context_label():
+    prompt = LLMService()._build_system_prompt(
+        tenant_name="Bismarcklaw",
+        context="State v. Robertson",
+        memory_context="",
+        user_name="Matt",
+    )
+
+    assert "FIRM CONTEXT" not in prompt
+    assert "SOURCE MATERIALS" in prompt
+    assert "Never write the phrase" in prompt
+
+
 def test_standard_stream_retries_gateway_fallback_before_first_token():
     class FakeStream:
         def __init__(self, chunks):
