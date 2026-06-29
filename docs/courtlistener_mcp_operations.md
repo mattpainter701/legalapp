@@ -198,6 +198,8 @@ Scheduler behavior:
   not download or import new CourtListener bulk/API data.
 - Uses `SCHEDULER_DB_URL` for its own lock/count queries inside Docker and
   passes `VECTORDB_URL`/`EMBEDDING_WORKER_DB_URL` to Jetson workers.
+- Runs with host networking so reverse-tunnel dispatch can reach the same
+  host-bound CourtListener DB port used by manual dispatcher runs.
 - Takes Postgres advisory lock `EMBEDDING_SCHEDULER_LOCK_ID`, default
   `2026062901`, so duplicate scheduler containers or manual runs do not launch
   overlapping Jetson workers.

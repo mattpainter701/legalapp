@@ -134,6 +134,7 @@ def test_courtlistener_compose_defines_embedding_scheduler_profile():
 
     assert "embedding-scheduler:" in compose
     assert 'profiles: ["embedding-scheduler"]' in compose
+    assert "network_mode: host" in scheduler_section
     assert "SCHEDULER_DB_URL:" in scheduler_section
     assert "python" in scheduler_section
     assert "mcp_server.embedding_scheduler" in scheduler_section

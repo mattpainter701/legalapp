@@ -96,12 +96,13 @@ services:
   embedding-scheduler:
     build: ./mcp-server
     profiles: ["embedding-scheduler"]
+    network_mode: host
     depends_on:
       courtlistener-db:
         condition: service_healthy
     environment:
-      SCHEDULER_DB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
-      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@${COURTLISTENER_DB_HOST_FOR_JETSON:-172.16.16.202}:${COURTLISTENER_DB_PORT:-5434}/${COURTLISTENER_DB_NAME:-courtlistener}
+      SCHEDULER_DB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@${COURTLISTENER_DB_HOST_FOR_SCHEDULER:-127.0.0.1}:${COURTLISTENER_DB_PORT:-5434}/${COURTLISTENER_DB_NAME:-courtlistener}
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@${COURTLISTENER_DB_HOST_FOR_JETSON:-127.0.0.1}:${COURTLISTENER_DB_PORT:-5434}/${COURTLISTENER_DB_NAME:-courtlistener}
       JETSON_HOSTS: ${JETSON_HOSTS:-}
       JETSON_0_HOST: ${JETSON_0_HOST:-}
       JETSON_1_HOST: ${JETSON_1_HOST:-}
