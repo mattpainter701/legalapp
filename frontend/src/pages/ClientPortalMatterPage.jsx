@@ -12,7 +12,7 @@ import {
 } from '../api'
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
-  Upload, Download, AlertTriangle, Scale, PenLine,
+  Upload, Download, AlertTriangle, Scale, PenLine, CheckCircle2, LockKeyhole,
 } from 'lucide-react'
 
 const TABS = [
@@ -327,11 +327,24 @@ function DocumentsTab() {
   )
 }
 
+function formatSignatureDate(value) {
+  if (!value) return '—'
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
+    }).format(new Date(value))
+  } catch {
+    return '—'
+  }
+}
+
 function SignaturesTab() {
   const [requests, setRequests] = useState([])
   const [signing, setSigning] = useState(null) // request id being signed
-  const [typed, setTyped] = useState('')
+  const [typedByRequest, setTypedByRequest] = useState({})
+  const [acceptedByRequest, setAcceptedByRequest] = useState({})
   const [err, setErr] = useState('')
+  const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
@@ -346,11 +359,16 @@ function SignaturesTab() {
 
   const sign = async (req) => {
     setErr('')
-    if (!typed.trim()) { setErr('Type your full name to sign.'); return }
+    setSuccess('')
+    const typed = (typedByRequest[req.id] || '').trim()
+    if (!typed) { setErr('Type your full legal name exactly as you want it to appear on the signature certificate.'); return }
+    if (!acceptedByRequest[req.id]) { setErr('Review and accept the electronic signature consent before signing.'); return }
     setSigning(req.id)
     try {
       await signClientPortalSignature(req.id, { typed_signature: typed })
-      setTyped('')
+      setTypedByRequest((prev) => ({ ...prev, [req.id]: '' }))
+      setAcceptedByRequest((prev) => ({ ...prev, [req.id]: false }))
+      setSuccess('Signature captured. Your legal team will see the executed copy in the matter documents.')
       load()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to sign. Please try again.')
@@ -362,7 +380,10 @@ function SignaturesTab() {
   if (loading) {
     return (
       <Card>
-        <p className="text-sm text-brand-ink-2">Loading signature requests…</p>
+        <div className="flex items-center gap-3 text-sm text-brand-ink-2">
+          <div className="w-5 h-5 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
+          Loading signature requests…
+        </div>
       </Card>
     )
   }
@@ -370,48 +391,88 @@ function SignaturesTab() {
   if (requests.length === 0) {
     return (
       <Card>
-        {err && <p className="text-sm text-brand-rose mb-2">{err}</p>}
-        <p className="text-sm text-brand-ink-2">No documents are awaiting your signature.</p>
+        <div className="flex items-start gap-3">
+          <CheckCircle2 size={22} className="text-brand-green mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-brand-ink">You're all caught up.</p>
+            <p className="text-sm text-brand-ink-2 mt-1">No documents are awaiting your signature. Completed signature certificates will appear in Documents when available.</p>
+          </div>
+        </div>
+        {success && <p className="text-sm text-brand-green mt-3">{success}</p>}
+        {err && <p className="text-sm text-brand-rose mt-3">{err}</p>}
       </Card>
     )
   }
 
   return (
     <div className="space-y-4">
-      {err && <p className="text-sm text-brand-rose">{err}</p>}
-      {requests.map((req) => (
-        <Card key={req.id}>
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-sm font-medium text-brand-ink">{req.document_name || 'Document'}</p>
-              <p className="text-xs text-brand-ink-2 capitalize">Status: {req.status.replace('_', ' ')}</p>
-            </div>
-            <PenLine size={18} className="text-brand-accent" />
+      <Card>
+        <div className="flex items-start gap-3">
+          <LockKeyhole size={22} className="text-brand-accent mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-brand-ink">Secure e-signature</p>
+            <p className="text-sm text-brand-ink-2 mt-1">Review each document name, type your legal name, and consent to sign electronically. We record the time, portal identity, and IP address for the completion certificate.</p>
           </div>
-          <ul className="text-xs text-brand-ink-2 mb-3 space-y-0.5">
-            {req.signers?.map((s) => (
-              <li key={s.id}>
-                {s.name} — <span className={s.status === 'signed' ? 'text-brand-green' : ''}>{s.status}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-2">
+        </div>
+      </Card>
+      {err && <p className="text-sm text-brand-rose">{err}</p>}
+      {success && <p className="text-sm text-brand-green">{success}</p>}
+      {requests.map((req) => {
+        const typed = typedByRequest[req.id] || ''
+        const accepted = Boolean(acceptedByRequest[req.id])
+        return (
+          <Card key={req.id}>
+            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
+              <div>
+                <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-brand-amber/10 text-brand-amber text-xs font-semibold uppercase tracking-wide mb-3">
+                  Action required
+                </div>
+                <p className="text-base font-serif font-bold text-brand-ink">{req.document_name || 'Document'}</p>
+                <p className="text-xs text-brand-ink-2 mt-1">Sent {formatSignatureDate(req.sent_at)} · {req.signers?.length || 0} signer(s)</p>
+              </div>
+              <PenLine size={22} className="text-brand-accent" />
+            </div>
+
+            <div className="rounded-xl border border-brand-line overflow-hidden mb-4">
+              {req.signers?.map((s, idx) => (
+                <div key={s.id} className="flex items-center justify-between gap-3 px-3 py-2 border-b border-brand-line last:border-b-0 bg-white/60">
+                  <div>
+                    <p className="text-sm text-brand-ink">{idx + 1}. {s.name}</p>
+                    <p className="text-xs text-brand-ink-2">{s.email}</p>
+                  </div>
+                  <span className={`text-xs font-semibold capitalize ${s.status === 'signed' ? 'text-brand-green' : 'text-brand-amber'}`}>
+                    {s.status === 'signed' ? `Signed ${formatSignatureDate(s.signed_at)}` : 'Pending'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <label className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
             <input
               value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              placeholder="Type your full name to sign"
-              className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+              onChange={(e) => setTypedByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
+              placeholder="Type your full legal name"
+              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
             />
+            <label className="flex items-start gap-2 mt-3 text-xs text-brand-ink-2">
+              <input
+                type="checkbox"
+                checked={accepted}
+                onChange={(e) => setAcceptedByRequest((prev) => ({ ...prev, [req.id]: e.target.checked }))}
+                className="mt-0.5"
+              />
+              <span>I consent to use an electronic signature and understand this typed name will be attached to this document's completion certificate.</span>
+            </label>
             <button
               onClick={() => sign(req)}
-              disabled={signing === req.id}
-              className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
+              disabled={signing === req.id || !typed.trim() || !accepted}
+              className="mt-4 w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {signing === req.id ? 'Signing…' : 'Sign'}
+              {signing === req.id ? 'Capturing signature…' : 'Sign document'}
             </button>
-          </div>
-        </Card>
-      ))}
+          </Card>
+        )
+      })}
     </div>
   )
 }

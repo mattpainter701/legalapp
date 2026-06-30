@@ -11,7 +11,7 @@ import {
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,
   createMatterPortalInvite, listMatterPortalInvites, revokeMatterPortalInvite,
   getMatterDocuments, createSignatureRequest, listSignatureRequests,
-  sendSignatureRequest, voidSignatureRequest,
+  sendSignatureRequest, voidSignatureRequest, getMatterDocumentDownloadUrl,
   syncMatterCloudFolder, listTrustAccounts,
   getContacts, getAdminUsers,
 } from '../api'
@@ -2033,6 +2033,17 @@ function ClientPortalTab({ matterId, matter }) {
 }
 
 // ── E-signature requests (firm side) ────────────────────────────────────────
+function formatSignatureDate(value) {
+  if (!value) return '—'
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit'
+    }).format(new Date(value))
+  } catch {
+    return '—'
+  }
+}
+
 function SignatureRequestsPanel({ matterId }) {
   const [requests, setRequests] = useState([])
   const [docs, setDocs] = useState([])
@@ -2041,6 +2052,7 @@ function SignatureRequestsPanel({ matterId }) {
   const [signerEmail, setSignerEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
 
   const load = useCallback(() => {
     listSignatureRequests(matterId).then(setRequests).catch(() => {})
@@ -2050,19 +2062,26 @@ function SignatureRequestsPanel({ matterId }) {
   }, [matterId])
   useEffect(() => { load() }, [load])
 
+  const counts = requests.reduce((acc, r) => {
+    acc[r.status] = (acc[r.status] || 0) + 1
+    return acc
+  }, {})
+
   const create = async (e) => {
     e.preventDefault()
     setErr('')
+    setNotice('')
     if (!docId) { setErr('Choose a document to send for signature.'); return }
     if (!signerName.trim() || !signerEmail.trim()) { setErr('Signer name and email are required.'); return }
     setBusy(true)
     try {
       const req = await createSignatureRequest(matterId, {
         document_id: docId,
-        signers: [{ name: signerName, email: signerEmail }],
+        signers: [{ name: signerName.trim(), email: signerEmail.trim() }],
       })
       await sendSignatureRequest(matterId, req.id)
       setSignerName(''); setSignerEmail(''); setDocId('')
+      setNotice('Signature request sent. The signer will see it in their client portal Signatures tab.')
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
@@ -2072,90 +2091,106 @@ function SignatureRequestsPanel({ matterId }) {
   }
 
   const voidReq = async (id) => {
-    await voidSignatureRequest(matterId, id).catch(() => {})
-    load()
+    setErr('')
+    setNotice('')
+    try {
+      await voidSignatureRequest(matterId, id)
+      setNotice('Signature request voided.')
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to void signature request.')
+    }
+  }
+
+  const statusBadge = (status) => {
+    const styles = {
+      completed: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+      sent: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+      partially_signed: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
+      voided: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+      draft: 'bg-brand-bg-soft text-brand-muted border-brand-line',
+    }
+    return styles[status] || styles.draft
   }
 
   return (
-    <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
-      <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
-        <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-          <Icon d={Icons.edit} size={18} className="text-brand-accent" /> E-Signature
-        </h2>
-        <p className="text-[13px] text-brand-muted font-sans mt-0.5">
-          Send a matter document for signature; the client signs in the portal and the executed copy is saved back to the matter.
-        </p>
+    <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm overflow-hidden">
+      <div className="px-6 py-5 border-b border-brand-line bg-gradient-to-r from-brand-bg-soft to-white">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
+              <Icon d={Icons.edit} size={18} className="text-brand-accent" /> E-Signature
+            </h2>
+            <p className="text-[13px] text-brand-muted font-sans mt-0.5">
+              Send portal-ready signature requests and track each signer through completion.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-xl border border-brand-line bg-white px-3 py-2"><p className="text-lg font-bold text-brand-ink">{counts.sent || 0}</p><p className="text-[10px] uppercase text-brand-muted">Awaiting</p></div>
+            <div className="rounded-xl border border-brand-line bg-white px-3 py-2"><p className="text-lg font-bold text-brand-ink">{counts.partially_signed || 0}</p><p className="text-[10px] uppercase text-brand-muted">Partial</p></div>
+            <div className="rounded-xl border border-brand-line bg-white px-3 py-2"><p className="text-lg font-bold text-brand-ink">{counts.completed || 0}</p><p className="text-[10px] uppercase text-brand-muted">Done</p></div>
+          </div>
+        </div>
       </div>
 
       <div className="p-6 space-y-6">
-        <form onSubmit={create} className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <select
-              value={docId}
-              onChange={(e) => setDocId(e.target.value)}
-              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-            >
-              <option value="">Select document…</option>
-              {docs.map((d) => (
-                <option key={d.id} value={d.id}>{d.filename}</option>
-              ))}
-            </select>
-            <input
-              value={signerName}
-              onChange={(e) => setSignerName(e.target.value)}
-              placeholder="Signer name"
-              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-            />
-            <input
-              type="email"
-              value={signerEmail}
-              onChange={(e) => setSignerEmail(e.target.value)}
-              placeholder="Signer email"
-              className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-            />
+        <form onSubmit={create} className="rounded-2xl border border-brand-line bg-white p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-sans font-semibold text-brand-ink">New request</h3>
+            <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signer who should sign it.</p>
           </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50"
-          >
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <select value={docId} onChange={(e) => setDocId(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+              <option value="">Select document…</option>
+              {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
+            </select>
+            <input value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Signer full name" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+            <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="Signer email" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+          </div>
+          <button type="submit" disabled={busy} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50">
             {busy ? 'Sending…' : 'Send for signature'}
           </button>
         </form>
 
         {err && <p className="text-sm text-brand-rose">{err}</p>}
+        {notice && <p className="text-sm text-brand-green">{notice}</p>}
 
         <div>
-          <h3 className="text-sm font-sans font-semibold text-brand-ink mb-2">Requests</h3>
+          <h3 className="text-sm font-sans font-semibold text-brand-ink mb-3">Signature queue</h3>
           {requests.length === 0 ? (
-            <p className="text-sm text-brand-muted">No signature requests yet.</p>
+            <div className="rounded-xl border border-dashed border-brand-line p-6 text-center">
+              <p className="text-sm text-brand-muted">No signature requests yet. Send the first one above.</p>
+            </div>
           ) : (
-            <ul className="divide-y divide-brand-line border border-brand-line rounded-lg">
+            <div className="space-y-3">
               {requests.map((r) => (
-                <li key={r.id} className="px-4 py-3 text-sm">
-                  <div className="flex items-center justify-between">
+                <div key={r.id} className="border border-brand-line rounded-2xl p-4 bg-white">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
                     <div>
-                      <p className="text-brand-ink">{r.document_name || 'Document'}</p>
-                      <p className="text-xs text-brand-muted capitalize">
-                        {r.status.replace('_', ' ')} · {r.signers?.length || 0} signer(s)
-                      </p>
+                      <p className="text-brand-ink font-medium">{r.document_name || 'Document'}</p>
+                      <p className="text-xs text-brand-muted mt-1">Sent {formatSignatureDate(r.sent_at)} · Created {formatSignatureDate(r.created_at)}</p>
                     </div>
-                    {!['completed', 'voided'].includes(r.status) && (
-                      <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">
-                        Void
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold capitalize ${statusBadge(r.status)}`}>{r.status.replace('_', ' ')}</span>
+                      {r.signed_document_id && (
+                        <a href={getMatterDocumentDownloadUrl(matterId, r.signed_document_id)} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Download executed copy</a>
+                      )}
+                      {!['completed', 'voided'].includes(r.status) && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
+                    </div>
                   </div>
-                  <ul className="mt-1 text-xs text-brand-muted">
-                    {r.signers?.map((s) => (
-                      <li key={s.id}>
-                        {s.name} — <span className={s.status === 'signed' ? 'text-brand-green' : ''}>{s.status}</span>
-                      </li>
+                  <div className="mt-3 grid gap-2">
+                    {r.signers?.map((s, idx) => (
+                      <div key={s.id} className="flex items-center justify-between rounded-lg bg-brand-bg-soft px-3 py-2 text-xs">
+                        <span className="text-brand-ink">{idx + 1}. {s.name} · {s.email}</span>
+                        <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : 'text-brand-amber font-semibold'}>
+                          {s.status === 'signed' ? `Signed ${formatSignatureDate(s.signed_at)}` : 'Pending signature'}
+                        </span>
+                      </div>
                     ))}
-                  </ul>
-                </li>
+                  </div>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
       </div>
