@@ -1,8 +1,13 @@
 # Cloud Integrations Enhancement Plan (Microsoft 365 + Google Workspace)
 
-**Status:** Proposed
+**Status:** Superseded by [`integrations-remediation-plan.md`](integrations-remediation-plan.md) (2026-07-01)
 **Date:** 2026-06-12
 **Scope:** Matter file share mappings, calendar sync, email-to-matter linking, email access from chat RAG
+
+> **Note (2026-07-01):** Of this plan, items 0.1/0.2 (scope parity + user-scope upgrades), the scheduled
+> correspondence-capture job, and per-user task calendar push shipped. The health spine, calendar engine,
+> email-links tables, RAG email work, and file polish did not. Those items are carried forward — re-sequenced
+> behind newly identified security and reliability fixes — in `integrations-remediation-plan.md`.
 
 ---
 
