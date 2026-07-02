@@ -11,7 +11,10 @@ class UserOAuthToken(Base):
     __tablename__ = "user_oauth_tokens"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "provider", name="uq_user_oauth_tokens_user_provider"
+            "tenant_id",
+            "user_id",
+            "provider",
+            name="ix_user_oauth_tokens_tenant_user_provider",
         ),
     )
 

@@ -23,7 +23,7 @@ from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
 from app.services.teams_gate import missing_teams_scopes
-from app.services.token_vault import decrypt_token, encrypt_token
+from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
 from app.services.tenant_oauth_apps import (
     get_tenant_oauth_app,
     get_zoom_phone_webhook_secret,
@@ -38,6 +38,10 @@ from app.services.zoom_phone import (
     probe_zoom_phone_connection,
     verify_zoom_webhook_signature,
     zoom_webhook_validation_response,
+)
+from app.utils.oauth_security import (
+    generate_pkce_pair,
+    is_oauth_client_configured,
 )
 
 settings = get_settings()
@@ -55,6 +59,15 @@ class ZoomPhoneAppCredentialRequest(BaseModel):
     webhook_secret_token: str = ""
 
 
+def _gc_fallback_states() -> None:
+    """Evict expired in-process state entries (only relevant when Redis is absent)."""
+    now = _time.time()
+    for key, ts in list(_fallback_states.items()):
+        if now - ts > _STATE_TTL:
+            del _fallback_states[key]
+            _fallback_state_data.pop(key, None)
+
+
 async def _save_state(request: Request, state: str, data: dict | None = None) -> None:
     redis = getattr(request.app.state, "redis", None)
     if redis:
@@ -64,6 +77,7 @@ async def _save_state(request: Request, state: str, data: dict | None = None) ->
                 f"integration:statedata:{state}", _STATE_TTL, _json.dumps(data)
             )
     else:
+        _gc_fallback_states()
         _fallback_states[state] = _time.time()
         if data:
             _fallback_state_data[state] = data
@@ -216,11 +230,17 @@ async def microsoft_connect(
     teams: int = Query(0, description="1=include Microsoft Teams scopes"),
     db: AsyncSession = Depends(get_db),
 ):
+    if not is_oauth_client_configured(
+        settings.MICROSOFT_CLIENT_ID, settings.MICROSOFT_CLIENT_SECRET
+    ):
+        raise HTTPException(status_code=501, detail="Microsoft OAuth not configured")
+
     user = await get_current_user(request, db)
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
     state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = generate_pkce_pair()
     await _save_state(
         request,
         state,
@@ -231,6 +251,7 @@ async def microsoft_connect(
             "tenant_id": str(user.tenant_id),
             "role": user.role,
             "teams": bool(teams),
+            "pkce_verifier": code_verifier,
         },
     )
 
@@ -247,6 +268,8 @@ async def microsoft_connect(
         f"&state={state}"
         f"&response_mode=query"
         f"&prompt=select_account"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -261,6 +284,8 @@ async def microsoft_callback(
     valid, meta = await _consume_state(request, state)
     if not valid:
         return _error_redirect("microsoft", "invalid_state")
+    if meta and meta.get("provider") not in (None, "microsoft"):
+        return _error_redirect("microsoft", "invalid_state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
     ms_tenant = settings.MICROSOFT_TENANT_ID
@@ -268,20 +293,25 @@ async def microsoft_callback(
 
     intent = meta.get("intent", "user") if meta else "user"
     teams_flag = bool(meta.get("teams")) if meta else False
+    code_verifier = meta.get("pkce_verifier") if meta else None
 
-    async with httpx.AsyncClient() as client:
+    token_payload = {
+        "client_id": settings.MICROSOFT_CLIENT_ID,
+        "client_secret": settings.MICROSOFT_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+        "scope": _admin_scopes(teams_flag)
+        if intent == "admin"
+        else MICROSOFT_USER_SCOPES,
+    }
+    if code_verifier:
+        token_payload["code_verifier"] = code_verifier
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         token_resp = await client.post(
             token_url,
-            data={
-                "client_id": settings.MICROSOFT_CLIENT_ID,
-                "client_secret": settings.MICROSOFT_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-                "scope": _admin_scopes(teams_flag)
-                if intent == "admin"
-                else MICROSOFT_USER_SCOPES,
-            },
+            data=token_payload,
         )
         if token_resp.status_code != 200:
             return _error_redirect("microsoft", "token_exchange_failed")
@@ -405,11 +435,17 @@ async def google_connect(
     intent: str = Query("admin", description="admin=tenant-wide, user=per-user"),
     db: AsyncSession = Depends(get_db),
 ):
+    if not is_oauth_client_configured(
+        settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET
+    ):
+        raise HTTPException(status_code=501, detail="Google OAuth not configured")
+
     user = await get_current_user(request, db)
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
     state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = generate_pkce_pair()
     await _save_state(
         request,
         state,
@@ -419,6 +455,7 @@ async def google_connect(
             "user_id": str(user.id),
             "tenant_id": str(user.tenant_id),
             "role": user.role,
+            "pkce_verifier": code_verifier,
         },
     )
 
@@ -434,6 +471,8 @@ async def google_connect(
         "&access_type=offline"
         "&prompt=consent"
         f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
     return RedirectResponse(url=authorize_url)
 
@@ -448,20 +487,27 @@ async def google_callback(
     valid, meta = await _consume_state(request, state)
     if not valid:
         return _error_redirect("google", "invalid_state")
+    if meta and meta.get("provider") not in (None, "google"):
+        return _error_redirect("google", "invalid_state")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/google/callback"
     intent = meta.get("intent", "user") if meta else "user"
+    code_verifier = meta.get("pkce_verifier") if meta else None
 
-    async with httpx.AsyncClient() as client:
+    token_payload = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "client_secret": settings.GOOGLE_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    if code_verifier:
+        token_payload["code_verifier"] = code_verifier
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         token_resp = await client.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
+            data=token_payload,
         )
         if token_resp.status_code != 200:
             return _error_redirect("google", "token_exchange_failed")
@@ -1295,6 +1341,46 @@ async def integration_status(
 # ── Disconnect endpoints ─────────────────────────────────────────────────
 
 
+async def _revoke_all_provider_tokens(
+    db: AsyncSession, tenant_id: str, provider: str
+) -> None:
+    """Best-effort revoke every tenant + per-user token for a provider before deleting rows."""
+    cred_result = await db.execute(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == tenant_id,
+            TenantCredential.provider == provider,
+        )
+    )
+    user_result = await db.execute(
+        select(UserOAuthToken).where(
+            UserOAuthToken.tenant_id == tenant_id,
+            UserOAuthToken.provider == provider,
+        )
+    )
+    rows = list(cred_result.scalars()) + list(user_result.scalars())
+    for row in rows:
+        try:
+            access_token = (
+                decrypt_token(row.encrypted_access_token)
+                if row.encrypted_access_token
+                else None
+            )
+            refresh_token = (
+                decrypt_token(row.encrypted_refresh_token)
+                if row.encrypted_refresh_token
+                else None
+            )
+            await revoke_provider_token(provider, access_token, refresh_token)
+        except Exception:
+            logger.warning(
+                "Failed to revoke %s token for tenant=%s row=%s",
+                provider,
+                tenant_id,
+                getattr(row, "id", None),
+                exc_info=True,
+            )
+
+
 @router.post("/microsoft/disconnect")
 async def microsoft_disconnect(
     request: Request,
@@ -1309,6 +1395,7 @@ async def microsoft_disconnect(
         raise HTTPException(status_code=400, detail="No tenant context")
 
     await set_tenant_context(db, tenant_id)
+    await _revoke_all_provider_tokens(db, tenant_id, "microsoft")
     await db.execute(
         delete(TenantCredential).where(
             TenantCredential.tenant_id == tenant_id,
@@ -1340,6 +1427,7 @@ async def google_disconnect(
         raise HTTPException(status_code=400, detail="No tenant context")
 
     await set_tenant_context(db, tenant_id)
+    await _revoke_all_provider_tokens(db, tenant_id, "google")
     await db.execute(
         delete(TenantCredential).where(
             TenantCredential.tenant_id == tenant_id,

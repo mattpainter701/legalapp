@@ -217,6 +217,57 @@ async def refresh_zoom_token(
         return new_access_token, expires_in
 
 
+async def revoke_google_token(token: str) -> bool:
+    """Revoke a Google OAuth token (refresh token preferred — invalidates the whole grant)."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/revoke",
+                data={"token": token},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except httpx.HTTPError:
+        logger.warning("Google token revoke request failed", exc_info=True)
+        return False
+    if resp.status_code == 200:
+        return True
+    logger.warning(
+        "Google token revoke failed: status=%d body=%s", resp.status_code, resp.text[:300]
+    )
+    return False
+
+
+async def revoke_microsoft_token(token: str) -> bool:
+    """Best-effort Microsoft token revocation.
+
+    Unlike Google, the Microsoft identity platform v2 endpoint has no per-token
+    revoke API for confidential-client access/refresh tokens. The closest
+    equivalent (``revokeSignInSessions``) invalidates ALL of the user's sessions
+    across every app and requires elevated Graph permissions this app does not
+    request, so it is deliberately not called here. Disconnecting still deletes
+    the stored credential so this app stops using the token; the token itself
+    remains valid at Microsoft until it naturally expires.
+    """
+    logger.info(
+        "Microsoft has no safe per-token revoke API; local credential removal only"
+    )
+    return False
+
+
+async def revoke_provider_token(
+    provider: str, access_token: str | None, refresh_token: str | None
+) -> bool:
+    """Revoke whichever token invalidates the most at the provider, if any exists."""
+    token = refresh_token or access_token
+    if not token:
+        return False
+    if provider == "google":
+        return await revoke_google_token(token)
+    if provider == "microsoft":
+        return await revoke_microsoft_token(token)
+    return False
+
+
 async def get_fresh_token(
     db: AsyncSession,
     tenant_id: str,

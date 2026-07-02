@@ -1,4 +1,3 @@
-import base64
 import json as _json
 import logging
 import secrets
@@ -37,6 +36,13 @@ from app.schemas.auth import (
     UserInfo,
 )
 from app.services.email import email_service
+from app.utils.oauth_security import (
+    generate_nonce,
+    generate_pkce_pair,
+    is_oauth_client_configured,
+    verify_google_id_token,
+    verify_microsoft_id_token,
+)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -74,7 +80,7 @@ async def _save_state(request: Request, state: str, data: dict = None) -> None:
 
 
 async def _consume_state(request: Request, state: str) -> tuple[bool, dict | None]:
-    """Return (is_valid, signup_data_or_None)."""
+    """Return (is_valid, state_meta_or_None) where state_meta holds signup/nonce/pkce_verifier."""
     redis = getattr(request.app.state, "redis", None)
     data = None
     if redis:
@@ -395,15 +401,7 @@ async def _get_or_create_user(
 # ── Microsoft OAuth ────────────────────────────────────────────────────────────
 
 
-def _oauth_configured(client_id: str, client_secret: str) -> bool:
-    """Reject empty, whitespace-only, or obviously bogus placeholder values."""
-    cid = (client_id or "").strip()
-    cs = (client_secret or "").strip()
-    if not cid or not cs:
-        return False
-    if cid.startswith("#") or "TODO" in cid.upper():
-        return False
-    return True
+_oauth_configured = is_oauth_client_configured
 
 
 @router.get("/microsoft/login")
@@ -429,7 +427,13 @@ async def microsoft_login(
             "phone": phone,
             "staff_size": staff_size,
         }
-    await _save_state(request, state, signup_data)
+    nonce = generate_nonce()
+    code_verifier, code_challenge = generate_pkce_pair()
+    await _save_state(
+        request,
+        state,
+        {"signup": signup_data, "nonce": nonce, "pkce_verifier": code_verifier},
+    )
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/microsoft/callback"
@@ -443,6 +447,9 @@ async def microsoft_login(
         f"&state={state}"
         f"&response_mode=query"
         f"&prompt=select_account"
+        f"&nonce={nonce}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
     response = RedirectResponse(url=authorize_url)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -457,25 +464,33 @@ async def microsoft_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    valid, signup_data = await _consume_state(request, state)
+    valid, state_meta = await _consume_state(request, state)
     if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    state_meta = state_meta or {}
+    signup_data = state_meta.get("signup")
+    expected_nonce = state_meta.get("nonce")
+    code_verifier = state_meta.get("pkce_verifier")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/microsoft/callback"
     ms_tenant = settings.MICROSOFT_TENANT_ID
     token_url = f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/token"
 
-    async with httpx.AsyncClient() as client:
+    token_data_payload = {
+        "client_id": settings.MICROSOFT_CLIENT_ID,
+        "client_secret": settings.MICROSOFT_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+        "scope": "openid email profile User.Read offline_access",
+    }
+    if code_verifier:
+        token_data_payload["code_verifier"] = code_verifier
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         token_response = await client.post(
             token_url,
-            data={
-                "client_id": settings.MICROSOFT_CLIENT_ID,
-                "client_secret": settings.MICROSOFT_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-                "scope": "openid email profile User.Read offline_access",
-            },
+            data=token_data_payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
@@ -506,19 +521,12 @@ async def microsoft_callback(
                 detail="No id_token in Microsoft token response",
             )
 
-        # id_token is a JWT: header.payload.signature
-        # We trust the payload because it just arrived from MS over HTTPS
-        try:
-            payload_b64 = id_token_raw.split(".")[1]
-            # Add padding if needed
-            payload_b64 += "=" * (4 - len(payload_b64) % 4)
-            payload_bytes = base64.urlsafe_b64decode(payload_b64)
-            claims = _json.loads(payload_bytes)
-        except Exception:
-            logger.exception("Failed to decode Microsoft id_token")
-            raise HTTPException(
-                status_code=400, detail="Failed to decode Microsoft id_token"
-            )
+        claims = await verify_microsoft_id_token(
+            id_token_raw,
+            client_id=settings.MICROSOFT_CLIENT_ID,
+            tenant=ms_tenant,
+            expected_nonce=expected_nonce,
+        )
 
         logger.info(
             "Microsoft id_token claims: sub=%s email=%s name=%s",
@@ -623,62 +631,6 @@ async def microsoft_callback(
 
 # ── Google OAuth ───────────────────────────────────────────────────────────────
 
-# Google's JWKS endpoint — used to verify id_token signatures
-_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
-
-
-async def _verify_google_id_token(id_token: str) -> dict:
-    """
-    Verify a Google id_token against Google's public JWKS and return claims.
-    Falls back to unverified decode in DEV_MODE only.
-    """
-    if settings.DEV_MODE:
-        # Dev shortcut — skip signature verification
-        parts = id_token.split(".")
-        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-        return _json.loads(base64.urlsafe_b64decode(padded))
-
-    async with httpx.AsyncClient() as client:
-        jwks_response = await client.get(_GOOGLE_JWKS_URL)
-        if jwks_response.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch Google JWKS")
-        jwks = jwks_response.json()
-
-    from jose import jwk
-
-    # Parse the JWT header to find the key ID
-    header_segment = id_token.split(".")[0]
-    padded = header_segment + "=" * (4 - len(header_segment) % 4)
-    header = _json.loads(base64.urlsafe_b64decode(padded))
-    kid = header.get("kid")
-
-    # Find the matching public key
-    matching_key = None
-    for key_data in jwks.get("keys", []):
-        if key_data.get("kid") == kid:
-            matching_key = key_data
-            break
-
-    if matching_key is None:
-        raise HTTPException(
-            status_code=400, detail="No matching Google public key for token kid"
-        )
-
-    try:
-        public_key = jwk.construct(matching_key)
-        claims = jwt.decode(
-            id_token,
-            public_key,
-            algorithms=["RS256"],
-            audience=settings.GOOGLE_CLIENT_ID,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Google id_token verification failed: {exc}"
-        )
-
-    return claims
-
 
 @router.get("/google/login")
 async def google_login(
@@ -701,7 +653,13 @@ async def google_login(
             "phone": phone,
             "staff_size": staff_size,
         }
-    await _save_state(request, state, signup_data)
+    nonce = generate_nonce()
+    code_verifier, code_challenge = generate_pkce_pair()
+    await _save_state(
+        request,
+        state,
+        {"signup": signup_data, "nonce": nonce, "pkce_verifier": code_verifier},
+    )
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/google/callback"
     encoded_redirect = urllib.parse.quote(redirect_uri, safe="")
@@ -715,6 +673,9 @@ async def google_login(
         f"&state={state}"
         f"&access_type=offline"
         f"&prompt=consent"
+        f"&nonce={nonce}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
     )
     response = RedirectResponse(url=authorize_url)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -729,22 +690,30 @@ async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    valid, signup_data = await _consume_state(request, state)
+    valid, state_meta = await _consume_state(request, state)
     if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    state_meta = state_meta or {}
+    signup_data = state_meta.get("signup")
+    expected_nonce = state_meta.get("nonce")
+    code_verifier = state_meta.get("pkce_verifier")
 
     redirect_uri = f"{settings.BACKEND_URL}/api/auth/google/callback"
 
-    async with httpx.AsyncClient() as client:
+    token_data_payload = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "client_secret": settings.GOOGLE_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    if code_verifier:
+        token_data_payload["code_verifier"] = code_verifier
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
         token_response = await client.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
+            data=token_data_payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
@@ -759,7 +728,11 @@ async def google_callback(
     if not id_token:
         raise HTTPException(status_code=400, detail="No id_token from Google")
 
-    claims = await _verify_google_id_token(id_token)
+    claims = await verify_google_id_token(
+        id_token,
+        client_id=settings.GOOGLE_CLIENT_ID,
+        expected_nonce=expected_nonce,
+    )
     if claims.get("email_verified") is not True:
         raise HTTPException(status_code=400, detail="Google email is not verified")
 
