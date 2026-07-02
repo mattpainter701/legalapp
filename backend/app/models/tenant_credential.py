@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -9,6 +9,14 @@ from app.database import Base
 
 class TenantCredential(Base):
     __tablename__ = "tenant_credentials"
+    # Production enforces this via the ix_tenant_credentials_tenant_provider
+    # unique index (migration 009); declared here too so the test schema
+    # (built via Base.metadata.create_all) gets the same protection.
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "provider", name="uq_tenant_credentials_tenant_provider"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

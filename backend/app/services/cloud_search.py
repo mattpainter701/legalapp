@@ -982,6 +982,7 @@ class CloudSearchService:
     ) -> list[CloudHit]:
         """Search within a specific OneDrive folder using the folder's drive endpoint."""
         query_string = " ".join(keywords) if keywords else "*"
+        query_string = query_string.replace("'", "''")
         url = f"{GRAPH_BASE}/me/drive/items/{folder_id}/search(q='{query_string}')"
         params = {
             "$top": min(max_hits, 200),

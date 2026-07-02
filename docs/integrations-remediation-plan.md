@@ -88,7 +88,7 @@ Severity: **P0** = security or data-integrity defect; **P1** = reliability defec
 | S5 | P1 | No PKCE; state not session-bound; MS/Google callbacks don't verify `state.provider` matches the route (only Zoom Phone does) | `integrations.py:254, 441, 772` |
 | S6 | P1 | Tenant-wide integration = **one admin's delegated token**, not app permissions / real admin consent; breaks when that admin's account changes; scopes over-broad (full `drive`, `Files.ReadWrite.All`, org-wide `Mail.Read`) | `integrations.py:94-101, 212-251` |
 | S7 | P1 | Single global Fernet key; no rotation (`MultiFernet`), no per-tenant keys | `token_vault.py:17-24` |
-| S8 | P1 | `tenant_credentials` lacks `(tenant_id, provider)` unique constraint while reads use `scalar_one_or_none()` (→ `MultipleResultsFound` risk); `user_oauth_tokens` unique omits `tenant_id` | `models/tenant_credential.py`, `models/user_oauth_token.py:12-16` |
+| S8 | P2 | ~~`tenant_credentials` lacks a `(tenant_id, provider)` unique constraint~~ — **corrected on implementation**: migration 009 already added `ix_tenant_credentials_tenant_provider` (unique), so this was never exploitable in production; the ORM model just didn't declare it, so the `Base.metadata.create_all()`-built test schema lacked the same protection (now fixed). `user_oauth_tokens` unique index omitted `tenant_id` (fixed: widened to `(tenant_id, user_id, provider)` in migration 072) | `models/tenant_credential.py`, `models/user_oauth_token.py`, `migrations/versions/009_oauth_tokens.py`, `migrations/versions/072_cred_unique_constraints.py` |
 | S9 | P2 | Only `TOKEN_ENCRYPTION_KEY` validated at boot; integration connect endpoints don't pre-check client config (login's `_oauth_configured` is not reused) | `config.py:200-224`, `auth.py:398-406`, `integrations.py:212, 402` |
 | S10 | P2 | OneDrive folder search interpolates unescaped user query into the Graph URL (SharePoint variant escapes) | `cloud_search.py:985` vs `:1042` |
 | S11 | P2 | Cloud search under tenant-level tokens is not user-permission-filtered (one user's chat can surface another's mail metadata) | `rag.py` / `cloud_search.py` (June plan §2.4.4) |
@@ -148,17 +148,17 @@ Phases are ordered so that security lands first, the reliability substrate secon
 
 ### Phase 0 — Security hardening (~1 week)
 
-| # | Fix | Files |
-|---|---|---|
-| 0.1 | **Verify Microsoft id_tokens**: JWKS signature + `aud`/`iss`/`exp` validation mirroring `_verify_google_id_token`; add `nonce` to both providers' login flows | `auth.py:409-621, 630-680` |
-| 0.2 | **Remove the `DEV_MODE` verification bypass** (or gate it on an explicit localhost allowlist + startup warning); never expose reset tokens outside tests | `auth.py:635-639, 1186`, `config.py:175` |
-| 0.3 | **PKCE (S256)** on both OAuth surfaces; store `code_verifier` in state meta; verify `state.provider` matches the callback route (pattern already exists in the Zoom Phone callback) | `auth.py`, `integrations.py:72-89, 254, 441` |
-| 0.4 | **Revoke at provider on disconnect**: Google `oauth2.googleapis.com/revoke`, Microsoft best-effort; then delete rows | `integrations.py:1298-1357` |
-| 0.5 | **DB constraints migration**: unique `(tenant_id, provider)` on `tenant_credentials` (dedupe existing rows first, keep newest active); extend `user_oauth_tokens` unique to include `tenant_id` | `models/tenant_credential.py`, `models/user_oauth_token.py`, new Alembic migration |
-| 0.6 | **Boot/config validation**: warn at startup on blank provider credentials; reuse `_oauth_configured` in `integrations.py` connect endpoints (return 501 like login does) | `config.py`, `integrations.py:212, 402` |
-| 0.7 | **State hygiene**: GC for `_fallback_states`/`_fallback_state_data` (port `_gc_fallback_dicts` from `auth.py`); document Redis as required for multi-worker deployments | `integrations.py:48-49` |
-| 0.8 | **Harden tenant auto-creation**: require email-domain verification or an explicit signup allowlist before auto-admin of a new domain tenant (decision needed — see §7) | `auth.py:314-392` |
-| 0.9 | Escape OneDrive search query (mirror the SharePoint `''` escaping) | `cloud_search.py:985` |
+| # | Status | Fix | Files |
+|---|---|---|---|
+| 0.1 | ✅ Done | **Verify Microsoft id_tokens**: JWKS signature + `aud`/`iss`/`tid` validation via a new shared `verify_microsoft_id_token`/`verify_google_id_token` in `utils/oauth_security.py` (mirrors the previous `_verify_google_id_token`); added `nonce` to both providers' login authorize URLs and verified on callback | `auth.py`, `utils/oauth_security.py` (new) |
+| 0.2 | ✅ Done | **Removed the `DEV_MODE` verification bypass** — Google id_token signature verification now always runs, no dev shortcut | `auth.py`, `utils/oauth_security.py` |
+| 0.3 | ✅ Done | **PKCE (S256)** added to both OAuth surfaces (login `auth.py` + integrations `integrations.py` for Microsoft/Google); `code_verifier` stored in state meta, sent on token exchange; `state.provider` now checked against the callback route for Microsoft/Google (Zoom Phone already did this) | `auth.py`, `integrations.py`, `utils/oauth_security.py` |
+| 0.4 | ✅ Done | **Revoke at provider on disconnect**: added `revoke_provider_token`/`revoke_google_token`/`revoke_microsoft_token` to `token_vault.py` (Google calls the real revoke endpoint; Microsoft is a documented no-op — no safe per-token revoke API exists without over-broad `revokeSignInSessions`); wired into both disconnect endpoints before row deletion | `token_vault.py`, `integrations.py` |
+| 0.5 | ✅ Done | **DB constraints migration**: `tenant_credentials` was already protected by a unique index (migration 009) — added the equivalent `UniqueConstraint` to the ORM model so the test schema matches; widened `user_oauth_tokens`' unique index to `(tenant_id, user_id, provider)` via migration 072 (verified upgrade/downgrade/re-upgrade against a live Postgres 16 instance) | `models/tenant_credential.py`, `models/user_oauth_token.py`, `migrations/versions/072_cred_unique_constraints.py` |
+| 0.6 | ✅ Done | **Boot/config validation**: `integrations.py` Microsoft/Google connect endpoints now call the shared `is_oauth_client_configured` (moved from `auth.py`'s private `_oauth_configured`) and return 501 on missing/placeholder config, matching login and Zoom | `utils/oauth_security.py`, `auth.py`, `integrations.py` |
+| 0.7 | ✅ Done | **State hygiene**: added `_gc_fallback_states` GC to `integrations.py`, called from `_save_state` (same pattern as `auth.py`) | `integrations.py` |
+| 0.8 | ⏸ Deferred | **Harden tenant auto-creation** — needs a product decision (domain verification vs. invite-only vs. accept current behavior); not implemented pending input (see §7) | `auth.py:314-392` |
+| 0.9 | ✅ Done | Escaped the OneDrive search query (mirrors the SharePoint `''` escaping) | `cloud_search.py` |
 
 ### Phase 1 — Reliability core (~1.5 weeks)
 
