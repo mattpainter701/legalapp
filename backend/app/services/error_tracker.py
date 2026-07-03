@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import set_tenant_context
 from app.models.error_log import ErrorLog
 from app.services.gateway_privacy import retained_debug_text
+from app.services.pii_detection import scrub_pii
 
 logger = logging.getLogger(__name__)
 
@@ -98,13 +99,17 @@ async def capture_error(
             if stack_trace == "NoneType: None\n":
                 stack_trace = None
 
+        # Exception text sometimes echoes the value that caused the failure
+        # (e.g. a uniqueness-constraint error repeating the offending email,
+        # or a validator quoting a submitted SSN) — redact obvious PII shapes
+        # before persisting, even though this data is internal/firm-facing.
         error_log = ErrorLog(
             tenant_id=tenant_id,
             user_id=user_id,
             error_type=error_type,
             severity=severity,
-            message=str(message)[:4000],  # Truncate very long messages
-            stack_trace=stack_trace[:8000] if stack_trace else None,
+            message=scrub_pii(str(message))[:4000],  # Truncate very long messages
+            stack_trace=scrub_pii(stack_trace)[:8000] if stack_trace else None,
             endpoint=endpoint,
             method=method,
             status_code=status_code,

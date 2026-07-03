@@ -1,6 +1,16 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.utils.password_policy import is_common_password
+
+
+def _reject_common_password(value: str) -> str:
+    if is_common_password(value):
+        raise ValueError(
+            "This password is too common. Please choose a more unique password."
+        )
+    return value
 
 
 class RegisterRequest(BaseModel):
@@ -11,6 +21,8 @@ class RegisterRequest(BaseModel):
     staff_size: Optional[int] = None
     address: Optional[str] = None
     phone: Optional[str] = None
+
+    _validate_password = field_validator("password")(_reject_common_password)
 
 
 class LoginRequest(BaseModel):
@@ -25,6 +37,8 @@ class PlanSignupRequest(BaseModel):
     password: str = Field(min_length=12, max_length=128)
     full_name: Optional[str] = None
 
+    _validate_password = field_validator("password")(_reject_common_password)
+
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -33,6 +47,8 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     password: str = Field(min_length=12, max_length=128)
+
+    _validate_password = field_validator("password")(_reject_common_password)
 
 
 class OAuthCallbackExchangeRequest(BaseModel):

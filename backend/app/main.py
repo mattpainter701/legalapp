@@ -86,15 +86,28 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info(f"Upload directory ensured: {settings.UPLOAD_DIR}")
 
-    # Redis client for rate limiting
+    # Redis client for rate limiting AND security-critical revocation (JWT jti
+    # blacklist, OAuth CSRF state, password-reset tokens, portal-session
+    # revocation). When Redis is unreachable these fall back to a per-worker
+    # in-memory dict, which is NOT a reliable guarantee across multiple
+    # uvicorn workers — a token revoked on worker A stays valid on worker B.
+    # That fallback is acceptable for local dev (DEV_MODE=true) but must not
+    # run silently in production: fail closed at startup instead.
     try:
         redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=False)
         await redis_client.ping()
         app.state.redis = redis_client
         logger.info("Redis connected")
     except Exception as exc:
-        logger.warning(f"Redis unavailable — rate limiting disabled: {exc}")
-        app.state.redis = None
+        if settings.DEV_MODE:
+            logger.warning(f"Redis unavailable — rate limiting disabled: {exc}")
+            app.state.redis = None
+        else:
+            raise RuntimeError(
+                f"Redis is required in production (DEV_MODE=false) for reliable "
+                f"cross-worker token revocation and rate limiting, but is "
+                f"unreachable: {exc}"
+            ) from exc
 
     app.state.jti_blacklist: dict[str, float] = {}
 
@@ -115,16 +128,22 @@ async def lifespan(app: FastAPI):
             )
             role_row = row.fetchone()
             if role_row and (role_row[0] or role_row[1]):
-                logger.error(
-                    "SECURITY: database role '%s' is superuser=%s bypassrls=%s. "
-                    "RLS tenant isolation is NOT enforced. Connect as the "
-                    "least-privilege 'clarity_app' role (see scripts/provision_app_role.sql).",
-                    "current_user",
-                    role_row[0],
-                    role_row[1],
-                )
+                message = (
+                    "SECURITY: database role is superuser=%s bypassrls=%s. RLS "
+                    "tenant isolation is NOT enforced — every tenant's data is "
+                    "visible to every other tenant. Connect as the least-privilege "
+                    "'clarity_app' role (see scripts/provision_app_role.sql)."
+                ) % (role_row[0], role_row[1])
+                if settings.DEV_MODE:
+                    logger.error(message)
+                else:
+                    # Fail closed: refuse to serve traffic with tenant isolation
+                    # disabled rather than log-and-continue in production.
+                    raise RuntimeError(message)
             else:
                 logger.info("DB role check passed: RLS is enforced for this connection")
+    except RuntimeError:
+        raise
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
 
@@ -199,11 +218,21 @@ async def lifespan(app: FastAPI):
     logger.info("Shutdown complete")
 
 
+# Interactive API docs expose the entire route/schema surface to anyone who can
+# reach the server. Only serve them when DEV_MODE is on; production deployments
+# must set DEV_MODE=false, which also gates the /dev/* router below.
+_docs_kwargs = (
+    {}
+    if settings.DEV_MODE
+    else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+)
+
 app = FastAPI(
     title="Clarity Legal API",
     version="1.0.0",
     description="Multi-tenant legal AI SaaS backend",
     lifespan=lifespan,
+    **_docs_kwargs,
 )
 
 # ─────────────────────────────────────────────────────
@@ -269,7 +298,11 @@ app.include_router(plugins_router, prefix="/api")
 app.include_router(prompt_admin_router, prefix="/api")
 app.include_router(cloud_admin_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
-app.include_router(dev_router, prefix="/api")
+# /dev/* endpoints (email-only login, tokens for every user) are only mounted
+# when DEV_MODE is on — not merely 404'd inside each handler — so the routes
+# don't exist in the OpenAPI schema or the routing table in production.
+if settings.DEV_MODE:
+    app.include_router(dev_router, prefix="/api")
 app.include_router(integrations_router)
 app.include_router(teams_router)
 app.include_router(email_router)
@@ -318,13 +351,14 @@ async def health_check():
     the failure and restart or route around the instance.
     """
     db_ok = False
-    db_error = None
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         db_ok = True
     except Exception as exc:
-        db_error = str(exc)
+        # /health is unauthenticated — log the real error server-side but never
+        # return raw exception text (can contain host/user/connection details).
+        logger.error(f"Health check DB connection failed: {exc}")
 
     if not db_ok:
         return JSONResponse(
@@ -332,7 +366,6 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "database": "unavailable",
-                "detail": db_error,
                 "version": "1.0.0",
             },
         )

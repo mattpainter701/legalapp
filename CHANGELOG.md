@@ -46,6 +46,53 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Backend/API security hardening (prod-readiness pass):** frontend auth now
+  lives entirely in httpOnly cookies — the SPA no longer reads, writes, or
+  falls back to a bearer token in `localStorage`, closing an XSS session-theft
+  vector (`App.jsx`, `api.js`, `LoginPage.jsx`, `SignupPage.jsx`,
+  `AuthCallback.jsx`). `get_settings()` now fails closed at startup if
+  `SECRET_KEY` or a configured `PLATFORM_SECRET_KEY` is short or matches a
+  known unfilled-template placeholder (e.g. the committed
+  `change-this-to-a-long-random-secret-key...` / `generate-with-openssl...`
+  values), preventing every JWT in the system from being forgeable by
+  accident. The `/dev/*` router (email-only login, 365-day tokens for every
+  user) is now excluded from the app entirely unless `DEV_MODE=true`, instead
+  of 404ing per-request — it no longer exists in routing or the OpenAPI schema
+  in prod. Interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are
+  likewise only served when `DEV_MODE=true`. Detecting a superuser/BYPASSRLS
+  database role (RLS silently disabled) is now a fatal startup error outside
+  `DEV_MODE` instead of a log line — the app refuses to serve traffic with
+  tenant isolation off. `/health` no longer echoes raw DB exception text to
+  unauthenticated callers. The rate-limit middleware's JWT claim extraction
+  now also reads the httpOnly access-token cookie (previously
+  `Authorization`-header only), so cookie-authenticated requests are no longer
+  invisible to per-user/per-tenant limits. Document upload
+  (`POST /api/documents/upload`) now rejects file types outside an explicit
+  allowlist (PDF/DOC/DOCX/TXT) instead of silently UTF-8-decoding arbitrary
+  binaries into the RAG pipeline.
+- **Backend/API security hardening, follow-up pass:** added
+  `backend/tests/test_route_auth_coverage.py`, a static/structural regression
+  test closing the "fail-open tenant middleware" finding without rearchitecting
+  request handling — it walks every registered route and asserts each one
+  calls a recognized auth function (or a same-codebase helper that resolves to
+  one, e.g. `require_teams_enabled`), against an explicit reviewed allowlist
+  for the ~40 genuinely public/differently-authenticated routes (OAuth
+  callbacks validated by CSRF state, webhooks validated by provider signature,
+  portal magic-links, MCP discovery, `DEV_MODE`-gated docs/dev routes).
+  Companion script `backend/scripts/audit_route_auth.py` regenerates the
+  candidate list after adding routes. `QBOSyncService._safe_qbo_string` now
+  also escapes backslashes and strips control characters, not just quotes.
+  Redis unreachability at startup is now fatal when `DEV_MODE=false` (mirrors
+  the RLS-bypass fatal-startup pattern) — the in-memory revocation/rate-limit
+  fallback is not reliable across multiple uvicorn workers and must not run
+  silently in production. `RegisterRequest`/`PlanSignupRequest`/
+  `ResetPasswordRequest` reject a small local common-password blocklist and
+  structural patterns (all-same-char, sequential digits) that a length-only
+  policy misses. Removed the deprecated `X-XSS-Protection` nginx header.
+  `error_tracker.capture_error` now runs `message`/`stack_trace` through the
+  existing `app.services.pii_detection.scrub_pii` before persisting, so an
+  exception that echoes a client's email/SSN/phone/card number (e.g. a
+  uniqueness-constraint violation) doesn't land verbatim in `ErrorLog`.
 - **Client portal security and UX:** client portal sessions now use a dedicated
   `client_portal_token` cookie instead of overwriting firm-app auth, portal JWTs
   carry the accepted invite ID, and portal requests fail closed if the invite is

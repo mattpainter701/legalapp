@@ -27,6 +27,78 @@ scopes is a possible future enhancement.
 
 ---
 
+## Backend/API Security Remediation Follow-Up — 2026-07-02 (DONE)
+
+**Goal:** Close the remaining Medium/Low findings from the 2026-07-02 backend
+security review, plus the deferred structural fix (fail-open tenant
+middleware), which the prior remediation round explicitly scoped out.
+
+- [x] Route auth-coverage regression test (structural fix for fail-open
+      tenant middleware — a static audit + CI guard instead of a runtime
+      default-deny rewrite, to avoid behavior-change risk across ~500 routes)
+- [x] Harden QBO query-string escaping (backslash + control-char handling,
+      not just quote-doubling)
+- [x] Fail closed at startup if Redis is unreachable and `DEV_MODE=false`
+      (mirrors the RLS-bypass fatal-startup pattern)
+- [x] Reject common/weak passwords on register/reset (local blocklist, no
+      external API call)
+- [x] Remove deprecated `X-XSS-Protection` header from nginx config
+- [x] Redact PII shapes (email/SSN/phone/card) from `ErrorLog.message` and
+      `.stack_trace` before persisting
+
+Summary: `backend/tests/test_route_auth_coverage.py` walks every registered
+FastAPI route and asserts each one calls a recognized auth function (or a
+same-codebase helper that does, resolved transitively through service-layer
+wrappers like `require_teams_enabled`), unless explicitly allowlisted with a
+reviewed reason (OAuth callbacks validated by CSRF state, webhooks validated
+by provider signature, portal magic-links, MCP discovery, DEV_MODE-gated
+routes). Verified the test has teeth via a mutation check (deleting a real
+allowlist entry makes it fail) and passes under both `DEV_MODE=true` and
+`DEV_MODE=false`. `backend/scripts/audit_route_auth.py` is a companion
+standalone script for regenerating the candidate list after adding routes.
+PII redaction reuses the existing `app.services.pii_detection.scrub_pii`
+(discovered mid-task — an earlier draft had built a duplicate regex module
+before noticing the existing one; deleted before landing). Full DB-backed
+suite run: 190 passed, 58 failed, 162 errored — all failures/errors verified
+as pre-existing Docker/Postgres-unavailable environmental noise (Windows
+async event-loop exhaustion cascading through ~400 tests when Postgres is
+unreachable), not regressions — every file touched this session was
+additionally verified passing in isolated/targeted runs. Frontend production
+build still clean (untouched this round). Run the full suite against a live
+Postgres before merging.
+
+---
+
+## Backend/API Prod-Readiness Security Remediation — 2026-07-02 (DONE)
+
+**Goal:** Close the highest-severity gaps found in a full backend/API security
+review conducted ahead of MVP-to-prod promotion.
+
+- [x] Move SPA auth off localStorage onto httpOnly-cookie-only sessions
+- [x] Fail closed at startup on a short/placeholder `SECRET_KEY` or `PLATFORM_SECRET_KEY`
+- [x] Exclude `/dev/*` router entirely (not just 404) unless `DEV_MODE=true`
+- [x] Hide `/docs`, `/redoc`, `/openapi.json` unless `DEV_MODE=true`
+- [x] Make superuser/BYPASSRLS DB role detection fatal at startup (was log-only)
+- [x] Stop `/health` from echoing raw DB exception text to unauthenticated callers
+- [x] Rate-limit JWT extraction now reads the cookie, not just the Authorization header
+- [x] Document upload endpoint enforces a PDF/DOC/DOCX/TXT allowlist
+
+Summary: closed the six "High" findings and two of the "Medium" findings from
+the security review (see conversation for the full list; remaining
+medium/low items — QBO query string-building, Redis-down revocation fallback,
+password breach-list check — are tracked for a follow-up pass). Verified via
+`tests/test_config.py` (placeholder/length rejection logic exercised directly
+against both the real committed `.env.hypervisor`/`.env.prod.example`
+template values and the documented local pytest `SECRET_KEY`/
+`PLATFORM_SECRET_KEY` fixtures to confirm no false positive), a full frontend
+production build, and syntax checks on all modified backend files. Full
+DB-backed pytest suite was not run this session (Docker Desktop was not
+running locally) — run `pytest tests/` before merging per
+`memory/backend-test-env.md` (updated with the new `PLATFORM_SECRET_KEY`
+length requirement).
+
+---
+
 ## Client Portal Security And UX Remediation — 2026-06-29 (DONE)
 
 **Goal:** Close the customer portal gaps found in review before broader rollout.

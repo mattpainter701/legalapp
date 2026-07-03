@@ -37,10 +37,21 @@ class QBOSyncService:
 
     @staticmethod
     def _safe_qbo_string(value: str | None) -> str:
-        """Escape single quotes for safe QBO query interpolation."""
+        """Escape a value for safe interpolation into a QBO query-language string.
+
+        QBO's REST API has no parameterized-query support — filter values are
+        interpolated directly into a SQL-like query string — so this is the
+        only injection defense available. Escapes backslash first (so a
+        trailing backslash can't consume the closing quote we add), then
+        single quotes (QBO's string-literal escape, matching standard SQL),
+        and strips control characters (newline/CR/NUL) that could otherwise
+        be used to smuggle additional query clauses or malformed request
+        bodies past this single-line string context.
+        """
         if value is None:
             return ""
-        return value.replace("'", "''")
+        value = value.replace("\\", "\\\\").replace("'", "''")
+        return "".join(ch for ch in value if ch >= " " or ch == "\t")
 
     @property
     def _headers(self) -> dict:
