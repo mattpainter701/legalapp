@@ -1,5 +1,32 @@
 # TASKS.md
 
+## Call Intake Prod Readiness — Tasks Module + Follow-up Receipts — 2026-07-03 (DONE)
+
+**Goal:** Make the standalone Call Intake product ready for the first customer:
+receptionists and assignees on the `intake-only` plan need task management to
+track lead follow-up, and the firm needs to see whether an assignee viewed
+their task and whether the caller was contacted back.
+
+- [x] Add a `tasks` module and bundle it into the `intake-only` plan (nav, route, and `/api/tasks` module-guard mapping)
+- [x] Keep legacy `enabled_modules` tenants working (matters implies tasks)
+- [x] Task read receipts: `viewed_at` set only by the assignee's own view (auto on Tasks page load / task fetch, explicit `POST /api/tasks/{id}/view`)
+- [x] Customer-contact tracking: `POST /api/tasks/{id}/contacted` with method + note, "Log contact" action in the Tasks UI
+- [x] Surface lead status, task status, seen, and contacted state on the intake dashboard call panel and in the calls CSV export
+- [x] Migration `073_task_read_receipts`; focused + full backend tests, frontend production build
+
+Summary: the `intake-only` plan now ships `intake-dashboard` + `tasks`, so an
+intake-only tenant's receptionist can watch lead/task state and assignees can
+work their follow-ups. Tasks carry `viewed_at` (in-app read receipt, assignee
+only), `customer_contacted_at`, and `customer_contact_method`; the Tasks page
+shows Seen/Unread and Contacted badges with a Log Contact modal, the intake
+call panel shows follow-up state per call, and the calls export includes
+`task_viewed_at` / `customer_contacted_at` / `customer_contact_method` columns.
+Email-based read receipts were deliberately not used (recipient-dismissable and
+widely blocked in M365/Google); sent-mail reply detection via Graph/Gmail
+scopes is a possible future enhancement.
+
+---
+
 ## Client Portal Security And UX Remediation — 2026-06-29 (DONE)
 
 **Goal:** Close the customer portal gaps found in review before broader rollout.

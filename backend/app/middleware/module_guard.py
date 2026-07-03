@@ -22,6 +22,7 @@ API_MODULE_MAP = {
     "/api/matters": "matters",
     "/api/chat": "chat",
     "/api/calendar": "calendar",
+    "/api/tasks": "tasks",
     "/api/communications": "communications",
     "/api/contacts": "contacts",
     "/api/templates": "templates",

@@ -276,7 +276,7 @@ export default function App() {
         />
         <Route
           path="/tasks"
-          element={<ShellRoute title="Tasks" module="matters"><TasksPage /></ShellRoute>}
+          element={<ShellRoute title="Tasks" module="tasks"><TasksPage /></ShellRoute>}
         />
         <Route
           path="/intake"

@@ -84,6 +84,18 @@ class Task(Base):
     reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Read receipt: first time the assignee opened/saw this task in-app.
+    viewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Follow-up outcome: when the assignee reported contacting the customer.
+    customer_contacted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # "call" | "email" | "sms" | "meeting" | "other"
+    customer_contact_method: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
 
     # "manual" | "email_agent" | "calendar_sync"
     source: Mapped[str] = mapped_column(

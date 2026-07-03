@@ -59,6 +59,9 @@ class RecentIntakeCaller(BaseModel):
     task_priority: Optional[str] = None
     task_due_date: Optional[date] = None
     task_completed_at: Optional[datetime] = None
+    task_viewed_at: Optional[datetime] = None
+    task_customer_contacted_at: Optional[datetime] = None
+    task_customer_contact_method: Optional[str] = None
     created_by_user_id: Optional[uuid.UUID] = None
     created_by_name: Optional[str] = None
     occurred_at: datetime

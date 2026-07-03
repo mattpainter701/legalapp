@@ -68,6 +68,9 @@ INTAKE_CALL_EXPORT_FIELDS = [
     "assigned_to_user_id",
     "task_status",
     "task_completed_at",
+    "task_viewed_at",
+    "customer_contacted_at",
+    "customer_contact_method",
     "logged_by_name",
     "logged_by_user_id",
     "contact_id",
@@ -412,6 +415,9 @@ async def _upsert_lead_assignment_task(
         task.status = "pending" if task.status == "cancelled" else task.status
         task.due_date = task.due_date or date.today()
         task.contact_id = lead.contact_id
+        if task.assigned_to_user_id != assigned_to_user_id:
+            # New assignee has not seen the task; reset the read receipt.
+            task.viewed_at = None
         task.assigned_to_user_id = assigned_to_user_id
 
     return task
@@ -479,6 +485,9 @@ async def _upsert_general_call_task(
         task.status = "pending" if task.status == "cancelled" else task.status
         task.due_date = task.due_date or date.today()
         task.contact_id = contact_id
+        if task.assigned_to_user_id != assigned_to_user_id:
+            # New assignee has not seen the task; reset the read receipt.
+            task.viewed_at = None
         task.assigned_to_user_id = assigned_to_user_id
     return task
 
@@ -836,6 +845,13 @@ async def recent_callers(
                 task_priority=task.priority if task else None,
                 task_due_date=task.due_date if task else None,
                 task_completed_at=task.completed_at if task else None,
+                task_viewed_at=task.viewed_at if task else None,
+                task_customer_contacted_at=task.customer_contacted_at
+                if task
+                else None,
+                task_customer_contact_method=task.customer_contact_method
+                if task
+                else None,
                 created_by_user_id=log.created_by_user_id,
                 created_by_name=_user_name_from_row(creator),
                 occurred_at=log.occurred_at,
@@ -1035,6 +1051,13 @@ async def export_call_records(
                 else "",
                 "task_status": task.status if task else "",
                 "task_completed_at": _iso_datetime(task.completed_at) if task else "",
+                "task_viewed_at": _iso_datetime(task.viewed_at) if task else "",
+                "customer_contacted_at": _iso_datetime(task.customer_contacted_at)
+                if task
+                else "",
+                "customer_contact_method": (task.customer_contact_method or "")
+                if task
+                else "",
                 "logged_by_name": logged_by or "",
                 "logged_by_user_id": str(log.created_by_user_id)
                 if log.created_by_user_id

@@ -57,6 +57,13 @@ async def test_intake_only_allowed_on_intake(intake_client):
 
 
 @pytest.mark.asyncio
+async def test_intake_only_allowed_on_tasks(intake_client):
+    # Standalone call-intake customers manage lead follow-up through tasks.
+    resp = await intake_client.get("/api/tasks")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_full_platform_token_not_blocked(client):
     # default conftest token has no plan claim -> full-platform -> allowed
     resp = await client.get("/api/matters")

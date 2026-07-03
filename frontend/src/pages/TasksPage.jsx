@@ -8,11 +8,13 @@ import {
   getOverdueTasks,
   sendTaskReminder,
   qualifyIntakeTask,
+  markTaskViewed,
+  markTaskContacted,
   searchUsers,
   getLead,
   convertLead,
 } from '../api'
-import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X } from 'lucide-react'
+import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import { useAuth } from '../App'
@@ -516,8 +518,76 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
   )
 }
 
+function LogContactModal({ task, onClose, onLogged }) {
+  const [method, setMethod] = useState('call')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      await markTaskContacted(task.id, { method, note: note.trim() || undefined })
+      onLogged()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Customer contact could not be logged.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-brand-ink font-sans">Log Customer Contact</h2>
+            <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
+          </div>
+          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">How were they contacted?</label>
+            <select value={method} onChange={e => setMethod(e.target.value)}
+              className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
+              <option value="call">Phone call</option>
+              <option value="email">Email</option>
+              <option value="sms">Text message</option>
+              <option value="meeting">Meeting</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+              className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
+              placeholder="What was discussed, next steps..." />
+          </div>
+          {error && (
+            <AlertBanner type="error" title="Contact was not logged">
+              {error}
+            </AlertBanner>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>
+            <button type="submit" disabled={saving}
+              className="px-4 py-2 text-sm bg-brand-ink text-white rounded hover:bg-brand-ink/90 disabled:opacity-50">
+              {saving ? 'Logging…' : 'Log Contact'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function TaskRow({
   task,
+  currentUserId,
+  canOpenMatters,
   onComplete,
   onDeleteRequest,
   onConfirmDelete,
@@ -528,6 +598,7 @@ function TaskRow({
   onActionError,
   onQualifyIntake,
   onOpenMatter,
+  onLogContact,
 }) {
   const label = dueDateLabel(task.due_date)
   const isOverdue = task.due_date && new Date(task.due_date + 'T00:00:00') < new Date() && task.status !== 'completed'
@@ -583,7 +654,41 @@ function TaskRow({
           </span>
         )}
         <PriorityBadge priority={task.priority} />
+        {task.assigned_to_user_id && task.assigned_to_user_id !== currentUserId && (
+          task.viewed_at ? (
+            <span
+              title={`Seen by assignee ${new Date(task.viewed_at).toLocaleString()}`}
+              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200"
+            >
+              <Eye size={11} /> Seen
+            </span>
+          ) : (
+            <span
+              title="The assignee has not opened this task yet"
+              className="inline-flex items-center gap-1 rounded-full bg-brand-amber/10 px-2 py-0.5 text-[11px] font-semibold text-brand-amber border border-brand-amber/20"
+            >
+              <Eye size={11} /> Unread
+            </span>
+          )
+        )}
+        {task.customer_contacted_at && (
+          <span
+            title={`Customer contacted ${new Date(task.customer_contacted_at).toLocaleString()}${task.customer_contact_method ? ` via ${task.customer_contact_method}` : ''}`}
+            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200"
+          >
+            <PhoneOutgoing size={11} /> Contacted
+          </span>
+        )}
         <span className="text-[11px] text-brand-muted uppercase hidden group-hover:inline">{task.task_type?.replace('_', ' ')}</span>
+        {!task.customer_contacted_at && task.contact_id && task.status !== 'completed' && task.status !== 'cancelled' && (
+          <button
+            onClick={() => onLogContact(task)}
+            title="Record that the customer was called or emailed back"
+            className="text-[11px] font-semibold text-blue-700 border border-blue-200 rounded px-2 py-1 hover:bg-blue-700 hover:text-white transition-colors"
+          >
+            Log contact
+          </button>
+        )}
         {isIntakeFollowUpTask(task) && task.status !== 'completed' && (
           <button
             onClick={() => onQualifyIntake(task)}
@@ -592,7 +697,7 @@ function TaskRow({
             Qualify lead
           </button>
         )}
-        {isAttorneyIntakeTask(task) && task.status !== 'completed' && (
+        {isAttorneyIntakeTask(task) && task.status !== 'completed' && canOpenMatters && (
           <button
             onClick={() => onOpenMatter(task)}
             className="text-[11px] font-semibold text-brand-green border border-brand-green/30 rounded px-2 py-1 hover:bg-brand-green hover:text-white transition-colors"
@@ -675,6 +780,12 @@ export default function TasksPage() {
   const [deletingId, setDeletingId] = useState(null)
   const [qualifyTask, setQualifyTask] = useState(null)
   const [openMatterTask, setOpenMatterTask] = useState(null)
+  const [logContactTask, setLogContactTask] = useState(null)
+
+  const canOpenMatters =
+    !Array.isArray(user?.enabled_modules) ||
+    user.enabled_modules.length === 0 ||
+    user.enabled_modules.includes('matters')
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -692,14 +803,33 @@ export default function TasksPage() {
       const overdueIds = new Set((overdueData.items || []).map(t => t.id))
       setTasks(allTasks.filter(t => !overdueIds.has(t.id)))
       setOverdue(overdueData.items || [])
+      return [...allTasks, ...(overdueData.items || [])]
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load tasks')
+      return []
     } finally {
       setLoading(false)
     }
   }, [filterStatus, filterPriority, filterType])
 
   useEffect(() => { loadTasks() }, [loadTasks])
+
+  // Read receipt: rendering this page shows the assignee their tasks, so mark
+  // any of the current user's unviewed tasks as seen (fire-and-forget).
+  useEffect(() => {
+    if (!user?.id || loading) return
+    const mine = [...overdue, ...tasks].filter(
+      t => t.assigned_to_user_id === user.id && !t.viewed_at
+    )
+    if (mine.length === 0) return
+    mine.forEach(t => { markTaskViewed(t.id).catch(() => {}) })
+    const seenAt = new Date().toISOString()
+    const markSeen = list => list.map(
+      t => (t.assigned_to_user_id === user.id && !t.viewed_at ? { ...t, viewed_at: seenAt } : t)
+    )
+    setTasks(markSeen)
+    setOverdue(markSeen)
+  }, [loading, user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleComplete = async (task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
@@ -755,6 +885,8 @@ export default function TasksPage() {
   const totalActive = overdue.length + todayTasks.length + upcomingTasks.length + noDueTasks.length
   const hasFilters = Boolean(filterStatus || filterPriority || filterType)
   const taskRowActions = {
+    currentUserId: user?.id,
+    canOpenMatters,
     onComplete: handleComplete,
     onDeleteRequest: handleDeleteRequest,
     onConfirmDelete: handleConfirmDelete,
@@ -765,6 +897,7 @@ export default function TasksPage() {
     onActionError: setActionError,
     onQualifyIntake: setQualifyTask,
     onOpenMatter: setOpenMatterTask,
+    onLogContact: setLogContactTask,
   }
 
   return (
@@ -936,6 +1069,17 @@ export default function TasksPage() {
           onClose={() => setQualifyTask(null)}
           onQualified={() => {
             setQualifyTask(null)
+            loadTasks()
+          }}
+        />
+      )}
+
+      {logContactTask && (
+        <LogContactModal
+          task={logContactTask}
+          onClose={() => setLogContactTask(null)}
+          onLogged={() => {
+            setLogContactTask(null)
             loadTasks()
           }}
         />

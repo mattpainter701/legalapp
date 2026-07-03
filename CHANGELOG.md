@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- **Call Intake standalone: tasks module + follow-up receipts:** the `intake-only`
+  plan now bundles a new `tasks` module (nav item, `/tasks` route, and
+  `/api/tasks` module-guard mapping) so receptionists and assignees on the
+  standalone product can view and work lead follow-up tasks. Tasks gained
+  in-app read receipts (`viewed_at`, set only when the assignee views their
+  task — automatically on the Tasks page or via `POST /api/tasks/{id}/view`)
+  and customer-contact tracking (`POST /api/tasks/{id}/contacted` with
+  method + note → `customer_contacted_at`/`customer_contact_method`, first
+  contact promotes a pending task to in-progress). The Tasks page shows
+  Seen/Unread and Contacted badges plus a Log Contact modal, the intake
+  dashboard call panel shows lead status, assignee, task status, seen, and
+  contacted state per call, and the intake calls CSV export gained
+  `task_viewed_at`, `customer_contacted_at`, and `customer_contact_method`
+  columns for partner-commission and follow-up reconciliation. Migration
+  `073_task_read_receipts`. Legacy `enabled_modules` tenants keep the Tasks
+  page (matters implies tasks); the Open Matter intake action is hidden on
+  plans without the matters module.
 - **CourtListener embedding scheduler:** added `mcp_server.embedding_scheduler`
   and a profile-gated `embedding-scheduler` compose service. The scheduler
   periodically counts `opinion_chunks` with missing embeddings, uses a Postgres

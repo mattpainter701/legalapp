@@ -26,8 +26,10 @@ A `Plan` is the unit of sale: a named bundle of modules plus metadata.
 | `upsell_target` | Plan id to upsell toward (`full-platform`), or `null` |
 
 Current registry: `intake-only` (public, upsells to full) and `full-platform` (default,
-not public). Admin/accountant users additionally get the `admin` module so an intake-only
-firm can manage its own users and partner rotation.
+not public). The `intake-only` plan bundles `intake-dashboard` **and** `tasks` — call
+follow-up is task-driven, so assignees need the Tasks page to see and work their leads and
+the receptionist needs it to watch follow-up state. Admin/accountant users additionally get
+the `admin` module so an intake-only firm can manage its own users and partner rotation.
 
 Adding a new tier = add one `Plan` entry. No endpoint or schema changes required.
 
@@ -79,9 +81,10 @@ POST /api/auth/signup/plan
 claim in the access token. Requests to a module-scoped API prefix outside the plan get
 **403 `{"detail": "Module not available on your plan"}`**.
 
-- Mapped prefixes: `/api/matters`, `/api/chat`, `/api/calendar`, `/api/communications`,
-  `/api/contacts`, `/api/templates`, `/api/time-tracking`, `/api/invoices`, `/api/trust`,
-  `/api/reports`, `/api/mcp`. **New module routers must be added to `API_MODULE_MAP`.**
+- Mapped prefixes: `/api/matters`, `/api/chat`, `/api/calendar`, `/api/tasks`,
+  `/api/communications`, `/api/contacts`, `/api/templates`, `/api/time-tracking`,
+  `/api/invoices`, `/api/trust`, `/api/reports`, `/api/mcp`. **New module routers must be
+  added to `API_MODULE_MAP`.**
 - Shared infra (`/api/auth`, `/api/me`, `/api/plan`, intake, admin, plugins listing, health,
   portal) is never blocked.
 - The `plan` claim is signed by the server (set at token issuance), so it is trustworthy.
@@ -108,6 +111,23 @@ Each row snapshots `assigned_to_name` / `assigned_by_name` at write time, so the
 accurate even if a user is renamed or removed. Both exports accept optional `start`/`end`
 date-range query params. The intake dashboard shows a **Partner Log** panel with inline
 export, alongside the existing call-records export.
+
+## Follow-up accountability (read receipts + customer contact)
+
+Every intake follow-up task tracks whether the assignee actually saw it and whether the
+caller was contacted back (migration `073`, columns on `tasks`):
+
+| Signal | Set when | Surfaced |
+|-|-|-|
+| `viewed_at` | The **assignee** opens the Tasks page or fetches the task (`GET /api/tasks/{id}` or `POST /api/tasks/{id}/view`); views by other users never count | "Seen / Unread" badge on task rows, "Task seen" on the intake dashboard call panel, `task_viewed_at` in the calls CSV export |
+| `customer_contacted_at` + `customer_contact_method` | Assignee (or admin) posts `POST /api/tasks/{id}/contacted` `{method: call\|email\|sms\|meeting\|other, note}` — the "Log contact" action on a task row. First-contact timestamp is preserved; the note is appended to the task description and a `pending` task moves to `in_progress` | "Contacted" badge, "Customer contacted" on the call panel, `customer_contacted_at` / `customer_contact_method` in the calls export |
+
+These are **in-app receipts** — they measure engagement with the assigned task, not email
+opens. Native M365/Google email read receipts (`Disposition-Notification-To` /
+`Return-Receipt-To` headers on the assignment email) are recipient-dismissable and widely
+blocked, so they are deliberately not relied on. Detecting a reply to the customer from
+M365/Google sent-mail would require per-user `Mail.Read`/Gmail scopes and is a possible
+future enhancement; the explicit "Log contact" action is the reliable signal today.
 
 ## Upsell
 

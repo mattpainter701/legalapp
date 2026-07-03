@@ -70,6 +70,19 @@ class TaskUpdate(BaseModel):
         return v
 
 
+class TaskContactedRequest(BaseModel):
+    method: str = "call"
+    note: Optional[str] = None
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, v: str) -> str:
+        allowed = {"call", "email", "sms", "meeting", "other"}
+        if v not in allowed:
+            raise ValueError(f"method must be one of {allowed}")
+        return v
+
+
 class IntakeTaskQualifyRequest(BaseModel):
     assigned_to_user_id: uuid.UUID
     partner_notes: Optional[str] = None
@@ -103,6 +116,9 @@ class TaskResponse(BaseModel):
     assigned_to_user_id: Optional[uuid.UUID]
     created_by_user_id: Optional[uuid.UUID]
     completed_at: Optional[datetime]
+    viewed_at: Optional[datetime] = None
+    customer_contacted_at: Optional[datetime] = None
+    customer_contact_method: Optional[str] = None
     source: str
     external_ref: Optional[str]
     created_at: datetime

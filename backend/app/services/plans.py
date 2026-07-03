@@ -22,7 +22,7 @@ PLANS: dict[str, Plan] = {
     "intake-only": Plan(
         id="intake-only",
         label="Call Intake",
-        modules=["intake-dashboard"],
+        modules=["intake-dashboard", "tasks"],
         default_module="intake-dashboard",
         billing_tier="intake_trial",
         public_signup=True,

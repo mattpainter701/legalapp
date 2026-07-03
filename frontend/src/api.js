@@ -955,6 +955,12 @@ export const sendTaskReminder = (taskId) =>
 export const qualifyIntakeTask = (taskId, data) =>
   api.post(`/tasks/${taskId}/qualify-intake`, data).then(r => r.data)
 
+export const markTaskViewed = (taskId) =>
+  api.post(`/tasks/${taskId}/view`).then(r => r.data)
+
+export const markTaskContacted = (taskId, data) =>
+  api.post(`/tasks/${taskId}/contacted`, data).then(r => r.data)
+
 // ── Communications ─────────────────────────────────────────────────────────
 
 export const getCommunications = (params = {}) =>
