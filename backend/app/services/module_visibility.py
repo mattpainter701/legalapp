@@ -16,6 +16,7 @@ MODULE_ROUTES = {
     "matters": "/matters",
     "chat": "/chat",
     "calendar": "/calendar",
+    "tasks": "/tasks",
     "communications": "/communications",
     "contacts": "/contacts",
     "intake": "/intake",
@@ -61,6 +62,10 @@ def _expand_modules(modules: list[str]) -> list[str]:
             normalized.append(module)
     if FULL_PLATFORM_MODULE in normalized:
         return list(FULL_PLATFORM_MODULES)
+    if "matters" in normalized and "tasks" not in normalized:
+        # Legacy module lists predate the standalone tasks module; matters
+        # tenants always had the tasks page, so keep it visible.
+        normalized.append("tasks")
     if "plugins" not in normalized:
         normalized.append("plugins")
     return sorted(

@@ -18,7 +18,7 @@ const NAV_GROUPS = [
     label: 'Workspace',
     items: [
       { path: '/calendar',       label: 'Calendar',       icon: CalendarDays, module: 'calendar' },
-      { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'matters' },
+      { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'tasks' },
       { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
       { path: '/contacts',       label: 'Contacts',       icon: Users, module: 'contacts' },
       { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },

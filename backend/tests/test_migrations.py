@@ -12,4 +12,4 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["071_operator_audit_logs"]
+    assert heads == ["073_task_read_receipts"]

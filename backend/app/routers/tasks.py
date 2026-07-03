@@ -34,6 +34,7 @@ from app.services.task_notifications import (
 from app.schemas.task import (
     IntakeTaskQualifyRequest,
     IntakeTaskQualifyResponse,
+    TaskContactedRequest,
     TaskCreate,
     TaskListResponse,
     TaskResponse,
@@ -434,15 +435,75 @@ async def get_task(
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
-    result = await db.execute(
-        select(Task).where(
-            Task.id == task_id,
-            Task.tenant_id == uuid.UUID(tenant_id),
+    task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
+        task.viewed_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(task)
+    return TaskResponse.model_validate(task)
+
+
+@router.post("/{task_id}/view", response_model=TaskResponse)
+async def mark_task_viewed(
+    task_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read receipt: record that the assignee has seen this task (idempotent).
+
+    Only a view by the assigned user counts — a receptionist or admin looking
+    at the task list must not mark someone else's task as read.
+    """
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
+        task.viewed_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(task)
+    return TaskResponse.model_validate(task)
+
+
+@router.post("/{task_id}/contacted", response_model=TaskResponse)
+async def mark_customer_contacted(
+    task_id: uuid.UUID,
+    payload: TaskContactedRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record that the customer was contacted for this follow-up task."""
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+    if (
+        task.assigned_to_user_id
+        and task.assigned_to_user_id != current_user.id
+        and current_user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the assigned user or an admin can log customer contact",
         )
-    )
-    task = result.scalar_one_or_none()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+
+    now = datetime.now(timezone.utc)
+    if task.customer_contacted_at is None:
+        task.customer_contacted_at = now
+    task.customer_contact_method = payload.method
+    if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
+        task.viewed_at = now
+    if task.status == "pending":
+        task.status = "in_progress"
+    if payload.note and payload.note.strip():
+        contacted_by = current_user.full_name or current_user.email
+        task.description = _append_section(
+            task.description,
+            f"Customer contact ({payload.method}, {now.strftime('%Y-%m-%d %H:%M')} UTC, {contacted_by}):",
+            payload.note,
+        )
+    await db.commit()
+    await db.refresh(task)
     return TaskResponse.model_validate(task)
 
 
@@ -476,6 +537,13 @@ async def update_task(
         task.completed_at = datetime.now(timezone.utc)
     elif updates.get("status") and updates["status"] != "completed":
         task.completed_at = None
+
+    if (
+        assignment_changed
+        and updates.get("assigned_to_user_id") != task.assigned_to_user_id
+    ):
+        # New assignee has not seen the task; reset the read receipt.
+        task.viewed_at = None
 
     for field, value in updates.items():
         setattr(task, field, value)

@@ -3,7 +3,7 @@ from app.services.plans import get_plan, public_plans, plan_for_config
 
 def test_intake_only_plan_shape():
     plan = get_plan("intake-only")
-    assert plan.modules == ["intake-dashboard"]
+    assert plan.modules == ["intake-dashboard", "tasks"]
     assert plan.default_module == "intake-dashboard"
     assert plan.public_signup is True
     assert plan.upsell_target == "full-platform"
@@ -51,6 +51,7 @@ async def test_resolve_intake_only_from_plan(db_session, test_tenant, test_user)
     )
     # admin user also gets the admin module via _with_finance_admin
     assert "intake-dashboard" in modules
+    assert "tasks" in modules
     assert "plugins" not in modules
     assert route == "/intake/dashboard"
 

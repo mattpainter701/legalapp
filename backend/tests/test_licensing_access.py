@@ -87,8 +87,9 @@ async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenan
     assert response.status_code == 200
     body = response.json()
     # Standalone Call Intake plan: no plugins/marketplace for a non-admin user;
-    # upsell is handled by locked-nav teasers instead.
-    assert body["enabled_modules"] == ["intake-dashboard"]
+    # upsell is handled by locked-nav teasers instead. Tasks ship with intake so
+    # receptionists and assignees can track lead follow-up.
+    assert body["enabled_modules"] == ["tasks", "intake-dashboard"]
     assert body["default_route"] == "/intake/dashboard"
     assert body["plan"] == "intake-only"
     assert body["upsell_target"] == "full-platform"
