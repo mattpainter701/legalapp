@@ -3,6 +3,23 @@
 ## [Unreleased]
 
 ### Added
+- **Call Intake tasks: assigner notes, closure reasons, customer-history
+  documentation:** task assignment emails can now carry a personal message
+  from the assigner (`assignment_note` on `POST /api/tasks` and on reassign
+  via `PATCH /api/tasks/{id}` — rendered as a highlighted "Message from
+  assigner" row in the alert email and appended to the task description).
+  Closing a task now records accountability: `closed_reason` +
+  `closed_by_user_id` are set on completion/cancellation, cancelling
+  **requires** a reason (422 without one), and reopening clears the closure
+  record. Every lifecycle event on a contact-linked task — assigned,
+  reassigned, customer contacted (Log Contact), completed, cancelled — is
+  now documented in the customer's communication history as a
+  `CommunicationLog` row (`external_ref = task:{id}:{event}`), including the
+  intake-dashboard lead follow-up / general-call task assignments and the
+  partner qualify handoff. The Tasks page gained an Assign To picker +
+  "Message to Assignee" field on create, Reassign and Close (with required
+  reason) actions per row, a Cancelled status filter, and closed-reason
+  display on closed rows. Migration `074_task_closure_tracking`.
 - **Call Intake standalone: tasks module + follow-up receipts:** the `intake-only`
   plan now bundles a new `tasks` module (nav item, `/tasks` route, and
   `/api/tasks` module-guard mapping) so receptionists and assignees on the
