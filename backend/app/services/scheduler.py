@@ -41,6 +41,10 @@ from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
 from app.services.cloud_sync import CloudSyncService
 from app.services.email import email_service
+from app.services.integration_observability import (
+    capture_integration_error,
+    record_integration_sync_run,
+)
 
 settings = get_settings()
 
@@ -1268,14 +1272,42 @@ class LegalScheduler:
                     try:
                         counts = await sync_svc.sync_all(session, str(tenant_id))
                         tenants_synced += 1
-                        for provider_counts in counts.values():
-                            total_records += sum(provider_counts.values())
+                        for provider, provider_counts in counts.items():
+                            provider_total = sum(provider_counts.values())
+                            total_records += provider_total
+                            await record_integration_sync_run(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                job_type="cloud-sync",
+                                status="completed",
+                                items_ok=provider_total,
+                            )
+                            await session.commit()
                     except Exception as tenant_err:
                         logger.warning(
                             "[cloud-sync] Sync failed for tenant %s: %s",
                             tenant_id,
                             tenant_err,
                         )
+                        await session.rollback()
+                        await capture_integration_error(
+                            session,
+                            tenant_id=tenant_id,
+                            provider="cloud",
+                            job_type="cloud-sync",
+                            message=str(tenant_err),
+                        )
+                        await record_integration_sync_run(
+                            session,
+                            tenant_id=tenant_id,
+                            provider="cloud",
+                            job_type="cloud-sync",
+                            status="failed",
+                            items_failed=1,
+                            error_summary=str(tenant_err),
+                        )
+                        await session.commit()
 
                 # Restore bypass context for the final log commit (sync_all set a
                 # tenant-scoped context on the shared session).
@@ -1358,6 +1390,15 @@ class LegalScheduler:
                             )
                             total_captured += counts.get("captured", 0)
                             users_scanned += 1
+                            await record_integration_sync_run(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                job_type="correspondence-capture",
+                                status="completed",
+                                items_ok=counts.get("captured", 0),
+                            )
+                            await session.commit()
                         except Exception as user_err:
                             logger.warning(
                                 "[correspondence-capture] Failed for user %s (%s): %s",
@@ -1366,6 +1407,23 @@ class LegalScheduler:
                                 user_err,
                             )
                             await session.rollback()
+                            await capture_integration_error(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                job_type="correspondence-capture",
+                                message=str(user_err),
+                            )
+                            await record_integration_sync_run(
+                                session,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                job_type="correspondence-capture",
+                                status="failed",
+                                items_failed=1,
+                                error_summary=str(user_err),
+                            )
+                            await session.commit()
 
                 await _bypass_rls(session)
                 summary = (
@@ -1431,7 +1489,17 @@ class LegalScheduler:
                         else:
                             continue
                         synced += 1
-                        total_users += res.get("total", 0)
+                        seen = res.get("total", 0)
+                        total_users += seen
+                        await record_integration_sync_run(
+                            session,
+                            tenant_id=tenant_id,
+                            provider=provider,
+                            job_type="user-sync",
+                            status="completed",
+                            items_ok=seen,
+                        )
+                        await session.commit()
                     except Exception as tenant_err:
                         failed += 1
                         logger.warning(
@@ -1451,6 +1519,23 @@ class LegalScheduler:
                                 tenant_id,
                                 record_err,
                             )
+                        await capture_integration_error(
+                            session,
+                            tenant_id=tenant_id,
+                            provider=provider,
+                            job_type="user-sync",
+                            message=str(tenant_err),
+                        )
+                        await record_integration_sync_run(
+                            session,
+                            tenant_id=tenant_id,
+                            provider=provider,
+                            job_type="user-sync",
+                            status="failed",
+                            items_failed=1,
+                            error_summary=str(tenant_err),
+                        )
+                        await session.commit()
 
                 await _bypass_rls(session)
                 summary = (

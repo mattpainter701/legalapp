@@ -46,6 +46,7 @@ from app.models.user_oauth_token import UserOAuthToken
 from app.models.teams_channel_link import TeamsChannelLink
 from app.models.teams_notification_setting import TeamsNotificationSetting
 from app.models.error_log import ErrorLog
+from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.contact import Contact, Lead
 from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
 from app.models.client_portal import ClientPortalInvite
@@ -137,6 +138,7 @@ __all__ = [
     "TeamsChannelLink",
     "TeamsNotificationSetting",
     "ErrorLog",
+    "IntegrationSyncRun",
     "Contact",
     "Lead",
     "LegacyCallRecord",

@@ -12,6 +12,7 @@ the multi-hop folder traversal and go directly to the pre-created folder.
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -38,6 +39,29 @@ DOCUMENT_CATEGORY_FOLDER_MAP = {
 }
 
 
+@dataclass(frozen=True)
+class StorageResult:
+    """Structured result for matter-file storage.
+
+    `storage_path` is the legacy value existing callers persist today. New
+    persistence code should prefer the explicit metadata fields when columns are
+    available.
+    """
+
+    provider: str
+    backend: str
+    storage_path: str | None = None
+    web_url: str | None = None
+    provider_item_id: str | None = None
+    drive_id: str | None = None
+    parent_id: str | None = None
+    error: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.error is None
+
+
 class MatterFileStore:
     """Store matter files in the customer's connected cloud storage."""
 
@@ -53,11 +77,41 @@ class MatterFileStore:
         matter_cloud_folder: dict | None = None,
         preferred_provider: str | None = None,
     ) -> str:
-        """Upload a file. Returns the storage path/URL.
+        """Upload a file. Returns the legacy storage path/URL.
 
         When matter_cloud_folder is provided, uploads directly to the pre-provisioned
         subfolder ID instead of traversing the folder tree.
         preferred_provider controls which cloud is tried first.
+        """
+        result = await self.store_matter_file_result(
+            db=db,
+            tenant_id=tenant_id,
+            matter_slug=matter_slug,
+            category=category,
+            filename=filename,
+            content=content,
+            content_type=content_type,
+            matter_cloud_folder=matter_cloud_folder,
+            preferred_provider=preferred_provider,
+        )
+        return result.storage_path or ""
+
+    async def store_matter_file_result(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        matter_slug: str,
+        category: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        matter_cloud_folder: dict | None = None,
+        preferred_provider: str | None = None,
+    ) -> StorageResult:
+        """Upload a file and return structured provider metadata.
+
+        This is the integration point for durable provider IDs once model columns
+        are available. `store_matter_file()` remains as the legacy string wrapper.
         """
         logger.info(
             "Storing %s/%s/%s (%d bytes) for tenant %s via preferred=%s",
@@ -88,7 +142,7 @@ class MatterFileStore:
 
         for provider in providers:
             if provider == "onedrive":
-                path = await self._try_store_onedrive(
+                result = await self._try_store_onedrive(
                     db,
                     tenant_id,
                     matter_slug,
@@ -98,10 +152,10 @@ class MatterFileStore:
                     content_type,
                     folder_id=onedrive_folder_id,
                 )
-                if path:
-                    return path
+                if result and result.succeeded:
+                    return result
             elif provider == "google_drive":
-                path = await self._try_store_google_drive(
+                result = await self._try_store_google_drive(
                     db,
                     tenant_id,
                     matter_slug,
@@ -111,10 +165,10 @@ class MatterFileStore:
                     content_type,
                     folder_id=gdrive_folder_id,
                 )
-                if path:
-                    return path
+                if result and result.succeeded:
+                    return result
             elif provider == "sharepoint":
-                path = await self._try_store_sharepoint(
+                result = await self._try_store_sharepoint(
                     db,
                     tenant_id,
                     filename,
@@ -123,8 +177,8 @@ class MatterFileStore:
                     folder_id=sharepoint_folder_id,
                     drive_id=sharepoint_drive_id,
                 )
-                if path:
-                    return path
+                if result and result.succeeded:
+                    return result
 
         # Fallback: local disk
         return await self._store_local(
@@ -147,12 +201,16 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
-    ) -> str | None:
+    ) -> StorageResult | None:
         """Try to store in customer's OneDrive. Uses upload session for files > 4 MiB."""
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
-                return None
+                return StorageResult(
+                    provider="microsoft",
+                    backend="onedrive",
+                    error="Microsoft token unavailable",
+                )
 
             if folder_id:
                 parent_id = folder_id
@@ -182,22 +240,34 @@ class MatterFileStore:
                 )
                 if resp.status_code in (200, 201):
                     data = resp.json()
-                    web_url = data.get("webUrl") or data.get(
-                        "@microsoft.graph.downloadUrl", ""
+                    result = _storage_result_from_graph_item(
+                        data,
+                        backend="onedrive",
+                        parent_id=parent_id,
                     )
-                    logger.info("Stored %s in OneDrive: %s", filename, web_url)
-                    return web_url
+                    logger.info("Stored %s in OneDrive: %s", filename, result.web_url)
+                    return result
                 else:
+                    error = f"OneDrive upload failed: {resp.status_code} {resp.text[:200]}"
                     logger.warning(
                         "OneDrive upload failed for %s: %s %s",
                         filename,
                         resp.status_code,
                         resp.text[:200],
                     )
-                    return None
+                    return StorageResult(
+                        provider="microsoft",
+                        backend="onedrive",
+                        parent_id=parent_id,
+                        error=error,
+                    )
         except Exception as exc:
             logger.warning("OneDrive storage attempt failed: %s", exc)
-            return None
+            return StorageResult(
+                provider="microsoft",
+                backend="onedrive",
+                error=str(exc),
+            )
 
     async def _upload_large_onedrive(
         self,
@@ -206,7 +276,7 @@ class MatterFileStore:
         filename: str,
         content: bytes,
         content_type: str,
-    ) -> str | None:
+    ) -> StorageResult | None:
         """Upload a large file to OneDrive using the resumable upload session API."""
         try:
             # Create upload session
@@ -228,11 +298,21 @@ class MatterFileStore:
                         session_resp.status_code,
                         session_resp.text[:200],
                     )
-                    return None
+                    return StorageResult(
+                        provider="microsoft",
+                        backend="onedrive",
+                        parent_id=parent_id,
+                        error=f"OneDrive upload session creation failed: {session_resp.status_code}",
+                    )
 
                 upload_url = session_resp.json().get("uploadUrl")
                 if not upload_url:
-                    return None
+                    return StorageResult(
+                        provider="microsoft",
+                        backend="onedrive",
+                        parent_id=parent_id,
+                        error="OneDrive upload session missing uploadUrl",
+                    )
 
             # Upload in chunks
             total = len(content)
@@ -253,11 +333,13 @@ class MatterFileStore:
                     )
                     if chunk_resp.status_code in (200, 201):
                         data = chunk_resp.json()
-                        web_url = data.get("webUrl") or data.get(
-                            "@microsoft.graph.downloadUrl", ""
+                        result = _storage_result_from_graph_item(
+                            data,
+                            backend="onedrive",
+                            parent_id=parent_id,
                         )
                         logger.info("Uploaded large file %s to OneDrive", filename)
-                        return web_url
+                        return result
                     elif chunk_resp.status_code == 202:
                         offset = end
                         continue
@@ -267,11 +349,26 @@ class MatterFileStore:
                             chunk_resp.status_code,
                             chunk_resp.text[:200],
                         )
-                        return None
-            return None
+                        return StorageResult(
+                            provider="microsoft",
+                            backend="onedrive",
+                            parent_id=parent_id,
+                            error=f"OneDrive chunk upload failed: {chunk_resp.status_code}",
+                        )
+            return StorageResult(
+                provider="microsoft",
+                backend="onedrive",
+                parent_id=parent_id,
+                error="OneDrive upload session completed without final item",
+            )
         except Exception as exc:
             logger.warning("Large OneDrive upload failed: %s", exc)
-            return None
+            return StorageResult(
+                provider="microsoft",
+                backend="onedrive",
+                parent_id=parent_id,
+                error=str(exc),
+            )
 
     async def _try_store_google_drive(
         self,
@@ -283,12 +380,16 @@ class MatterFileStore:
         content: bytes,
         content_type: str,
         folder_id: str | None = None,
-    ) -> str | None:
+    ) -> StorageResult | None:
         """Try to store in customer's Google Drive. Uses resumable upload for files > 5 MiB."""
         try:
             token = await get_fresh_token(db, tenant_id, "google")
             if not token:
-                return None
+                return StorageResult(
+                    provider="google",
+                    backend="google_drive",
+                    error="Google token unavailable",
+                )
 
             if folder_id:
                 parent_id = folder_id
@@ -305,7 +406,15 @@ class MatterFileStore:
                     filename,
                     existing,
                 )
-                return f"https://drive.google.com/file/d/{existing}/view"
+                web_link = _gdrive_web_url(existing)
+                return StorageResult(
+                    provider="google",
+                    backend="google_drive",
+                    storage_path=web_link,
+                    web_url=web_link,
+                    provider_item_id=existing,
+                    parent_id=parent_id,
+                )
 
             if len(content) > self._CHUNK_THRESHOLD_GOOGLE:
                 return await self._upload_large_google_drive(
@@ -337,20 +446,38 @@ class MatterFileStore:
                 if resp.status_code in (200, 201):
                     data = resp.json()
                     file_id = data.get("id", "")
-                    web_link = f"https://drive.google.com/file/d/{file_id}/view"
+                    web_link = data.get("webViewLink") or _gdrive_web_url(file_id)
+                    result = StorageResult(
+                        provider="google",
+                        backend="google_drive",
+                        storage_path=web_link,
+                        web_url=web_link,
+                        provider_item_id=file_id or None,
+                        parent_id=parent_id,
+                    )
                     logger.info("Stored %s in Google Drive: %s", filename, web_link)
-                    return web_link
+                    return result
                 else:
+                    error = f"Google Drive upload failed: {resp.status_code} {resp.text[:200]}"
                     logger.warning(
                         "Google Drive upload failed for %s: %s %s",
                         filename,
                         resp.status_code,
                         resp.text[:200],
                     )
-                    return None
+                    return StorageResult(
+                        provider="google",
+                        backend="google_drive",
+                        parent_id=parent_id,
+                        error=error,
+                    )
         except Exception as exc:
             logger.warning("Google Drive storage attempt failed: %s", exc)
-            return None
+            return StorageResult(
+                provider="google",
+                backend="google_drive",
+                error=str(exc),
+            )
 
     async def _find_gdrive_file(
         self, token: str, parent_id: str, filename: str
@@ -387,7 +514,7 @@ class MatterFileStore:
         filename: str,
         content: bytes,
         content_type: str,
-    ) -> str | None:
+    ) -> StorageResult | None:
         """Upload a large file to Google Drive using resumable upload."""
         try:
             # Initiate resumable upload session.
@@ -408,14 +535,24 @@ class MatterFileStore:
                         "Google Drive resumable session init failed: %s",
                         init_resp.status_code,
                     )
-                    return None
+                    return StorageResult(
+                        provider="google",
+                        backend="google_drive",
+                        parent_id=parent_id,
+                        error=f"Google Drive resumable session init failed: {init_resp.status_code}",
+                    )
 
                 upload_url = init_resp.headers.get("Location")
                 if not upload_url:
                     # Some API versions return the URL in the response.
                     upload_url = init_resp.headers.get("location")
                 if not upload_url:
-                    return None
+                    return StorageResult(
+                        provider="google",
+                        backend="google_drive",
+                        parent_id=parent_id,
+                        error="Google Drive resumable session missing upload URL",
+                    )
 
             # Upload in chunks.
             total = len(content)
@@ -437,8 +574,16 @@ class MatterFileStore:
                     if chunk_resp.status_code in (200, 201):
                         data = chunk_resp.json()
                         file_id = data.get("id", "")
+                        web_link = data.get("webViewLink") or _gdrive_web_url(file_id)
                         logger.info("Uploaded large file %s to Google Drive", filename)
-                        return f"https://drive.google.com/file/d/{file_id}/view"
+                        return StorageResult(
+                            provider="google",
+                            backend="google_drive",
+                            storage_path=web_link,
+                            web_url=web_link,
+                            provider_item_id=file_id or None,
+                            parent_id=parent_id,
+                        )
                     elif chunk_resp.status_code == 308:
                         # 308 Resume Incomplete — continue.
                         offset = end
@@ -449,11 +594,26 @@ class MatterFileStore:
                             chunk_resp.status_code,
                             chunk_resp.text[:200],
                         )
-                        return None
-            return None
+                        return StorageResult(
+                            provider="google",
+                            backend="google_drive",
+                            parent_id=parent_id,
+                            error=f"Google Drive chunk upload failed: {chunk_resp.status_code}",
+                        )
+            return StorageResult(
+                provider="google",
+                backend="google_drive",
+                parent_id=parent_id,
+                error="Google Drive upload session completed without final file",
+            )
         except Exception as exc:
             logger.warning("Large Google Drive upload failed: %s", exc)
-            return None
+            return StorageResult(
+                provider="google",
+                backend="google_drive",
+                parent_id=parent_id,
+                error=str(exc),
+            )
 
     async def _try_store_sharepoint(
         self,
@@ -465,14 +625,26 @@ class MatterFileStore:
         *,
         folder_id: str | None,
         drive_id: str | None,
-    ) -> str | None:
+    ) -> StorageResult | None:
         """Try to store in a configured SharePoint document library."""
         if not folder_id or not drive_id:
-            return None
+            return StorageResult(
+                provider="microsoft",
+                backend="sharepoint",
+                drive_id=drive_id,
+                parent_id=folder_id,
+                error="SharePoint drive_id or folder_id unavailable",
+            )
         try:
             token = await get_fresh_token(db, tenant_id, "microsoft")
             if not token:
-                return None
+                return StorageResult(
+                    provider="microsoft",
+                    backend="sharepoint",
+                    drive_id=drive_id,
+                    parent_id=folder_id,
+                    error="Microsoft token unavailable",
+                )
             upload_url = (
                 f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}:/"
                 f"{filename}:/content"
@@ -485,24 +657,40 @@ class MatterFileStore:
                         "Authorization": f"Bearer {token}",
                         "Content-Type": content_type,
                     },
-                )
+            )
             if resp.status_code in (200, 201):
                 data = resp.json()
-                web_url = data.get("webUrl") or data.get(
-                    "@microsoft.graph.downloadUrl", ""
+                result = _storage_result_from_graph_item(
+                    data,
+                    backend="sharepoint",
+                    parent_id=folder_id,
+                    drive_id=drive_id,
                 )
-                logger.info("Stored %s in SharePoint: %s", filename, web_url)
-                return web_url
+                logger.info("Stored %s in SharePoint: %s", filename, result.web_url)
+                return result
+            error = f"SharePoint upload failed: {resp.status_code} {resp.text[:200]}"
             logger.warning(
                 "SharePoint upload failed for %s: %s %s",
                 filename,
                 resp.status_code,
                 resp.text[:200],
             )
-            return None
+            return StorageResult(
+                provider="microsoft",
+                backend="sharepoint",
+                drive_id=drive_id,
+                parent_id=folder_id,
+                error=error,
+            )
         except Exception as exc:
             logger.warning("SharePoint storage attempt failed: %s", exc)
-            return None
+            return StorageResult(
+                provider="microsoft",
+                backend="sharepoint",
+                drive_id=drive_id,
+                parent_id=folder_id,
+                error=str(exc),
+            )
 
     async def _store_local(
         self,
@@ -511,14 +699,18 @@ class MatterFileStore:
         category: str,
         filename: str,
         content: bytes,
-    ) -> str:
+    ) -> StorageResult:
         """Store file on local disk. Returns the absolute storage path."""
         rel_path = f"matters/{matter_slug}/{category}/{filename}"
         full_path = Path(settings.UPLOAD_DIR) / tenant_id / rel_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_bytes(content)
         logger.info("Stored %s locally at %s", filename, full_path)
-        return str(full_path)
+        return StorageResult(
+            provider="local",
+            backend="local",
+            storage_path=str(full_path),
+        )
 
 
 def _extract_subfolder_id(
@@ -575,6 +767,32 @@ def _ordered_providers(preferred: str | None) -> list[str]:
     if preferred in all_providers:
         return [preferred] + [p for p in all_providers if p != preferred]
     return all_providers
+
+
+def _storage_result_from_graph_item(
+    data: dict,
+    *,
+    backend: str,
+    parent_id: str | None,
+    drive_id: str | None = None,
+) -> StorageResult:
+    web_url = data.get("webUrl") or data.get("@microsoft.graph.downloadUrl")
+    parent_ref = data.get("parentReference") or {}
+    resolved_drive_id = drive_id or parent_ref.get("driveId")
+    resolved_parent_id = parent_id or parent_ref.get("id")
+    return StorageResult(
+        provider="microsoft",
+        backend=backend,
+        storage_path=web_url,
+        web_url=web_url,
+        provider_item_id=data.get("id"),
+        drive_id=resolved_drive_id,
+        parent_id=resolved_parent_id,
+    )
+
+
+def _gdrive_web_url(file_id: str) -> str:
+    return f"https://drive.google.com/file/d/{file_id}/view"
 
 
 async def _ensure_onedrive_path(token: str, folders: list[str]) -> str:

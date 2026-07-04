@@ -9,6 +9,11 @@ class IntegrationStatus(BaseModel):
     scopes: Optional[str] = None
     required_scopes: Optional[str] = None
     missing_scopes: list[str] = []
+    health: str = "disconnected"
+    reconnect_required: bool = False
+    last_refresh_at: Optional[datetime] = None
+    last_refresh_error: Optional[str] = None
+    scopes_version: int = 1
     expires_at: Optional[datetime] = None
     service_account_email: Optional[str] = None
     last_user_sync_at: Optional[datetime] = None

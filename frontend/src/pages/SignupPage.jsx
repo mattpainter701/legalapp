@@ -53,8 +53,8 @@ export default function SignupPage() {
     setLoading(true)
     try {
       const data = { ...form, staff_size: form.staff_size ? parseInt(form.staff_size, 10) : null }
-      const res = await register(data)
-      await authLogin(res.access_token)
+      await register(data)
+      await authLogin()
       navigate('/matters', { replace: true })
     } catch (err) {
       setError(err.response?.data?.detail || 'Registration failed')

@@ -28,7 +28,7 @@ On top of these, the review found **security defects** the June plan did not cov
 | 0.6 Scheduled email scan | ✅ Partially — `correspondence-capture` scheduler job ships (`scheduler.py:87, 1299`); the LLM `email_agent` pipeline remains manual-only |
 | Task calendar push per-user tokens | ✅ Done (TASKS.md 2026-06-11) |
 | 0.3–0.5, 0.7 (provisioning race, `storage_backend` column, error classification, scheduled calendar sync) | ❌ Not done |
-| Phase 1 health spine (`integration_sync_runs`, token health columns, scope audit) | ❌ Not done |
+| Phase 1 health spine (`integration_sync_runs`, token health columns, scope audit) | ✅ Done — shipped as remediation Phase 2 via migration `073_integration_observability`; admin health cards now show token health, refresh errors, reconnect state, and recent sync runs |
 | Phase 2 calendar engine (`external_calendar_events`) | ❌ Not done |
 | Phase 3 email pipeline (`email_matter_links`, matching v2, delta sync) | ❌ Not done |
 | Phase 4 RAG email | ❌ Not done |
@@ -162,41 +162,42 @@ Phases are ordered so that security lands first, the reliability substrate secon
 
 ### Phase 1 — Reliability core (~1.5 weeks)
 
-| # | Fix | Files |
-|---|---|---|
-| 1.1 | **Shared provider HTTP clients**: new `services/graph_client.py` + `services/google_client.py` — single base URLs, default timeout (e.g. 30s), 429/`Retry-After` honoring + bounded transient retry (borrow `teams._graph_request` pattern), typed exceptions (`ProviderAuthError`, `ProviderThrottled`, `ProviderNotFound`, `ProviderError`) | new files; migrate `calendar_sync.py`, `google/microsoft_mail.py`, `google/microsoft_calendar.py`, `user_sync.py`, `cloud_sync.py`, `cloud_init.py`, `cloud_search.py`, `document_sync.py`, `matter_file_store.py` |
-| 1.2 | **Consolidate token refresh** into one code path (single `_refresh(provider, row)` used by tenant and user grains); `SELECT … FOR UPDATE` (or `with_for_update(skip_locked)` + short wait/re-read) around refresh to kill the race; always persist rotated refresh tokens | `token_vault.py` |
-| 1.3 | **Persist token health**: on refresh failure record `last_refresh_error`/`last_refresh_at`; on `invalid_grant` flip `is_active=False` and set `health='revoked'`; add retry-with-backoff for transient token-endpoint failures | `token_vault.py`, models + migration (shared with 2.1) |
-| 1.4 | **Truthful status**: `/api/integrations/status` and `get_calendar_providers` surface `health`/`reconnect_required` instead of row-exists=connected | `integrations.py:1230-1290`, `auth.py:1426-1447` |
-| 1.5 | **Consistent error contract**: services raise the typed exceptions from 1.1; routers map `ProviderAuthError`→424 (pattern exists in `routers/calendar.py`), `ProviderThrottled`→503+Retry-After; retire the RuntimeError/None/bool mix | routers + services |
-| 1.6 | **Token vault test suite** (first ever): httpx `MockTransport` — encrypt/decrypt round-trip, `_is_fresh` skew, refresh success/rotation persistence, `invalid_grant` → health flip, 5xx retry, concurrent-refresh single-flight | `backend/tests/test_token_vault.py` (new) |
+| # | Status | Fix | Files |
+|-|-|-|-|
+| 1.1 | ✅ Done (core + mail slice) | **Shared provider HTTP clients**: added `services/provider_http.py`, `services/graph_client.py`, and `services/google_client.py` with shared base URLs, default timeout, 429/`Retry-After` honoring, bounded transient retry, and typed exceptions (`ProviderAuthError`, `ProviderThrottled`, `ProviderNotFound`, `ProviderError`). Migrated the Microsoft/Gmail mail readers as representative covered callers. | `provider_http.py`, `graph_client.py`, `google_client.py`, `google_mail.py`, `microsoft_mail.py` |
+| 1.1b | ⏸ Deferred | Migrate the remaining wide raw-HTTP fanout after storage/provider identity semantics are tightened: `calendar_sync.py`, `google_calendar.py`, `microsoft_calendar.py`, `user_sync.py`, `cloud_sync.py`, `cloud_init.py`, `cloud_search.py`, `document_sync.py`, `matter_file_store.py`, and admin/provider probes. | Phase 3+ service migrations |
+| 1.2 | ✅ Done | **Consolidate token refresh** into one code path used by tenant and user grains; `SELECT ... FOR UPDATE` plus a bounded Postgres lock timeout wraps check-then-refresh; rotated refresh tokens are persisted. | `token_vault.py` |
+| 1.3 | ✅ Done | **Persist token health**: on refresh failure record `last_refresh_error`/`last_refresh_at`; on `invalid_grant` flip `is_active=False` where applicable and set `health='revoked'`; token endpoints now retry transient 5xx/429/transport failures. | `token_vault.py`, models + migration 073 |
+| 1.4 | ✅ Done | **Truthful status**: `/api/integrations/status` and admin health surfaces expose `health`/`reconnect_required` instead of row-exists=connected. Calendar-provider status uses the same persisted token-health fields where available. | `integrations.py`, `admin.py`, credential models |
+| 1.5 | ⏸ Deferred | **Consistent router error contract**: services now have typed provider exceptions in the shared layer, but broad router-level remapping (`ProviderAuthError`→424, `ProviderThrottled`→503+Retry-After) remains deferred until the remaining services migrate. | routers + remaining services |
+| 1.6 | ✅ Done | **Token vault and provider-client test suites**: coverage for refresh success/rotation persistence, `invalid_grant` health flip, 5xx retry, provider 401/429/5xx mapping, mail reader client usage, and a Postgres-only concurrent-refresh single-flight regression. | `backend/tests/test_token_vault.py`, `test_provider_http.py`, `test_mail_provider_clients.py` |
 
 ### Phase 2 — Observability spine (~1 week)
 
-| # | Fix | Files |
-|---|---|---|
-| 2.1 | **`integration_sync_runs` table** (tenant_id, provider, job_type, started/finished, status, items_ok, items_failed, error_summary) + token-health columns (`health`, `last_refresh_error`, `scopes_version`) on both credential tables | new model + migration |
-| 2.2 | **Scope audit at callback**: compare granted `scope` to the required set; persist the gap; mark `missing_scopes` instead of discovering at call time | `integrations.py` callbacks |
-| 2.3 | **Wire `error_tracker`/`ErrorLog`** into scheduler jobs and integration services (capture in `_guarded` and per-tenant failure branches); fix `cloud_search_status` to report real errors | `scheduler.py:216, 387`, `routers/cloud_admin.py:175-195` |
-| 2.4 | **Admin dashboard**: per-provider health cards (token health, last sync runs per job type, docs local-vs-cloud counts, failing matters) in `IntegrationsPanel.jsx`/`CloudSearchAdmin.jsx`; one-click "Run sync now" / "Repair" |
-| 2.5 | **User re-auth prompts**: banner + settings card when the user's own token is missing/expired/under-scoped | frontend |
-| 2.6 | **De-silence chat cloud search**: record skip/fail reason (no token / planner declined / provider error) into chat response metadata; failure stays non-fatal but becomes diagnosable | `rag.py:301-388` |
-| 2.7 | Make directory-sync licensing explicit: config or admin toggle for auto-`license_active` on synced users | `services/user_sync.py` |
+| # | Status | Fix | Files |
+|-|-|-|-|
+| 2.1 | ✅ Done | **`integration_sync_runs` table** (tenant_id, provider, job_type, started/finished, status, items_ok, items_failed, error_summary) + token-health columns (`health`, `last_refresh_error`, `scopes_version`) on both credential tables | `models/integration_sync_run.py`, `migrations/versions/073_integration_observability.py`, credential models |
+| 2.2 | ✅ Done | **Scope audit at callback**: compare granted `scope` to the required set; persist the gap; mark `missing_scopes` instead of discovering at call time | `integrations.py`, `services/integration_observability.py` |
+| 2.3 | ✅ Done | **Wire `error_tracker`/`ErrorLog`** into integration scheduler jobs and per-tenant failure branches; fix `cloud_search_status` to report real errors | `services/scheduler.py`, `routers/cloud_admin.py` |
+| 2.4 | ✅ Done (health slice) | **Admin dashboard**: per-provider cards now show token health, refresh errors, reconnect state, and recent sync runs; existing "Sync now" remains wired. Docs local-vs-cloud counts/failing matters/repair remain Phase 3 storage work. | `routers/admin.py`, `IntegrationsPanel.jsx` |
+| 2.5 | ⏸ Deferred | **User re-auth prompts**: banner + settings card when the user's own token is missing/expired/under-scoped | frontend |
+| 2.6 | ⏸ Deferred | **De-silence chat cloud search**: record skip/fail reason (no token / planner declined / provider error) into chat response metadata; failure stays non-fatal but becomes diagnosable | `rag.py:301-388` |
+| 2.7 | ⏸ Deferred | Make directory-sync licensing explicit: config or admin toggle for auto-`license_active` on synced users | `services/user_sync.py` |
 
 ### Phase 3 — Storage correctness (~1.5 weeks)
 
-| # | Fix | Files |
-|---|---|---|
-| 3.1 | **Implement cloud document delete**: DELETE removes the provider item by object ID (see 3.5) with `ProviderNotFound` tolerated, then the DB row; offer "unlink only" variant. Replaces the 501 stub | `routers/matter_documents.py:198-205`, `matter_file_store.py` |
-| 3.2 | **Delta sync + pruning**: adopt Graph `/delta` and Drive `changes.list`/`startPageToken` cursors (persist in the existing `sync_cursor` column); tombstone/prune `cloud_metadata_index` rows on deletion/move; full re-list only as fallback/backfill | `cloud_sync.py`, `models/cloud_metadata.py` |
-| 3.3 | **Index matter subfolders**: recursive (or matter-folder-scoped) enumeration in the scheduled sync; add pagination loops to `document_sync.py` | `cloud_sync.py:575`, `document_sync.py` |
-| 3.4 | **Unify folder naming**: one `matter_folder_name(matter)` helper used by background provisioning, provision/sync endpoints, and all three providers (incl. SharePoint) | `cloud_init.py`, `matters.py:251-255, 2298, 2578` |
-| 3.5 | **Real storage columns**: `storage_backend`, `storage_error`, `provider_object_id` on `matter_documents` (+ backfill migration from URL sniffing); upload response returns destination ("Saved to OneDrive ✓" / "Saved locally ⚠") | `models/matter_document.py`, `matter_file_store.py`, migration |
-| 3.6 | **Provisioning robustness**: queue provisioning as a tracked retryable job (or lazy-provision on first upload via the existing idempotent `_ensure_*` helpers); `_status='partial'` with per-provider detail when some providers fail; Google 409/duplicate recovery; upload dedupe pre-check for OneDrive/SharePoint (replace blind `conflictBehavior=rename`) | `matters.py:685`, `cloud_init.py`, `matter_file_store.py` |
-| 3.7 | **Folder reconcile job + repair endpoint**: weekly verification that root/matter/subfolder IDs still resolve; auto-repair + report via `integration_sync_runs`; per-matter "Repair cloud folders" button | new scheduler agent, `matters.py`, frontend |
-| 3.8 | **Local→cloud backfill** task: push locally-stored docs (now identifiable via 3.5) to the correct matter folder once a healthy credential exists; dedupe against existing files | script/scheduler task |
-| 3.9 | Scope the per-matter "Sync folder" action to that matter's folders instead of tenant-wide `sync_all` | `matters.py:2593`, `cloud_sync.py` |
-| 3.10 | Merge/retire duplicate listing implementations: `document_sync.py` browse/ingest moves onto the shared clients + `cloud_sync` index | `document_sync.py` |
+| # | Status | Fix | Files |
+|-|-|-|-|
+| 3.1 | ✅ Done (metadata-backed rows) | **Implement cloud document delete**: DELETE removes the provider item by object ID with `ProviderNotFound` tolerated, then the DB row. Legacy URL-only cloud rows still fail closed because they cannot be safely routed. | `routers/matter_documents.py`, `matter_file_store.py` |
+| 3.2 | ⏸ Deferred | **Delta sync + pruning**: adopt Graph `/delta` and Drive `changes.list`/`startPageToken` cursors (persist in the existing `sync_cursor` column); tombstone/prune `cloud_metadata_index` rows on deletion/move; full re-list only as fallback/backfill | `cloud_sync.py`, `models/cloud_metadata.py` |
+| 3.3 | ⏸ Deferred | **Index matter subfolders**: recursive (or matter-folder-scoped) enumeration in the scheduled sync; add pagination loops to `document_sync.py` | `cloud_sync.py:575`, `document_sync.py` |
+| 3.4 | ⏸ Deferred | **Unify folder naming**: one `matter_folder_name(matter)` helper used by background provisioning, provision/sync endpoints, and all three providers (incl. SharePoint) | `cloud_init.py`, `matters.py:251-255, 2298, 2578` |
+| 3.5 | ✅ Done (new writes) | **Real storage columns**: `storage_provider`, `storage_backend`, `storage_error`, `provider_object_id`, `provider_drive_id`, and `provider_parent_id` on `matter_documents`; uploads now return structured provider metadata and new matter uploads persist it. Historical backfill remains deferred. | `models/matter_document.py`, `matter_file_store.py`, migration 074 |
+| 3.6 | ⏸ Partial | **Provisioning robustness**: structured upload results now expose failures, and Google Drive folder creation now recovers from 409 duplicate races like OneDrive/SharePoint. Tracked retryable provisioning, partial provider status, and OneDrive/SharePoint upload pre-check dedupe remain open. | `matters.py:685`, `cloud_init.py`, `matter_file_store.py` |
+| 3.7 | ⏸ Deferred | **Folder reconcile job + repair endpoint**: weekly verification that root/matter/subfolder IDs still resolve; auto-repair + report via `integration_sync_runs`; per-matter "Repair cloud folders" button | new scheduler agent, `matters.py`, frontend |
+| 3.8 | ⏸ Deferred | **Local→cloud backfill** task: push locally-stored docs (now identifiable via 3.5) to the correct matter folder once a healthy credential exists; dedupe against existing files | script/scheduler task |
+| 3.9 | ✅ Done | Scope the per-matter "Sync folder" action to that matter's primary/subfolder/context folders instead of tenant-wide `sync_all`; scheduler/admin sync still uses `sync_all`. | `matters.py`, `cloud_sync.py` |
+| 3.10 | ⏸ Deferred | Merge/retire duplicate listing implementations: `document_sync.py` browse/ingest moves onto the shared clients + `cloud_sync` index | `document_sync.py` |
 
 ### Phase 4 — Feature verticals (carried from June plan; ~4 weeks)
 

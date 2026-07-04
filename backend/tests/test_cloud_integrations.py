@@ -16,6 +16,11 @@ from app.services.cloud_search import (
     CloudHit,
     CloudSearchService,
 )
+from app.services.cloud_sync import (
+    _matter_folder_ids,
+    _sharepoint_folder_refs,
+    CloudSyncService,
+)
 from app.services.rag import build_cloud_context
 from app.services.scheduler import AGENT_REGISTRY, LegalScheduler
 
@@ -203,6 +208,122 @@ def test_cloud_metadata_scope_folder_ids_extracts_all_matter_folders():
     ]
 
 
+def test_matter_scoped_sync_extracts_primary_subfolders_and_context():
+    cloud_folder = {
+        "google_drive": {
+            "matter_folder_id": "gd-primary",
+            "subfolders": {
+                "documents": "gd-docs",
+                "pleadings": "gd-pleadings",
+            },
+        },
+        "onedrive": {
+            "id": "od-primary",
+            "subfolders": {
+                "documents": "od-docs",
+            },
+        },
+        "context_folders": [
+            {"provider": "google_drive", "matter_folder_id": "gd-context"},
+            {"provider": "onedrive", "folder_id": "od-context"},
+        ],
+    }
+
+    assert _matter_folder_ids(cloud_folder, "google_drive") == [
+        "gd-primary",
+        "gd-docs",
+        "gd-pleadings",
+        "gd-context",
+    ]
+    assert _matter_folder_ids(cloud_folder, "onedrive") == [
+        "od-primary",
+        "od-docs",
+        "od-context",
+    ]
+
+
+def test_matter_scoped_sync_extracts_sharepoint_drive_refs():
+    cloud_folder = {
+        "sharepoint": {
+            "drive_id": "drive-1",
+            "matter_folder_id": "sp-primary",
+            "subfolders": {
+                "documents": "sp-docs",
+            },
+        },
+        "context_folders": [
+            {
+                "provider": "sharepoint",
+                "drive_id": "drive-2",
+                "matter_folder_id": "sp-context",
+            }
+        ],
+    }
+
+    assert _sharepoint_folder_refs(cloud_folder) == [
+        ("drive-1", "sp-primary"),
+        ("drive-1", "sp-docs"),
+        ("drive-2", "sp-context"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sync_matter_folders_dispatches_only_folder_syncs(monkeypatch):
+    service = CloudSyncService()
+    calls: list[tuple[str, object]] = []
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+
+    class FakeDb:
+        async def execute(self, *args, **kwargs):
+            return None
+
+    async def fake_google(db, tenant_id, folder_ids, user_id=None):
+        calls.append(("google", folder_ids))
+        assert user_id == "user-1"
+        return 2
+
+    async def fake_onedrive(db, tenant_id, folder_ids, user_id=None):
+        calls.append(("onedrive", folder_ids))
+        assert user_id == "user-1"
+        return 3
+
+    async def fake_sharepoint(db, tenant_id, folder_refs):
+        calls.append(("sharepoint", folder_refs))
+        return 4
+
+    async def fail_sync_all(*args, **kwargs):
+        raise AssertionError("matter folder sync must not call sync_all")
+
+    monkeypatch.setattr(service, "sync_google_drive_folders", fake_google)
+    monkeypatch.setattr(service, "sync_onedrive_folders", fake_onedrive)
+    monkeypatch.setattr(service, "sync_sharepoint_folders", fake_sharepoint)
+    monkeypatch.setattr(service, "sync_all", fail_sync_all)
+
+    result = await service.sync_matter_folders(
+        db=FakeDb(),
+        tenant_id=tenant_id,
+        user_id="user-1",
+        matter_cloud_folder={
+            "google_drive": {"matter_folder_id": "gd-primary"},
+            "onedrive": {"matter_folder_id": "od-primary"},
+            "sharepoint": {
+                "drive_id": "drive-1",
+                "matter_folder_id": "sp-primary",
+            },
+        },
+    )
+
+    assert result == {
+        "google": {"files": 2, "emails": 0},
+        "microsoft": {"files": 7, "emails": 0},
+    }
+    assert calls == [
+        ("google", ["gd-primary"]),
+        ("onedrive", ["od-primary"]),
+        ("sharepoint", [("drive-1", "sp-primary")]),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
     """A tenant can have Microsoft 365 and Google connected simultaneously."""
@@ -347,3 +468,54 @@ def test_cloud_folder_selection_falls_back_to_lowest_duplicate_suffix():
     chosen = cloud_init._choose_existing_folder(items, "claritylegal-records")
 
     assert chosen["id"] == "folder-2"
+
+
+@pytest.mark.asyncio
+async def test_gdrive_folder_create_409_recovers_existing_folder(monkeypatch):
+    """If another worker creates the folder after our pre-list, re-list and reuse it."""
+    from app.services import cloud_init
+
+    class Response:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.get_calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            self.get_calls += 1
+            if self.get_calls == 1:
+                return Response(200, {"files": []})
+            return Response(
+                200,
+                {
+                    "files": [
+                        {
+                            "id": "folder-existing",
+                            "name": "Matter A",
+                            "createdTime": "2026-07-02T10:00:00Z",
+                        }
+                    ]
+                },
+            )
+
+        async def post(self, *args, **kwargs):
+            return Response(409, text="already exists")
+
+    monkeypatch.setattr(cloud_init.httpx, "AsyncClient", FakeClient)
+
+    assert await cloud_init._ensure_gdrive_folder(
+        "token", "Matter A", "parent-folder"
+    ) == "folder-existing"

@@ -1149,6 +1149,85 @@ Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug
 
 ## Backlog — Integration Health & Module Restoration
 
+### Integration Remediation Phase 1 — Reliability Core (P1, LARGE)
+- [x] Add shared provider HTTP clients with default timeout, Retry-After/429 handling, transient retry, and typed provider exceptions
+- [x] Consolidate token refresh behavior with row locking, transient retry, rotated refresh-token persistence, and health updates
+- [x] Migrate representative provider service callers onto the shared HTTP layer with focused tests
+- [x] Keep remaining raw provider-call migrations explicitly tracked in the remediation plan
+- [x] Run focused integration reliability tests and backend compile
+
+Summary: added `provider_http.py`, `graph_client.py`, and `google_client.py`
+with bounded provider HTTP timeout/retry behavior, `Retry-After` handling for
+429s, transient 5xx/transport retry, and typed provider exceptions. Migrated
+Microsoft/Gmail mail readers off raw no-timeout `httpx` calls and added focused
+provider-client/mail tests. `token_vault.py` now uses one refresh path for
+Microsoft, Google, and Zoom, wraps stale-token check/refresh in `SELECT ... FOR
+UPDATE` with a bounded Postgres lock timeout, retries transient token endpoint
+failures, persists rotated refresh tokens, and records token health. Remaining
+raw-provider migrations for storage/calendar/directory/search stay tracked in
+`docs/integrations-remediation-plan.md` Phase 3+ because they need broader
+storage semantics and typed router mapping. Verification: backend compile
+passed; focused reliability/observability tests passed with 22 passed and one
+Postgres-only concurrency regression skipped locally unless `TEST_DATABASE_URL`
+is set.
+
+### Integration Remediation Phase 2 — Observability Spine (P1, LARGE)
+- [x] Add `integration_sync_runs` model/migration and helpers for provider/job sync reporting
+- [x] Persist OAuth callback scope audit results and expose missing scopes
+- [x] Wire integration scheduler failures into admin-visible `ErrorLog`
+- [x] Add admin integration health data/cards backed by token health and recent sync runs
+- [x] Add focused backend/frontend tests and update the remediation plan status
+
+Summary: added migration `073_integration_observability` with token-health/scope-audit columns on tenant and user OAuth credential tables plus tenant-scoped `integration_sync_runs`. Microsoft/Google OAuth callbacks now persist missing-scope audit results. Token refresh failures record `last_refresh_error`, and `invalid_grant` marks credentials revoked/inactive. Cloud/user/correspondence integration scheduler branches now write sync-run rows and admin-visible `ErrorLog` entries for per-tenant failures. Admin integration responses and cards show token health, refresh errors, reconnect state, and recent sync runs. Verification: backend compile passed, focused observability/token tests passed, frontend production build passed; DB-backed readiness tests remain blocked locally by refused Postgres connection.
+
+### Integration Remediation Phase 3 — Storage Correctness (P1, LARGE)
+- [x] Add durable cloud storage metadata to matter documents
+- [x] Return structured provider storage results from matter file uploads
+- [x] Persist provider object IDs/drive IDs/parent IDs for new uploads
+- [x] Implement cloud document delete for Google Drive, OneDrive, and SharePoint
+- [x] Add focused storage/delete regression tests and verification
+
+Summary: added migration `074_matter_document_storage_metadata` and explicit
+matter-document storage metadata for provider/backend, provider object ID,
+drive ID, parent ID, and storage errors while preserving legacy URL-derived
+behavior. Matter file uploads now return a structured `StorageResult` for new
+callers and keep the old string wrapper for portal/correspondence compatibility.
+New matter document uploads persist provider IDs for OneDrive, SharePoint, and
+Google Drive. Cloud-backed delete now deletes by durable provider metadata,
+tolerates provider 404s before deleting the DB row, and fails closed for legacy
+URL-only rows or provider auth/throttle/errors. Remaining Phase 3 items for
+delta sync, recursive indexing, provisioning repair, and backfill stay tracked
+in `docs/integrations-remediation-plan.md`. Verification: backend compile
+passed and focused storage/reliability/observability tests passed with 36
+passed and one Postgres-only concurrency regression skipped locally unless
+`TEST_DATABASE_URL` is set.
+
+### Integration Remediation Phase 3.9 — Matter-Scoped Cloud Folder Sync (P1, MEDIUM)
+- [x] Add a matter-scoped cloud metadata sync path
+- [x] Wire the per-matter sync endpoint/button to the scoped path
+- [x] Preserve tenant-wide sync for scheduler/admin jobs
+- [x] Add focused regression tests and verification
+
+Summary: added `CloudSyncService.sync_matter_folders()` plus scoped Google
+Drive, OneDrive, and SharePoint folder sync helpers that enumerate only the
+matter's recorded primary, subfolder, and context folder IDs. The per-matter
+`/cloud-folder/sync` endpoint now calls the scoped path instead of tenant-wide
+`sync_all`, while scheduler/admin jobs continue using `sync_all`. Verification:
+focused cloud integration tests passed with 17 passed, and touched modules
+compiled with a test-only `SECRET_KEY`.
+
+### Integration Remediation Phase 3.6a — Google Folder Provisioning Recovery (P1, MEDIUM)
+- [x] Harden Google Drive folder ensure against 409/duplicate races
+- [x] Preserve existing folder selection semantics
+- [x] Add focused regression tests and verification
+
+Summary: `_ensure_gdrive_folder` now mirrors the Microsoft folder recovery
+pattern: if folder creation returns 409 after an empty pre-list, it re-lists
+the parent and reuses the best matching existing folder instead of surfacing a
+hard provisioning failure or inviting duplicate/manual retries. Verification:
+focused cloud integration tests passed with 18 passed, and touched modules
+compiled with a test-only `SECRET_KEY`.
+
 ### Mediation Platform Module Follow-Ups
 - [ ] Portal document delete endpoint (backend has no DELETE for portal docs)
 - [ ] Proposal accept/reject UI in portal case page

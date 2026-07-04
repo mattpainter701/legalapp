@@ -19,6 +19,7 @@ from app.services.cloud_search import CloudSearchService
 from app.services.cloud_sync import CloudSyncService
 from app.services.llm import LLMService
 from app.services.retrieval_planner import RetrievalPlanner
+from app.services.error_tracker import capture_error
 
 logger = logging.getLogger(__name__)
 
@@ -172,10 +173,21 @@ async def cloud_search_status(
         )
         last_sync_value = last_sync_result.scalar_one()
         last_sync = last_sync_value.isoformat() if last_sync_value else None
-    except Exception:
+    except Exception as exc:
         logger.exception("Cloud search status query failed for tenant %s", tenant_id)
+        await capture_error(
+            db=db,
+            tenant_id=admin.tenant_id,
+            user_id=admin.id,
+            error_type="integration_status_error",
+            message=f"Cloud search status query failed: {exc}",
+            severity="error",
+            request=request,
+        )
         return {
             "enabled": True,
+            "status": "error",
+            "error": str(exc),
             "providers": {
                 "google": {
                     "connected": False,

@@ -54,47 +54,40 @@ const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [token, setToken] = useState(() => localStorage.getItem('token'))
   const [loading, setLoading] = useState(true)
 
-  const fetchUser = useCallback(async (tok) => {
+  // Auth state lives entirely in the backend's httpOnly cookies — the access
+  // token is never read from or written to browser-accessible storage, so an
+  // XSS payload cannot exfiltrate a live session token. Session presence is
+  // derived by asking the API who the current cookie belongs to.
+  const fetchUser = useCallback(async () => {
     try {
       const me = await getMe()
       setUser(me)
       return me
     } catch {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      setToken(null)
       setUser(null)
       return null
     }
   }, [])
 
   useEffect(() => {
-    if (token) {
-      fetchUser(token).finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
-  }, [token, fetchUser])
+    fetchUser().finally(() => setLoading(false))
+  }, [fetchUser])
 
-  const login = useCallback(async (newToken) => {
-    localStorage.setItem('token', newToken)
-    setToken(newToken)
-    const me = await fetchUser(newToken)
+  const login = useCallback(async () => {
+    // The login/register/oauth-exchange call already set the httpOnly
+    // cookies server-side; just resolve who we are now.
+    const me = await fetchUser()
     return me
   }, [fetchUser])
 
   const logoutUser = useCallback(() => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setToken(null)
     setUser(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout: logoutUser, refreshUser: fetchUser, loading }}>
+    <AuthContext.Provider value={{ user, login, logout: logoutUser, refreshUser: fetchUser, loading }}>
       {children}
     </AuthContext.Provider>
   )

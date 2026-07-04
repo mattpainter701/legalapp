@@ -2590,7 +2590,12 @@ async def sync_matter_cloud_folder(
     await db.commit()
     await db.refresh(matter)
 
-    sync_counts = await _cloud_sync.sync_all(db, tenant_id_str)
+    sync_counts = await _cloud_sync.sync_matter_folders(
+        db,
+        tenant_id_str,
+        matter.cloud_folder,
+        user_id=str(current_user.id),
+    )
     files = await _build_matter_cloud_files_response(
         db, tenant_id, current_user.id, matter
     )

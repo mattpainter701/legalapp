@@ -21,7 +21,7 @@ export default function AuthCallback() {
     }
 
     exchangeOAuthCode(code)
-      .then((result) => login(result.access_token))
+      .then(() => login())
       .then((userObj) => {
         const defaultRoute = userObj?.default_route || '/matters'
         const enabledModules = userObj?.enabled_modules || []

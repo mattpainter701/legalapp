@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import String, DateTime, ForeignKey, Text, UniqueConstraint, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -41,6 +41,17 @@ class UserOAuthToken(Base):
         DateTime(timezone=True), nullable=True
     )
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    health: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="healthy", server_default="healthy"
+    )
+    last_refresh_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_refresh_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

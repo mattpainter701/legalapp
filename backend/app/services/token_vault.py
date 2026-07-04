@@ -1,9 +1,12 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 from cryptography.fernet import Fernet
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -12,6 +15,12 @@ from app.database import set_tenant_context
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+TOKEN_REFRESH_TIMEOUT = 20.0
+TOKEN_REFRESH_MAX_ATTEMPTS = 3
+TOKEN_REFRESH_BASE_DELAY = 0.25
+TOKEN_REFRESH_MAX_DELAY = 2.0
+DB_LOCK_TIMEOUT_MS = 5000
 
 
 def _get_fernet() -> Fernet:
@@ -36,6 +45,34 @@ def _is_fresh(expires_at: datetime | None) -> bool:
     return datetime.now(timezone.utc) < expires_at - timedelta(seconds=60)
 
 
+def _record_refresh_success(row) -> None:
+    if hasattr(row, "health"):
+        row.health = (
+            "missing_scopes" if getattr(row, "missing_scopes", None) else "healthy"
+        )
+    if hasattr(row, "last_refresh_at"):
+        row.last_refresh_at = datetime.now(timezone.utc)
+    if hasattr(row, "last_refresh_error"):
+        row.last_refresh_error = None
+    if hasattr(row, "is_active"):
+        row.is_active = True
+
+
+def _record_refresh_failure(row, status_code: int | None, body: str) -> None:
+    error = f"{status_code or 'error'} {body[:500]}".strip()
+    if hasattr(row, "last_refresh_at"):
+        row.last_refresh_at = datetime.now(timezone.utc)
+    if hasattr(row, "last_refresh_error"):
+        row.last_refresh_error = error
+    if "invalid_grant" in body:
+        if hasattr(row, "health"):
+            row.health = "revoked"
+        if hasattr(row, "is_active"):
+            row.is_active = False
+    elif hasattr(row, "health") and getattr(row, "health", None) != "revoked":
+        row.health = "refresh_failed"
+
+
 def encrypt_token(plaintext: str) -> str:
     return _get_fernet().encrypt(plaintext.encode()).decode()
 
@@ -44,65 +81,226 @@ def decrypt_token(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+def _retry_after_delay(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_delay(resp: httpx.Response | None, attempt: int) -> float:
+    retry_after = _retry_after_delay(resp.headers.get("Retry-After") if resp else None)
+    if retry_after is not None:
+        return min(retry_after, TOKEN_REFRESH_MAX_DELAY)
+    return min(TOKEN_REFRESH_BASE_DELAY * (2**attempt), TOKEN_REFRESH_MAX_DELAY)
+
+
+def _is_transient_response(resp: httpx.Response) -> bool:
+    return resp.status_code == 429 or 500 <= resp.status_code < 600
+
+
+async def _post_token_with_retry(url: str, **kwargs) -> httpx.Response:
+    last_exc: httpx.HTTPError | None = None
+    async with httpx.AsyncClient(timeout=TOKEN_REFRESH_TIMEOUT) as client:
+        for attempt in range(TOKEN_REFRESH_MAX_ATTEMPTS):
+            try:
+                resp = await client.post(url, **kwargs)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_exc = exc
+                if attempt == TOKEN_REFRESH_MAX_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(_retry_delay(None, attempt))
+                continue
+
+            if (
+                not _is_transient_response(resp)
+                or attempt == TOKEN_REFRESH_MAX_ATTEMPTS - 1
+            ):
+                return resp
+            await asyncio.sleep(_retry_delay(resp, attempt))
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("token refresh retry loop exited unexpectedly")
+
+
+async def _set_lock_timeout(db: AsyncSession) -> None:
+    bind = db.get_bind()
+    if bind and bind.dialect.name == "postgresql":
+        await db.execute(text(f"SET LOCAL lock_timeout = '{DB_LOCK_TIMEOUT_MS}ms'"))
+
+
+def _is_lock_timeout(exc: DBAPIError) -> bool:
+    sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+    return sqlstate in {"55P03", "57014"}
+
+
+async def _execute_locked_scalar(db: AsyncSession, stmt):
+    try:
+        await _set_lock_timeout(db)
+        result = await db.execute(stmt)
+    except DBAPIError as exc:
+        if not _is_lock_timeout(exc):
+            raise
+        await db.rollback()
+        logger.warning("Timed out waiting for OAuth token row lock")
+        return None
+    return result.scalar_one_or_none()
+
+
+async def _locked_tenant_credential(
+    db: AsyncSession,
+    tenant_id: str,
+    provider: str,
+    credential_id: str | None = None,
+):
+    from app.models.tenant_credential import TenantCredential
+
+    await set_tenant_context(db, tenant_id)
+    stmt = (
+        select(TenantCredential)
+        .where(
+            TenantCredential.tenant_id == tenant_id,
+            TenantCredential.provider == provider,
+            TenantCredential.is_active,
+        )
+        .with_for_update()
+    )
+    if credential_id:
+        stmt = stmt.where(TenantCredential.id == credential_id)
+    return await _execute_locked_scalar(db, stmt)
+
+
+async def _locked_user_token(
+    db: AsyncSession,
+    tenant_id: str,
+    user_id: str,
+    provider: str,
+):
+    from app.models.user_oauth_token import UserOAuthToken
+
+    await set_tenant_context(db, tenant_id)
+    stmt = (
+        select(UserOAuthToken)
+        .where(
+            UserOAuthToken.user_id == user_id,
+            UserOAuthToken.tenant_id == tenant_id,
+            UserOAuthToken.provider == provider,
+        )
+        .with_for_update()
+    )
+    return await _execute_locked_scalar(db, stmt)
+
+
+def _token_request(provider: str, refresh_token: str) -> tuple[str, dict]:
+    if provider == "microsoft":
+        ms_tenant = settings.MICROSOFT_TENANT_ID
+        return (
+            f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/token",
+            {
+                "data": {
+                    "client_id": settings.MICROSOFT_CLIENT_ID,
+                    "client_secret": settings.MICROSOFT_CLIENT_SECRET,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                }
+            },
+        )
+    if provider == "google":
+        return (
+            "https://oauth2.googleapis.com/token",
+            {
+                "data": {
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                }
+            },
+        )
+    if provider == "zoom":
+        return (
+            "https://zoom.us/oauth/token",
+            {
+                "auth": (settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
+                "data": {
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            },
+        )
+    raise ValueError(f"Unsupported OAuth provider: {provider}")
+
+
+async def _refresh_locked_row(
+    db: AsyncSession,
+    row,
+    provider: str,
+) -> tuple[str, int] | None:
+    if not row or not getattr(row, "encrypted_refresh_token", None):
+        return None
+
+    refresh_token = decrypt_token(row.encrypted_refresh_token)
+    token_url, request_kwargs = _token_request(provider, refresh_token)
+
+    try:
+        resp = await _post_token_with_retry(token_url, **request_kwargs)
+    except httpx.HTTPError as exc:
+        _record_refresh_failure(row, None, str(exc))
+        await db.commit()
+        logger.warning("%s token refresh request failed", provider, exc_info=True)
+        return None
+
+    if resp.status_code != 200:
+        _record_refresh_failure(row, resp.status_code, resp.text)
+        await db.commit()
+        logger.warning(
+            "%s token refresh failed: status=%d body=%s",
+            provider,
+            resp.status_code,
+            resp.text[:300],
+        )
+        return None
+
+    data = resp.json()
+    new_access_token = data.get("access_token")
+    new_refresh_token = data.get("refresh_token")
+    expires_in = data.get("expires_in", 3600)
+
+    if not new_access_token:
+        _record_refresh_failure(row, None, "missing access_token in token response")
+        await db.commit()
+        return None
+
+    row.encrypted_access_token = encrypt_token(new_access_token)
+    if new_refresh_token:
+        row.encrypted_refresh_token = encrypt_token(new_refresh_token)
+    row.token_expires_at = _expires_at(expires_in)
+    _record_refresh_success(row)
+    await db.commit()
+
+    return new_access_token, expires_in
+
+
 async def refresh_microsoft_token(
     db: AsyncSession,
     tenant_id: str,
     credential_id: str | None = None,
 ) -> tuple[str, int] | None:
     """Refresh an M365 token. Returns (new_access_token, expires_in) or None."""
-    from app.models.tenant_credential import TenantCredential
-
-    await set_tenant_context(db, tenant_id)
-    stmt = select(TenantCredential).where(
-        TenantCredential.tenant_id == tenant_id,
-        TenantCredential.provider == "microsoft",
-        TenantCredential.is_active,
+    cred = await _locked_tenant_credential(
+        db, tenant_id, "microsoft", credential_id=credential_id
     )
-    if credential_id:
-        stmt = stmt.where(TenantCredential.id == credential_id)
-    result = await db.execute(stmt)
-    cred = result.scalar_one_or_none()
-
-    if not cred or not cred.encrypted_refresh_token:
-        return None
-
-    refresh_token = decrypt_token(cred.encrypted_refresh_token)
-    ms_tenant = settings.MICROSOFT_TENANT_ID
-    token_url = f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/token"
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            token_url,
-            data={
-                "client_id": settings.MICROSOFT_CLIENT_ID,
-                "client_secret": settings.MICROSOFT_CLIENT_SECRET,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(
-                "Microsoft token refresh failed: status=%d body=%s",
-                resp.status_code,
-                resp.text,
-            )
-            return None
-
-        data = resp.json()
-        new_access_token = data.get("access_token")
-        new_refresh_token = data.get("refresh_token")
-        expires_in = data.get("expires_in", 3600)
-
-        if not new_access_token:
-            return None
-
-        cred.encrypted_access_token = encrypt_token(new_access_token)
-        if new_refresh_token:
-            cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
-        cred.token_expires_at = _expires_at(expires_in)
-        await db.commit()
-
-        return new_access_token, expires_in
+    return await _refresh_locked_row(db, cred, "microsoft")
 
 
 async def refresh_google_token(
@@ -111,55 +309,10 @@ async def refresh_google_token(
     credential_id: str | None = None,
 ) -> tuple[str, int] | None:
     """Refresh a Google token. Returns (new_access_token, expires_in) or None."""
-    from app.models.tenant_credential import TenantCredential
-
-    await set_tenant_context(db, tenant_id)
-    stmt = select(TenantCredential).where(
-        TenantCredential.tenant_id == tenant_id,
-        TenantCredential.provider == "google",
-        TenantCredential.is_active,
+    cred = await _locked_tenant_credential(
+        db, tenant_id, "google", credential_id=credential_id
     )
-    if credential_id:
-        stmt = stmt.where(TenantCredential.id == credential_id)
-    result = await db.execute(stmt)
-    cred = result.scalar_one_or_none()
-
-    if not cred or not cred.encrypted_refresh_token:
-        return None
-
-    refresh_token = decrypt_token(cred.encrypted_refresh_token)
-    token_url = "https://oauth2.googleapis.com/token"
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            token_url,
-            data={
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(
-                "Google token refresh failed: status=%d body=%s",
-                resp.status_code,
-                resp.text,
-            )
-            return None
-
-        data = resp.json()
-        new_access_token = data.get("access_token")
-        expires_in = data.get("expires_in", 3600)
-
-        if not new_access_token:
-            return None
-
-        cred.encrypted_access_token = encrypt_token(new_access_token)
-        cred.token_expires_at = _expires_at(expires_in)
-        await db.commit()
-
-        return new_access_token, expires_in
+    return await _refresh_locked_row(db, cred, "google")
 
 
 async def refresh_zoom_token(
@@ -168,53 +321,10 @@ async def refresh_zoom_token(
     credential_id: str | None = None,
 ) -> tuple[str, int] | None:
     """Refresh a tenant-level Zoom token. Returns (new_access_token, expires_in)."""
-    from app.models.tenant_credential import TenantCredential
-
-    await set_tenant_context(db, tenant_id)
-    stmt = select(TenantCredential).where(
-        TenantCredential.tenant_id == tenant_id,
-        TenantCredential.provider == "zoom",
-        TenantCredential.is_active,
+    cred = await _locked_tenant_credential(
+        db, tenant_id, "zoom", credential_id=credential_id
     )
-    if credential_id:
-        stmt = stmt.where(TenantCredential.id == credential_id)
-    result = await db.execute(stmt)
-    cred = result.scalar_one_or_none()
-
-    if not cred or not cred.encrypted_refresh_token:
-        return None
-
-    refresh_token = decrypt_token(cred.encrypted_refresh_token)
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://zoom.us/oauth/token",
-            auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
-            data={
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(
-                "Zoom token refresh failed: status=%d body=%s",
-                resp.status_code,
-                resp.text[:300],
-            )
-            return None
-
-        data = resp.json()
-        new_access_token = data.get("access_token")
-        new_refresh_token = data.get("refresh_token")
-        expires_in = data.get("expires_in", 3600)
-        if not new_access_token:
-            return None
-
-        cred.encrypted_access_token = encrypt_token(new_access_token)
-        if new_refresh_token:
-            cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
-        cred.token_expires_at = _expires_at(expires_in)
-        await db.commit()
-        return new_access_token, expires_in
+    return await _refresh_locked_row(db, cred, "zoom")
 
 
 async def revoke_google_token(token: str) -> bool:
@@ -275,34 +385,19 @@ async def get_fresh_token(
     credential_id: str | None = None,
 ) -> str | None:
     """Get a valid access token, refreshing if needed."""
-    from app.models.tenant_credential import TenantCredential
+    if provider not in {"microsoft", "google", "zoom"}:
+        return None
 
-    await set_tenant_context(db, tenant_id)
-    stmt = select(TenantCredential).where(
-        TenantCredential.tenant_id == tenant_id,
-        TenantCredential.provider == provider,
-        TenantCredential.is_active,
+    cred = await _locked_tenant_credential(
+        db, tenant_id, provider, credential_id=credential_id
     )
-    if credential_id:
-        stmt = stmt.where(TenantCredential.id == credential_id)
-    result = await db.execute(stmt)
-    cred = result.scalar_one_or_none()
-
     if not cred:
         return None
 
     if _is_fresh(cred.token_expires_at):
         return decrypt_token(cred.encrypted_access_token)
 
-    if provider == "microsoft":
-        refreshed = await refresh_microsoft_token(db, tenant_id, credential_id)
-    elif provider == "google":
-        refreshed = await refresh_google_token(db, tenant_id, credential_id)
-    elif provider == "zoom":
-        refreshed = await refresh_zoom_token(db, tenant_id, credential_id)
-    else:
-        return None
-
+    refreshed = await _refresh_locked_row(db, cred, provider)
     if refreshed:
         return refreshed[0]
     return None
@@ -315,17 +410,10 @@ async def get_fresh_user_token(
     provider: str,
 ) -> str | None:
     """Get a valid per-user access token, refreshing if needed."""
-    from app.models.user_oauth_token import UserOAuthToken
+    if provider not in {"microsoft", "google", "zoom"}:
+        return None
 
-    await set_tenant_context(db, tenant_id)
-    result = await db.execute(
-        select(UserOAuthToken).where(
-            UserOAuthToken.user_id == user_id,
-            UserOAuthToken.tenant_id == tenant_id,
-            UserOAuthToken.provider == provider,
-        )
-    )
-    token_row = result.scalar_one_or_none()
+    token_row = await _locked_user_token(db, tenant_id, user_id, provider)
 
     if not token_row:
         logger.warning(
@@ -339,11 +427,7 @@ async def get_fresh_user_token(
     if _is_fresh(token_row.token_expires_at):
         return decrypt_token(token_row.encrypted_access_token)
 
-    refresh_token = None
-    if token_row.encrypted_refresh_token:
-        refresh_token = decrypt_token(token_row.encrypted_refresh_token)
-
-    if not refresh_token:
+    if not token_row.encrypted_refresh_token:
         logger.warning(
             "get_fresh_user_token: token expired and no refresh token for user_id=%s provider=%s tenant_id=%s",
             user_id,
@@ -352,108 +436,7 @@ async def get_fresh_user_token(
         )
         return None
 
-    if provider == "microsoft":
-        ms_tenant = settings.MICROSOFT_TENANT_ID
-        token_url = f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/token"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                token_url,
-                data={
-                    "client_id": settings.MICROSOFT_CLIENT_ID,
-                    "client_secret": settings.MICROSOFT_CLIENT_SECRET,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(
-                    "get_fresh_user_token: microsoft refresh failed status=%d user_id=%s",
-                    resp.status_code,
-                    user_id,
-                )
-                return None
-            data = resp.json()
-            new_access_token = data.get("access_token")
-            new_refresh_token = data.get("refresh_token")
-            expires_in = data.get("expires_in", 3600)
-            if not new_access_token:
-                logger.warning(
-                    "get_fresh_user_token: microsoft refresh returned no access_token user_id=%s",
-                    user_id,
-                )
-                return None
-            token_row.encrypted_access_token = encrypt_token(new_access_token)
-            if new_refresh_token:
-                token_row.encrypted_refresh_token = encrypt_token(new_refresh_token)
-            token_row.token_expires_at = _expires_at(expires_in)
-            await db.commit()
-            return new_access_token
-
-    if provider == "google":
-        token_url = "https://oauth2.googleapis.com/token"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                token_url,
-                data={
-                    "client_id": settings.GOOGLE_CLIENT_ID,
-                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(
-                    "get_fresh_user_token: google refresh failed status=%d user_id=%s",
-                    resp.status_code,
-                    user_id,
-                )
-                return None
-            data = resp.json()
-            new_access_token = data.get("access_token")
-            expires_in = data.get("expires_in", 3600)
-            if not new_access_token:
-                logger.warning(
-                    "get_fresh_user_token: google refresh returned no access_token user_id=%s",
-                    user_id,
-                )
-                return None
-            token_row.encrypted_access_token = encrypt_token(new_access_token)
-            token_row.token_expires_at = _expires_at(expires_in)
-            await db.commit()
-            return new_access_token
-
-    if provider == "zoom":
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://zoom.us/oauth/token",
-                auth=(settings.ZOOM_CLIENT_ID, settings.ZOOM_CLIENT_SECRET),
-                data={
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(
-                    "get_fresh_user_token: zoom refresh failed status=%d user_id=%s",
-                    resp.status_code,
-                    user_id,
-                )
-                return None
-            data = resp.json()
-            new_access_token = data.get("access_token")
-            new_refresh_token = data.get("refresh_token")
-            expires_in = data.get("expires_in", 3600)
-            if not new_access_token:
-                logger.warning(
-                    "get_fresh_user_token: zoom refresh returned no access_token user_id=%s",
-                    user_id,
-                )
-                return None
-            token_row.encrypted_access_token = encrypt_token(new_access_token)
-            if new_refresh_token:
-                token_row.encrypted_refresh_token = encrypt_token(new_refresh_token)
-            token_row.token_expires_at = _expires_at(expires_in)
-            await db.commit()
-            return new_access_token
-
+    refreshed = await _refresh_locked_row(db, token_row, provider)
+    if refreshed:
+        return refreshed[0]
     return None

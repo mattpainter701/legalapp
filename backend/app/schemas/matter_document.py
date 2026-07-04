@@ -18,6 +18,11 @@ class MatterDocumentResponse(BaseModel):
     document_category: str | None
     portal_visible: bool = False
     storage_backend: str = "local"
+    storage_provider: str | None = None
+    provider_object_id: str | None = None
+    provider_drive_id: str | None = None
+    provider_parent_id: str | None = None
+    storage_error: str | None = None
     cloud_url: str | None = None
     created_at: datetime
     updated_at: datetime

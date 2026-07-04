@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -20,11 +21,19 @@ from app.schemas.matter_document import (
     MatterDocumentUpdate,
 )
 from app.services.matter_file_store import MatterFileStore
+from app.services.graph_client import graph_request
+from app.services.google_client import google_request
+from app.services.provider_http import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderNotFound,
+    ProviderThrottled,
+)
+from app.services.token_vault import get_fresh_token
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["matter-documents"])
 matter_file_store = MatterFileStore()
-
 
 async def _get_matter_or_404(
     matter_id: str, tenant_id: uuid.UUID, db: AsyncSession
@@ -56,6 +65,198 @@ async def _get_doc_or_404(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
+
+
+def _first_doc_attr(doc: MatterDocument, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = getattr(doc, name, None)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _normalize_storage_provider(provider: str | None) -> str | None:
+    if not provider:
+        return None
+    normalized = provider.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "google": "google_drive",
+        "gdrive": "google_drive",
+        "drive": "google_drive",
+        "microsoft_graph": "onedrive",
+        "ms_graph": "onedrive",
+        "msgraph": "onedrive",
+        "one_drive": "onedrive",
+        "local_disk": "local",
+        "disk": "local",
+        "filesystem": "local",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _doc_storage_provider(doc: MatterDocument) -> str | None:
+    return _normalize_storage_provider(
+        _first_doc_attr(
+            doc,
+            (
+                "storage_provider",
+                "provider",
+                "provider_backend",
+                "cloud_provider",
+                "storage_backend",
+            ),
+        )
+    )
+
+
+def _doc_provider_object_id(doc: MatterDocument) -> str | None:
+    return _first_doc_attr(
+        doc,
+        (
+            "provider_object_id",
+            "provider_item_id",
+            "cloud_object_id",
+            "cloud_file_id",
+        ),
+    )
+
+
+def _doc_provider_drive_id(doc: MatterDocument) -> str | None:
+    return _first_doc_attr(doc, ("provider_drive_id", "drive_id", "cloud_drive_id"))
+
+
+def _storage_result_document_fields(storage_result) -> dict:
+    return {
+        "storage_path": storage_result.storage_path,
+        "storage_provider": storage_result.provider,
+        "storage_backend": storage_result.backend,
+        "provider_object_id": storage_result.provider_item_id,
+        "provider_drive_id": storage_result.drive_id,
+        "provider_parent_id": storage_result.parent_id,
+        "storage_error": storage_result.error,
+    }
+
+
+def _cloud_token_provider(storage_provider: str) -> str:
+    if storage_provider == "google_drive":
+        return "google"
+    return "microsoft"
+
+
+async def _delete_cloud_provider_object(
+    *,
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    storage_provider: str,
+    object_id: str,
+    drive_id: str | None,
+) -> None:
+    """Router-local storage delete shim until this moves into a storage service."""
+    token = await get_fresh_token(
+        db, str(tenant_id), _cloud_token_provider(storage_provider)
+    )
+    if not token:
+        raise ProviderAuthError(f"No connected token for {storage_provider}")
+
+    safe_object_id = quote(object_id, safe="")
+    safe_drive_id = quote(drive_id, safe="") if drive_id else None
+
+    if storage_provider == "google_drive":
+        await google_request(
+            "DELETE",
+            f"/{safe_object_id}",
+            token=token,
+            base_url="https://www.googleapis.com/drive/v3/files",
+            provider_name="Google Drive",
+        )
+        return
+
+    if storage_provider == "sharepoint":
+        if not safe_drive_id:
+            raise ProviderError("SharePoint document delete requires provider_drive_id")
+        await graph_request(
+            "DELETE",
+            f"/drives/{safe_drive_id}/items/{safe_object_id}",
+            token=token,
+        )
+        return
+
+    if storage_provider == "onedrive":
+        url = (
+            f"/drives/{safe_drive_id}/items/{safe_object_id}"
+            if safe_drive_id
+            else f"/me/drive/items/{safe_object_id}"
+        )
+        await graph_request(
+            "DELETE",
+            url,
+            token=token,
+        )
+        return
+
+    raise ProviderError(f"Unsupported storage provider: {storage_provider}")
+
+
+async def _delete_cloud_backing_if_needed(
+    doc: MatterDocument,
+    db: AsyncSession,
+) -> None:
+    storage_path = doc.storage_path or ""
+    has_legacy_cloud_url = storage_path.startswith(("http://", "https://"))
+    storage_provider = _doc_storage_provider(doc)
+    object_id = _doc_provider_object_id(doc)
+
+    if storage_provider in (None, "local") and not has_legacy_cloud_url:
+        return
+
+    if not storage_provider or storage_provider == "cloud" or not object_id:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Cloud-backed document deletion requires durable provider metadata; "
+                "the database record was not removed."
+            ),
+        )
+
+    try:
+        await _delete_cloud_provider_object(
+            db=db,
+            tenant_id=doc.tenant_id,
+            storage_provider=storage_provider,
+            object_id=object_id,
+            drive_id=_doc_provider_drive_id(doc),
+        )
+    except ProviderNotFound:
+        return
+    except ProviderThrottled as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cloud provider throttled document deletion; "
+                "database record was not removed."
+            ),
+            headers=(
+                {"Retry-After": str(int(exc.retry_after))}
+                if exc.retry_after is not None
+                else None
+            ),
+        ) from exc
+    except ProviderAuthError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Cloud provider credentials could not delete this document; "
+                "database record was not removed."
+            ),
+        ) from exc
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Cloud provider document deletion failed; "
+                "database record was not removed."
+            ),
+        ) from exc
 
 
 @router.get(
@@ -125,7 +326,7 @@ async def upload_matter_document(
 
     doc_id = uuid.uuid4()
     safe_filename = os.path.basename(file.filename)
-    storage_path = await matter_file_store.store_matter_file(
+    storage_result = await matter_file_store.store_matter_file_result(
         db=db,
         tenant_id=str(user.tenant_id),
         matter_slug=matter.slug,
@@ -145,7 +346,7 @@ async def upload_matter_document(
         filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),
-        storage_path=storage_path,
+        **_storage_result_document_fields(storage_result),
         description=description,
         document_category=document_category,
     )
@@ -195,14 +396,7 @@ async def delete_matter_document(
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
 
-    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "Cloud-backed document deletion requires provider object IDs; "
-                "the database record was not removed."
-            ),
-        )
+    await _delete_cloud_backing_if_needed(doc, db)
 
     if doc.storage_path and os.path.exists(doc.storage_path):
         try:

@@ -36,6 +36,17 @@ class TenantCredential(Base):
         DateTime(timezone=True), nullable=True
     )
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    health: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="healthy", server_default="healthy"
+    )
+    last_refresh_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_refresh_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_user_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

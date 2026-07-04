@@ -11,60 +11,28 @@ const api = axios.create({
   withCredentials: true, // Allow httpOnly cookies to be sent with requests
 })
 
-// Request interceptor: browsers send httpOnly cookies automatically. Keep a
-// bearer fallback because older sessions still store the JWT in localStorage and
-// cross-origin cookie settings can be brittle in dev/proxy setups.
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      if (typeof config.headers?.set === 'function') {
-        config.headers.set('Authorization', `Bearer ${token}`)
-      } else {
-        config.headers = {
-          ...(config.headers || {}),
-          Authorization: `Bearer ${token}`,
-        }
-      }
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
+// Auth lives entirely in httpOnly cookies set by the backend — the SPA never
+// reads or stores the access/refresh token in localStorage, so an XSS payload
+// cannot exfiltrate a live session. `withCredentials: true` above is what
+// actually authenticates every request; no Authorization header is needed.
 
 // Response interceptor: on 401, attempt a single rotating-refresh, then retry the
 // original request once. Concurrent 401s share one in-flight refresh (single-flight)
-// so we never fire multiple /auth/refresh calls. If refresh fails, clear state and
-// redirect to login.
+// so we never fire multiple /auth/refresh calls. If refresh fails, redirect to login.
 let refreshPromise = null
 
 // Paths for which a 401 must NOT trigger a refresh attempt (would loop / is terminal).
 const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']
 
-const clearAuthState = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-}
-
 const redirectToLogin = () => {
-  clearAuthState()
   if (window.location.pathname !== '/login') {
     window.location.href = '/login'
   }
 }
 
-const addBearerFallback = (headers = {}) => {
-  const token = localStorage.getItem('token')
-  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
-}
-
 const refreshAuthSession = async () => {
   if (!refreshPromise) {
-    refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
-      const freshToken = refreshResponse?.data?.access_token
-      if (freshToken) localStorage.setItem('token', freshToken)
-      return refreshResponse
-    }).finally(() => {
+    refreshPromise = api.post('/auth/refresh').finally(() => {
       refreshPromise = null
     })
   }
@@ -87,7 +55,6 @@ api.interceptors.response.use(
     if (NO_REFRESH_PATHS.some((p) => url.includes(p))) {
       // Auth endpoint failures should surface to the current form instead of
       // forcing a reload that clears the page-level error message.
-      clearAuthState()
       return Promise.reject(error)
     }
 
@@ -100,17 +67,6 @@ api.interceptors.response.use(
 
     // Refresh succeeded (new cookies set) — retry the original request once.
     config._retried = true
-    const freshToken = localStorage.getItem('token')
-    if (freshToken) {
-      if (typeof config.headers?.set === 'function') {
-        config.headers.set('Authorization', `Bearer ${freshToken}`)
-      } else {
-        config.headers = {
-          ...(config.headers || {}),
-          Authorization: `Bearer ${freshToken}`,
-        }
-      }
-    }
     return api(config)
   }
 )
@@ -179,7 +135,7 @@ export const streamMessage = async function* (conversationId, content, includePu
   const request = () => fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     credentials: 'include',
-    headers: addBearerFallback({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body,
   })
   let response = await request()

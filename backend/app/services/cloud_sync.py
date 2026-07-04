@@ -100,6 +100,68 @@ class CloudSyncService:
 
         return result
 
+    async def sync_matter_folders(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        matter_cloud_folder: dict | None,
+        user_id: str | None = None,
+    ) -> dict:
+        """Sync only the folders mapped to one matter.
+
+        This powers the per-matter "Sync folder" action. It intentionally avoids
+        tenant-wide mail and root-folder scans; scheduler/admin jobs still use
+        ``sync_all``.
+        """
+        await set_tenant_context(db, tenant_id)
+
+        result: dict = {
+            "google": {"files": 0, "emails": 0},
+            "microsoft": {"files": 0, "emails": 0},
+        }
+        cloud_folder = matter_cloud_folder or {}
+
+        google_folder_ids = _matter_folder_ids(cloud_folder, "google_drive")
+        if google_folder_ids:
+            try:
+                result["google"]["files"] = await self.sync_google_drive_folders(
+                    db, tenant_id, google_folder_ids, user_id=user_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Google Drive matter-folder sync failed for tenant %s: %s",
+                    tenant_id,
+                    exc,
+                )
+
+        onedrive_folder_ids = _matter_folder_ids(cloud_folder, "onedrive")
+        if onedrive_folder_ids:
+            try:
+                result["microsoft"]["files"] += await self.sync_onedrive_folders(
+                    db, tenant_id, onedrive_folder_ids, user_id=user_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "OneDrive matter-folder sync failed for tenant %s: %s",
+                    tenant_id,
+                    exc,
+                )
+
+        sharepoint_refs = _sharepoint_folder_refs(cloud_folder)
+        if sharepoint_refs:
+            try:
+                result["microsoft"]["files"] += await self.sync_sharepoint_folders(
+                    db, tenant_id, sharepoint_refs
+                )
+            except Exception as exc:
+                logger.warning(
+                    "SharePoint matter-folder sync failed for tenant %s: %s",
+                    tenant_id,
+                    exc,
+                )
+
+        return result
+
     async def sync_google_drive(
         self,
         db: AsyncSession,
@@ -202,6 +264,39 @@ class CloudSyncService:
                 return 0
 
         logger.info("Google Drive synced %d files for tenant %s", count, tenant_id)
+        return count
+
+    async def sync_google_drive_folders(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        folder_ids: list[str],
+        user_id: str | None = None,
+    ) -> int:
+        """Sync Google Drive file metadata for specific folder IDs only."""
+        token = await self._get_token(db, tenant_id, "google", user_id)
+        if not token:
+            return 0
+
+        count = 0
+        seen: set[str] = set()
+        for folder_id in _dedupe(folder_ids):
+            if count >= MAX_FILES:
+                break
+            count += await self._sync_google_drive_folder(
+                db,
+                tenant_id,
+                token,
+                folder_id,
+                seen=seen,
+                remaining=MAX_FILES - count,
+            )
+
+        logger.info(
+            "Google Drive matter-folder sync indexed %d files for tenant %s",
+            count,
+            tenant_id,
+        )
         return count
 
     async def sync_gmail_metadata(
@@ -345,6 +440,32 @@ class CloudSyncService:
             "file",
         )
 
+    async def sync_onedrive_folders(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        folder_ids: list[str],
+        user_id: str | None = None,
+    ) -> int:
+        """Sync OneDrive file metadata for specific folder IDs only."""
+        token = await self._get_token(db, tenant_id, "microsoft", user_id)
+        if not token:
+            return 0
+
+        count = 0
+        for folder_id in _dedupe(folder_ids):
+            if count >= MAX_FILES:
+                break
+            count += await self._sync_graph_files(
+                db,
+                tenant_id,
+                token,
+                f"{GRAPH_BASE}/me/drive/items/{folder_id}/children",
+                "file",
+                max_items=MAX_FILES - count,
+            )
+        return count
+
     async def sync_sharepoint(
         self,
         db: AsyncSession,
@@ -413,6 +534,37 @@ class CloudSyncService:
         final = min(count, MAX_FILES)
         logger.info("SharePoint synced %d files for tenant %s", final, tenant_id)
         return final
+
+    async def sync_sharepoint_folders(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        folder_refs: list[tuple[str, str]],
+    ) -> int:
+        """Sync SharePoint file metadata for specific ``(drive_id, folder_id)`` refs."""
+        token = await self._get_token(db, tenant_id, "microsoft")
+        if not token:
+            return 0
+
+        count = 0
+        seen_refs: set[tuple[str, str]] = set()
+        for drive_id, folder_id in folder_refs:
+            if count >= MAX_FILES:
+                break
+            ref = (drive_id, folder_id)
+            if not drive_id or not folder_id or ref in seen_refs:
+                continue
+            seen_refs.add(ref)
+            count += await self._sync_graph_files(
+                db,
+                tenant_id,
+                token,
+                f"{GRAPH_BASE}/drives/{drive_id}/items/{folder_id}/children",
+                "file",
+                max_items=MAX_FILES - count,
+                drive_name="SharePoint",
+            )
+        return count
 
     async def sync_outlook_mail(
         self,
@@ -572,6 +724,104 @@ class CloudSyncService:
         )
         await db.execute(stmt)
 
+    async def _sync_google_drive_folder(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        token: str,
+        folder_id: str,
+        *,
+        seen: set[str],
+        remaining: int,
+    ) -> int:
+        count = 0
+        page_token: str | None = None
+        mime_clause = " or ".join(f"mimeType='{m}'" for m in LEGAL_MIME_TYPES)
+        ext_clause = " or ".join(
+            f"name contains '.{ext.strip('.')}'" for ext in LEGAL_EXTENSIONS
+        )
+        safe_folder_id = folder_id.replace("'", "\\'")
+        q = (
+            f"'{safe_folder_id}' in parents and "
+            f"(({mime_clause}) or ({ext_clause})) and trashed=false"
+        )
+
+        async with httpx.AsyncClient() as client:
+            try:
+                while count < remaining:
+                    params = {
+                        "q": q,
+                        "pageSize": min(100, remaining - count),
+                        "fields": (
+                            "nextPageToken,files(id,name,mimeType,webViewLink,"
+                            "modifiedTime,createdTime,size,owners,parents)"
+                        ),
+                        "orderBy": "modifiedTime desc",
+                    }
+                    if page_token:
+                        params["pageToken"] = page_token
+
+                    resp = await client.get(
+                        f"{GOOGLE_DRIVE_BASE}/files",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params=params,
+                    )
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "Google Drive folder listing failed: status=%d body=%.200s",
+                            resp.status_code,
+                            resp.text,
+                        )
+                        break
+
+                    body = resp.json()
+                    for item in body.get("files", []):
+                        object_id = item.get("id")
+                        if not object_id or object_id in seen:
+                            continue
+                        seen.add(object_id)
+
+                        owner_email = None
+                        owners = item.get("owners")
+                        if owners:
+                            owner_email = owners[0].get("emailAddress")
+
+                        await self._upsert(
+                            db,
+                            tenant_id,
+                            provider="google",
+                            object_type="file",
+                            object_id=object_id,
+                            title=item.get("name"),
+                            parent_id=(
+                                item["parents"][0] if item.get("parents") else folder_id
+                            ),
+                            owner_email=owner_email,
+                            modified_time=_parse_dt(item.get("modifiedTime")),
+                            created_time=_parse_dt(item.get("createdTime")),
+                            mime_type=item.get("mimeType"),
+                            snippet=_make_snippet(
+                                item.get("name", ""), item.get("mimeType")
+                            ),
+                            size_bytes=_int_or_none(item.get("size")),
+                            web_url=item.get("webViewLink"),
+                        )
+                        count += 1
+                        if count >= remaining:
+                            break
+
+                    page_token = body.get("nextPageToken")
+                    if not page_token:
+                        break
+
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                logger.warning("Google Drive folder sync error: %s", exc)
+                return 0
+
+        return count
+
     async def _sync_graph_files(
         self,
         db: AsyncSession,
@@ -580,6 +830,7 @@ class CloudSyncService:
         children_url: str,
         object_type: str,
         drive_name: str | None = None,
+        max_items: int = MAX_FILES,
     ) -> int:
         """List files from a MS Graph ``children`` endpoint and upsert metadata.
 
@@ -597,7 +848,7 @@ class CloudSyncService:
         }
         async with httpx.AsyncClient() as client:
             try:
-                while next_url and count < MAX_FILES:
+                while next_url and count < max_items:
                     resp = await client.get(
                         next_url,
                         headers={"Authorization": f"Bearer {token}"},
@@ -617,7 +868,7 @@ class CloudSyncService:
                     items = body.get("value", [])
                     next_url = body.get("@odata.nextLink")
                     for item in items:
-                        if count >= MAX_FILES:
+                        if count >= max_items:
                             break
 
                         file_info = item.get("file")
@@ -719,6 +970,74 @@ def _int_or_none(value) -> int | None:
         return int(value)
     except (ValueError, TypeError):
         return None
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(v for v in values if v))
+
+
+def _folder_id_from_metadata(metadata: dict | None) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    value = (
+        metadata.get("matter_folder_id")
+        or metadata.get("folder_id")
+        or metadata.get("id")
+    )
+    return str(value) if value else None
+
+
+def _matter_folder_ids(cloud_folder: dict | None, provider: str) -> list[str]:
+    """Return primary, subfolder, and context folder IDs for one provider."""
+    if not isinstance(cloud_folder, dict):
+        return []
+
+    ids: list[str] = []
+    provider_data = cloud_folder.get(provider)
+    primary_id = _folder_id_from_metadata(provider_data)
+    if primary_id:
+        ids.append(primary_id)
+
+    if isinstance(provider_data, dict):
+        for value in (provider_data.get("subfolders") or {}).values():
+            if value:
+                ids.append(str(value))
+
+    for context in cloud_folder.get("context_folders") or []:
+        if not isinstance(context, dict) or context.get("provider") != provider:
+            continue
+        context_id = _folder_id_from_metadata(context)
+        if context_id:
+            ids.append(context_id)
+
+    return _dedupe(ids)
+
+
+def _sharepoint_folder_refs(cloud_folder: dict | None) -> list[tuple[str, str]]:
+    """Return ``(drive_id, folder_id)`` refs for SharePoint matter folders."""
+    if not isinstance(cloud_folder, dict):
+        return []
+
+    refs: list[tuple[str, str]] = []
+    provider_data = cloud_folder.get("sharepoint")
+    if isinstance(provider_data, dict):
+        drive_id = provider_data.get("drive_id")
+        primary_id = _folder_id_from_metadata(provider_data)
+        if drive_id and primary_id:
+            refs.append((str(drive_id), primary_id))
+        for folder_id in (provider_data.get("subfolders") or {}).values():
+            if drive_id and folder_id:
+                refs.append((str(drive_id), str(folder_id)))
+
+    for context in cloud_folder.get("context_folders") or []:
+        if not isinstance(context, dict) or context.get("provider") != "sharepoint":
+            continue
+        drive_id = context.get("drive_id")
+        folder_id = _folder_id_from_metadata(context)
+        if drive_id and folder_id:
+            refs.append((str(drive_id), folder_id))
+
+    return list(dict.fromkeys(refs))
 
 
 # ── Module-level singleton ──────────────────────────────────────────────────

@@ -569,6 +569,13 @@ async def _ensure_gdrive_folder(token: str, folder_name: str, parent_id: str) ->
         )
         if resp.status_code in (200, 201):
             return resp.json()["id"]
+        if resp.status_code == 409:
+            existing = _choose_existing_folder(
+                await _list_gdrive_child_folders(client, headers, parent_id),
+                folder_name,
+            )
+            if existing:
+                return existing["id"]
         raise RuntimeError(
             f"Failed to create Google Drive folder '{folder_name}': "
             f"{resp.status_code} {resp.text[:200]}"

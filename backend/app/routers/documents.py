@@ -29,6 +29,25 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 embedding_service = EmbeddingService()
 
+# Only formats `extract_text` actually knows how to parse. Anything else falls
+# through to a raw UTF-8 decode there, which happily "succeeds" (with garbage)
+# on arbitrary binaries — so unlisted types are rejected here instead of being
+# silently ingested into the RAG pipeline.
+_ALLOWED_UPLOAD_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt")
+_ALLOWED_UPLOAD_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "text/plain",
+}
+
+
+def _is_allowed_upload(filename: str, content_type: str | None) -> bool:
+    fn_lower = filename.lower()
+    if fn_lower.endswith(_ALLOWED_UPLOAD_EXTENSIONS):
+        return True
+    return bool(content_type) and content_type.lower() in _ALLOWED_UPLOAD_CONTENT_TYPES
+
 
 def _document_to_response(doc: Document) -> DocumentResponse:
     return DocumentResponse(
@@ -42,7 +61,9 @@ def _document_to_response(doc: Document) -> DocumentResponse:
     )
 
 
-async def _persist_uploaded_document(db: AsyncSession, doc: Document) -> DocumentResponse:
+async def _persist_uploaded_document(
+    db: AsyncSession, doc: Document
+) -> DocumentResponse:
     """Persist upload row while tenant RLS context is still active."""
     db.add(doc)
     await db.flush()
@@ -205,6 +226,12 @@ async def upload_document(
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
+
+    if not _is_allowed_upload(file.filename, file.content_type):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, DOC, DOCX, TXT.",
+        )
 
     # Create storage directory
     document_id = uuid.uuid4()

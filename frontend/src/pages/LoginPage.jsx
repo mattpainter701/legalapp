@@ -55,8 +55,8 @@ export default function LoginPage() {
     setLoading(true)
     setError(null)
     try {
-      const result = await login({ email, password })
-      const userObj = await authLogin(result.access_token)
+      await login({ email, password })
+      const userObj = await authLogin()
       navigate(userObj?.default_route || '/matters', { replace: true })
     } catch (err) {
       const detail = err?.response?.data?.detail

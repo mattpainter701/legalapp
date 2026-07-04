@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -39,6 +39,14 @@ class MatterDocument(Base):
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    storage_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    _storage_backend: Mapped[str | None] = mapped_column(
+        "storage_backend", String(50), nullable=True
+    )
+    provider_object_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    provider_drive_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    provider_parent_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    storage_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     document_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Firm controls which case files are visible in the client portal.
@@ -67,7 +75,15 @@ class MatterDocument(Base):
 
     @property
     def storage_backend(self) -> str:
-        """Best-effort storage backend label derived from the stored location."""
+        """Explicit backend when known, otherwise legacy URL-derived label."""
+        explicit_backend = self._normalize_storage_backend(self._storage_backend)
+        if explicit_backend:
+            return explicit_backend
+
+        explicit_provider = self._normalize_storage_backend(self.storage_provider)
+        if explicit_provider:
+            return explicit_provider
+
         cloud_url = self.cloud_url
         if not cloud_url:
             return "local"
@@ -81,3 +97,25 @@ class MatterDocument(Base):
         ):
             return "onedrive"
         return "cloud"
+
+    @storage_backend.setter
+    def storage_backend(self, value: str | None) -> None:
+        self._storage_backend = value
+
+    @staticmethod
+    def _normalize_storage_backend(value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = value.strip().lower().replace("-", "_")
+        if not normalized:
+            return None
+        aliases = {
+            "google": "google_drive",
+            "gdrive": "google_drive",
+            "drive": "google_drive",
+            "microsoft": "onedrive",
+            "ms_graph": "onedrive",
+            "one_drive": "onedrive",
+            "share_point": "sharepoint",
+        }
+        return aliases.get(normalized, normalized)

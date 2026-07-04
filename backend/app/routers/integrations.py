@@ -24,6 +24,7 @@ from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
 from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
+from app.services.integration_observability import apply_scope_audit, missing_scopes
 from app.services.tenant_oauth_apps import (
     get_tenant_oauth_app,
     get_zoom_phone_webhook_secret,
@@ -295,15 +296,14 @@ async def microsoft_callback(
     teams_flag = bool(meta.get("teams")) if meta else False
     code_verifier = meta.get("pkce_verifier") if meta else None
 
+    expected_scopes = _admin_scopes(teams_flag) if intent == "admin" else MICROSOFT_USER_SCOPES
     token_payload = {
         "client_id": settings.MICROSOFT_CLIENT_ID,
         "client_secret": settings.MICROSOFT_CLIENT_SECRET,
         "code": code,
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
-        "scope": _admin_scopes(teams_flag)
-        if intent == "admin"
-        else MICROSOFT_USER_SCOPES,
+        "scope": expected_scopes,
     }
     if code_verifier:
         token_payload["code_verifier"] = code_verifier
@@ -371,21 +371,22 @@ async def microsoft_callback(
                 existing.granted_by_user_id = uuid.UUID(admin_user_id)
                 if service_email:
                     existing.service_account_email = service_email
+                cred_row = existing
             else:
-                db.add(
-                    TenantCredential(
-                        tenant_id=uuid.UUID(tenant_id),
-                        provider="microsoft",
-                        encrypted_access_token=encrypt_token(access_token),
-                        encrypted_refresh_token=(
-                            encrypt_token(refresh_token) if refresh_token else None
-                        ),
-                        token_expires_at=_expires_at(expires_in),
-                        scopes=scope_str,
-                        granted_by_user_id=uuid.UUID(admin_user_id),
-                        service_account_email=service_email,
-                    )
+                cred_row = TenantCredential(
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="microsoft",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=(
+                        encrypt_token(refresh_token) if refresh_token else None
+                    ),
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
+                    granted_by_user_id=uuid.UUID(admin_user_id),
+                    service_account_email=service_email,
                 )
+                db.add(cred_row)
+            apply_scope_audit(cred_row, "microsoft", expected_scopes, _scope_is_granted)
         else:
             user_id, tenant_id = _require_state_user(meta, "user")
             await set_tenant_context(db, tenant_id)
@@ -405,19 +406,19 @@ async def microsoft_callback(
                 row.token_expires_at = _expires_at(expires_in)
                 row.scopes = scope_str
             else:
-                db.add(
-                    UserOAuthToken(
-                        user_id=uuid.UUID(user_id),
-                        tenant_id=uuid.UUID(tenant_id),
-                        provider="microsoft",
-                        encrypted_access_token=encrypt_token(access_token),
-                        encrypted_refresh_token=(
-                            encrypt_token(refresh_token) if refresh_token else None
-                        ),
-                        token_expires_at=_expires_at(expires_in),
-                        scopes=scope_str,
-                    )
+                row = UserOAuthToken(
+                    user_id=uuid.UUID(user_id),
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="microsoft",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=(
+                        encrypt_token(refresh_token) if refresh_token else None
+                    ),
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
                 )
+                db.add(row)
+            apply_scope_audit(row, "microsoft", MICROSOFT_USER_SCOPES, _scope_is_granted)
 
         await db.commit()
 
@@ -558,20 +559,20 @@ async def google_callback(
                 if service_email:
                     row.service_account_email = service_email
             else:
-                db.add(
-                    TenantCredential(
-                        tenant_id=uuid.UUID(tenant_id),
-                        provider="google",
-                        encrypted_access_token=encrypt_token(access_token),
-                        encrypted_refresh_token=(
-                            encrypt_token(refresh_token) if refresh_token else None
-                        ),
-                        token_expires_at=_expires_at(expires_in),
-                        scopes=scope_str,
-                        granted_by_user_id=uuid.UUID(admin_user_id),
-                        service_account_email=service_email,
-                    )
+                row = TenantCredential(
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="google",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=(
+                        encrypt_token(refresh_token) if refresh_token else None
+                    ),
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
+                    granted_by_user_id=uuid.UUID(admin_user_id),
+                    service_account_email=service_email,
                 )
+                db.add(row)
+            apply_scope_audit(row, "google", GOOGLE_ADMIN_SCOPES, _scope_is_granted)
         else:
             user_id, tenant_id = _require_state_user(meta, "user")
             await set_tenant_context(db, tenant_id)
@@ -591,19 +592,19 @@ async def google_callback(
                 row.token_expires_at = _expires_at(expires_in)
                 row.scopes = scope_str
             else:
-                db.add(
-                    UserOAuthToken(
-                        user_id=uuid.UUID(user_id),
-                        tenant_id=uuid.UUID(tenant_id),
-                        provider="google",
-                        encrypted_access_token=encrypt_token(access_token),
-                        encrypted_refresh_token=(
-                            encrypt_token(refresh_token) if refresh_token else None
-                        ),
-                        token_expires_at=_expires_at(expires_in),
-                        scopes=scope_str,
-                    )
+                row = UserOAuthToken(
+                    user_id=uuid.UUID(user_id),
+                    tenant_id=uuid.UUID(tenant_id),
+                    provider="google",
+                    encrypted_access_token=encrypt_token(access_token),
+                    encrypted_refresh_token=(
+                        encrypt_token(refresh_token) if refresh_token else None
+                    ),
+                    token_expires_at=_expires_at(expires_in),
+                    scopes=scope_str,
                 )
+                db.add(row)
+            apply_scope_audit(row, "google", GOOGLE_USER_SCOPES, _scope_is_granted)
 
         await db.commit()
 
@@ -1274,20 +1275,13 @@ async def integration_status(
     )
     users_list = user_count.scalars().all()
 
-    def _missing_scopes(provider: str, granted: str | None, required: str) -> list[str]:
-        if not granted:
-            return required.split()
-        granted_set = set(granted.split())
-        return sorted(
-            scope
-            for scope in required.split()
-            if not _scope_is_granted(scope, granted_set, provider)
-        )
-
     ms_required = MICROSOFT_ADMIN_SCOPES
     google_required = GOOGLE_ADMIN_SCOPES
 
     ms_connected = ms_row is not None and ms_row.is_active
+    ms_missing = missing_scopes(
+        "microsoft", ms_row.scopes if ms_row else None, ms_required, _scope_is_granted
+    )
     ms_teams_missing = missing_teams_scopes(ms_row.scopes if ms_row else None)
     ms_teams_connected = (
         settings.TEAMS_FEATURE_ENABLED and ms_connected and not ms_teams_missing
@@ -1298,9 +1292,12 @@ async def integration_status(
         connected=ms_connected,
         scopes=ms_row.scopes if ms_row else None,
         required_scopes=ms_required,
-        missing_scopes=_missing_scopes(
-            "microsoft", ms_row.scopes if ms_row else None, ms_required
-        ),
+        missing_scopes=ms_missing,
+        health=ms_row.health if ms_row else "disconnected",
+        reconnect_required=bool(ms_row and (not ms_row.is_active or ms_missing)),
+        last_refresh_at=ms_row.last_refresh_at if ms_row else None,
+        last_refresh_error=ms_row.last_refresh_error if ms_row else None,
+        scopes_version=ms_row.scopes_version if ms_row else 1,
         expires_at=ms_row.token_expires_at if ms_row else None,
         service_account_email=ms_row.service_account_email if ms_row else None,
         last_user_sync_at=ms_row.last_user_sync_at if ms_row else None,
@@ -1314,14 +1311,26 @@ async def integration_status(
         teams_connected=ms_teams_connected,
         teams_missing_scopes=ms_teams_missing,
     )
+    google_connected = google_row is not None and google_row.is_active
+    google_missing = missing_scopes(
+        "google",
+        google_row.scopes if google_row else None,
+        google_required,
+        _scope_is_granted,
+    )
     google_status = IntegrationStatus(
         provider="google",
-        connected=google_row is not None and google_row.is_active,
+        connected=google_connected,
         scopes=google_row.scopes if google_row else None,
         required_scopes=google_required,
-        missing_scopes=_missing_scopes(
-            "google", google_row.scopes if google_row else None, google_required
+        missing_scopes=google_missing,
+        health=google_row.health if google_row else "disconnected",
+        reconnect_required=bool(
+            google_row and (not google_row.is_active or google_missing)
         ),
+        last_refresh_at=google_row.last_refresh_at if google_row else None,
+        last_refresh_error=google_row.last_refresh_error if google_row else None,
+        scopes_version=google_row.scopes_version if google_row else 1,
         expires_at=google_row.token_expires_at if google_row else None,
         service_account_email=google_row.service_account_email if google_row else None,
         last_user_sync_at=google_row.last_user_sync_at if google_row else None,

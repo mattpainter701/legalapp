@@ -67,11 +67,19 @@ def _current_day_key() -> str:
 
 
 def _extract_jwt_claims(request: Request) -> tuple[Optional[str], Optional[str], str]:
-    """Return (user_id, tenant_id, billing_tier) from the JWT, or (None, None, 'payg')."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return None, None, "payg"
-    token = auth.split(" ", 1)[1]
+    """Return (user_id, tenant_id, billing_tier) from the JWT, or (None, None, 'payg').
+
+    Reads the access token from the httpOnly cookie first (the SPA's primary
+    auth path) and falls back to the Authorization header (non-browser
+    clients). Cookie-only requests were previously invisible to this check,
+    which meant they bypassed the per-user/per-tenant rate limits entirely.
+    """
+    token = request.cookies.get("access_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return None, None, "payg"
+        token = auth.split(" ", 1)[1]
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
@@ -140,13 +148,10 @@ def _counts_against_tenant_daily(method: str, path: str) -> bool:
         return True
     if method != "POST":
         return False
-    return (
-        path.startswith("/api/conversations/")
-        and (
-            path.endswith("/messages")
-            or path.endswith("/messages/stream")
-            or "/messages/" in path
-        )
+    return path.startswith("/api/conversations/") and (
+        path.endswith("/messages")
+        or path.endswith("/messages/stream")
+        or "/messages/" in path
     )
 
 

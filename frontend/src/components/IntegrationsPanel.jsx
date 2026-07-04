@@ -330,6 +330,8 @@ export default function IntegrationsPanel() {
   const healthLabels = {
     healthy: 'All good',
     missing_scopes: 'Missing scopes',
+    refresh_failed: 'Refresh failed',
+    revoked: 'Reconnect required',
     disconnected: 'Not connected',
   }
 
@@ -705,6 +707,13 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
   const allScopes = [...(info.granted_scopes || []), ...(info.missing_required || [])]
   // Deduplicate while preserving order
   const uniqueScopes = [...new Set(allScopes)]
+  const healthText = {
+    healthy: 'Healthy',
+    missing_scopes: 'Missing Scopes',
+    refresh_failed: 'Refresh Failed',
+    revoked: 'Reconnect Required',
+    disconnected: 'Disconnected',
+  }[info.health] || 'Needs Attention'
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
@@ -713,11 +722,10 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
           <h3 className="text-brand-ink font-sans text-base font-bold">{name}</h3>
           <span className={`inline-block mt-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
             info.health === 'healthy' ? 'bg-green-100 text-green-700' :
-            info.health === 'missing_scopes' ? 'bg-amber-100 text-amber-700' :
+            info.health === 'missing_scopes' || info.health === 'refresh_failed' ? 'bg-amber-100 text-amber-700' :
             'bg-red-100 text-red-700'
           }`}>
-            {info.health === 'healthy' ? 'Healthy' :
-             info.health === 'missing_scopes' ? 'Missing Scopes' : 'Disconnected'}
+            {healthText}
           </span>
           {info.connected && (
             <p className="mt-1 text-xs text-brand-ink-2 font-sans">
@@ -725,9 +733,19 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
               {info.last_sync_status === 'failed' ? ' · last sync failed' : ` · last run ${relTime(info.last_sync_at)}`}
             </p>
           )}
+          {info.connected && (
+            <p className="mt-1 text-xs text-brand-ink-2 font-sans">
+              Token refresh {info.last_refresh_at ? relTime(info.last_refresh_at) : 'not yet recorded'}
+            </p>
+          )}
           {info.connected && info.last_sync_error && (
             <p className="mt-1 text-xs text-red-600 font-mono bg-red-50 px-2 py-1 rounded">
               {info.last_sync_error}
+            </p>
+          )}
+          {info.connected && info.last_refresh_error && (
+            <p className="mt-1 text-xs text-red-600 font-mono bg-red-50 px-2 py-1 rounded">
+              {info.last_refresh_error}
             </p>
           )}
         </div>
@@ -749,6 +767,22 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
           </button>
         </div>
       </div>
+
+      {info.recent_sync_runs?.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+          {info.recent_sync_runs.slice(0, 3).map((run) => (
+            <div key={`${run.job_type}-${run.started_at}`} className="bg-brand-bg border border-brand-line rounded-lg px-3 py-2">
+              <div className="text-[11px] uppercase font-bold text-brand-ink-2">{run.job_type}</div>
+              <div className={`text-xs font-bold ${run.status === 'completed' ? 'text-green-700' : 'text-red-600'}`}>
+                {run.status} · {relTime(run.started_at)}
+              </div>
+              <div className="text-[11px] text-brand-ink-2">
+                {run.items_ok || 0} ok · {run.items_failed || 0} failed
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="space-y-1.5">
         {uniqueScopes.map((scope) => {

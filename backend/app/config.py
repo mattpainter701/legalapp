@@ -50,9 +50,13 @@ class Settings(BaseSettings):
     # ── Zoom OAuth / meeting provider ────────────────────────────────────────
     ZOOM_CLIENT_ID: str = ""
     ZOOM_CLIENT_SECRET: str = ""
-    ZOOM_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
+    ZOOM_REDIRECT_URI: str = (
+        ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
+    )
     ZOOM_WEBHOOK_SECRET_TOKEN: str = ""
-    ZOOM_PHONE_REDIRECT_URI: str = ""  # e.g. https://yourdomain.com/api/integrations/zoom-phone/callback
+    ZOOM_PHONE_REDIRECT_URI: str = (
+        ""  # e.g. https://yourdomain.com/api/integrations/zoom-phone/callback
+    )
     # Optional Zoom Phone Server-to-Server OAuth app. The account ID is
     # tenant-specific in multi-tenant installs; this default is for a single
     # customer deployment until the admin credential UI lands.
@@ -217,8 +221,85 @@ def validate_token_encryption_key(settings: Settings) -> None:
         raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}") from e
 
 
+# Substrings that indicate a secret was left at its template/placeholder value
+# rather than replaced with a real random value. Every JWT in the system is
+# forgeable if SECRET_KEY matches one of these, so this must be fatal at boot.
+# NOTE: keep this list to markers that only appear in *unfilled* templates —
+# not generic words like "secret-key", which legitimately appears inside the
+# documented local test fixture value (see memory/backend-test-env.md) and
+# would false-positive on a perfectly fine random-enough dev/test secret.
+_PLACEHOLDER_SECRET_MARKERS = (
+    "changeme",
+    "change-me",
+    "change_me",
+    "change-this",
+    "change_this",
+    "replace-this",
+    "replace_this",
+    "your-secret",
+    "yoursecret",
+    "<todo>",
+    "insert-secret",
+    "insert_secret",
+    "generate-with-openssl",
+    "generate_with_openssl",
+    "managed-outside-git",
+)
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_SECRET_MARKERS)
+
+
+def validate_secret_key(settings: Settings) -> None:
+    """Validate SECRET_KEY is present, long enough, and not a template placeholder.
+
+    SECRET_KEY signs every access/refresh JWT and the mediation-portal magic-link
+    tokens. A short or placeholder value (e.g. a template's "change-me-in-prod")
+    lets an attacker forge tokens for any user/tenant, including admins — this
+    must fail closed at startup rather than log a warning.
+    """
+    key = settings.SECRET_KEY
+    if not key or len(key) < 32:
+        raise ValueError(
+            "SECRET_KEY must be set to a random value of at least 32 characters. "
+            'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+        )
+    if _looks_like_placeholder(key):
+        raise ValueError(
+            "SECRET_KEY appears to be a template placeholder value, not a real "
+            "secret. Generate a real one with: "
+            'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+        )
+
+
+def validate_platform_secret_key(settings: Settings) -> None:
+    """Validate PLATFORM_SECRET_KEY when set (empty disables platform endpoints).
+
+    The platform router already rejects requests when this is short via a
+    per-request check; validating at startup fails fast instead of leaving a
+    weak key live until the first request exercises it.
+    """
+    key = settings.PLATFORM_SECRET_KEY
+    if not key:
+        return
+    if len(key) < 32:
+        raise ValueError(
+            "PLATFORM_SECRET_KEY must be at least 32 characters (or unset to "
+            "disable platform operator endpoints)."
+        )
+    if _looks_like_placeholder(key):
+        raise ValueError(
+            "PLATFORM_SECRET_KEY appears to be a template placeholder value, not "
+            "a real secret."
+        )
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
     validate_token_encryption_key(settings)
+    validate_secret_key(settings)
+    validate_platform_secret_key(settings)
     return settings

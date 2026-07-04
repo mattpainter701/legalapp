@@ -6,7 +6,7 @@ from typing import Optional
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel as _PydanticBase
-from sqlalchemy import select, func
+from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -14,6 +14,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin as _require_admin
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
+from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.tenant import Tenant, TenantSettings
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
@@ -162,6 +163,16 @@ async def integration_health(
         select(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
     )
     creds = cred_result.scalars().all()
+    runs_result = await db.execute(
+        select(IntegrationSyncRun)
+        .where(IntegrationSyncRun.tenant_id == tenant_id)
+        .order_by(desc(IntegrationSyncRun.started_at))
+        .limit(50)
+    )
+    runs = runs_result.scalars().all()
+    latest_runs: dict[tuple[str, str], IntegrationSyncRun] = {}
+    for run in runs:
+        latest_runs.setdefault((run.provider, run.job_type), run)
 
     providers = {}
     for provider in ("microsoft", "google"):
@@ -173,6 +184,10 @@ async def integration_health(
                 "granted_by_user_id": None,
                 "granted_by_user_email": None,
                 "granted_by_user_active": None,
+                "health": "disconnected",
+                "last_refresh_at": None,
+                "last_refresh_error": None,
+                "reconnect_required": False,
                 "warning": None,
             }
             continue
@@ -192,6 +207,10 @@ async def integration_health(
         warning = None
         if grantor_active is False:
             warning = f"User {grantor_email} who granted consent is deactivated — integrations may break. Re-authorize with another admin."
+        elif match.health == "revoked":
+            warning = "OAuth grant was revoked. Re-connect this provider."
+        elif match.health == "refresh_failed":
+            warning = match.last_refresh_error or "Last token refresh failed."
         elif match.token_expires_at and match.token_expires_at < datetime.now(
             timezone.utc
         ):
@@ -209,6 +228,12 @@ async def integration_health(
             "expires_at": match.token_expires_at.isoformat()
             if match.token_expires_at
             else None,
+            "health": match.health,
+            "last_refresh_at": match.last_refresh_at.isoformat()
+            if match.last_refresh_at
+            else None,
+            "last_refresh_error": match.last_refresh_error,
+            "reconnect_required": match.health == "revoked",
             "warning": warning,
         }
 
@@ -1267,6 +1292,21 @@ async def get_permissions_audit(
 
     def audit_provider(provider: str, required: list[str], user_count: int) -> dict:
         match = next((c for c in creds if c.provider == provider), None)
+        provider_runs = [
+            {
+                "job_type": run.job_type,
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat()
+                if run.finished_at
+                else None,
+                "items_ok": run.items_ok,
+                "items_failed": run.items_failed,
+                "error_summary": run.error_summary,
+            }
+            for (run_provider, _job), run in latest_runs.items()
+            if run_provider == provider
+        ]
         freshness = {
             "user_count": user_count,
             "last_sync_at": match.last_user_sync_at.isoformat()
@@ -1275,6 +1315,13 @@ async def get_permissions_audit(
             "last_sync_total": match.last_user_sync_total if match else None,
             "last_sync_status": match.last_user_sync_status if match else None,
             "last_sync_error": match.last_user_sync_error if match else None,
+            "token_health": match.health if match else "disconnected",
+            "last_refresh_at": match.last_refresh_at.isoformat()
+            if match and match.last_refresh_at
+            else None,
+            "last_refresh_error": match.last_refresh_error if match else None,
+            "scopes_version": match.scopes_version if match else 1,
+            "recent_sync_runs": provider_runs,
         }
         if not match or not match.scopes:
             return {
@@ -1284,6 +1331,7 @@ async def get_permissions_audit(
                 "extra_scopes": [],
                 "all_required": False,
                 "health": "disconnected",
+                "reconnect_required": False,
                 **freshness,
             }
         granted = [s.strip() for s in match.scopes.split(" ") if s.strip()]
@@ -1296,13 +1344,18 @@ async def get_permissions_audit(
             for s in granted
             if not any(_scope_is_granted(req, {s}, provider) for req in required)
         ]
+        token_health = match.health or "healthy"
+        effective_health = token_health
+        if token_health == "healthy" and missing:
+            effective_health = "missing_scopes"
         return {
             "connected": True,
             "granted_scopes": granted,
             "missing_required": missing,
             "extra_scopes": extra,
             "all_required": len(missing) == 0,
-            "health": "healthy" if len(missing) == 0 else "missing_scopes",
+            "health": effective_health,
+            "reconnect_required": token_health == "revoked" or bool(missing),
             **freshness,
         }
 
@@ -1315,10 +1368,7 @@ async def get_permissions_audit(
         and google_audit["health"] == "disconnected"
     ):
         overall = "disconnected"
-    elif (
-        ms_audit["health"] == "missing_scopes"
-        or google_audit["health"] == "missing_scopes"
-    ):
+    elif ms_audit["health"] != "healthy" or google_audit["health"] != "healthy":
         overall = "attention_needed"
 
     return {

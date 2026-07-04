@@ -20,6 +20,20 @@
   `073_task_read_receipts`. Legacy `enabled_modules` tenants keep the Tasks
   page (matters implies tasks); the Open Matter intake action is hidden on
   plans without the matters module.
+- **Cloud document storage metadata:** added durable matter-document storage
+  metadata for explicit provider/backend, provider object ID, drive ID, parent
+  ID, and storage errors, plus structured `StorageResult` upload plumbing for
+  OneDrive, SharePoint, Google Drive, and local fallback.
+- **Integration reliability core:** added shared provider HTTP clients for
+  Microsoft Graph and Google APIs with default timeouts, bounded transient
+  retry, `Retry-After`/429 handling, and typed provider exceptions. Gmail and
+  Microsoft mail readers now use the shared layer, with focused provider-client
+  and mail-reader coverage.
+- **Integration observability spine:** added `integration_sync_runs` plus
+  token-health/scope-audit columns on tenant and user OAuth credential tables.
+  Microsoft/Google OAuth callbacks now persist missing scopes, and admin
+  integration health cards show token health, refresh errors, reconnect state,
+  and recent cloud/user/correspondence sync runs.
 - **CourtListener embedding scheduler:** added `mcp_server.embedding_scheduler`
   and a profile-gated `embedding-scheduler` compose service. The scheduler
   periodically counts `opinion_chunks` with missing embeddings, uses a Postgres
@@ -46,6 +60,12 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Matter cloud-folder sync scope:** the per-matter cloud folder sync endpoint
+  now refreshes only that matter's mapped primary, subfolder, and context
+  folders instead of launching a tenant-wide cloud metadata scan.
+- **Google Drive folder provisioning race:** Google folder creation now
+  re-lists and reuses the existing folder when a concurrent create returns 409,
+  matching the OneDrive/SharePoint duplicate-recovery behavior.
 - **Backend/API security hardening (prod-readiness pass):** frontend auth now
   lives entirely in httpOnly cookies — the SPA no longer reads, writes, or
   falls back to a bearer token in `localStorage`, closing an XSS session-theft
@@ -93,6 +113,19 @@
   existing `app.services.pii_detection.scrub_pii` before persisting, so an
   exception that echoes a client's email/SSN/phone/card number (e.g. a
   uniqueness-constraint violation) doesn't land verbatim in `ErrorLog`.
+- **Cloud-backed document delete:** matter document delete now removes
+  provider-backed files by durable Google Drive, OneDrive, or SharePoint IDs
+  before deleting the DB row, tolerates provider 404s, and keeps failing closed
+  for legacy URL-only rows that cannot be safely routed.
+- **OAuth token refresh race:** tenant and per-user token refresh now re-checks
+  freshness under a row lock, uses one provider refresh path for Microsoft,
+  Google, and Zoom, retries transient token-endpoint failures, persists rotated
+  refresh tokens, and records health/last-refresh error state.
+- **Integration failure visibility:** token refresh failures now record
+  `last_refresh_error`/`last_refresh_at`, `invalid_grant` marks credentials
+  revoked/inactive, and integration scheduler per-tenant failures write
+  admin-visible `ErrorLog` entries instead of living only in worker logs.
+  Cloud-search status now returns a real error state when its status query fails.
 - **Client portal security and UX:** client portal sessions now use a dedicated
   `client_portal_token` cookie instead of overwriting firm-app auth, portal JWTs
   carry the accepted invite ID, and portal requests fail closed if the invite is
@@ -225,6 +258,13 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Tests
+- **Integration observability:** added focused tests for scope normalization,
+  missing-scope persistence, and token-health derivation. Verification:
+  `py -m compileall backend/app/models backend/app/services backend/app/routers backend/app/schemas`,
+  `py -m pytest backend/tests/test_integration_observability.py backend/tests/test_token_vault_revoke.py -q`
+  with a throwaway `TOKEN_ENCRYPTION_KEY`, and `npm run build` in `frontend/`.
+  DB-backed integration readiness tests still cannot run locally because the
+  test Postgres connection is refused.
 - **Client portal remediation:** added unit regressions for invite-bound portal
   JWTs, dedicated portal cookie naming, revoked invite rejection, legacy token
   rejection, and contact/email-bound portal signer matching. Verification:
