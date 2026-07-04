@@ -96,6 +96,13 @@ class Task(Base):
     customer_contact_method: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )
+    # Why the task was completed/cancelled, and by whom. Cleared on reopen.
+    closed_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # "manual" | "email_agent" | "calendar_sync"
     source: Mapped[str] = mapped_column(

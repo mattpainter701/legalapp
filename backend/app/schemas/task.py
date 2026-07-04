@@ -19,6 +19,9 @@ class TaskCreate(BaseModel):
     matter_id: Optional[uuid.UUID] = None
     contact_id: Optional[uuid.UUID] = None
     assigned_to_user_id: Optional[uuid.UUID] = None
+    # Personal message from the assigner, included in the assignment email and
+    # appended to the task description. Not a Task column.
+    assignment_note: Optional[str] = None
 
     @field_validator("task_type")
     @classmethod
@@ -58,6 +61,10 @@ class TaskUpdate(BaseModel):
     matter_id: Optional[uuid.UUID] = None
     contact_id: Optional[uuid.UUID] = None
     assigned_to_user_id: Optional[uuid.UUID] = None
+    # Personal message from the assigner when (re)assigning. Not a Task column.
+    assignment_note: Optional[str] = None
+    # Required when cancelling; optional context when completing.
+    closed_reason: Optional[str] = None
 
     @field_validator("status")
     @classmethod
@@ -119,6 +126,8 @@ class TaskResponse(BaseModel):
     viewed_at: Optional[datetime] = None
     customer_contacted_at: Optional[datetime] = None
     customer_contact_method: Optional[str] = None
+    closed_reason: Optional[str] = None
+    closed_by_user_id: Optional[uuid.UUID] = None
     source: str
     external_ref: Optional[str]
     created_at: datetime
