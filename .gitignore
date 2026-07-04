@@ -38,6 +38,7 @@ nginx/letsencrypt/
 nginx/webroot/
 
 # Backups / logs
+backups/
 *.dump
 *.dump.gz
 /var/log/clarity-legal/
