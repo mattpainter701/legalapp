@@ -60,6 +60,8 @@ from app.routers.smb import router as smb_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.users import router as users_router
 from app.routers.platform_llm import router as platform_llm_router
+from app.routers.call_intake import router as call_intake_router
+from app.routers.call_intake import integrations_router as zoom_integrations_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -238,6 +240,8 @@ app.include_router(cloud_admin_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev_router, prefix="/api")
 app.include_router(integrations_router)
+app.include_router(call_intake_router)
+app.include_router(zoom_integrations_router)
 app.include_router(teams_router)
 app.include_router(email_router)
 app.include_router(document_sync_router)
