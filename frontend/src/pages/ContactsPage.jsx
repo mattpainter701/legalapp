@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getContacts, createContact } from '../api'
-import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail } from 'lucide-react'
+import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail, HeartHandshake, AlertCircle, Star } from 'lucide-react'
 import { useAuth } from '../App'
 
 const CONTACT_TYPES = ['client', 'opposing_party', 'witness', 'expert', 'vendor', 'referral', 'other']
@@ -180,14 +180,36 @@ export default function ContactsPage() {
     return () => clearTimeout(t)
   }, [loadContacts, q])
 
+  const stats = useMemo(() => {
+    const clients = contacts.filter(c => c.contact_type === 'client')
+    const needsContactInfo = contacts.filter(c => !c.email && !c.phone)
+    const referralSources = contacts.filter(c => c.contact_type === 'referral')
+    return {
+      clients: clients.length,
+      organizations: contacts.filter(c => c.entity_type === 'organization').length,
+      needsContactInfo: needsContactInfo.length,
+      referralSources: referralSources.length,
+    }
+  }, [contacts])
+
+  const priorityContacts = useMemo(() => (
+    contacts
+      .filter(c => c.contact_type === 'client' || !c.email || !c.phone)
+      .slice(0, 4)
+  ), [contacts])
+
+  const applyRoleFilter = (role) => {
+    setFilterType(prev => (prev === role ? '' : role))
+  }
+
   return (
     <div className="">
       <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-serif font-bold text-brand-ink">Contacts</h1>
-            <p className="text-sm text-brand-muted mt-1">{total} contact{total !== 1 ? 's' : ''}</p>
+            <h1 className="text-2xl font-serif font-bold text-brand-ink">Customer Relations</h1>
+            <p className="text-sm text-brand-muted mt-1">{total} contact{total !== 1 ? 's' : ''} across clients, referral sources, vendors, and case parties.</p>
           </div>
           <button
             onClick={() => setShowCreate(true)}
@@ -196,6 +218,45 @@ export default function ContactsPage() {
             <Plus size={16} />
             New Contact
           </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          <div className="lg:col-span-2 bg-white border border-brand-line rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-4">
+              <HeartHandshake size={18} className="text-brand-accent" />
+              <h2 className="font-serif font-bold text-brand-ink">Relationship dashboard</h2>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: 'Clients', value: stats.clients, icon: Star, action: () => applyRoleFilter('client') },
+                { label: 'Organizations', value: stats.organizations, icon: Building2, action: () => setFilterEntity(filterEntity === 'organization' ? '' : 'organization') },
+                { label: 'Need info', value: stats.needsContactInfo, icon: AlertCircle, action: () => { setFilterType(''); setFilterEntity('') } },
+                { label: 'Referrals', value: stats.referralSources, icon: Users, action: () => applyRoleFilter('referral') },
+              ].map(item => {
+                const StatIcon = item.icon
+                return (
+                  <button key={item.label} onClick={item.action} className="text-left rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3 hover:border-brand-accent/40 hover:bg-white transition-colors">
+                    <StatIcon size={15} className="text-brand-muted mb-2" />
+                    <div className="text-2xl font-serif font-bold text-brand-ink">{item.value}</div>
+                    <div className="text-[12px] font-semibold text-brand-muted uppercase tracking-wide">{item.label}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="bg-brand-ink text-white rounded-2xl p-5 shadow-sm">
+            <h2 className="font-serif font-bold mb-3">Next best actions</h2>
+            <div className="space-y-2">
+              {priorityContacts.length === 0 ? (
+                <p className="text-sm text-white/70">Add clients to start relationship tracking.</p>
+              ) : priorityContacts.map(c => (
+                <button key={c.id} onClick={() => navigate(`/contacts/${c.id}`)} className="w-full text-left rounded-xl bg-white/10 px-3 py-2 hover:bg-white/15 transition-colors">
+                  <div className="text-sm font-semibold truncate">{c.display_name}</div>
+                  <div className="text-[11px] text-white/70 truncate">{!c.email && !c.phone ? 'Add email or phone' : c.contact_type === 'client' ? 'Review client relationship' : 'Review contact details'}</div>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Filters */}

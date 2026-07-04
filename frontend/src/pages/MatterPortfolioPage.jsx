@@ -24,6 +24,8 @@ const Icons = {
   grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
   alert: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+  spark: 'M13 2L3 14h8l-1 8 10-12h-8l1-8z',
+  users: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
 }
 
 const STATUS_COLORS = {
@@ -280,6 +282,12 @@ export default function MatterPortfolioPage() {
     pending: matters.filter(m => m.status === 'pending').length,
     closed: matters.filter(m => m.status === 'closed').length,
     critical: matters.filter(m => m.risk_level?.toLowerCase() === 'critical').length,
+    needsAction: matters.filter(needsAction).length,
+    staleClientUpdates: matters.filter(m => {
+      if (!m.updated_at || !['open', 'active'].includes(m.status)) return false
+      try { return differenceInDays(new Date(), parseISO(m.updated_at)) > 14 } catch { return false }
+    }).length,
+    withClients: matters.filter(m => m.client_name).length,
   }), [matters])
 
   const filtered = useMemo(() => matters.filter(m => {
@@ -482,6 +490,43 @@ export default function MatterPortfolioPage() {
             {error}
           </div>
         )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+          <div className="lg:col-span-2 bg-brand-ink text-white rounded-2xl p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Icon d={Icons.spark} size={16} className="text-brand-amber" />
+                  <h3 className="font-serif font-bold text-lg">Matter command center</h3>
+                </div>
+                <p className="text-sm text-white/75 max-w-2xl">Prioritize high-risk work, stale client updates, and upcoming deadlines before browsing the full portfolio.</p>
+              </div>
+              <button onClick={() => { setStatusFilter('all'); setPracticeFilter('all'); setSearch('') }} className="shrink-0 px-3 py-2 rounded-lg bg-white/10 text-xs font-semibold hover:bg-white/15">Reset view</button>
+            </div>
+            <div className="grid grid-cols-3 gap-3 mt-5">
+              <button onClick={() => setSearch('')} className="rounded-xl bg-white/10 px-4 py-3 text-left hover:bg-white/15">
+                <div className="text-2xl font-serif font-bold">{stats.needsAction}</div>
+                <div className="text-[12px] text-white/70 font-semibold uppercase tracking-wide">Need action</div>
+              </button>
+              <button onClick={() => setSearch('')} className="rounded-xl bg-white/10 px-4 py-3 text-left hover:bg-white/15">
+                <div className="text-2xl font-serif font-bold">{stats.staleClientUpdates}</div>
+                <div className="text-[12px] text-white/70 font-semibold uppercase tracking-wide">Stale updates</div>
+              </button>
+              <button onClick={() => navigate('/contacts')} className="rounded-xl bg-white/10 px-4 py-3 text-left hover:bg-white/15">
+                <div className="text-2xl font-serif font-bold">{stats.withClients}</div>
+                <div className="text-[12px] text-white/70 font-semibold uppercase tracking-wide">Client-linked</div>
+              </button>
+            </div>
+          </div>
+          <div className="bg-brand-surface border border-brand-line rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-3"><Icon d={Icons.users} size={16} className="text-brand-accent" /><h3 className="font-serif font-bold text-brand-ink">Customer value prompts</h3></div>
+            <ul className="space-y-2 text-sm text-brand-ink-2 font-sans">
+              <li>• Send proactive updates on matters stale over 14 days.</li>
+              <li>• Review critical-risk matters before new intake.</li>
+              <li>• Keep client names attached for stronger CRM reporting.</li>
+            </ul>
+          </div>
+        </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
