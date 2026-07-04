@@ -108,7 +108,9 @@ def remove_task_from_calendars(
     )
 
 
-async def send_task_assignment_alert(db: AsyncSession, task: Task) -> bool:
+async def send_task_assignment_alert(
+    db: AsyncSession, task: Task, assignment_note: str | None = None
+) -> bool:
     """Send an immediate email alert when a task is assigned to a user."""
     if not task.assigned_to_user_id:
         return False
@@ -167,14 +169,20 @@ async def send_task_assignment_alert(db: AsyncSession, task: Task) -> bool:
         customer_name=contact.display_name if contact else None,
         matter_name=matter.matter_name if matter else None,
         source=task.source,
+        assigner_note=assignment_note,
     )
 
 
-async def notify_task_created(db: AsyncSession, task: Task, tenant_id: str) -> bool:
+async def notify_task_created(
+    db: AsyncSession,
+    task: Task,
+    tenant_id: str,
+    assignment_note: str | None = None,
+) -> bool:
     """Notify external systems and assignee after a new task is created."""
     push_task_to_calendars(task, tenant_id)
     if task.assigned_to_user_id:
-        return await send_task_assignment_alert(db, task)
+        return await send_task_assignment_alert(db, task, assignment_note)
     return False
 
 
@@ -186,6 +194,7 @@ async def notify_task_updated(
     calendar_changed: bool,
     assignment_changed: bool,
     previous_calendar_user_id: str | None = None,
+    assignment_note: str | None = None,
 ) -> None:
     """Notify external systems after a task update."""
     if calendar_changed:
@@ -196,5 +205,5 @@ async def notify_task_updated(
         else:
             push_task_to_calendars(task, tenant_id)
     if assignment_changed and task.assigned_to_user_id:
-        return await send_task_assignment_alert(db, task)
+        return await send_task_assignment_alert(db, task, assignment_note)
     return False

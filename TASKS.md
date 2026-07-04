@@ -1,5 +1,27 @@
 # TASKS.md
 
+## Call Intake Task Tracking — Assigner Notes, Closure Reasons, Customer History — 2026-07-04 (DONE)
+
+**Goal:** Round out follow-up task accountability: let the assigner attach a
+personal message to the assignment email, require a reason when closing a
+task, allow reassignment with a reason, and document every task lifecycle
+event in the customer's communication history.
+
+- [x] `assignment_note` on task create/reassign → highlighted "Message from assigner" row in the assignment email + persisted on the task description
+- [x] `closed_reason` + `closed_by_user_id` (migration `074_task_closure_tracking`); cancelling requires a reason (422), reopening clears the closure record
+- [x] Customer-history documentation: assigned/reassigned/contacted/completed/cancelled events on contact-linked tasks written to `CommunicationLog` (`task:{id}:{event}`), incl. intake-dashboard task upserts and partner qualify handoff
+- [x] Tasks UI: Assign To + Message on create, per-row Reassign and Close (required reason) modals, Cancelled filter, closed-reason display
+- [x] Tests: `test_task_tracking.py` (6), read-receipt + intake-dashboard + plans/guard suites green against local Postgres; frontend production build clean
+
+Summary: assignment emails remain a structured system template but now carry
+the assigner's own note; closure and reassignment are attributed with reasons;
+and the contact's communication log is the single customer-history record of
+the whole follow-up trail (who was assigned, whether the caller was contacted
+back, and why the task closed). Email-based read receipts remain deliberately
+out (see 2026-07-03 entry); in-app `viewed_at` is the read signal.
+
+---
+
 ## Call Intake Prod Readiness — Tasks Module + Follow-up Receipts — 2026-07-03 (DONE)
 
 **Goal:** Make the standalone Call Intake product ready for the first customer:

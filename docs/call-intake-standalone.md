@@ -129,6 +129,38 @@ blocked, so they are deliberately not relied on. Detecting a reply to the custom
 M365/Google sent-mail would require per-user `Mail.Read`/Gmail scopes and is a possible
 future enhancement; the explicit "Log contact" action is the reliable signal today.
 
+## Assignment notes, closure reasons & customer history (migration `074`)
+
+**Assigner draft:** `assignment_note` on `POST /api/tasks` (create + assign) and
+`PATCH /api/tasks/{id}` (reassign) carries a personal message from the assigner. It is
+rendered as a highlighted **Message from assigner** row in the assignment alert email and
+appended to the task description (`Assignment note (<assigner>):` /
+`Reassignment note (<assigner>):`), so the instruction survives on the task itself. The
+assignment email is otherwise a structured system template
+(`EmailService.send_task_assignment_alert`): task, priority, type, due, customer, matter,
+source, description.
+
+**Close with reason:** completing or cancelling via `PATCH /api/tasks/{id}` records
+`closed_reason` and `closed_by_user_id`. Cancelling **requires** `closed_reason`
+(422 otherwise); the checkbox quick-complete stays reason-optional. Reopening
+(status back to pending/in-progress) clears both. The Tasks page has per-row
+**Reassign** (new assignee + message) and **Close** (outcome + required reason) actions,
+and closed rows show their reason.
+
+**Customer history:** every lifecycle event on a *contact-linked* task is documented as a
+`CommunicationLog` row on that contact (`app/services/task_history.py`,
+`external_ref = task:{task_id}:{event}`):
+
+| Event | When | Channel |
+|-|-|-|
+| `assigned` / `reassigned` | Task created with an assignee, reassigned, intake-dashboard lead follow-up / general-call task upserts, partner qualify handoff | `other` |
+| `contacted` | `POST /api/tasks/{id}/contacted` (Log Contact) | the contact method (`call`/`email`/`sms`/`meeting`, else `other`), direction `outbound` |
+| `completed` / `cancelled` | Status transition, with the closure reason in the body | `other` |
+
+Tasks without a `contact_id` are never written to the history — the communication log is
+the customer's record, not an internal audit trail. Outbound task rows do not pollute the
+intake call feed, which filters on `channel="call" AND direction="inbound"`.
+
 ## Upsell
 
 On a limited plan, the sidebar renders the other modules as **locked teasers** (greyed, lock

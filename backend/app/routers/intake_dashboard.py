@@ -44,6 +44,7 @@ from app.schemas.intake_dashboard import (
     ZoomPhoneSyncResponse,
 )
 from app.services.intake_archive_import import normalize_phone
+from app.services.task_history import record_task_event
 from app.services.task_notifications import notify_task_created
 from app.services.zoom_phone import (
     ZoomPhoneIntegrationError,
@@ -408,6 +409,9 @@ async def _upsert_lead_assignment_task(
         )
         db.add(task)
         await db.flush()
+        await record_task_event(
+            db, task, event="assigned", actor_user_id=created_by_user_id
+        )
     else:
         task.title = f"Urgent intake follow-up: {caller}"
         task.description = "\n".join(bit for bit in description_bits if bit)
@@ -418,7 +422,10 @@ async def _upsert_lead_assignment_task(
         if task.assigned_to_user_id != assigned_to_user_id:
             # New assignee has not seen the task; reset the read receipt.
             task.viewed_at = None
-        task.assigned_to_user_id = assigned_to_user_id
+            task.assigned_to_user_id = assigned_to_user_id
+            await record_task_event(
+                db, task, event="reassigned", actor_user_id=created_by_user_id
+            )
 
     return task
 
@@ -478,6 +485,9 @@ async def _upsert_general_call_task(
         )
         db.add(task)
         await db.flush()
+        await record_task_event(
+            db, task, event="assigned", actor_user_id=created_by_user_id
+        )
     else:
         task.title = task_title
         task.description = "\n".join(bit for bit in description_bits if bit)
@@ -488,7 +498,10 @@ async def _upsert_general_call_task(
         if task.assigned_to_user_id != assigned_to_user_id:
             # New assignee has not seen the task; reset the read receipt.
             task.viewed_at = None
-        task.assigned_to_user_id = assigned_to_user_id
+            task.assigned_to_user_id = assigned_to_user_id
+            await record_task_event(
+                db, task, event="reassigned", actor_user_id=created_by_user_id
+            )
     return task
 
 

@@ -64,6 +64,76 @@ function dueDateLabel(dateStr) {
   return { text: format(d, 'MMM d, yyyy'), color: 'text-brand-muted' }
 }
 
+function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff name or email' }) {
+  const [query, setQuery] = useState('')
+  const [users, setUsers] = useState([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState(null)
+
+  const handleSearch = async () => {
+    if (query.trim().length < 2) {
+      setSearchError('Search by at least 2 characters of the name or email.')
+      return
+    }
+    setSearching(true)
+    setSearchError(null)
+    try {
+      const results = await searchUsers(query.trim())
+      setUsers(results || [])
+      if ((results || []).length === 0) setSearchError('No active users matched that search.')
+    } catch (e) {
+      setSearchError(e?.response?.data?.detail || 'User search failed.')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handleSearch()
+            }
+          }}
+          className="flex-1 px-3 py-2 border border-brand-line rounded text-sm focus:outline-none focus:border-brand-accent"
+          placeholder={placeholder}
+        />
+        <button
+          type="button"
+          onClick={handleSearch}
+          disabled={searching}
+          className="px-3 py-2 bg-brand-ink text-white rounded text-sm disabled:opacity-50"
+        >
+          {searching ? 'Searching…' : 'Search'}
+        </button>
+      </div>
+      {searchError && <p className="text-xs text-brand-rose mt-1">{searchError}</p>}
+      {users.length > 0 && (
+        <div className="mt-2 border border-brand-line rounded-lg divide-y divide-brand-line max-h-36 overflow-y-auto">
+          {users.map(user => (
+            <button
+              type="button"
+              key={user.id}
+              onClick={() => onSelect(user)}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-brand-bg-soft ${
+                selectedUser?.id === user.id ? 'bg-brand-accent/10 text-brand-ink' : 'text-brand-muted'
+              }`}
+            >
+              <span className="font-semibold text-brand-ink">{user.full_name || user.email}</span>
+              {user.full_name && <span className="ml-2 text-xs text-brand-muted">{user.email}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CreateTaskModal({ onClose, onCreate }) {
   const [form, setForm] = useState({
     title: '',
@@ -73,6 +143,8 @@ function CreateTaskModal({ onClose, onCreate }) {
     description: '',
     contact_id: null,
   })
+  const [assignee, setAssignee] = useState(null)
+  const [assignmentNote, setAssignmentNote] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -88,6 +160,8 @@ function CreateTaskModal({ onClose, onCreate }) {
       if (!payload.due_date) delete payload.due_date
       if (!payload.description) delete payload.description
       if (!payload.contact_id) delete payload.contact_id
+      if (assignee) payload.assigned_to_user_id = assignee.id
+      if (assignee && assignmentNote.trim()) payload.assignment_note = assignmentNote.trim()
       const task = await createTask(payload)
       onCreate(task)
     } catch (e) {
@@ -142,6 +216,25 @@ function CreateTaskModal({ onClose, onCreate }) {
               placeholder="Search contacts…"
             />
           </div>
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign To</label>
+            <UserSearchPicker selectedUser={assignee} onSelect={setAssignee} />
+            {assignee && (
+              <p className="text-xs text-brand-muted mt-1">
+                Assigning to <span className="font-semibold text-brand-ink">{assignee.full_name || assignee.email}</span>
+                {' — '}they get an email alert.
+                <button type="button" onClick={() => setAssignee(null)} className="ml-2 text-brand-rose hover:underline">Clear</button>
+              </p>
+            )}
+          </div>
+          {assignee && (
+            <div>
+              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Message to Assignee</label>
+              <textarea value={assignmentNote} onChange={e => setAssignmentNote(e.target.value)} rows={2}
+                className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
+                placeholder="Personal note included in the assignment email…" />
+            </div>
+          )}
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
             <textarea value={form.description} onChange={e => set('description', e.target.value)} rows={2}
@@ -584,6 +677,140 @@ function LogContactModal({ task, onClose, onLogged }) {
   )
 }
 
+function ReassignTaskModal({ task, onClose, onReassigned }) {
+  const [selectedUser, setSelectedUser] = useState(null)
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!selectedUser) {
+      setError('Select who should own this task.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await updateTask(task.id, {
+        assigned_to_user_id: selectedUser.id,
+        assignment_note: note.trim() || undefined,
+      })
+      onReassigned()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Task could not be reassigned.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-brand-ink font-sans">Reassign Task</h2>
+            <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
+          </div>
+          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">New Assignee *</label>
+            <UserSearchPicker selectedUser={selectedUser} onSelect={setSelectedUser} />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason / Message</label>
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+              className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
+              placeholder="Why this is being reassigned — included in the assignment email and the customer history." />
+          </div>
+          {error && (
+            <AlertBanner type="error" title="Reassignment failed">
+              {error}
+            </AlertBanner>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>
+            <button type="submit" disabled={saving || !selectedUser}
+              className="px-4 py-2 text-sm bg-brand-ink text-white rounded hover:bg-brand-ink/90 disabled:opacity-50">
+              {saving ? 'Reassigning…' : 'Reassign'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function CloseTaskModal({ task, onClose, onClosed }) {
+  const [outcome, setOutcome] = useState('completed')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!reason.trim()) {
+      setError('A reason is required to close the task.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await updateTask(task.id, { status: outcome, closed_reason: reason.trim() })
+      onClosed()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Task could not be closed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+        <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-brand-ink font-sans">Close Task</h2>
+            <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
+          </div>
+          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Outcome</label>
+            <select value={outcome} onChange={e => setOutcome(e.target.value)}
+              className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
+              <option value="completed">Completed — work is done</option>
+              <option value="cancelled">Cancelled — no longer needed</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason *</label>
+            <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+              className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
+              placeholder="Outcome or why it's being closed — recorded on the task and in the customer history."
+              required />
+          </div>
+          {error && (
+            <AlertBanner type="error" title="Task was not closed">
+              {error}
+            </AlertBanner>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>
+            <button type="submit" disabled={saving}
+              className="px-4 py-2 text-sm bg-brand-ink text-white rounded hover:bg-brand-ink/90 disabled:opacity-50">
+              {saving ? 'Closing…' : 'Close Task'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function TaskRow({
   task,
   currentUserId,
@@ -599,9 +826,12 @@ function TaskRow({
   onQualifyIntake,
   onOpenMatter,
   onLogContact,
+  onReassign,
+  onCloseTask,
 }) {
   const label = dueDateLabel(task.due_date)
-  const isOverdue = task.due_date && new Date(task.due_date + 'T00:00:00') < new Date() && task.status !== 'completed'
+  const isClosed = task.status === 'completed' || task.status === 'cancelled'
+  const isOverdue = task.due_date && new Date(task.due_date + 'T00:00:00') < new Date() && !isClosed
   const isConfirmingDelete = pendingDeleteId === task.id
   const isDeleting = deletingId === task.id
   const [remindSent, setRemindSent] = useState(false)
@@ -637,12 +867,17 @@ function TaskRow({
         {task.status === 'completed' && <Check size={12} />}
       </button>
       <div className="flex-1 min-w-0">
-        <span className={`text-sm ${task.status === 'completed' ? 'line-through text-brand-muted' : 'text-brand-ink'}`}>
+        <span className={`text-sm ${isClosed ? 'line-through text-brand-muted' : 'text-brand-ink'}`}>
           {task.title}
         </span>
         {task.description && (
           <p className={`text-[12px] text-brand-muted mt-0.5 ${isIntakeFollowUpTask(task) ? 'whitespace-pre-wrap line-clamp-4' : 'truncate'}`}>
             {task.description}
+          </p>
+        )}
+        {isClosed && task.closed_reason && (
+          <p className="text-[12px] text-brand-muted mt-0.5 italic truncate" title={task.closed_reason}>
+            {task.status === 'cancelled' ? 'Cancelled' : 'Closed'}: {task.closed_reason}
           </p>
         )}
       </div>
@@ -704,6 +939,24 @@ function TaskRow({
           >
             Open matter
           </button>
+        )}
+        {!isClosed && (
+          <>
+            <button
+              onClick={() => onReassign(task)}
+              title="Reassign this task to another staff member"
+              className="opacity-0 group-hover:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-accent hover:text-brand-accent transition-all"
+            >
+              Reassign
+            </button>
+            <button
+              onClick={() => onCloseTask(task)}
+              title="Close this task with a reason"
+              className="opacity-0 group-hover:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-ink hover:text-brand-ink transition-all"
+            >
+              Close
+            </button>
+          </>
         )}
         {remindSent ? (
           <span className="text-[11px] text-brand-green font-semibold">Sent!</span>
@@ -781,6 +1034,8 @@ export default function TasksPage() {
   const [qualifyTask, setQualifyTask] = useState(null)
   const [openMatterTask, setOpenMatterTask] = useState(null)
   const [logContactTask, setLogContactTask] = useState(null)
+  const [reassignTask, setReassignTask] = useState(null)
+  const [closeTask, setCloseTask] = useState(null)
 
   const canOpenMatters =
     !Array.isArray(user?.enabled_modules) ||
@@ -873,14 +1128,15 @@ export default function TasksPage() {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  const todayTasks = tasks.filter(t => t.due_date && isToday(new Date(t.due_date + 'T00:00:00')) && t.status !== 'completed')
+  const isClosedTask = t => t.status === 'completed' || t.status === 'cancelled'
+  const todayTasks = tasks.filter(t => t.due_date && isToday(new Date(t.due_date + 'T00:00:00')) && !isClosedTask(t))
   const upcomingTasks = tasks.filter(t => {
-    if (!t.due_date || t.status === 'completed') return false
+    if (!t.due_date || isClosedTask(t)) return false
     const d = new Date(t.due_date + 'T00:00:00')
     return d > today && !isToday(d)
   })
-  const noDueTasks = tasks.filter(t => !t.due_date && t.status !== 'completed')
-  const completedTasks = tasks.filter(t => t.status === 'completed')
+  const noDueTasks = tasks.filter(t => !t.due_date && !isClosedTask(t))
+  const completedTasks = tasks.filter(isClosedTask)
 
   const totalActive = overdue.length + todayTasks.length + upcomingTasks.length + noDueTasks.length
   const hasFilters = Boolean(filterStatus || filterPriority || filterType)
@@ -898,6 +1154,8 @@ export default function TasksPage() {
     onQualifyIntake: setQualifyTask,
     onOpenMatter: setOpenMatterTask,
     onLogContact: setLogContactTask,
+    onReassign: setReassignTask,
+    onCloseTask: setCloseTask,
   }
 
   return (
@@ -930,6 +1188,7 @@ export default function TasksPage() {
             <option value="pending">Pending</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
           </select>
           <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
@@ -1040,7 +1299,7 @@ export default function TasksPage() {
               <details className="bg-white rounded-xl border border-brand-line overflow-hidden">
                 <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none text-[11px] font-bold text-brand-muted uppercase tracking-widest">
                   <Check size={13} className="text-brand-green" />
-                  Completed ({completedTasks.length})
+                  Closed ({completedTasks.length})
                 </summary>
                 {completedTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : 'border-t border-brand-line/50'}>
@@ -1080,6 +1339,28 @@ export default function TasksPage() {
           onClose={() => setLogContactTask(null)}
           onLogged={() => {
             setLogContactTask(null)
+            loadTasks()
+          }}
+        />
+      )}
+
+      {reassignTask && (
+        <ReassignTaskModal
+          task={reassignTask}
+          onClose={() => setReassignTask(null)}
+          onReassigned={() => {
+            setReassignTask(null)
+            loadTasks()
+          }}
+        />
+      )}
+
+      {closeTask && (
+        <CloseTaskModal
+          task={closeTask}
+          onClose={() => setCloseTask(null)}
+          onClosed={() => {
+            setCloseTask(null)
             loadTasks()
           }}
         />

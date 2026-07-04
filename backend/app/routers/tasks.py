@@ -25,6 +25,7 @@ from app.models.contact import Contact, Lead
 from app.models.task import Task
 from app.models.user import User
 from app.services.email import email_service
+from app.services.task_history import record_customer_contact, record_task_event
 from app.services.task_notifications import (
     notify_task_created,
     notify_task_updated,
@@ -237,17 +238,30 @@ async def create_task(
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
+    data = payload.model_dump(exclude_none=True)
+    assignment_note = (data.pop("assignment_note", None) or "").strip() or None
+
     task = Task(
         tenant_id=uuid.UUID(tenant_id),
         created_by_user_id=current_user.id,
-        **payload.model_dump(exclude_none=True),
+        **data,
     )
+    if assignment_note:
+        assigner = current_user.full_name or current_user.email
+        task.description = _append_section(
+            task.description, f"Assignment note ({assigner}):", assignment_note
+        )
     db.add(task)
+    await db.flush()
+    if task.assigned_to_user_id:
+        await record_task_event(
+            db, task, event="assigned", actor=current_user, note=assignment_note
+        )
     await db.commit()
     await db.refresh(task)
 
     # Fire-and-forget: push calendars and alert assignee.
-    await notify_task_created(db, task, tenant_id)
+    await notify_task_created(db, task, tenant_id, assignment_note)
 
     return TaskResponse.model_validate(task)
 
@@ -398,6 +412,17 @@ async def qualify_intake_task(
     if partner_task.status != "completed":
         partner_task.status = "completed"
         partner_task.completed_at = datetime.now(timezone.utc)
+        partner_task.closed_reason = "Lead qualified and handed to attorney intake"
+        partner_task.closed_by_user_id = current_user.id
+
+    if created_attorney_task or assignment_changed:
+        await record_task_event(
+            db,
+            attorney_task,
+            event="assigned" if created_attorney_task else "reassigned",
+            actor=current_user,
+            note=payload.partner_notes,
+        )
 
     await db.commit()
     await db.refresh(partner_task)
@@ -502,6 +527,9 @@ async def mark_customer_contacted(
             f"Customer contact ({payload.method}, {now.strftime('%Y-%m-%d %H:%M')} UTC, {contacted_by}):",
             payload.note,
         )
+    await record_customer_contact(
+        db, task, method=payload.method, actor=current_user, note=payload.note
+    )
     await db.commit()
     await db.refresh(task)
     return TaskResponse.model_validate(task)
@@ -528,25 +556,69 @@ async def update_task(
         raise HTTPException(status_code=404, detail="Task not found")
 
     previous_calendar_user_id = task_calendar_user_id(task)
+    previous_assignee_id = task.assigned_to_user_id
+    previous_status = task.status
     updates = payload.model_dump(exclude_none=True)
+    assignment_note = (updates.pop("assignment_note", None) or "").strip() or None
+    closed_reason = (updates.pop("closed_reason", None) or "").strip() or None
     calendar_changed = bool(_CALENDAR_RELEVANT_FIELDS & set(updates))
     assignment_changed = "assigned_to_user_id" in updates
 
-    # Auto-set completed_at when marking complete
-    if updates.get("status") == "completed" and not task.completed_at:
-        task.completed_at = datetime.now(timezone.utc)
-    elif updates.get("status") and updates["status"] != "completed":
-        task.completed_at = None
-
+    new_status = updates.get("status")
     if (
-        assignment_changed
-        and updates.get("assigned_to_user_id") != task.assigned_to_user_id
+        new_status == "cancelled"
+        and previous_status != "cancelled"
+        and not closed_reason
     ):
-        # New assignee has not seen the task; reset the read receipt.
-        task.viewed_at = None
+        raise HTTPException(
+            status_code=422,
+            detail="A closed_reason is required when cancelling a task",
+        )
+
+    # Auto-set completed_at when marking complete
+    if new_status == "completed" and not task.completed_at:
+        task.completed_at = datetime.now(timezone.utc)
+    elif new_status and new_status != "completed":
+        task.completed_at = None
 
     for field, value in updates.items():
         setattr(task, field, value)
+
+    reassigned = assignment_changed and task.assigned_to_user_id != previous_assignee_id
+    if reassigned:
+        # New assignee has not seen the task; reset the read receipt.
+        task.viewed_at = None
+        if assignment_note:
+            assigner = current_user.full_name or current_user.email
+            task.description = _append_section(
+                task.description, f"Reassignment note ({assigner}):", assignment_note
+            )
+
+    closing = new_status in ("completed", "cancelled") and new_status != previous_status
+    if new_status in ("completed", "cancelled"):
+        if closed_reason:
+            task.closed_reason = closed_reason
+        if closing:
+            task.closed_by_user_id = current_user.id
+    elif new_status:
+        # Reopened — the previous closure record no longer applies.
+        task.closed_reason = None
+        task.closed_by_user_id = None
+    elif closed_reason and task.status in ("completed", "cancelled"):
+        task.closed_reason = closed_reason
+
+    if reassigned and task.assigned_to_user_id:
+        await record_task_event(
+            db,
+            task,
+            event="reassigned" if previous_assignee_id else "assigned",
+            actor=current_user,
+            note=assignment_note,
+        )
+    if closing:
+        await record_task_event(
+            db, task, event=new_status, actor=current_user, note=task.closed_reason
+        )
 
     await db.commit()
     await db.refresh(task)
@@ -558,6 +630,7 @@ async def update_task(
         calendar_changed=calendar_changed,
         assignment_changed=assignment_changed,
         previous_calendar_user_id=previous_calendar_user_id,
+        assignment_note=assignment_note,
     )
 
     return TaskResponse.model_validate(task)
