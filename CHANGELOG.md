@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **Production deploy data guard:** added `scripts/prod_data_guard.sh` to take
+  a custom-format Postgres dump and exact public-table/per-tenant row-count
+  snapshot before production deploys, then fail the post-deploy check if any
+  existing count decreases. The legacy deploy script now runs the guard before
+  build/restart and verifies counts after health checks, and no longer uses
+  `--remove-orphans` during the main app restart.
 - **Call Intake tasks: assigner notes, closure reasons, customer-history
   documentation:** task assignment emails can now carry a personal message
   from the assigner (`assignment_note` on `POST /api/tasks` and on reassign

@@ -1,5 +1,43 @@
 # TASKS.md
 
+## Production Matter Data Visibility Incident — 2026-07-04 — BLOCKED
+
+**Goal:** Verify whether the affected tenant's matter records are missing,
+hidden by tenant/RLS/module behavior, or affected by the latest deploy, and
+preserve production data while restoring access.
+
+- [x] Snapshot current production data state without destructive changes
+- [x] Verify tenant matter counts directly in Postgres and through API behavior
+- [x] Identify whether deploy changed data, visibility, RLS context, or module access
+- [ ] Restore matter visibility safely if records still exist
+- [x] Add/update deployment guardrails so future deploys preserve existing tenant data
+
+Summary: production now has a fresh logical backup at
+`/home/varta/legalapp/backups/legalapp-prod-pre-matter-incident-20260704T165304Z.sql.gz`.
+Direct Postgres inspection shows tenant
+`9ff4a695-826c-422c-bb7f-6037495a2c4e` has 0 rows in `matters`, 0 matter
+references from documents/tasks/leads/time entries/communications, and 1134
+Zoom communication logs. The active backend DB role is `clarity_app` with RLS
+active, so this is not an RLS-hidden matter list. Obvious host backup
+locations did not contain an older app DB dump. Restoring matter records is
+blocked until an older Postgres dump, cloud export, legacy source export, or
+other historical source for that tenant is available.
+
+Guardrails added: `scripts/prod_data_guard.sh` creates a predeploy pg_dump and
+public-table/per-tenant row-count snapshot, then fails the post-deploy check if
+any existing count decreases. `scripts/backup_db.sh` no longer prunes backups
+unless explicitly confirmed. Production deploy memory and the deploy skill now
+require the guard before customer-facing deploys.
+
+Follow-up: production is currently running with `DEV_MODE=true`; set
+`DEV_MODE=false` after confirming non-placeholder production secrets, then
+restart and verify `/api/dev/*`, `/docs`, `/redoc`, and `/openapi.json` are not
+served. During incident inspection, the backend environment was accidentally
+printed to the tool log; rotate production secrets before treating the install
+as customer-safe.
+
+---
+
 ## Zoom Phone Intake Feed Regression — 2026-07-04 (DONE)
 
 **Goal:** Restore the call intake dashboard feed for tenants with existing Zoom
