@@ -1,5 +1,18 @@
 # TASKS.md
 
+## Zoom Phone Intake Feed Regression — 2026-07-04 — IN PROGRESS
+
+**Goal:** Restore the call intake dashboard feed for tenants with existing Zoom
+Phone grants when the integrations page reports connected but the call feed
+returns an internal server error.
+
+- [x] Identify the production 500 from backend logs and affected endpoint
+- [x] Add a focused regression for the failing intake/Zoom path
+- [x] Fix the backend behavior without breaking existing connected grants
+- [ ] Validate locally and deploy to production if code or env changes are needed
+
+---
+
 ## Call Intake Task Tracking — Assigner Notes, Closure Reasons, Customer History — 2026-07-04 (DONE)
 
 **Goal:** Round out follow-up task accountability: let the assigner attach a

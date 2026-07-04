@@ -8,6 +8,7 @@ from uuid import UUID
 from app.config import get_settings
 
 settings = get_settings()
+NO_TENANT_CONTEXT = "00000000-0000-0000-0000-000000000000"
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -57,10 +58,21 @@ async def get_db(request: Request = None) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
-    """Set the current tenant context for RLS policies."""
-    tenant_id = str(UUID(str(tenant_id))) if tenant_id else ""
+    """Set the current tenant context for RLS policies.
+
+    Older migrations created policies against ``app.tenant_id``; newer ones use
+    ``app.current_tenant_id``. Keep both transaction-local GUCs in sync until
+    all policies are normalized.
+    """
+    tenant_id = str(UUID(str(tenant_id))) if tenant_id else NO_TENANT_CONTEXT
     await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+        text(
+            """
+            SELECT
+              set_config('app.current_tenant_id', :tenant_id, true),
+              set_config('app.tenant_id', :tenant_id, true)
+            """
+        ),
         {"tenant_id": tenant_id},
     )
 
@@ -68,11 +80,20 @@ async def set_tenant_context(session: AsyncSession, tenant_id: str) -> None:
 async def clear_tenant_context(session: AsyncSession) -> None:
     """Clear the tenant RLS context (transaction-local).
 
-    Resets ``app.current_tenant_id`` to empty so RLS policies match no rows
-    (fail-closed). Useful before/after a cross-tenant operation on a reused
-    session.
+    Resets both tenant-context GUCs to a sentinel UUID so RLS policies match no
+    rows (fail-closed), including legacy policies that cast directly to UUID.
+    Useful before/after a cross-tenant operation on a reused session.
     """
-    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    await session.execute(
+        text(
+            """
+            SELECT
+              set_config('app.current_tenant_id', :tenant_id, true),
+              set_config('app.tenant_id', :tenant_id, true)
+            """
+        ),
+        {"tenant_id": NO_TENANT_CONTEXT},
+    )
 
 
 async def enable_rls_bypass(session: AsyncSession) -> None:

@@ -63,6 +63,12 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Fixed
+- **Zoom Phone intake call-feed sync:** fixed a production 500 where tenants
+  with connected Zoom Phone grants could fetch call history but inserts into
+  `communication_logs` failed RLS because legacy policies still read
+  `app.tenant_id` while newer request setup only set `app.current_tenant_id`.
+  The shared tenant-context helper now keeps both GUC names synchronized and
+  clears them to a fail-closed sentinel UUID.
 - **Backend/API security hardening (prod-readiness pass):** frontend auth now
   lives entirely in httpOnly cookies — the SPA no longer reads, writes, or
   falls back to a bearer token in `localStorage`, closing an XSS session-theft
@@ -242,6 +248,12 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Tests
+- **Zoom Phone intake RLS regression:** expanded the tenant-isolation test to
+  assert both current and legacy tenant-context GUCs are set/cleared together,
+  and made it honor `TEST_DATABASE_URL` so the non-superuser RLS probe runs
+  against the local test Postgres port. Verification:
+  `py -m pytest backend\tests\test_tenant_isolation.py backend\tests\test_intake_dashboard.py -q`
+  and `py -m compileall -q backend\app`.
 - **Client portal remediation:** added unit regressions for invite-bound portal
   JWTs, dedicated portal cookie naming, revoked invite rejection, legacy token
   rejection, and contact/email-bound portal signer matching. Verification:

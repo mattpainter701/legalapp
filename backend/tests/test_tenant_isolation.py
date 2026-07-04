@@ -1,8 +1,8 @@
 """Row Level Security tenant-isolation seed test.
 
 This is the SEED of the full cross-tenant isolation matrix (epic task 1304).
-It proves the core RLS mechanism works: the ``app.current_tenant_id`` GUC drives
-per-tenant visibility, an unset context is fail-closed (zero rows), and the auth
+It proves the core RLS mechanism works: the tenant-context GUCs drive
+per-tenant visibility, cleared context is fail-closed (zero rows), and the auth
 ``app.rls_bypass`` GUC re-opens visibility for the cross-tenant auth path.
 
 Critical environment fact this test encodes:
@@ -20,30 +20,36 @@ and installs policies mirroring production. It skips cleanly (never errors at
 collection) when Postgres is unavailable.
 """
 
+import os
 import uuid
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import (
     clear_tenant_context,
     enable_rls_bypass,
+    NO_TENANT_CONTEXT,
     set_tenant_context,
 )
 
 pytestmark = pytest.mark.asyncio
 
 # Superuser URL (same convention as conftest.py) — used for DDL/seeding.
-TEST_DB_URL = "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
+TEST_DB_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://test:test@localhost:5432/legalapp_test",
+)
 # Non-superuser role the assertions run as, so RLS is actually enforced.
 _RLS_ROLE = "rls_probe_role"
 _RLS_PW = "rls_probe_pw"
-RLS_ROLE_URL = (
-    f"postgresql+asyncpg://{_RLS_ROLE}:{_RLS_PW}@localhost:5432/legalapp_test"
-)
+RLS_ROLE_URL = make_url(TEST_DB_URL).set(
+    username=_RLS_ROLE, password=_RLS_PW
+).render_as_string(hide_password=False)
 
 # A dedicated throwaway table so we never depend on the real schema / FKs.
 _TABLE = "rls_seed_probe"
@@ -117,6 +123,14 @@ async def rls_session():
                 )
             )
             await conn.execute(
+                text(
+                    f"""
+                    ALTER ROLE {_RLS_ROLE} LOGIN PASSWORD '{_RLS_PW}'
+                      NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE
+                    """
+                )
+            )
+            await conn.execute(
                 text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}")
             )
             await conn.execute(
@@ -183,9 +197,42 @@ async def test_tenant_context_isolates_rows(rls_session):
     assert await _count(rls_session, "b") == 0  # tenant B invisible
 
 
+async def test_tenant_context_sets_current_and_legacy_gucs(rls_session):
+    """Both policy generations must see the same tenant id."""
+    await set_tenant_context(rls_session, TENANT_A)
+
+    current, legacy = (
+        await rls_session.execute(
+            text(
+                """
+                SELECT
+                  current_setting('app.current_tenant_id', true),
+                  current_setting('app.tenant_id', true)
+                """
+            )
+        )
+    ).one()
+
+    assert current == TENANT_A
+    assert legacy == TENANT_A
+
+
 async def test_no_context_is_fail_closed(rls_session):
-    """With no tenant context set, the GUC is empty => zero rows (fail-closed)."""
+    """With no tenant context set, the sentinel UUID sees zero rows."""
     await clear_tenant_context(rls_session)
+    current, legacy = (
+        await rls_session.execute(
+            text(
+                """
+                SELECT
+                  current_setting('app.current_tenant_id', true),
+                  current_setting('app.tenant_id', true)
+                """
+            )
+        )
+    ).one()
+    assert current == NO_TENANT_CONTEXT
+    assert legacy == NO_TENANT_CONTEXT
     assert await _count(rls_session) == 0
 
 
