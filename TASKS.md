@@ -1200,7 +1200,7 @@ is set.
 - [x] Add admin integration health data/cards backed by token health and recent sync runs
 - [x] Add focused backend/frontend tests and update the remediation plan status
 
-Summary: added migration `073_integration_observability` with token-health/scope-audit columns on tenant and user OAuth credential tables plus tenant-scoped `integration_sync_runs`. Microsoft/Google OAuth callbacks now persist missing-scope audit results. Token refresh failures record `last_refresh_error`, and `invalid_grant` marks credentials revoked/inactive. Cloud/user/correspondence integration scheduler branches now write sync-run rows and admin-visible `ErrorLog` entries for per-tenant failures. Admin integration responses and cards show token health, refresh errors, reconnect state, and recent sync runs. Verification: backend compile passed, focused observability/token tests passed, frontend production build passed; DB-backed readiness tests remain blocked locally by refused Postgres connection.
+Summary: added migration `075_integration_observability` with token-health/scope-audit columns on tenant and user OAuth credential tables plus tenant-scoped `integration_sync_runs`. Microsoft/Google OAuth callbacks now persist missing-scope audit results. Token refresh failures record `last_refresh_error`, and `invalid_grant` marks credentials revoked/inactive. Cloud/user/correspondence integration scheduler branches now write sync-run rows and admin-visible `ErrorLog` entries for per-tenant failures. Admin integration responses and cards show token health, refresh errors, reconnect state, and recent sync runs. Verification: backend compile passed, focused observability/token tests passed, frontend production build passed; DB-backed readiness tests remain blocked locally by refused Postgres connection.
 
 ### Integration Remediation Phase 3 — Storage Correctness (P1, LARGE)
 - [x] Add durable cloud storage metadata to matter documents
@@ -1209,7 +1209,7 @@ Summary: added migration `073_integration_observability` with token-health/scope
 - [x] Implement cloud document delete for Google Drive, OneDrive, and SharePoint
 - [x] Add focused storage/delete regression tests and verification
 
-Summary: added migration `074_matter_document_storage_metadata` and explicit
+Summary: added migration `076_matter_document_storage_metadata` and explicit
 matter-document storage metadata for provider/backend, provider object ID,
 drive ID, parent ID, and storage errors while preserving legacy URL-derived
 behavior. Matter file uploads now return a structured `StorageResult` for new

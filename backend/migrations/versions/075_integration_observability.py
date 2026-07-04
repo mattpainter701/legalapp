@@ -1,7 +1,7 @@
-"""073 - integration observability spine
+"""075 - integration observability spine
 
-Revision ID: 073_integration_observability
-Revises: 072_cred_unique_constraints
+Revision ID: 075_integration_observability
+Revises: 074_task_closure_tracking
 Create Date: 2026-07-02
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "073_integration_observability"
-down_revision = "072_cred_unique_constraints"
+revision = "075_integration_observability"
+down_revision = "074_task_closure_tracking"
 branch_labels = None
 depends_on = None
 
