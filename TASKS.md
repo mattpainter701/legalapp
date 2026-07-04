@@ -1,6 +1,6 @@
 # TASKS.md
 
-## Zoom Phone Intake Feed Regression — 2026-07-04 — IN PROGRESS
+## Zoom Phone Intake Feed Regression — 2026-07-04 (DONE)
 
 **Goal:** Restore the call intake dashboard feed for tenants with existing Zoom
 Phone grants when the integrations page reports connected but the call feed
@@ -9,7 +9,17 @@ returns an internal server error.
 - [x] Identify the production 500 from backend logs and affected endpoint
 - [x] Add a focused regression for the failing intake/Zoom path
 - [x] Fix the backend behavior without breaking existing connected grants
-- [ ] Validate locally and deploy to production if code or env changes are needed
+- [x] Validate locally and deploy to production if code or env changes are needed
+
+Summary: production `/api/intake/dashboard/zoom-phone/sync` was failing after
+Zoom returned call history because `communication_logs` still had a legacy RLS
+policy keyed to `app.tenant_id`, while app sessions only set
+`app.current_tenant_id`. The shared `set_tenant_context` helper now sets both
+GUC names, and `clear_tenant_context` resets both to an all-zero fail-closed
+UUID sentinel. Verified with a non-superuser RLS regression, focused intake
+tests, backend compile, frontend build, production health/OAuth checks, and a
+rollback-only production insert smoke. Re-ran the affected tenant's Zoom sync
+successfully after deploy.
 
 ---
 
