@@ -68,6 +68,12 @@
 - **Gateway privacy defaults:** LiteLLM message logging remains disabled and the base config no longer enables success/failure callbacks. LegalApp gateway usage, MCP usage, and error logs now suppress raw prompt/query text by default behind `GATEWAY_RAW_TEXT_RETENTION_ENABLED=false`; chat sends only metadata fields (`tenant_id`, `user_id`, `conversation_id`, `operation_type`, `matter_id`, `plugin`, `skill`, `premium`) to LiteLLM. Retention defaults are documented as 30 days for gateway logs, 7 days for debug logs, and 365 days for spend logs.
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
+### Changed
+- **Git/deploy hygiene:** cleaned merged local and remote branches after the
+  production data guard landed, removed stale clean worktrees, preserved
+  unmerged in-flight integration work, and re-verified the production data
+  guard snapshot plus public health before resuming feature work from `main`.
+
 ### Fixed
 - **Zoom Phone intake call-feed sync:** fixed a production 500 where tenants
   with connected Zoom Phone grants could fetch call history but inserts into

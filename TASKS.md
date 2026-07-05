@@ -1,5 +1,35 @@
 # TASKS.md
 
+## Production-Safe Dev Workflow And Git Cleanup — 2026-07-04 (DONE)
+
+**Goal:** Keep local development/debugging productive while making production
+deploys data-preserving by default, then clean Git state so work resumes from a
+clean `main`.
+
+- [x] Verify local and hypervisor Git state are on clean `main`
+- [x] Prune stale remote-tracking refs and remove safely merged local branches
+- [x] Preserve active/unmerged branch state without deleting in-flight work
+- [x] Validate the production data guard and health checks still pass
+- [x] Update task/changelog records and commit cleanup
+
+Summary: local and hypervisor checkouts are on `main` at
+`ae3184d`/`origin/main` before the ledger commit, with clean worktrees except
+for this task record. Removed stale clean worktrees
+`I:/deepseek/legalapp/legalapp-deploy-main` and
+`I:/deepseek/legalapp/legalapp-review-fixes`, deleted merged local branches
+`codex/fix-zoom-intake-feed-500`, `codex/recent-merge-fixes`,
+`codex/sprint-15-integration-health`, `feat/call-inbox-redesign`, and
+`feat/call-intake-standalone`, and deleted merged remote branches
+`claude/call-intake-prod-ready-kn4y20`,
+`claude/call-intake-task-tracking-j595dh`,
+`codex/finish-ux-for-e-sign-tool`, `codex/recent-merge-fixes`, and
+`feat/call-inbox-redesign`. Preserved unmerged local branch
+`codex/integration-remediation-reconcile` and unmerged remote branches for
+future review. Production guard snapshot returned 164 count rows and public
+health returned 200.
+
+---
+
 ## Production Matter Data Visibility Incident — 2026-07-04 — BLOCKED
 
 **Goal:** Verify whether the affected tenant's matter records are missing,
