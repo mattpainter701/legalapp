@@ -1,5 +1,23 @@
 # TASKS.md
 
+## Assistant Chat Source/Reference Tracking UX — 2026-07-05 (DONE)
+
+**Goal:** Preserve visible source/reference context across assistant chat
+initiation, first response, follow-up prompts, and rendered results so users
+can track which sources informed each answer.
+
+- [x] Inspect assistant chat prompt/result data flow
+- [x] Refactor UI state/rendering for per-turn sources and references
+- [x] Validate with focused frontend checks
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: chat now keeps a per-turn reference context through streaming,
+refresh, and conversation reloads. User prompts and assistant answers both
+show a compact References strip with matter, upload, firm/cloud, and
+CourtListener counts, while the final answer retains a source-neutral
+"Sources & References" ledger with responsive columns. Validation passed with
+the frontend production build.
+
 ## Matter Create API 500 — 2026-07-05 (DONE)
 
 **Goal:** Fix `POST /api/matters` returning 500 in production after the latest

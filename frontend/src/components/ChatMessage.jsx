@@ -53,28 +53,28 @@ function sourceBadge(src) {
 function SourcesLedger({ sources }) {
   if (!sources || sources.length === 0) return null
 
-  const cols = 'grid-cols-[30px_minmax(150px,2fr)_minmax(120px,140px)_minmax(120px,1.5fr)]'
+  const cols = 'grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
 
   return (
     <div className="mt-10 pt-6 border-t-[3px] border-brand-ink">
       <h4 className="font-mono text-xs font-bold uppercase tracking-widest text-brand-ink mb-4 flex items-center gap-2">
-        <Book className="w-4 h-4" /> Authorities Referenced
+        <Book className="w-4 h-4" /> Sources & References
       </h4>
 
-      <div className="w-full text-left text-sm border border-brand-line bg-brand-bg">
+      <div className="w-full overflow-x-auto text-left text-sm border border-brand-line bg-brand-bg">
         {/* Header */}
-        <div className={`grid ${cols} gap-2 p-2 border-b border-brand-line bg-brand-surface-2 text-xs font-mono text-brand-muted uppercase tracking-wider`}>
+        <div className={`grid min-w-[620px] ${cols} gap-2 p-2 border-b border-brand-line bg-brand-surface-2 text-xs font-mono text-brand-muted uppercase tracking-wider`}>
           <div className="text-center">#</div>
-          <div>Authority</div>
-          <div>Citation</div>
-          <div>Court</div>
+          <div>Source</div>
+          <div>Reference</div>
+          <div>Origin</div>
         </div>
 
         {/* Rows */}
         <div className="divide-y divide-brand-line">
           {sources.map((src, idx) => {
             const citation = cleanSourceText(src.citation)
-            const caseName = cleanSourceText(src.case_name) || 'Unknown authority'
+            const caseName = cleanSourceText(src.case_name) || 'Unknown source'
             const court = cleanSourceText(src.court)
             const excerpt = cleanSourceText(src.excerpt)
             const href = sourceHref(src)
@@ -85,7 +85,7 @@ function SourcesLedger({ sources }) {
                 key={idx}
                 className={`flex flex-col ${idx % 2 === 1 ? 'bg-brand-surface' : ''}`}
               >
-                <div className={`grid ${cols} gap-2 p-3 items-center`}>
+                <div className={`grid min-w-[620px] ${cols} gap-2 p-3 items-center`}>
                   <div className="text-center font-mono text-brand-muted text-xs">
                     {String(idx + 1).padStart(2, '0')}
                   </div>
@@ -150,6 +150,90 @@ function SourcesLedger({ sources }) {
 
 function formatCount(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0
+}
+
+function countSourcesByType(sources) {
+  const counts = {
+    matter: 0,
+    uploads: 0,
+    firm: 0,
+    courtlistener: 0,
+    total: 0,
+  }
+
+  for (const src of Array.isArray(sources) ? sources : []) {
+    const type = src?.source_type || ''
+    if (type === 'public_authority') {
+      counts.courtlistener += 1
+    } else if (type === 'matter_context') {
+      counts.matter += 1
+    } else {
+      counts.firm += 1
+    }
+  }
+  counts.total = counts.matter + counts.uploads + counts.firm + counts.courtlistener
+  return counts
+}
+
+function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
+  const sourceCounts = countSourcesByType(sources)
+  const contextCounts = referenceContext?.counts || {}
+  const counts = {
+    matter: formatCount(contextCounts.matter ?? sourceCounts.matter),
+    uploads: formatCount(contextCounts.uploads ?? sourceCounts.uploads),
+    firm: formatCount(contextCounts.firm ?? sourceCounts.firm),
+    courtlistener: formatCount(contextCounts.courtlistener ?? sourceCounts.courtlistener),
+  }
+  counts.total = formatCount(
+    contextCounts.total ??
+    (counts.matter + counts.uploads + counts.firm + counts.courtlistener)
+  )
+  const sourceCount = formatCount(referenceContext?.source_count ?? (Array.isArray(sources) ? sources.length : 0))
+  const status = referenceContext?.status || (sourceCount ? 'Sources attached to answer' : '')
+  const hasAny = counts.total > 0 || sourceCount > 0 || status
+  if (!hasAny) return null
+
+  const chips = [
+    { icon: Scale, label: 'Matter', value: counts.matter },
+    { icon: FileText, label: 'Uploads', value: counts.uploads },
+    { icon: FolderSearch, label: 'Firm/cloud', value: counts.firm },
+    { icon: BookOpen, label: 'CourtListener', value: counts.courtlistener },
+  ].filter((chip) => chip.value > 0)
+
+  const isUser = variant === 'user'
+  const boxClasses = isUser
+    ? 'border-brand-bg/15 bg-brand-bg/10 text-brand-bg/75'
+    : 'border-brand-line bg-brand-bg text-brand-ink-2'
+  const labelClasses = isUser ? 'text-brand-bg/55' : 'text-brand-muted'
+  const valueClasses = isUser ? 'text-brand-bg' : 'text-brand-ink'
+  const chipClasses = isUser ? 'border-brand-bg/15 bg-brand-ink/30' : 'border-brand-line bg-brand-surface'
+
+  return (
+    <div className={`mt-3 border px-3 py-2 text-xs ${boxClasses}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`font-mono font-bold uppercase tracking-widest ${labelClasses}`}>
+          References
+        </span>
+        {sourceCount > 0 && (
+          <span className={`font-mono font-bold ${valueClasses}`}>
+            {sourceCount} cited
+          </span>
+        )}
+        {chips.map(({ icon: Icon, label, value }) => (
+          <span key={label} className={`inline-flex items-center gap-1 border px-2 py-1 ${chipClasses}`}>
+            <Icon className="h-3 w-3" strokeWidth={2} />
+            <span>{label}</span>
+            <span className={`font-mono font-bold ${valueClasses}`}>{value}</span>
+          </span>
+        ))}
+        {status && (
+          <span className="min-w-0 truncate" title={status}>
+            {status}
+          </span>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function AssistantWorkingState({ progress, compact = false }) {
@@ -280,6 +364,11 @@ export default function ChatMessage({ message }) {
             </button>
           </div>
           <p className="text-base leading-relaxed font-sans whitespace-pre-wrap">{content}</p>
+          <ReferenceTrail
+            referenceContext={message.referenceContext}
+            sources={message.sources}
+            variant="user"
+          />
         </div>
       </div>
     )
@@ -316,6 +405,12 @@ export default function ChatMessage({ message }) {
             </>
           ) : (
             <AssistantWorkingState progress={message.progress} />
+          )}
+          {hasAssistantContent && (
+            <ReferenceTrail
+              referenceContext={message.referenceContext}
+              sources={message.sources}
+            />
           )}
         </div>
 

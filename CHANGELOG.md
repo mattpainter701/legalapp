@@ -100,6 +100,11 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Changed
+- **Assistant chat source/reference UX:** chat turns now retain source
+  retrieval context after streaming and refresh. User prompts and assistant
+  answers both show a compact References strip with matter, upload,
+  firm/cloud, and CourtListener counts, and the final answer ledger is now
+  labeled for mixed sources and references instead of only authorities.
 - **Production deploy:** shipped `d2e7851` for the Matter create API 500 fix
   to the hypervisor after a predeploy dump/count snapshot; rebuilt
   backend/frontend, recreated the app containers, verified
