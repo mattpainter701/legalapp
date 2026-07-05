@@ -45,10 +45,13 @@ export default function InvoiceDetailPage() {
   useEffect(() => { loadInvoice() }, [loadInvoice])
 
   const handleStatusChange = async (newStatus) => {
+    if (newStatus === 'void' && !confirm('Void this invoice? Its time entries and expenses will return to the unbilled pool.')) return
     try {
       await updateInvoice(id, { status: newStatus })
       loadInvoice()
     } catch (err) {
+      const detail = err?.response?.data?.detail
+      alert(typeof detail === 'string' ? detail : 'Failed to update status')
       console.error('Failed to update status', err)
     }
   }
@@ -105,9 +108,10 @@ export default function InvoiceDetailPage() {
   if (loading) return <div style={{ padding: 24 }}>Loading...</div>
   if (!invoice) return <div style={{ padding: 24 }}>Invoice not found.</div>
 
-  const cs = STATUS_COLORS[invoice.status] || STATUS_COLORS.draft
-  const paidAmt = invoice.payments?.reduce((s, p) => s + p.amount, 0) || 0
-  const balance = invoice.total - paidAmt
+  const cs = STATUS_COLORS[invoice.is_overdue ? 'overdue' : invoice.status] || STATUS_COLORS.draft
+  const paidAmt = Number(invoice.amount_paid ?? (invoice.payments?.reduce((s, p) => s + Number(p.amount), 0) || 0))
+  const balance = Number(invoice.balance_due ?? (invoice.total - paidAmt))
+  const canVoid = ['draft', 'sent'].includes(invoice.status) && paidAmt === 0
 
   return (
     <div style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
@@ -132,17 +136,37 @@ export default function InvoiceDetailPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {(invoice.status === 'draft' || invoice.status === 'sent' || invoice.status === 'invoiced') && invoice.status !== 'paid' && (
+          {invoice.status === 'draft' && (
             <button
-              onClick={() => handleStatusChange(
-                invoice.status === 'draft' ? 'sent' : 'paid'
-              )}
+              onClick={() => handleStatusChange('sent')}
+              style={{
+                padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                border: 'none', cursor: 'pointer', background: '#2563eb', color: '#fff', fontWeight: 600,
+              }}
+            >
+              Send Invoice
+            </button>
+          )}
+          {['sent', 'partially_paid'].includes(invoice.status) && (
+            <button
+              onClick={() => handleStatusChange('paid')}
               style={{
                 padding: '6px 14px', fontSize: 13, borderRadius: 6,
                 border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
               }}
             >
-              {invoice.status === 'draft' ? 'Mark Invoiced' : 'Mark Paid'}
+              Mark Paid
+            </button>
+          )}
+          {canVoid && (
+            <button
+              onClick={() => handleStatusChange('void')}
+              style={{
+                padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                border: '1px solid #fca5a5', cursor: 'pointer', background: '#fff', color: '#b91c1c',
+              }}
+            >
+              Void
             </button>
           )}
           <button
@@ -175,7 +199,7 @@ export default function InvoiceDetailPage() {
           </button>
           <button
             onClick={handleSyncToQBO}
-            disabled={syncing}
+            disabled={syncing || invoice.status === 'draft'}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
@@ -183,9 +207,15 @@ export default function InvoiceDetailPage() {
               cursor: syncing ? 'wait' : 'pointer',
               background: invoice.qbo_sync_status === 'synced' ? QBO_GREEN : '#fff',
               color: invoice.qbo_sync_status === 'synced' ? '#fff' : '#374151',
-              opacity: syncing ? 0.7 : 1,
+              opacity: syncing || invoice.status === 'draft' ? 0.7 : 1,
             }}
-            title={invoice.qbo_sync_status === 'synced' ? `Synced to QBO (ID: ${invoice.qbo_invoice_id})` : 'Sync to QuickBooks Online'}
+            title={
+              invoice.status === 'draft'
+                ? 'Draft invoices are not synced — send the invoice first'
+                : invoice.qbo_sync_status === 'synced'
+                  ? `Synced to QBO (ID: ${invoice.qbo_invoice_id})`
+                  : 'Sync to QuickBooks Online'
+            }
           >
             {/* QBO checkmark / sync icon */}
             {invoice.qbo_sync_status === 'synced' ? (
@@ -275,16 +305,20 @@ export default function InvoiceDetailPage() {
       {/* Payments */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <h3 style={{ fontSize: 15, margin: 0 }}>Payments</h3>
-        <button
-          onClick={() => setShowPayment(!showPayment)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 4,
-            padding: '6px 12px', fontSize: 12, borderRadius: 6,
-            border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
-          }}
-        >
-          <CreditCard size={14} /> Record Payment
-        </button>
+        {!['draft', 'void', 'written_off'].includes(invoice.status) ? (
+          <button
+            onClick={() => setShowPayment(!showPayment)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '6px 12px', fontSize: 12, borderRadius: 6,
+              border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+            }}
+          >
+            <CreditCard size={14} /> Record Payment
+          </button>
+        ) : invoice.status === 'draft' ? (
+          <span style={{ fontSize: 12, color: '#9ca3af' }}>Send the invoice to record payments</span>
+        ) : null}
       </div>
 
       {showPayment && (

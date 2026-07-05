@@ -101,11 +101,59 @@ class QBOSyncService:
 
     # ── Customer Sync (Matter → QBO Customer) ───────────────────────────────
 
-    async def sync_customer(self, matter_id: str) -> dict | None:
-        """Create or update a QBO Customer from a Matter.
+    async def _matter_display_name(self, matter) -> str:
+        """QBO Customer DisplayName for a matter: "ClientName — MatterName"."""
+        client_name = matter.counterparty
+        if matter.client_contact_id:
+            from app.models.contact import Contact
 
-        Naming convention: "ClientName — MatterName (CaseRef)"
+            c_res = await self.db.execute(
+                select(Contact).where(Contact.id == matter.client_contact_id)
+            )
+            c = c_res.scalar_one_or_none()
+            if c:
+                client_name = c.display_name
+
+        display_name = f"{client_name} — {matter.matter_name}"
+        if len(display_name) > 100:
+            display_name = display_name[:97] + "..."
+        return display_name
+
+    async def _ensure_customer(self, realm_id: str, matter) -> dict | None:
+        """Find or create the QBO Customer for a matter; returns the Customer dict.
+
+        QBO transaction endpoints require CustomerRef.value (the Id) — a
+        name-only reference is rejected — so anything that posts an invoice,
+        payment, or time activity must resolve the Id through here first.
         """
+        display_name = await self._matter_display_name(matter)
+        safe_display = self._safe_qbo_string(display_name)
+
+        url = self._api_url(realm_id, "query")
+        query = f"SELECT * FROM Customer WHERE DisplayName = '{safe_display}'"
+        existing = await self._request("GET", url, params={"query": query})
+        if existing and existing.get("QueryResponse", {}).get("Customer"):
+            return existing["QueryResponse"]["Customer"][0]
+
+        customer_data = {
+            "DisplayName": display_name,
+            "CompanyName": (matter.counterparty or display_name)[:100],
+            "Notes": (
+                f"Matter: {matter.matter_name}\n"
+                f"Type: {matter.matter_type}\n"
+                f"Jurisdiction: {matter.jurisdiction}\n"
+                f"Status: {matter.status}"
+            ),
+        }
+        created = await self._request(
+            "POST", self._api_url(realm_id, "customer"), json_data=customer_data
+        )
+        if created and created.get("Customer"):
+            return created["Customer"]
+        return None
+
+    async def sync_customer(self, matter_id: str) -> dict | None:
+        """Create or update a QBO Customer from a Matter."""
         from app.models.plugin import Matter
 
         await set_tenant_context(self.db, self.tenant_id)
@@ -122,29 +170,15 @@ class QBOSyncService:
         if not realm_id:
             return None
 
-        # Prefer linked Contact name over counterparty string
-        client_name = matter.counterparty
-        if matter.client_contact_id:
-            from app.models.contact import Contact
-            from sqlalchemy import select as _select
+        customer = await self._ensure_customer(realm_id, matter)
+        if not customer:
+            return None
 
-            c_res = await self.db.execute(
-                _select(Contact).where(Contact.id == matter.client_contact_id)
-            )
-            c = c_res.scalar_one_or_none()
-            if c:
-                client_name = c.display_name
-
-        display_name = f"{client_name} — {matter.matter_name}"
-        if len(display_name) > 100:
-            display_name = display_name[:97] + "..."
-
-        safe_display = self._safe_qbo_string(display_name)
-
-        customer_data = {
-            "DisplayName": display_name,
-            "GivenName": client_name,
-            "CompanyName": client_name,
+        # Sparse-update the notes/company fields so QBO reflects matter changes
+        sparse_data = {
+            "Id": customer["Id"],
+            "SyncToken": customer.get("SyncToken", "0"),
+            "sparse": True,
             "Notes": (
                 f"Matter: {matter.matter_name}\n"
                 f"Type: {matter.matter_type}\n"
@@ -152,34 +186,19 @@ class QBOSyncService:
                 f"Status: {matter.status}"
             ),
         }
-
-        # Check if customer already exists (by DisplayName)
-        url = self._api_url(realm_id, "query")
-        query = f"SELECT * FROM Customer WHERE DisplayName = '{safe_display}'"
-        existing = await self._request("GET", url, params={"query": query})
-
-        if existing and existing.get("QueryResponse", {}).get("Customer"):
-            qbo_customer = existing["QueryResponse"]["Customer"][0]
-            customer_id = qbo_customer["Id"]
-            # Update (sparse — only set changed fields)
-            sparse_data = {
-                "Id": customer_id,
-                "sparse": True,
-                **customer_data,
-            }
-            return await self._request(
-                "POST", self._api_url(realm_id, "customer"), json_data=sparse_data
-            )
-
-        # Create new
         return await self._request(
-            "POST", self._api_url(realm_id, "customer"), json_data=customer_data
+            "POST", self._api_url(realm_id, "customer"), json_data=sparse_data
         )
 
     # ── TimeActivity Sync ───────────────────────────────────────────────────
 
     async def sync_time_entry(self, time_entry_id: str) -> dict | None:
-        """Sync a TimeEntry to QBO TimeActivity."""
+        """Sync a TimeEntry to QBO TimeActivity.
+
+        Idempotent: entries already carrying a qbo_timeactivity_id are
+        skipped, so repeated full syncs no longer create duplicate
+        TimeActivities in QBO.
+        """
         from app.models.billing import TimeEntry
         from app.models.plugin import Matter
 
@@ -193,6 +212,10 @@ class QBOSyncService:
         entry = result.scalar_one_or_none()
         if not entry or not entry.is_billable:
             return None
+        if entry.qbo_timeactivity_id:
+            return {"TimeActivity": {"Id": entry.qbo_timeactivity_id}}
+        if entry.timer_started_at is not None:
+            return None  # Timer still running — nothing final to sync yet
 
         # Get the matter for this entry
         matter_result = await self.db.execute(
@@ -206,16 +229,16 @@ class QBOSyncService:
         if not realm_id:
             return None
 
+        customer = await self._ensure_customer(realm_id, matter)
+        if not customer:
+            return None
+
         # Find or create the Item (service) for billable time
         item_ref = await self._ensure_service_item(realm_id, "Legal Services")
 
         time_data = {
             "NameOf": "Employee",  # or "Vendor"
-            "CustomerRef": {
-                "name": self._safe_qbo_string(
-                    f"{matter.counterparty} — {matter.matter_name}"
-                )
-            },
+            "CustomerRef": {"value": customer["Id"]},
             "ItemRef": {"value": item_ref["Id"], "name": "Legal Services"},
             "HourlyRate": float(entry.hourly_rate),
             "Hours": float(entry.hours),
@@ -224,9 +247,13 @@ class QBOSyncService:
             "TxnDate": entry.date.isoformat(),
         }
 
-        return await self._request(
+        result = await self._request(
             "POST", self._api_url(realm_id, "timeactivity"), json_data=time_data
         )
+        if result and result.get("TimeActivity", {}).get("Id"):
+            entry.qbo_timeactivity_id = result["TimeActivity"]["Id"]
+            await self.db.commit()
+        return result
 
     async def _ensure_service_item(self, realm_id: str, item_name: str) -> dict:
         """Find or create a service-type Item in QBO."""
@@ -298,6 +325,23 @@ class QBOSyncService:
             for m in mapping_result.scalars().all()
         }
 
+        # Resolve expense categories so expense lines can hit their
+        # category-specific item mapping (filing_fee, travel, ...) instead of
+        # only the generic expense fallback.
+        from app.models.billing import Expense
+
+        expense_ids = [
+            li.source_id
+            for li in line_items
+            if li.source_type == "expense" and li.source_id
+        ]
+        expense_categories: dict = {}
+        if expense_ids:
+            cat_result = await self.db.execute(
+                select(Expense.id, Expense.category).where(Expense.id.in_(expense_ids))
+            )
+            expense_categories = {row[0]: row[1] for row in cat_result.all()}
+
         def _item_ref(source_type: str, expense_category: str | None) -> dict | None:
             key = (source_type, expense_category)
             fallback_key = (source_type, None)
@@ -312,7 +356,12 @@ class QBOSyncService:
                 "UnitPrice": float(li.unit_price),
                 "Qty": float(li.quantity),
             }
-            item_ref = _item_ref(li.source_type, None)
+            category = (
+                expense_categories.get(li.source_id)
+                if li.source_type == "expense"
+                else None
+            )
+            item_ref = _item_ref(li.source_type, category)
             if item_ref:
                 detail["ItemRef"] = item_ref
 
@@ -325,25 +374,30 @@ class QBOSyncService:
                 }
             )
 
-        customer_name = f"{matter.counterparty} — {matter.matter_name}"
-        if len(customer_name) > 100:
-            customer_name = customer_name[:97] + "..."
-
-        safe_customer = self._safe_qbo_string(customer_name)
+        customer = await self._ensure_customer(realm_id, matter)
+        if not customer:
+            return None
 
         invoice_data = {
-            "DocNumber": invoice.invoice_number,
+            "DocNumber": invoice.invoice_number[:21],  # QBO DocNumber limit
             "TxnDate": invoice.issue_date.isoformat(),
             "DueDate": invoice.due_date.isoformat(),
-            "CustomerRef": {"name": safe_customer},
+            "CustomerRef": {"value": customer["Id"]},
             "Line": qbo_lines,
             "PrivateNote": invoice.notes or "",
-            "TotalAmt": float(invoice.total),
         }
 
         # Check if already synced
         if invoice.qbo_invoice_id:
+            # QBO updates require the current SyncToken (optimistic locking)
+            current = await self._request(
+                "GET", self._api_url(realm_id, "invoice", invoice.qbo_invoice_id)
+            )
+            sync_token = "0"
+            if current and current.get("Invoice"):
+                sync_token = current["Invoice"].get("SyncToken", "0")
             invoice_data["Id"] = invoice.qbo_invoice_id
+            invoice_data["SyncToken"] = sync_token
             invoice_data["sparse"] = True
             result = await self._request(
                 "POST", self._api_url(realm_id, "invoice"), json_data=invoice_data
@@ -376,6 +430,9 @@ class QBOSyncService:
         if not payment:
             return None
 
+        if payment.qbo_payment_id:
+            return {"Payment": {"Id": payment.qbo_payment_id}}  # Already synced
+
         # Get the linked invoice
         inv_result = await self.db.execute(
             select(Invoice).where(Invoice.id == payment.invoice_id)
@@ -388,9 +445,22 @@ class QBOSyncService:
         if not realm_id:
             return None
 
+        # QBO Payment requires CustomerRef — pull it from the synced invoice
+        qbo_invoice = await self._request(
+            "GET", self._api_url(realm_id, "invoice", invoice.qbo_invoice_id)
+        )
+        customer_ref = (
+            qbo_invoice.get("Invoice", {}).get("CustomerRef")
+            if qbo_invoice
+            else None
+        )
+        if not customer_ref:
+            return None
+
         payment_data = {
             "TotalAmt": float(payment.amount),
             "TxnDate": payment.payment_date.isoformat(),
+            "CustomerRef": {"value": customer_ref["value"]},
             "PaymentMethodRef": {"value": self._map_payment_method(payment.method)},
             "Line": [
                 {
@@ -533,8 +603,10 @@ class QBOSyncService:
             summary["errors"].append("No QBO realm ID found")
             return summary
 
-        # Sync unbilled time entries
-        from app.models.billing import TimeEntry
+        # Sync unbilled time entries that haven't been pushed yet — the
+        # qbo_timeactivity_id filter keeps repeat runs from duplicating
+        # TimeActivities in QBO.
+        from app.models.billing import Invoice, Payment, TimeEntry
 
         await set_tenant_context(self.db, self.tenant_id)
         entries_result = await self.db.execute(
@@ -543,18 +615,18 @@ class QBOSyncService:
                 TimeEntry.is_billable.is_(True),
                 TimeEntry.invoice_id.is_(None),
                 TimeEntry.status == "draft",
+                TimeEntry.qbo_timeactivity_id.is_(None),
             )
         )
         for entry in entries_result.scalars().all():
             try:
-                await self.sync_time_entry(str(entry.id))
-                summary["time_activities_synced"] += 1
+                result = await self.sync_time_entry(str(entry.id))
+                if result:
+                    summary["time_activities_synced"] += 1
             except Exception as exc:
                 summary["errors"].append(f"TimeEntry {entry.id}: {exc}")
 
         # Sync unsynced invoices
-        from app.models.billing import Invoice
-
         inv_result = await self.db.execute(
             select(Invoice).where(
                 Invoice.tenant_id == self.tenant_id,
@@ -564,9 +636,30 @@ class QBOSyncService:
         )
         for inv in inv_result.scalars().all():
             try:
-                await self.sync_invoice(str(inv.id))
-                summary["invoices_synced"] += 1
+                result = await self.sync_invoice(str(inv.id))
+                if result:
+                    summary["invoices_synced"] += 1
+                else:
+                    summary["errors"].append(f"Invoice {inv.id}: sync returned null")
             except Exception as exc:
                 summary["errors"].append(f"Invoice {inv.id}: {exc}")
+
+        # Sync payments not yet pushed, for invoices that exist in QBO
+        pay_result = await self.db.execute(
+            select(Payment)
+            .join(Invoice, Invoice.id == Payment.invoice_id)
+            .where(
+                Payment.tenant_id == self.tenant_id,
+                Payment.qbo_payment_id.is_(None),
+                Invoice.qbo_invoice_id.is_not(None),
+            )
+        )
+        for payment in pay_result.scalars().all():
+            try:
+                result = await self.sync_payment(str(payment.id))
+                if result:
+                    summary["payments_synced"] += 1
+            except Exception as exc:
+                summary["errors"].append(f"Payment {payment.id}: {exc}")
 
         return summary
