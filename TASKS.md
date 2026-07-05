@@ -1,6 +1,6 @@
 # TASKS.md
 
-## Call Intake Create Lead Staff Task 500 — 2026-07-05 — IN PROGRESS
+## Call Intake Create Lead Staff Task 500 — 2026-07-05 (DONE)
 
 **Goal:** Fix the Call Intake "create lead + staff task" action returning a
 500 after the latest merges, without disturbing production data or unrelated
@@ -9,8 +9,27 @@ workflow branches.
 - [x] Confirm local/prod Git state and capture the production traceback
 - [x] Reproduce or cover the failing action with a focused test
 - [x] Patch the intake/task path and validate locally
-- [ ] Deploy through production data guard if code changes are needed
-- [ ] Update TASKS.md and CHANGELOG.md with the outcome
+- [x] Deploy through production data guard if code changes are needed
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: production traceback showed
+`sqlalchemy.exc.InvalidRequestError: Could not refresh instance
+'<CommunicationLog ...>'` at `create_dashboard_call` after the combined
+`create_lead` + `specific_staff` workflow committed. Fixed the route to build
+the response from flushed IDs before commit, avoid the unsafe post-commit
+`CommunicationLog` refresh, and re-bind tenant context before task
+notifications. Added a regression that fails on post-commit communication-log
+refreshes and verifies tenant context is present for notifications. Local
+validation passed: targeted regression, full
+`backend\tests\test_intake_dashboard.py` (24 tests), backend compile, and
+frontend production build. Deployed commit `acbbe64` to the hypervisor after
+predeploy backup `backups/legalapp-predeploy-20260705T202925Z.dump` and count
+snapshot `backups/legalapp-predeploy-20260705T202925Z.counts.tsv`; rebuilt
+backend/frontend, recreated containers, and postdeploy data guard passed with
+`backups/legalapp-postdeploy-20260705T203245Z.counts.tsv`. Health, public
+health, Microsoft/Google OAuth 307 redirects, cloudflared, closed docs/dev
+routes, backend logs, and Alembic head `075_billing_timer_and_qbo_dedupe` all
+checked clean.
 
 ---
 

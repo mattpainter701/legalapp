@@ -100,6 +100,11 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Changed
+- **Production deploy:** shipped `acbbe64` for the Call Intake
+  create-lead/staff-task 500 fix to the hypervisor after a predeploy dump/count
+  snapshot; rebuilt backend/frontend, recreated the app containers, verified
+  health/OAuth/cloudflared/closed docs-dev routes, and passed the postdeploy
+  production data guard.
 - **Production deploy:** pulled and deployed merge `4e70405` for the billing
   timer/invoicing/QBO overhaul after rotating the placeholder `SECRET_KEY`,
   setting production `DEV_MODE=false`, taking a predeploy DB dump/count
