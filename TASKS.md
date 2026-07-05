@@ -28,6 +28,21 @@ for this task record. Removed stale clean worktrees
 future review. Production guard snapshot returned 164 count rows and public
 health returned 200.
 
+### Before Prod
+
+- [ ] Rotate production secrets that were exposed during incident inspection
+      before treating the install as customer-safe.
+- [ ] Replace placeholder-shaped `SECRET_KEY` in local `.env` and production
+      `.env`; keep local `.env` as the source of truth before copying to the
+      hypervisor.
+- [ ] Set production `DEV_MODE=false`, restart backend, and verify `/api/dev/*`,
+      `/docs`, `/redoc`, and `/openapi.json` are not served.
+- [ ] Keep `scripts/prod_data_guard.sh pre` + `post` in every deploy path; do
+      not build/restart production unless a fresh DB backup and row-count
+      snapshot exist.
+- [ ] Continue feature/debug work from clean `main`; preserve unmerged branches
+      until reviewed, merged, or explicitly discarded.
+
 ---
 
 ## Production Matter Data Visibility Incident — 2026-07-04 — BLOCKED
