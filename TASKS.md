@@ -1,5 +1,34 @@
 # TASKS.md
 
+## Post-Merge Production Deploy — 2026-07-05 (DONE)
+
+**Goal:** Pull the newly merged changes to local `main`, validate them, and
+deploy to the hypervisor only through the data-preserving production path.
+
+- [x] Pull latest `origin/main` into local clean `main`
+- [x] Run focused build/test/preflight validations for the merged changes
+- [x] Run production env guard and data guard before any container restart
+- [x] Deploy to hypervisor if preflight is safe
+- [x] Run post-deploy health, OAuth, and data-guard validation
+- [x] Update TASKS.md and CHANGELOG.md with deploy result
+
+Summary: pulled `origin/main` from `65dc4ba` to merge commit `4e70405`
+(`claude/time-tracking-invoicing-overhaul-snuau0`). Local validation passed:
+38 focused backend billing/migration tests, backend compile, and frontend
+production build. Hardened the two production env blockers before restart:
+local and hypervisor `.env` now have a non-placeholder `SECRET_KEY` and
+`DEV_MODE=false`; backups were written as `.env.backup.pre-prod-*` locally and
+on the hypervisor. Predeploy data guard created
+`backups/legalapp-predeploy-20260705T150448Z.dump` plus count snapshot.
+Rebuilt backend/frontend and started the stack without `--remove-orphans`;
+postdeploy data guard passed. Production is at `4e70405`, Alembic is at
+`075_billing_timer_and_qbo_dedupe`, and the new billing timer/QBO columns plus
+partial running-timer index exist. Health checks passed locally and publicly,
+Microsoft/Google OAuth returned 307, cloudflared is active, and `/docs`,
+`/redoc`, `/openapi.json`, and `/api/dev/users` are closed.
+
+---
+
 ## Production-Safe Dev Workflow And Git Cleanup — 2026-07-04 (DONE)
 
 **Goal:** Keep local development/debugging productive while making production
@@ -30,14 +59,14 @@ health returned 200.
 
 ### Before Prod
 
-- [ ] Rotate production secrets that were exposed during incident inspection
-      before treating the install as customer-safe.
-- [ ] Replace placeholder-shaped `SECRET_KEY` in local `.env` and production
+- [ ] Rotate remaining production/provider secrets that were exposed during
+      incident inspection before treating the install as customer-safe.
+- [x] Replace placeholder-shaped `SECRET_KEY` in local `.env` and production
       `.env`; keep local `.env` as the source of truth before copying to the
       hypervisor.
-- [ ] Set production `DEV_MODE=false`, restart backend, and verify `/api/dev/*`,
+- [x] Set production `DEV_MODE=false`, restart backend, and verify `/api/dev/*`,
       `/docs`, `/redoc`, and `/openapi.json` are not served.
-- [ ] Keep `scripts/prod_data_guard.sh pre` + `post` in every deploy path; do
+- [x] Keep `scripts/prod_data_guard.sh pre` + `post` in every deploy path; do
       not build/restart production unless a fresh DB backup and row-count
       snapshot exist.
 - [ ] Continue feature/debug work from clean `main`; preserve unmerged branches
