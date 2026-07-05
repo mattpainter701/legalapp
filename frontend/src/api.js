@@ -1314,6 +1314,22 @@ export const updateTimeEntry = (id, data) =>
 export const deleteTimeEntry = (id) =>
   api.delete(`/billing/time-entries/${id}`)
 
+// Live timer
+export const startTimer = (data) =>
+  api.post('/billing/time-entries/timer/start', data).then(r => r.data)
+export const stopTimer = (data = {}) =>
+  api.post('/billing/time-entries/timer/stop', data).then(r => r.data)
+export const getActiveTimer = () =>
+  api.get('/billing/time-entries/timer').then(r => r.data)
+export const cancelTimer = () =>
+  api.delete('/billing/time-entries/timer')
+
+// Billing settings
+export const getBillingSettings = () =>
+  api.get('/billing/settings').then(r => r.data)
+export const updateBillingSettings = (data) =>
+  api.put('/billing/settings', data).then(r => r.data)
+
 export const getInvoices = (params) =>
   api.get('/billing/invoices', { params }).then(r => r.data)
 export const getInvoice = (id) =>

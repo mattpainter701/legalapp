@@ -3,6 +3,37 @@
 ## [Unreleased]
 
 ### Added
+- **Time tracking, invoicing & QBO overhaul:** live billing timers with one
+  running timer per user (`POST/GET/DELETE /api/billing/time-entries/timer`,
+  start/stop endpoints; elapsed time rounds UP to the tenant's billing
+  increment — default 6 minutes, minimum one increment), tenant billing
+  settings (`GET/PUT /api/billing/settings`: default hourly rate + timer
+  rounding), and a Start Timer / Stop & Log / Discard timer bar with live
+  elapsed display on the Time Tracking page (plus a Matter column). Invoices
+  now generate as **drafts** with sequential per-tenant numbers
+  (`INV-YYYY-NNNN` instead of random hex) and billing-period dates derived
+  from the billed entries; status transitions are validated
+  (draft→sent→paid/partially_paid, void/written_off rules), `sent_at` is
+  stamped on send, payments are blocked on draft/void invoices, and voiding
+  an invoice releases its time entries and expenses back to the unbilled
+  pool for re-invoicing. Invoice APIs return `amount_paid`, `balance_due`,
+  `is_overdue` (computed from due date — no cron needed), and `matter_name`;
+  the Invoices page gained status/overdue filters, matter + balance columns,
+  and overdue badges; the invoice detail page gained Send Invoice / Mark
+  Paid / Void actions. Time-entry list gained `date_from`/`date_to`/
+  `user_id`/`billable_only` filters and pagination with SQL-side totals.
+  QBO sync fixes: the automatic invoice/payment sync on status change was
+  silently broken (it read nonexistent plaintext-token attributes off the
+  integration row — it now resolves a fresh decrypted token via the token
+  vault, honoring refresh); QBO `CustomerRef` now uses the customer **Id**
+  (find-or-create) instead of a name-only reference that QBO rejects;
+  TimeActivity sync is idempotent via a new `qbo_timeactivity_id` column
+  (full syncs no longer duplicate time in QBO); invoice updates fetch the
+  current `SyncToken`; payment sync includes the required `CustomerRef`
+  and is skipped when already synced; `sync/all` now also pushes pending
+  payments and reports `payments_synced`; expense invoice lines resolve
+  their category-specific QBO item mapping. Migration
+  `075_billing_timer_and_qbo_dedupe`.
 - **Production deploy data guard:** added `scripts/prod_data_guard.sh` to take
   a custom-format Postgres dump and exact public-table/per-tenant row-count
   snapshot before production deploys, then fail the post-deploy check if any
