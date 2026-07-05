@@ -1,6 +1,6 @@
 # TASKS.md
 
-## Matter Create API 500 — 2026-07-05 — IN PROGRESS
+## Matter Create API 500 — 2026-07-05 (DONE)
 
 **Goal:** Fix `POST /api/matters` returning 500 in production after the latest
 merges, while preserving existing production matter/customer data.
@@ -8,8 +8,27 @@ merges, while preserving existing production matter/customer data.
 - [x] Confirm local/prod Git state and inspect current production logs
 - [x] Reproduce or cover the failing create-matter path with a focused test
 - [x] Patch the matter-create path and validate locally
-- [ ] Deploy through production data guard if code changes are needed
-- [ ] Update TASKS.md and CHANGELOG.md with the outcome
+- [x] Deploy through production data guard if code changes are needed
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: current production logs after the previous restart did not retain a
+fresh `POST /api/matters` traceback, but the create route had the same
+post-commit RLS failure shape as the Call Intake fix: it committed, then
+refreshed/reloaded the created `Matter` after transaction-local tenant context
+was cleared. Patched `POST /api/matters` to explicitly bind tenant context at
+the start of create and re-bind it after commit before refreshing/reloading the
+new matter. Added `backend\tests\test_matters.py` to cover matter creation,
+primary assignment/event creation, and the post-commit tenant-context
+requirement. Local validation passed: `backend\tests\test_matters.py`,
+`backend\tests\test_module_guard.py`, backend compile, and frontend production
+build. Deployed commit `d2e7851` after predeploy backup
+`backups/legalapp-predeploy-20260705T203919Z.dump` and count snapshot
+`backups/legalapp-predeploy-20260705T203919Z.counts.tsv`; rebuilt
+backend/frontend, recreated containers, and postdeploy data guard passed with
+`backups/legalapp-postdeploy-20260705T204231Z.counts.tsv`. Health, public
+health, Microsoft/Google OAuth 307 redirects, cloudflared, closed docs/dev
+routes, fresh backend logs, and Alembic head `075_billing_timer_and_qbo_dedupe`
+all checked clean.
 
 ---
 
