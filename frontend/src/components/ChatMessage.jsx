@@ -134,7 +134,7 @@ function SourcesLedger({ sources }) {
                 </div>
                 {excerpt && (
                   <div className="pl-[38px] pr-4 pb-3">
-                    <p className="font-serif italic text-sm text-brand-ink-2 border-l-[3px] border-brand-line-2 pl-3 ml-2 bg-brand-surface p-2">
+                    <p className="max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-serif italic text-sm text-brand-ink-2 border-l-[3px] border-brand-line-2 pl-3 ml-2 bg-brand-surface p-2">
                       "{excerpt}"
                     </p>
                   </div>
@@ -209,7 +209,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
   const chipClasses = isUser ? 'border-brand-bg/15 bg-brand-ink/30' : 'border-brand-line bg-brand-surface'
 
   return (
-    <div className={`mt-3 border px-3 py-2 text-xs ${boxClasses}`}>
+    <div className={`mt-3 min-w-0 border px-3 py-2 text-xs ${boxClasses}`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className={`font-mono font-bold uppercase tracking-widest ${labelClasses}`}>
           References
@@ -227,7 +227,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
           </span>
         ))}
         {status && (
-          <span className="min-w-0 truncate" title={status}>
+          <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]" title={status}>
             {status}
           </span>
         )}
@@ -363,7 +363,7 @@ export default function ChatMessage({ message }) {
               <span className="sr-only">{copied ? 'Copied' : 'Copy query'}</span>
             </button>
           </div>
-          <p className="text-base leading-relaxed font-sans whitespace-pre-wrap">{content}</p>
+          <p className="text-base leading-relaxed font-sans whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{content}</p>
           <ReferenceTrail
             referenceContext={message.referenceContext}
             sources={message.sources}
@@ -395,7 +395,7 @@ export default function ChatMessage({ message }) {
         </div>
 
         {/* Body */}
-        <div className="text-brand-ink text-[15px]">
+        <div className="min-w-0 text-brand-ink text-[15px] break-words [overflow-wrap:anywhere]">
           {hasAssistantContent ? (
             <>
               {message.progress && !message.progress.complete && (

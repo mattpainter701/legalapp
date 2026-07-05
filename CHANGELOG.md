@@ -127,6 +127,9 @@
   guard snapshot plus public health before resuming feature work from `main`.
 
 ### Fixed
+- **Assistant chat reference ledger wrapping:** long unbroken citations,
+  source excerpts, and message/reference text now wrap inside the chat card
+  instead of overflowing across the page.
 - **Matter create API 500:** `POST /api/matters` now explicitly binds tenant
   context before writing and re-binds it after commit before refreshing/reloading
   the created matter, preventing production RLS from hiding the just-created

@@ -1,5 +1,19 @@
 # TASKS.md
 
+## Assistant Chat Reference Ledger Wrap Bug — 2026-07-05 (DONE)
+
+**Goal:** Fix chat source/reference ledger and message text overflow when
+citations or excerpts contain long unbroken strings.
+
+- [x] Patch chat message wrapping styles
+- [x] Validate frontend build
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: chat message bodies, reference status strips, and source ledger
+excerpts now break long unspaced strings inside their containers instead of
+bleeding across the page. Validation passed with the frontend production
+build.
+
 ## Assistant Chat Source/Reference Tracking UX — 2026-07-05 (DONE)
 
 **Goal:** Preserve visible source/reference context across assistant chat
