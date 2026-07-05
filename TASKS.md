@@ -1,5 +1,19 @@
 # TASKS.md
 
+## Call Intake Create Lead Staff Task 500 — 2026-07-05 — IN PROGRESS
+
+**Goal:** Fix the Call Intake "create lead + staff task" action returning a
+500 after the latest merges, without disturbing production data or unrelated
+workflow branches.
+
+- [x] Confirm local/prod Git state and capture the production traceback
+- [x] Reproduce or cover the failing action with a focused test
+- [x] Patch the intake/task path and validate locally
+- [ ] Deploy through production data guard if code changes are needed
+- [ ] Update TASKS.md and CHANGELOG.md with the outcome
+
+---
+
 ## Post-Merge Production Deploy — 2026-07-05 (DONE)
 
 **Goal:** Pull the newly merged changes to local `main`, validate them, and

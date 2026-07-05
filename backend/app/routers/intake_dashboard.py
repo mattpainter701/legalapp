@@ -1759,19 +1759,21 @@ async def create_dashboard_call(
             communication_id=log.id,
             practice_area=payload.practice_area,
         )
-    await db.commit()
-    await db.refresh(log)
-    if assignment_task_id and task:
-        await notify_task_created(db, task, str(tenant_id))
-
-    return IntakeDashboardCallResponse(
-        communication_id=log.id,
+    communication_id = log.id
+    response = IntakeDashboardCallResponse(
+        communication_id=communication_id,
         contact_id=contact_id,
         lead_id=lead_id,
         task_id=assignment_task_id,
         created_lead=created_lead,
         status="logged",
     )
+    await db.commit()
+    if assignment_task_id and task:
+        await set_tenant_context(db, str(tenant_id))
+        await notify_task_created(db, task, str(tenant_id))
+
+    return response
 
 
 @router.post("/leads/{lead_id}/assign-next", response_model=AssignNextResponse)
@@ -1842,6 +1844,7 @@ async def assign_next_partner(
     )
     await db.commit()
     if task:
+        await set_tenant_context(db, str(tenant_id))
         await notify_task_created(db, task, str(tenant_id))
 
     return AssignNextResponse(

@@ -4,7 +4,7 @@ import io
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
@@ -17,6 +17,7 @@ from app.models.tenant import Tenant
 from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
+from app.routers import intake_dashboard as intake_dashboard_router
 from app.services.intake_archive_import import (
     import_legacy_call_csv,
     normalize_phone,
@@ -564,6 +565,83 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
     assert row["outcome"] == "log_only"
     assert row["assigned_to_name"] == "Service Provider"
     assert row["task_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_call_create_lead_specific_staff_keeps_post_commit_context(
+    client, db_session, test_tenant, monkeypatch
+):
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="leadstaff@testfirm.com",
+        full_name="Lead Staff",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(staff)
+    await db_session.commit()
+
+    original_refresh = db_session.refresh
+
+    async def fail_communication_log_refresh(instance, *args, **kwargs):
+        if isinstance(instance, CommunicationLog):
+            raise AssertionError("post-commit communication log refresh is unsafe")
+        return await original_refresh(instance, *args, **kwargs)
+
+    notified = {}
+
+    async def assert_scoped_notification(db, task, tenant_id, assignment_note=None):
+        current_tenant = (
+            await db.execute(
+                text("SELECT current_setting('app.current_tenant_id', true)")
+            )
+        ).scalar_one()
+        assert current_tenant == tenant_id
+        notified["task_id"] = task.id
+
+    monkeypatch.setattr(db_session, "refresh", fail_communication_log_refresh)
+    monkeypatch.setattr(
+        intake_dashboard_router, "notify_task_created", assert_scoped_notification
+    )
+
+    resp = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "caller_name": "Lena Lead",
+            "phone": "(701) 555-9191",
+            "practice_area": "family",
+            "purpose": "Needs attorney review and staff follow-up",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Follow up with Lena Lead",
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["created_lead"] is True
+    assert data["lead_id"]
+    assert data["task_id"]
+    assert notified["task_id"] == uuid.UUID(data["task_id"])
+
+    task = await db_session.get(Task, uuid.UUID(data["task_id"]))
+    assert task.assigned_to_user_id == staff.id
+    assert task.contact_id == uuid.UUID(data["contact_id"])
+    assert f"Linked lead: {data['lead_id']}" in task.description
+
+    assignment = (
+        await db_session.execute(
+            select(PartnerAssignmentLog).where(
+                PartnerAssignmentLog.communication_id
+                == uuid.UUID(data["communication_id"])
+            )
+        )
+    ).scalar_one()
+    assert assignment.assignment_method == "specific_staff"
+    assert assignment.assigned_to_user_id == staff.id
 
 
 @pytest.mark.asyncio

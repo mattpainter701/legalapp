@@ -112,6 +112,11 @@
   guard snapshot plus public health before resuming feature work from `main`.
 
 ### Fixed
+- **Call Intake create lead + staff task 500:** stopped refreshing the
+  `CommunicationLog` after commit in `POST /api/intake/dashboard/calls` and
+  re-bound tenant context before task notifications so production RLS no
+  longer hides the just-created call row during the combined lead/staff-task
+  workflow.
 - **Zoom Phone intake call-feed sync:** fixed a production 500 where tenants
   with connected Zoom Phone grants could fetch call history but inserts into
   `communication_logs` failed RLS because legacy policies still read
@@ -297,6 +302,12 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Tests
+- **Call Intake create lead + staff task regression:** added coverage for the
+  exact `create_lead` + `specific_staff` dashboard action, including a guard
+  against post-commit communication-log refreshes and a tenant-context check
+  before notifications. Verification: targeted regression, full
+  `backend\tests\test_intake_dashboard.py`, backend compile, and frontend
+  production build.
 - **Zoom Phone intake RLS regression:** expanded the tenant-isolation test to
   assert both current and legacy tenant-context GUCs are set/cleared together,
   and made it honor `TEST_DATABASE_URL` so the non-superuser RLS probe runs
