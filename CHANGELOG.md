@@ -3,6 +3,37 @@
 ## [Unreleased]
 
 ### Added
+- **API error observability and route-client contract checks:** added
+  request-id middleware (`X-Request-ID`), migration
+  `077_error_logs_nullable_tenant` for durable tenantless/system error logs,
+  focused error-observability/startup tests, and
+  `backend/scripts/route_client_contract.py` plus a pytest wrapper to verify
+  frontend API call sites still match backend route methods/paths.
+- **API/frontend/backend error-readiness map**
+  (`docs/api-front-backend-map-eval-2026-07-05.md`): mapped 511 backend routes
+  and 339 frontend API call sites, reviewed exception/error-log/access-log
+  paths, and documented the next stability priorities: request/error IDs in
+  safe 500 responses, tenantless/system error logging, production DB
+  fail-closed startup, shared frontend API error normalization, removal or
+  dev-gating of bearer-token localStorage fallback, and route/client contract
+  smokes.
+- **Tenant-context RLS hardening:** migration
+  `076_harden_strict_tenant_rls` recreates the strict legacy
+  contacts/tasks/communication_logs/leads tenant policies with
+  `current_setting(..., true)` + `NULLIF`, and focused regressions now cover
+  post-commit tenant context re-binding, Stripe webhook tenant resolution,
+  recurring billing tenant loops, cloud-sync provider rebinds, and chat
+  attachment UUID serialization.
+- **Backend 500 root-cause review** (`docs/backend-500-review-2026-07-05.md`):
+  full-codebase audit of the recurring "Internal server error" class. Root
+  cause: RLS tenant context is a transaction-local GUC dropped by every
+  `db.commit()`; ~122 vulnerable commit sites enumerated across 30+ routers
+  and 3 services, verified against production `error_logs`/`pg_policies`.
+  Also documents three confirmed silent failures (Stripe payment webhook
+  reconciliation, recurring-invoice generation, multi-provider cloud sync)
+  and the recommended systemic fix (auto re-bind on transaction begin in
+  `get_db`, hardening migration for 4 strict legacy RLS policies, regression
+  test). Review only — no code changes.
 - **Time tracking, invoicing & QBO overhaul:** live billing timers with one
   running timer per user (`POST/GET/DELETE /api/billing/time-entries/timer`,
   start/stop endpoints; elapsed time rounds UP to the tenant's billing
@@ -127,9 +158,26 @@
   guard snapshot plus public health before resuming feature work from `main`.
 
 ### Fixed
+- **Opaque production API failures:** safe error responses now include
+  `request_id` and captured `error_id`, request IDs persist in `error_logs`,
+  tenantless/system errors no longer skip logging, and production startup
+  fails closed when the initial DB connectivity probe fails. Frontend API
+  handling now normalizes Axios and streaming-fetch failures, preserves
+  request/error IDs from response bodies/headers, parses validation details,
+  and removes the production localStorage bearer-token fallback unless
+  explicitly enabled for dev.
 - **Assistant chat reference ledger wrapping:** long unbroken citations,
   source excerpts, and message/reference text now wrap inside the chat card
   instead of overflowing across the page.
+- **Systemic post-commit RLS 500s:** request DB sessions now attach a
+  per-session SQLAlchemy `after_begin` listener that re-binds both tenant GUCs
+  on every new transaction, so any DB work after `db.commit()` remains scoped
+  instead of returning empty RLS reads or `Could not refresh instance` 500s.
+  Auth register/signup explicitly re-enable the transaction-local RLS bypass
+  after their first commit. Stripe payment webhooks resolve and bind tenant
+  context before invoice/payment reconciliation, recurring billing runs per
+  active tenant with tenant context, cloud sync re-binds around each provider,
+  and chat attachment responses serialize UUID IDs as strings.
 - **Matter create API 500:** `POST /api/matters` now explicitly binds tenant
   context before writing and re-binds it after commit before refreshing/reloading
   the created matter, preventing production RLS from hiding the just-created

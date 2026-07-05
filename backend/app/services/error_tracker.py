@@ -72,10 +72,7 @@ async def capture_error(
         request_id: Correlation/request ID
     """
     try:
-        if tenant_id is None:
-            logger.debug("Skipping error log without tenant context: %s", message)
-            return None
-        await set_tenant_context(db, str(tenant_id))
+        await set_tenant_context(db, str(tenant_id) if tenant_id else None)
 
         endpoint = None
         method = None

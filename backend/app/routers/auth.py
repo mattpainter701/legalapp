@@ -928,6 +928,7 @@ async def register(
     db.add(user)
     await ensure_stripe_customer(tenant, db)
     await db.commit()
+    await enable_rls_bypass(db)
     await db.refresh(user)
     await db.refresh(tenant)
 
@@ -1015,6 +1016,7 @@ async def signup_with_plan(
     )
     db.add(user)
     await db.commit()
+    await enable_rls_bypass(db)
     await db.refresh(user)
     await db.refresh(tenant)
 

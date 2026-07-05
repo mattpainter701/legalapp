@@ -19,6 +19,7 @@ Key patterns:
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -67,38 +68,67 @@ class CloudSyncService:
         Per-provider errors are caught individually so a single failure
         does not prevent the other providers from syncing.
         """
-        await set_tenant_context(db, tenant_id)
-
         result: dict = {
             "google": {"files": 0, "emails": 0},
             "microsoft": {"files": 0, "emails": 0},
         }
 
-        # Google
-        try:
-            result["google"]["files"] = await self.sync_google_drive(db, tenant_id)
-        except Exception as exc:
-            logger.warning("Google Drive sync failed for tenant %s: %s", tenant_id, exc)
-        try:
-            result["google"]["emails"] = await self.sync_gmail_metadata(db, tenant_id)
-        except Exception as exc:
-            logger.warning("Gmail sync failed for tenant %s: %s", tenant_id, exc)
-
-        # Microsoft
-        try:
-            result["microsoft"]["files"] = await self.sync_onedrive(db, tenant_id)
-        except Exception as exc:
-            logger.warning("OneDrive sync failed for tenant %s: %s", tenant_id, exc)
-        try:
-            result["microsoft"]["files"] += await self.sync_sharepoint(db, tenant_id)
-        except Exception as exc:
-            logger.warning("SharePoint sync failed for tenant %s: %s", tenant_id, exc)
-        try:
-            result["microsoft"]["emails"] = await self.sync_outlook_mail(db, tenant_id)
-        except Exception as exc:
-            logger.warning("Outlook mail sync failed for tenant %s: %s", tenant_id, exc)
+        result["google"]["files"] = await self._run_provider_sync(
+            db,
+            tenant_id,
+            "Google Drive",
+            lambda: self.sync_google_drive(db, tenant_id),
+        )
+        result["google"]["emails"] = await self._run_provider_sync(
+            db,
+            tenant_id,
+            "Gmail",
+            lambda: self.sync_gmail_metadata(db, tenant_id),
+        )
+        result["microsoft"]["files"] = await self._run_provider_sync(
+            db,
+            tenant_id,
+            "OneDrive",
+            lambda: self.sync_onedrive(db, tenant_id),
+        )
+        result["microsoft"]["files"] += await self._run_provider_sync(
+            db,
+            tenant_id,
+            "SharePoint",
+            lambda: self.sync_sharepoint(db, tenant_id),
+        )
+        result["microsoft"]["emails"] = await self._run_provider_sync(
+            db,
+            tenant_id,
+            "Outlook mail",
+            lambda: self.sync_outlook_mail(db, tenant_id),
+        )
 
         return result
+
+    async def _run_provider_sync(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        provider_name: str,
+        sync_call: Callable[[], Awaitable[int]],
+    ) -> int:
+        await set_tenant_context(db, tenant_id)
+        try:
+            count = await sync_call()
+        except Exception as exc:
+            await db.rollback()
+            logger.warning(
+                "%s sync failed for tenant %s: %s",
+                provider_name,
+                tenant_id,
+                exc,
+            )
+            await set_tenant_context(db, tenant_id)
+            return 0
+
+        await set_tenant_context(db, tenant_id)
+        return count
 
     async def sync_google_drive(
         self,
@@ -394,6 +424,7 @@ class CloudSyncService:
                     drive_name = drive.get("name", "Documents")
                     children_url = f"{GRAPH_BASE}/drives/{drive_id}/root/children"
 
+                    await set_tenant_context(db, tenant_id)
                     item_count = await self._sync_graph_files(
                         db,
                         tenant_id,

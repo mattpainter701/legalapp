@@ -17,7 +17,7 @@ from app.middleware.tenant import get_current_user
 from app.services.access_control import require_finance_admin
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
-from app.models.tenant import TenantSettings
+from app.models.tenant import Tenant, TenantSettings
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
@@ -1505,11 +1505,62 @@ async def stripe_webhook(
     return {"status": "received"}
 
 
+def _uuid_from_stripe_metadata(metadata: dict, key: str) -> uuid.UUID | None:
+    value = metadata.get(key)
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        logger.warning("Stripe webhook metadata has invalid %s: %r", key, value)
+        return None
+
+
+async def _resolve_and_bind_stripe_tenant(
+    db: AsyncSession, metadata: dict
+) -> uuid.UUID | None:
+    tenant_id = _uuid_from_stripe_metadata(metadata, "tenant_id")
+    if tenant_id:
+        await set_tenant_context(db, str(tenant_id))
+        return tenant_id
+
+    invoice_id = _uuid_from_stripe_metadata(metadata, "invoice_id")
+    if not invoice_id:
+        return None
+
+    tenant_result = await db.execute(select(Tenant.id))
+    for candidate_tenant_id in tenant_result.scalars().all():
+        await set_tenant_context(db, str(candidate_tenant_id))
+        inv_result = await db.execute(
+            select(Invoice.tenant_id).where(Invoice.id == invoice_id)
+        )
+        resolved_tenant_id = inv_result.scalar_one_or_none()
+        if resolved_tenant_id:
+            return resolved_tenant_id
+
+    return None
+
+
 async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     """Handle payment_intent.succeeded: create Payment + update invoice status."""
     stripe_payment_intent_id = intent["id"]
     metadata = intent.get("metadata", {})
     invoice_id = metadata.get("invoice_id")
+
+    if not invoice_id:
+        logger.warning(
+            f"payment_intent.succeeded without invoice_id metadata: {stripe_payment_intent_id}"
+        )
+        return
+
+    tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+    if not tenant_id:
+        logger.warning(
+            "Stripe webhook: unable to resolve tenant for invoice %s and PI %s",
+            invoice_id,
+            stripe_payment_intent_id,
+        )
+        return
 
     # Idempotency check: skip if this payment intent was already recorded
     existing = await db.execute(
@@ -1527,19 +1578,15 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     payment_date = date.today()
     method = "stripe"
 
-    if not invoice_id:
-        # No invoice metadata — create an unlinked payment for tracking
-        logger.warning(
-            f"payment_intent.succeeded without invoice_id metadata: {stripe_payment_intent_id}"
-        )
-        return
-
     # Verify invoice exists
     inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
     invoice = inv_result.scalar_one_or_none()
     if not invoice:
         logger.warning(
-            f"Stripe webhook: invoice {invoice_id} not found for PI {stripe_payment_intent_id}"
+            "Stripe webhook: invoice %s not found for PI %s in tenant %s",
+            invoice_id,
+            stripe_payment_intent_id,
+            tenant_id,
         )
         return
 
@@ -1594,6 +1641,14 @@ async def _handle_payment_intent_failed(db: AsyncSession, intent: dict):
 
     # Optionally mark invoice for follow-up
     if invoice_id:
+        tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+        if not tenant_id:
+            logger.warning(
+                "Stripe webhook: unable to resolve tenant for failed payment on invoice %s",
+                invoice_id,
+            )
+            return
+
         inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
         invoice = inv_result.scalar_one_or_none()
         if invoice and invoice.status not in ("paid", "written_off"):
@@ -1618,6 +1673,14 @@ async def _handle_checkout_session_completed(db: AsyncSession, session: dict):
 
     # If we have a payment intent, delegate to the payment_intent handler
     if payment_intent_id:
+        tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+        if not tenant_id:
+            logger.warning(
+                "Stripe webhook: unable to resolve tenant for checkout invoice %s",
+                invoice_id,
+            )
+            return
+
         # Check if already processed
         existing = await db.execute(
             select(Payment).where(Payment.stripe_payment_intent_id == payment_intent_id)
@@ -1632,7 +1695,16 @@ async def _handle_checkout_session_completed(db: AsyncSession, session: dict):
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            await _handle_payment_intent_succeeded(db, intent)
+            intent_payload = (
+                intent.to_dict_recursive()
+                if hasattr(intent, "to_dict_recursive")
+                else dict(intent)
+            )
+            intent_payload["metadata"] = {
+                **metadata,
+                **(intent_payload.get("metadata") or {}),
+            }
+            await _handle_payment_intent_succeeded(db, intent_payload)
         except stripe.StripeError as exc:
             logger.error(
                 f"Failed to retrieve payment intent {payment_intent_id}: {exc}"

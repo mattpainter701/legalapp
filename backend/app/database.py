@@ -1,5 +1,5 @@
 from fastapi import Request
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from typing import AsyncGenerator
@@ -47,7 +47,20 @@ async def get_db(request: Request = None) -> AsyncGenerator[AsyncSession, None]:
         if request is not None:
             tenant_id = getattr(request.state, "tenant_id", None)
         if tenant_id:
-            await set_tenant_context(session, str(tenant_id))
+            tenant_id = str(UUID(str(tenant_id)))
+
+            @event.listens_for(session.sync_session, "after_begin")
+            def _rebind_tenant_context(sync_session, transaction, connection):
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          set_config('app.current_tenant_id', :tenant_id, true),
+                          set_config('app.tenant_id', :tenant_id, true)
+                        """
+                    ),
+                    {"tenant_id": tenant_id},
+                )
         try:
             yield session
         except Exception:

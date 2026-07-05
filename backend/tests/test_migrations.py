@@ -12,4 +12,4 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["075_billing_timer_and_qbo_dedupe"]
+    assert heads == ["077_error_logs_nullable_tenant"]

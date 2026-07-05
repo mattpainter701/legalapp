@@ -22,14 +22,18 @@ collection) when Postgres is unavailable.
 
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import String, select, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app import database
 from app.database import (
     clear_tenant_context,
     enable_rls_bypass,
@@ -53,6 +57,19 @@ RLS_ROLE_URL = make_url(TEST_DB_URL).set(
 
 # A dedicated throwaway table so we never depend on the real schema / FKs.
 _TABLE = "rls_seed_probe"
+
+
+class ProbeBase(DeclarativeBase):
+    pass
+
+
+class RLSProbe(ProbeBase):
+    __tablename__ = _TABLE
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+
 
 TENANT_A = str(uuid.uuid4())
 TENANT_B = str(uuid.uuid4())
@@ -245,3 +262,39 @@ async def test_rls_bypass_reveals_all_rows(rls_session):
     # Bypass on: all three rows (both tenants) become visible.
     await enable_rls_bypass(rls_session)
     assert await _count(rls_session) == 3
+
+
+async def test_get_db_rebinds_tenant_context_after_commit_for_refresh(
+    monkeypatch, rls_session
+):
+    class ExistingSessionContext:
+        async def __aenter__(self):
+            return rls_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr(
+        database, "async_session_maker", lambda: ExistingSessionContext()
+    )
+    request = SimpleNamespace(state=SimpleNamespace(tenant_id=TENANT_A))
+    db_stream = database.get_db(request)
+
+    try:
+        db = await db_stream.__anext__()
+        await db.commit()
+
+        current = (
+            await db.execute(text("SELECT current_setting('app.current_tenant_id')"))
+        ).scalar_one()
+        assert current == TENANT_A
+
+        row = (
+            await db.execute(select(RLSProbe).where(RLSProbe.label == "a1"))
+        ).scalar_one()
+        await db.commit()
+
+        await db.refresh(row)
+        assert row.label == "a1"
+    finally:
+        await db_stream.aclose()

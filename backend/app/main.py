@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.database import engine
+from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.tenant import TenantMiddleware
 from app.middleware.module_guard import ModuleGuardMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -146,6 +147,8 @@ async def lifespan(app: FastAPI):
         raise
     except Exception as exc:
         logger.error(f"Database connection failed: {exc}")
+        if not settings.DEV_MODE:
+            raise RuntimeError(f"Database connectivity probe failed: {exc}") from exc
 
     # LiteLLM gateway reachability check
     if not settings.LITELLM_ENABLED:
@@ -265,9 +268,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Platform-Key"],
 )
 
-# ─────────────────────────────────────────────────────
 # Tenant middleware (must come after CORS)
-# ─────────────────────────────────────────────────────
 app.add_middleware(TenantMiddleware)
 
 app.add_middleware(ModuleGuardMiddleware)  # fail-closed plan/module enforcement
@@ -275,6 +276,10 @@ app.add_middleware(ModuleGuardMiddleware)  # fail-closed plan/module enforcement
 app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
 
 app.add_middleware(ApiAccessLogMiddleware)
+
+# Request-id middleware is registered last so it is outermost in Starlette's
+# middleware stack and can stamp even middleware-generated responses.
+app.add_middleware(RequestIdMiddleware)
 
 # ─────────────────────────────────────────────────────
 # Routers
@@ -423,9 +428,10 @@ async def _capture_exception_to_errorlog(
 
         user_id = _uuid.UUID(user_id_str) if user_id_str else None
         tenant_id = _uuid.UUID(tenant_id_str) if tenant_id_str else None
+        request_id = getattr(request.state, "request_id", None)
 
         async with async_session_maker() as session:
-            await capture_error(
+            return await capture_error(
                 db=session,
                 error_type=error_type,
                 severity="error" if status_code >= 500 else "warning",
@@ -434,16 +440,19 @@ async def _capture_exception_to_errorlog(
                 status_code=status_code,
                 user_id=user_id,
                 tenant_id=tenant_id,
+                request_id=request_id,
             )
     except Exception:
-        pass  # Error tracking must never cascade
+        return None  # Error tracking must never cascade
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     # Capture 4xx/5xx HTTP exceptions
+    request_id = getattr(request.state, "request_id", None)
+    error_id = None
     if exc.status_code >= 400:
-        await _capture_exception_to_errorlog(
+        error_id = await _capture_exception_to_errorlog(
             request,
             exc,
             exc.status_code,
@@ -451,10 +460,15 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             if exc.status_code in (400, 422)
             else "api_error",
         )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
-    )
+    content = {"detail": exc.detail}
+    if request_id:
+        content["request_id"] = request_id
+    if error_id and exc.status_code >= 500:
+        content["error_id"] = str(error_id)
+    response = JSONResponse(status_code=exc.status_code, content=content)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.exception_handler(Exception)
@@ -471,13 +485,19 @@ async def generic_exception_handler(request: Request, exc: Exception):
     else:
         error_type = "api_error"
 
-    await _capture_exception_to_errorlog(
+    request_id = getattr(request.state, "request_id", None)
+    error_id = await _capture_exception_to_errorlog(
         request,
         exc,
         500,
         error_type=error_type,
     )
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-    )
+    response = {"detail": "Something went wrong"}
+    if request_id:
+        response["request_id"] = request_id
+    if error_id:
+        response["error_id"] = str(error_id)
+    payload = JSONResponse(status_code=500, content=response)
+    if request_id:
+        payload.headers["X-Request-ID"] = request_id
+    return payload

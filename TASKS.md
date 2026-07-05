@@ -1,5 +1,45 @@
 # TASKS.md
 
+## API Reliability Production Deploy — 2026-07-05 — IN PROGRESS
+
+**Goal:** Commit, push, deploy, and validate the systemic API/RLS/error
+observability fixes on the hypervisor production stack.
+
+- [ ] Confirm local and remote Git state are safe for deploy
+- [ ] Run focused pre-deploy validation
+- [ ] Commit and push the deployable changes
+- [ ] Run production env/data guards before restart
+- [ ] Deploy backend/frontend and validate health/OAuth/data guard
+- [ ] Update TASKS.md and CHANGELOG.md with deploy result
+
+## API Error Observability & UX Hardening — 2026-07-05 (DONE)
+
+**Goal:** Resolve the API/front/backend map findings so production testing
+returns supportable errors instead of opaque "Internal server error" messages.
+
+- [x] Add request/error IDs and tenantless/system error logging
+- [x] Fail closed on production DB startup failure
+- [x] Normalize frontend API errors, including streaming fetch
+- [x] Remove or dev-gate localStorage bearer fallback
+- [x] Add route/client contract smoke coverage
+- [x] Validate focused backend/frontend checks
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: production API errors now have correlation handles instead of opaque
+500s. Added request-id middleware with `X-Request-ID`, included `request_id`
+and captured `error_id` in safe HTTP/generic error JSON, persisted request IDs
+to `error_logs`, and added migration `077_error_logs_nullable_tenant` so
+tenantless/system errors can be logged. Production startup now fails closed on
+DB connectivity probe failure. Frontend `api.js` now exports centralized
+`normalizeApiError()`, normalizes Axios and streaming fetch failures, preserves
+request/error IDs from body/headers, parses validation details, and removes
+production localStorage bearer fallback unless explicitly enabled for dev with
+`VITE_LEGACY_TOKEN_AUTH=true`. Added `backend/scripts/route_client_contract.py`
+and `backend/tests/test_route_client_contract.py`; standalone contract check
+currently matches 391 frontend API call sites to backend routes. Validation:
+32 focused backend tests passed, route-client script passed, backend compile
+passed, and frontend production build passed.
+
 ## Assistant Chat Reference Ledger Wrap Bug — 2026-07-05 (DONE)
 
 **Goal:** Fix chat source/reference ledger and message text overflow when
@@ -13,6 +53,31 @@ Summary: chat message bodies, reference status strips, and source ledger
 excerpts now break long unspaced strings inside their containers instead of
 bleeding across the page. Validation passed with the frontend production
 build.
+
+## API / Frontend / Backend Error-Readiness Map — 2026-07-05 (DONE)
+
+**Goal:** Map the frontend API callers, backend routes, tenant/RLS/error
+handling, and production observability paths to identify why customer testing
+still surfaces generic "Internal server error" messages and what to harden
+next.
+
+- [x] Inventory frontend API client + backend route surface
+- [x] Review error propagation and user-facing API UX
+- [x] Run focused static/test probes for route/auth/migration/API drift
+- [x] Write findings and priority remediation plan
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: wrote `docs/api-front-backend-map-eval-2026-07-05.md`. The app has
+511 backend routes and 339 frontend API call sites; route auth coverage,
+Alembic head check, and frontend production build passed. Main remaining
+production-testing pain is API observability/UX, not another single endpoint:
+generic 500 responses have no request/error ID, tenantless/system failures can
+skip durable error logging, production startup does not fail closed on DB
+connection failure, frontend error handling is page-by-page instead of
+normalized, localStorage bearer fallback remains, and there is no route/client
+contract gate. Priority plan: request IDs + safe error IDs, tenantless/system
+error logging, DB fail-closed startup, shared frontend API error normalizer,
+remove/dev-gate bearer fallback, and add route/client/top-workflow smoke tests.
 
 ## Assistant Chat Source/Reference Tracking UX — 2026-07-05 (DONE)
 
@@ -31,6 +96,59 @@ show a compact References strip with matter, upload, firm/cloud, and
 CourtListener counts, while the final answer retains a source-neutral
 "Sources & References" ledger with responsive columns. Validation passed with
 the frontend production build.
+
+## Backend/API 500 Review & Root-Cause Documentation — 2026-07-05 (DONE)
+
+**Goal:** Systematic review of all API routers for the recurring "internal
+server error" class (post-commit tenant-context loss → RLS empty reads),
+enumerate every vulnerable endpoint, document root cause + systemic fix.
+
+- [x] Confirm root cause mechanism (transaction-local GUC dropped on commit)
+- [x] Enumerate all vulnerable endpoints across 48 routers + services (subagents)
+- [x] Identify any other distinct 500 classes
+- [x] Write review document with systemic fix recommendation
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: every production 500 in the last 7 days traces to one root cause —
+`set_tenant_context` binds a transaction-local GUC that every `db.commit()`
+silently drops; post-commit DB work then runs unscoped under RLS. Census via
+four parallel review agents found **~122 vulnerable commit sites** across 30+
+routers and 3 services. Verified against live `error_logs` and `pg_policies`.
+Also confirmed three **silent** failures: Stripe payment-reconciliation
+webhook (no tenant context, payments never marked paid), recurring-invoice
+job (generates nothing), and cloud sync (providers 2-5 unscoped). Full report
+with per-endpoint census and the recommended systemic fix (auto re-bind via
+SQLAlchemy `after_begin` in `get_db`, strict-policy hardening migration,
+regression test): `docs/backend-500-review-2026-07-05.md`. Fix work is a
+follow-up task — no code changed in this review.
+
+## Systemic Tenant-Context Fix (DONE)
+
+Priority order from `docs/backend-500-review-2026-07-05.md` §7:
+
+- [x] `get_db` auto re-bind (`after_begin` listener) + auth register/signup bypass re-invoke
+- [x] Stripe payment webhook tenant resolution (revenue)
+- [x] `recurring_billing.py` per-tenant loop (revenue)
+- [x] Migration hardening 4 strict RLS policies (contacts/tasks/communication_logs/leads)
+- [x] `cloud_sync.py` rebind per provider
+- [x] Regression test pinning post-commit GUC survival
+- [x] Chat attachment Pydantic UUID→str fix
+
+Summary: fixed the systemic post-commit RLS context loss by adding a
+per-session SQLAlchemy `after_begin` listener in `get_db` that re-binds both
+tenant GUCs on every new transaction, plus explicit auth bypass re-enable for
+the two signup routes after their first commit. Added migration
+`076_harden_strict_tenant_rls` to harden strict contacts/tasks/
+communication_logs/leads policies with `current_setting(..., true)` +
+`NULLIF`, converting missing tenant context from hard 500s to fail-closed
+empty reads. Stripe webhook reconciliation now resolves/binds tenant context
+before forced-RLS invoice/payment queries, recurring billing loops active
+tenants with per-tenant context, and cloud sync re-binds around each provider
+so internal commits cannot un-scope later providers. The chat attachment UUID
+serialization 500 is fixed. Focused validation passed for migrations,
+chat-attachment serialization, cloud sync, and revenue tenant-context tests;
+the DB-backed RLS contract test is present but skipped locally because
+Postgres refused the test connection.
 
 ## Matter Create API 500 — 2026-07-05 (DONE)
 
