@@ -1,16 +1,30 @@
 # TASKS.md
 
-## API Reliability Production Deploy — 2026-07-05 — IN PROGRESS
+## API Reliability Production Deploy — 2026-07-05 (DONE)
 
 **Goal:** Commit, push, deploy, and validate the systemic API/RLS/error
 observability fixes on the hypervisor production stack.
 
-- [ ] Confirm local and remote Git state are safe for deploy
-- [ ] Run focused pre-deploy validation
-- [ ] Commit and push the deployable changes
-- [ ] Run production env/data guards before restart
-- [ ] Deploy backend/frontend and validate health/OAuth/data guard
-- [ ] Update TASKS.md and CHANGELOG.md with deploy result
+- [x] Confirm local and remote Git state are safe for deploy
+- [x] Run focused pre-deploy validation
+- [x] Commit and push the deployable changes
+- [x] Run production env/data guards before restart
+- [x] Deploy backend/frontend and validate health/OAuth/data guard
+- [x] Update TASKS.md and CHANGELOG.md with deploy result
+
+Summary: committed and deployed `25a9238` (`fix(api): harden tenant context
+and error handling`) to the hypervisor production stack at
+`https://legalapp.perevagagroup.com`. Local preflight passed: 32 focused
+backend tests, route-client contract script, frontend production build, and
+staged secret scan. Production env guard passed with `DEV_MODE=false`.
+Predeploy backups/counts were created, with the restart-protecting snapshot at
+`backups/legalapp-predeploy-20260705T232755Z.dump` and
+`backups/legalapp-predeploy-20260705T232755Z.counts.tsv`; postdeploy data
+guard passed with `backups/legalapp-postdeploy-20260705T233047Z.counts.tsv`.
+Backend/frontend were rebuilt and recreated, Alembic upgraded through
+`077_error_logs_nullable_tenant`, local and public health returned ok,
+Microsoft/Google OAuth returned 307, cloudflared was active, request IDs were
+present on API responses, and docs/dev routes returned 404.
 
 ## API Error Observability & UX Hardening — 2026-07-05 (DONE)
 

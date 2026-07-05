@@ -131,6 +131,13 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Changed
+- **Production deploy:** shipped `25a9238` for the systemic API/RLS/error
+  observability hardening to the hypervisor after local backend/frontend
+  validation, staged secret scan, production env guard, and predeploy
+  dump/count snapshot. Rebuilt and recreated backend/frontend, ran migrations
+  through `077_error_logs_nullable_tenant`, verified local and public health,
+  Microsoft/Google OAuth 307 redirects, active cloudflared, request-id headers,
+  closed docs/dev routes, and passed the postdeploy production data guard.
 - **Assistant chat source/reference UX:** chat turns now retain source
   retrieval context after streaming and refresh. User prompts and assistant
   answers both show a compact References strip with matter, upload,
