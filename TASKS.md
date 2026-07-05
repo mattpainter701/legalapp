@@ -1,5 +1,18 @@
 # TASKS.md
 
+## Matter Create API 500 — 2026-07-05 — IN PROGRESS
+
+**Goal:** Fix `POST /api/matters` returning 500 in production after the latest
+merges, while preserving existing production matter/customer data.
+
+- [x] Confirm local/prod Git state and inspect current production logs
+- [x] Reproduce or cover the failing create-matter path with a focused test
+- [x] Patch the matter-create path and validate locally
+- [ ] Deploy through production data guard if code changes are needed
+- [ ] Update TASKS.md and CHANGELOG.md with the outcome
+
+---
+
 ## Call Intake Create Lead Staff Task 500 — 2026-07-05 (DONE)
 
 **Goal:** Fix the Call Intake "create lead + staff task" action returning a

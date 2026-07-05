@@ -117,6 +117,10 @@
   guard snapshot plus public health before resuming feature work from `main`.
 
 ### Fixed
+- **Matter create API 500:** `POST /api/matters` now explicitly binds tenant
+  context before writing and re-binds it after commit before refreshing/reloading
+  the created matter, preventing production RLS from hiding the just-created
+  row during response construction.
 - **Call Intake create lead + staff task 500:** stopped refreshing the
   `CommunicationLog` after commit in `POST /api/intake/dashboard/calls` and
   re-bound tenant context before task notifications so production RLS no
@@ -307,6 +311,12 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Tests
+- **Matter create RLS regression:** added `backend\tests\test_matters.py` to
+  cover `POST /api/matters`, primary assignment/event creation, and the
+  post-commit tenant-context requirement before refreshing the created matter.
+  Verification: `backend\tests\test_matters.py`,
+  `backend\tests\test_module_guard.py`, backend compile, and frontend
+  production build.
 - **Call Intake create lead + staff task regression:** added coverage for the
   exact `create_lead` + `specific_staff` dashboard action, including a guard
   against post-commit communication-log refreshes and a tenant-context check

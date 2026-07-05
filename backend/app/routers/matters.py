@@ -610,6 +610,7 @@ async def create_matter(
     """Create a new matter with optional initial assignments."""
     user = await get_current_user(request, db)
     tenant_id = user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
 
     slug = _generate_slug(body.matter_name)
 
@@ -761,7 +762,9 @@ async def create_matter(
                 exc_info=True,
             )
 
+    matter_id = matter.id
     await db.commit()
+    await set_tenant_context(db, str(tenant_id))
     await db.refresh(matter)
 
     # Reload with relationships
@@ -772,7 +775,7 @@ async def create_matter(
             selectinload(Matter.client),
             selectinload(Matter.attorney_of_record),
         )
-        .where(Matter.id == matter.id)
+        .where(Matter.id == matter_id)
     )
     matter = result.unique().scalar_one()
 
