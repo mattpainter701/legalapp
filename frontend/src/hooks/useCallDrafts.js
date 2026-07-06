@@ -15,6 +15,7 @@ const LOCAL_WRITE_DEBOUNCE_MS = 300
 const BACKEND_WRITE_DEBOUNCE_MS = 5000
 const MAX_DRAFTS = 30
 const MAX_RECEIPTS = 30
+const RATE_LIMIT_STATUS = 429
 
 const DRAFT_FORM_DEFAULTS = {
   caller_name: '',
@@ -67,6 +68,31 @@ const isTransientError = (error) => {
   const status = error?.status || error?.response?.status
   if (!status) return true
   return status >= 500 || status === 408 || status === 429
+}
+
+const MEANINGFUL_DRAFT_FIELDS = [
+  'caller_name',
+  'phone',
+  'purpose',
+  'notes',
+  'custom_task_title',
+  'source_communication_id',
+  'selected_staff_id',
+  'linked_history_contact_id',
+  'linked_history_lead_id',
+  'linked_history_result_id',
+  'linked_history_title',
+  'linked_history_phone',
+]
+
+function hasMeaningfulDraftContent(draft) {
+  if (!draft || typeof draft !== 'object') return false
+  if (MEANINGFUL_DRAFT_FIELDS.some((key) => {
+    const value = draft[key]
+    return typeof value === 'string' ? value.trim().length > 0 : Boolean(value)
+  })) return true
+  return ['practice_area', 'outcome', 'task_mode', 'task_title', 'qualified']
+    .some((key) => draft[key] !== undefined && draft[key] !== DRAFT_FORM_DEFAULTS[key])
 }
 
 function normalizeReceipts(list) {
@@ -166,11 +192,17 @@ export default function useCallDrafts({ onToast } = {}) {
   const backendTimersRef = useRef(new Map())
   const deleteQueueRef = useRef([])
   const storageHealthyRef = useRef(true)
+  const syncingDraftIdsRef = useRef(new Set())
+  const onToastRef = useRef(onToast)
+
+  useEffect(() => {
+    onToastRef.current = onToast
+  }, [onToast])
 
   const emitToast = useCallback((type, title, message) => {
-    if (typeof onToast !== 'function') return
-    onToast(type, title, message)
-  }, [onToast])
+    if (typeof onToastRef.current !== 'function') return
+    onToastRef.current(type, title, message)
+  }, [])
 
   const setDrafts = useCallback((next) => {
     setDraftsState((current) => {
@@ -294,19 +326,26 @@ export default function useCallDrafts({ onToast } = {}) {
 
   const markDraftDirty = useCallback((draftId, patch) => {
     const now = nowISO()
+    let shouldSyncBackend = false
+    let didChange = false
     setDrafts((current) => current.map((draft) => {
       if (draft.draft_id !== draftId) return draft
+      const nextDraft = { ...draft, ...patch }
+      const changed = Object.keys(patch || {}).some((key) => draft[key] !== nextDraft[key])
+      if (!changed) return draft
+      didChange = true
+      shouldSyncBackend = hasMeaningfulDraftContent(nextDraft)
       return {
-        ...draft,
-        ...patch,
+        ...nextDraft,
         updated_at: now,
-        _dirty: true,
+        _dirty: shouldSyncBackend,
         _localOnly: true,
         _localUpdatedAt: now,
       }
     }))
+    if (!didChange) return
     scheduleLocalPersist(draftId)
-    if (draftId) {
+    if (draftId && shouldSyncBackend) {
       if (backendTimersRef.current.has(draftId)) {
         clearTimeout(backendTimersRef.current.get(draftId))
       }
@@ -318,10 +357,13 @@ export default function useCallDrafts({ onToast } = {}) {
   }, [scheduleLocalPersist])
 
   const flushBackendDraft = useCallback(async (draftId, { force = false } = {}) => {
+    if (!mountedRef.current) return
     if (!draftId) return
     const draft = draftsRef.current.find((entry) => entry.draft_id === draftId)
     if (!draft || (!draft._dirty && !force)) return
-    if (draft._syncing) return
+    if (!hasMeaningfulDraftContent(draft)) return
+    if (draft._syncing || syncingDraftIdsRef.current.has(draftId)) return
+    syncingDraftIdsRef.current.add(draftId)
 
     const backendPayload = { ...draft }
     delete backendPayload._dirty
@@ -332,22 +374,13 @@ export default function useCallDrafts({ onToast } = {}) {
     delete backendPayload._localUpdatedAt
     delete backendPayload._syncRetryCount
 
-    const receiptId = force ? addReceipt(draftId, {
-      label: 'Draft save',
-      status: 'pending',
-      retry: {
-        method: 'PUT',
-        url: `/intake/drafts/${draftId}`,
-        payload: { payload: backendPayload },
-      },
-    }) : null
-
     setDrafts((current) => current.map((entry) => (
       entry.draft_id === draftId ? { ...entry, _syncing: true, _syncError: null } : entry
     )))
 
     try {
       const saved = await upsertIntakeDraft(draftId, { payload: backendPayload })
+      if (!mountedRef.current) return
       const normalized = normalizeDraftFromBackend(saved)
       setDrafts((current) => current.map((entry) => {
         if (entry.draft_id !== draftId) return entry
@@ -365,19 +398,10 @@ export default function useCallDrafts({ onToast } = {}) {
           receipts: entry.receipts || normalized.receipts,
         }
       }))
-      if (receiptId) updateReceipt(draftId, receiptId, { status: 'ok', error: '' }, { markDirty: false })
     } catch (error) {
+      if (!mountedRef.current) return
       const normalizedError = normalizeApiError(error)
       const retryCount = Number(draft._syncRetryCount || 0)
-      const failedReceiptId = receiptId || addReceipt(draftId, {
-        label: 'Draft autosave',
-        status: 'failed',
-        retry: {
-          method: 'PUT',
-          url: `/intake/drafts/${draftId}`,
-          payload: { payload: backendPayload },
-        },
-      })
       setDrafts((current) => current.map((entry) => {
         if (entry.draft_id !== draftId) return entry
         return {
@@ -387,26 +411,28 @@ export default function useCallDrafts({ onToast } = {}) {
           _syncRetryCount: retryCount + 1,
         }
       }))
-      updateReceipt(draftId, failedReceiptId, {
-        status: 'failed',
-        error: normalizedError.message || 'Failed to save draft',
-      })
       persistDraft({
         ...(draftsRef.current.find((entry) => entry.draft_id === draftId) || draft),
         _syncing: false,
         _syncError: normalizedError.message || 'Failed to save draft',
         _syncRetryCount: retryCount + 1,
       })
-      if (isTransientError(normalizedError) && retryCount < 1) {
+      if (
+        isTransientError(normalizedError)
+        && normalizedError.status !== RATE_LIMIT_STATUS
+        && retryCount < 1
+      ) {
         setTimeout(() => {
           if (!mountedRef.current) return
-          flushBackendDraft(draftId, { force: true })
-        }, 1000)
-      } else {
+          flushBackendDraft(draftId)
+        }, 10000)
+      } else if (force && normalizedError.status !== RATE_LIMIT_STATUS) {
         emitToast('error', 'Draft save failed', normalizedError.message || 'Failed to save draft')
       }
+    } finally {
+      syncingDraftIdsRef.current.delete(draftId)
     }
-  }, [addReceipt, emitToast, persistDraft, updateReceipt])
+  }, [emitToast, persistDraft])
 
   const updateDraftField = useCallback((draftId, patch) => {
     markDraftDirty(draftId, patch)
@@ -414,14 +440,18 @@ export default function useCallDrafts({ onToast } = {}) {
 
   const createDraft = useCallback((seed = {}) => {
     const now = nowISO()
-    const draft = {
+    const seededDraft = {
       ...DRAFT_FORM_DEFAULTS,
       ...seed,
+    }
+    const hasSeedContent = hasMeaningfulDraftContent(seededDraft)
+    const draft = {
+      ...seededDraft,
       draft_id: newDraftId(),
       created_at: now,
       updated_at: now,
       receipts: [],
-      _dirty: true,
+      _dirty: hasSeedContent,
       _localOnly: true,
       _syncing: false,
       _syncError: null,
@@ -595,9 +625,6 @@ export default function useCallDrafts({ onToast } = {}) {
     activeDraftIdRef.current = activeId
     persistDraftIndex(next)
     next.forEach((draft) => {
-      if (draft._dirty) {
-        flushBackendDraft(draft.draft_id)
-      }
       if (draft._localOnly || !draft._backendUpdatedAt) {
         persistDraft(draft)
       }
@@ -627,6 +654,7 @@ export default function useCallDrafts({ onToast } = {}) {
       backendTimersRef.current.forEach((timer) => clearTimeout(timer))
       localTimersRef.current.clear()
       backendTimersRef.current.clear()
+      syncingDraftIdsRef.current.clear()
     }
   }, [hydrate])
 

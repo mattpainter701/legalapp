@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Intake draft autosave flood:** fixed a production issue where the call
+  draft hook could rehydrate repeatedly, sync untouched cards, and continue
+  autosave attempts after nginx returned 429s, consuming the shared API rate
+  limit and making unrelated pages appear broken. Draft hydration is now
+  stable, blank cards do not sync to the backend, 429 autosave failures do not
+  auto-retry or stack toasts, duplicate in-flight saves are blocked, and the
+  capture form flushes only when focus leaves the form rather than during
+  normal field-to-field movement. Also fixed the intake rotation admin panel's
+  invalid hook dependency list and added migration
+  `079_error_logs_system_policy` so tenantless/system error-log rows can pass
+  the nullable `error_logs.tenant_id` RLS policy.
+
 ### Added
 - **Intake call drafts and action receipts:** added
   `intake_call_drafts` (`078_intake_call_drafts`) with hardened tenant RLS,

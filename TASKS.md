@@ -1,5 +1,29 @@
 # TASKS.md
 
+## Intake Draft Autosave Hotfix — 2026-07-06 (DONE)
+
+**Goal:** Stop the intake dashboard from creating endless draft autosave
+errors when the page is opened or focus moves inside the call-capture form.
+
+- [x] Prevent untouched default call cards from syncing to the backend
+- [x] Stop form-level blur from flushing while focus remains inside the form
+- [x] Make autosave failures quiet and non-self-reinforcing under 429s
+- [x] Fix intake page admin rendering issues found during the hotfix
+- [x] Validate frontend build and targeted checks
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: fixed the intake draft loop that could flood nginx's general API
+rate limit and make unrelated pages appear broken. `useCallDrafts()` now keeps
+the toast callback in a ref so hydrate is stable, skips backend sync for blank
+untouched draft cards, suppresses 429 retry/toast storms, avoids duplicate
+in-flight saves, and no longer replays dirty drafts during hydration. The
+intake capture form only flushes on blur when focus leaves the form, not when
+tabbing between fields. The rotation admin panel no longer references
+out-of-scope dependencies, and migration `079_error_logs_system_policy` fixes
+tenantless `error_logs` inserts under RLS. Validation: frontend production
+build passed, migration compile passed, Alembic head is
+`079_error_logs_system_policy`, and `git diff --check` passed.
+
 ## Intake Call Drafts + Action Receipts — 2026-07-05 (DONE)
 
 **Goal:** Implement the approved intake call draft persistence and action

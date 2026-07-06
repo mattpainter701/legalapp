@@ -168,7 +168,7 @@ function RotationAdmin() {
     } catch {
       setRules([])
     }
-  }, [runSearchFor, setForm])
+  }, [])
 
   useEffect(() => { loadRules() }, [loadRules])
 
@@ -542,9 +542,6 @@ export default function IntakeDashboardPage() {
       .then((data) => {
         if (cancelled) return
         setAssignmentAvailability(data)
-        if (!data.can_assign) {
-          setForm((current) => ({ ...current, auto_assign: false }))
-        }
       })
       .catch(() => {
         if (!cancelled) setAssignmentAvailability(null)
@@ -554,6 +551,11 @@ export default function IntakeDashboardPage() {
       })
     return () => { cancelled = true }
   }, [form.outcome, form.practice_area, form.task_mode])
+
+  const handleCaptureBlur = useCallback((event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return
+    executeOnBlur(activeDraftId)
+  }, [activeDraftId, executeOnBlur])
 
   useEffect(() => {
     if (form.task_mode !== 'specific_staff' || staffQuery.trim().length < 2) {
@@ -801,7 +803,12 @@ export default function IntakeDashboardPage() {
         assignedText = form.task_mode === 'specific_staff'
           ? ` General task assigned to ${selectedStaff?.full_name || selectedStaff?.email || 'staff'}.`
           : ' Urgent follow-up task created.'
-      } else if (form.task_mode === 'partner_rotation' && form.auto_assign && result.lead_id) {
+      } else if (
+        form.task_mode === 'partner_rotation'
+        && form.auto_assign
+        && assignmentAvailability?.can_assign !== false
+        && result.lead_id
+      ) {
         if (assignmentAvailability && !assignmentAvailability.can_assign) {
           assignedText = ` Assignment skipped: ${assignmentAvailability.reason || 'no matching rotation rule'}.`
         } else {
@@ -1009,7 +1016,7 @@ export default function IntakeDashboardPage() {
 
               <form
                 onSubmit={submitCall}
-                onBlur={() => executeOnBlur(activeDraftId)}
+                onBlur={handleCaptureBlur}
                 className="mt-4 grid gap-4 lg:grid-cols-2"
               >
                 <div className="lg:col-span-2">
@@ -1212,7 +1219,7 @@ export default function IntakeDashboardPage() {
                   <label className="lg:col-span-2 flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
                     <input
                       type="checkbox"
-                      checked={form.auto_assign}
+                      checked={form.auto_assign && assignmentAvailability?.can_assign !== false}
                       onChange={(e) => set('auto_assign', e.target.checked)}
                       disabled={form.outcome !== 'create_lead' || assignmentChecking || assignmentAvailability?.can_assign === false}
                     />
