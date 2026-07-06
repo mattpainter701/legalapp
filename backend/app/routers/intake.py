@@ -10,21 +10,28 @@ Intake / Lead pipeline router.
 
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
+from app.models.intake_dashboard import IntakeCallDraft
 from app.models.plugin import Matter
 from app.schemas.contact import (
     LeadConvertRequest,
     LeadCreate,
     LeadResponse,
     LeadUpdate,
+)
+from app.schemas.intake_dashboard import (
+    IntakeCallDraftResponse,
+    IntakeCallDraftUpsertRequest,
 )
 
 router = APIRouter(prefix="/api/intake", tags=["intake"])
@@ -38,6 +45,112 @@ VALID_LEAD_STATUSES = {
     "matter_opened",
     "declined",
 }
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@router.get("/drafts", response_model=list[IntakeCallDraftResponse])
+async def list_current_user_intake_drafts(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(IntakeCallDraft)
+        .where(
+            IntakeCallDraft.tenant_id == current_user.tenant_id,
+            IntakeCallDraft.created_by_user_id == current_user.id,
+        )
+        .order_by(IntakeCallDraft.updated_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.put("/drafts/{draft_id}", response_model=IntakeCallDraftResponse)
+async def upsert_intake_draft(
+    draft_id: uuid.UUID,
+    body: IntakeCallDraftUpsertRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = str(current_user.tenant_id)
+    user_id = current_user.id
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(IntakeCallDraft).where(
+            IntakeCallDraft.id == draft_id,
+            IntakeCallDraft.tenant_id == current_user.tenant_id,
+            IntakeCallDraft.created_by_user_id == user_id,
+        )
+    )
+    draft = result.scalar_one_or_none()
+
+    now = _now_utc()
+
+    if draft:
+        draft.payload = body.payload
+        draft.updated_at = now
+        await db.commit()
+    else:
+        draft = IntakeCallDraft(
+            id=draft_id,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=user_id,
+            payload=body.payload,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(draft)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            await set_tenant_context(db, tenant_id)
+            existing = await db.execute(
+                select(IntakeCallDraft).where(
+                    IntakeCallDraft.id == draft_id,
+                    IntakeCallDraft.tenant_id == current_user.tenant_id,
+                    IntakeCallDraft.created_by_user_id == user_id,
+                )
+            )
+            draft = existing.scalar_one_or_none()
+            if not draft:
+                raise HTTPException(
+                    status_code=404, detail="Draft not found"
+                ) from None
+            draft.payload = body.payload
+            draft.updated_at = now
+            await db.commit()
+    return draft
+
+
+@router.delete("/drafts/{draft_id}", status_code=204)
+async def delete_intake_draft(
+    draft_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(IntakeCallDraft).where(
+            IntakeCallDraft.id == draft_id,
+            IntakeCallDraft.tenant_id == current_user.tenant_id,
+            IntakeCallDraft.created_by_user_id == current_user.id,
+        )
+    )
+    draft = result.scalar_one_or_none()
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    await db.delete(draft)
+    await db.commit()
 
 
 def _make_slug(matter_name: str, tenant_id: str) -> str:

@@ -159,6 +159,21 @@ class ZoomPhoneSyncResponse(BaseModel):
     skipped: int
 
 
+class IntakeCallDraftResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    created_by_user_id: uuid.UUID | None = None
+    payload: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class IntakeCallDraftUpsertRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class RotationRuleInput(BaseModel):
     practice_area: str = Field(..., min_length=1, max_length=100)
     eligible_user_ids: list[uuid.UUID] = Field(default_factory=list)

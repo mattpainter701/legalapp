@@ -44,6 +44,7 @@ import PortalAcceptPage from './pages/PortalAcceptPage'
 import PortalCasePage from './pages/PortalCasePage'
 import ClientPortalAcceptPage from './pages/ClientPortalAcceptPage'
 import ClientPortalMatterPage from './pages/ClientPortalMatterPage'
+import { ToastProvider } from './components/toast/ToastProvider'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -193,7 +194,8 @@ function LegacyBillingRedirect() {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
+      <ToastProvider>
+        <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -357,7 +359,8 @@ export default function App() {
         {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+        </Routes>
+      </ToastProvider>
     </AuthProvider>
   )
 }

@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Intake call drafts and action receipts:** added
+  `intake_call_drafts` (`078_intake_call_drafts`) with hardened tenant RLS,
+  current-user draft list/upsert/delete endpoints at `/api/intake/drafts`,
+  server-authored draft timestamps, and frontend two-tier draft persistence
+  through `useCallDrafts()` (localStorage immediacy plus backend durability).
+  The intake dashboard now has a call-card strip above Call Capture, `Alt+1..9`
+  card switching, `Alt+Shift+N` new draft, shared `ToastProvider`,
+  `AsyncButton`, and per-draft `ReceiptTrail` retry support for failed draft
+  saves, lead assignment, and call submission.
 - **API error observability and route-client contract checks:** added
   request-id middleware (`X-Request-ID`), migration
   `077_error_logs_nullable_tenant` for durable tenantless/system error logs,
@@ -131,6 +140,11 @@
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
 ### Changed
+- **Intake call capture:** the existing Call Capture form is now backed by the
+  active draft while preserving the dashboard layout. Selecting history
+  matches, recent callers, phone context, notes, task routing, and staff
+  assignment updates the active draft and flushes to backend on blur/card
+  switch.
 - **Production deploy:** shipped `25a9238` for the systemic API/RLS/error
   observability hardening to the hypervisor after local backend/frontend
   validation, staged secret scan, production env guard, and predeploy
@@ -379,6 +393,13 @@
 - **Chat latency — parallel pre-work + faster failover:** Parallelized five independent async operations (matter context, attachment context, memory context, LLM route, RAG cache check) with `asyncio.gather` in both `/messages` and `/messages/stream` endpoints — saves ~150-300ms per request. Reduced LiteLLM `request_timeout` 60→25s, `num_retries` 1→0, `cooldown_time` 30→15s, and added per-model `timeout` values (15s free, 20-30s paid) for faster failover to fallback models.
 
 ### Tests
+- **Intake call drafts:** added focused backend coverage for draft CRUD,
+  idempotent upsert, current-user/tenant scoping, cross-tenant draft-id
+  collision handling, and server-authored `updated_at`. Verification passed
+  for backend compile, route-client contract (`394` frontend API call sites),
+  and frontend production build. Local DB-backed intake tests remain blocked
+  by unavailable Postgres (`ConnectionRefusedError`, `WinError 1225`) after 6
+  non-DB tests passed.
 - **Matter create RLS regression:** added `backend\tests\test_matters.py` to
   cover `POST /api/matters`, primary assignment/event creation, and the
   post-commit tenant-context requirement before refreshing the created matter.

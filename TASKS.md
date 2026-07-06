@@ -1,5 +1,35 @@
 # TASKS.md
 
+## Intake Call Drafts + Action Receipts — 2026-07-05 (DONE)
+
+**Goal:** Implement the approved intake call draft persistence and action
+receipt design from
+`docs/superpowers/specs/2026-07-05-intake-call-drafts-design.md`, preserving
+the current intake dashboard layout while making in-progress call capture
+durable across refresh/navigation and surfacing mutation feedback clearly.
+
+- [x] Add backend draft persistence table, RLS, router endpoints, and tests
+- [x] Add frontend draft hook, tab strip, receipts, toasts, and async button
+- [x] Wire the active call-capture form to durable drafts without re-laying out
+      the dashboard
+- [x] Validate keyboard shortcuts, autosave, retry, and failure behavior
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: implemented the approved intake call draft persistence and action
+receipt design. Added migration `078_intake_call_drafts`, the
+`IntakeCallDraft` model, `/api/intake/drafts` list/upsert/delete endpoints
+with server-authored timestamps and current-user tenant scoping, plus focused
+CRUD/idempotency/isolation tests. Frontend call capture now runs from
+`useCallDrafts()` with immediate localStorage persistence, backend autosave,
+draft card switching (`Alt+1..9`) and new draft shortcut (`Alt+Shift+N`),
+shared `ToastProvider`, `AsyncButton`, and per-draft `ReceiptTrail` retry
+support. The existing dashboard layout is preserved. Validation: backend
+compile passed, route-client contract passed with 394 matched frontend call
+sites, and frontend production build passed. DB-backed intake tests reached
+the local Postgres fixture and then failed with `ConnectionRefusedError`
+(`WinError 1225`), so endpoint test execution remains environment-blocked
+locally.
+
 ## API Reliability Production Deploy — 2026-07-05 (DONE)
 
 **Goal:** Commit, push, deploy, and validate the systemic API/RLS/error

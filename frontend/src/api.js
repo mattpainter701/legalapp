@@ -1181,6 +1181,15 @@ export const getIntakeAssignmentAvailability = (params = {}) =>
 export const createIntakeDashboardCall = (data) =>
   api.post('/intake/dashboard/calls', data).then(r => r.data)
 
+export const getIntakeDrafts = () =>
+  api.get('/intake/drafts').then((r) => r.data)
+
+export const upsertIntakeDraft = (draftId, data) =>
+  api.put(`/intake/drafts/${draftId}`, data).then((r) => r.data)
+
+export const deleteIntakeDraft = (draftId) =>
+  api.delete(`/intake/drafts/${draftId}`).then((r) => r.data)
+
 export const assignNextPartner = (leadId) =>
   api.post(`/intake/dashboard/leads/${leadId}/assign-next`).then(r => r.data)
 
