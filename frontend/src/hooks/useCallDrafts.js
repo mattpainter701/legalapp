@@ -95,6 +95,15 @@ function hasMeaningfulDraftContent(draft) {
     .some((key) => draft[key] !== undefined && draft[key] !== DRAFT_FORM_DEFAULTS[key])
 }
 
+// Defends against a proxy/gateway HTML error page (nginx 429/502/504) ever
+// getting stored verbatim as a receipt's error text — whether from a stale
+// entry saved before this guard existed, or a future regression.
+function sanitizeReceiptError(value) {
+  const text = typeof value === 'string' ? value : ''
+  if (/^\s*<(!doctype|html)/i.test(text)) return 'Request failed. Please try again.'
+  return text.slice(0, 300)
+}
+
 function normalizeReceipts(list) {
   if (!Array.isArray(list)) return []
   return list
@@ -104,7 +113,7 @@ function normalizeReceipts(list) {
       status: entry.status || 'pending',
       label: entry.label || 'Action',
       at: entry.at || nowISO(),
-      error: entry.error || '',
+      error: sanitizeReceiptError(entry.error),
       retry: entry.retry || null,
     }))
     .filter((entry) => ['ok', 'failed', 'pending'].includes(entry.status))
@@ -309,7 +318,9 @@ export default function useCallDrafts({ onToast } = {}) {
       return {
         ...draft,
         receipts: (draft.receipts || []).map((receipt) => (
-          receipt.id === receiptId ? { ...receipt, ...patch } : receipt
+          receipt.id === receiptId
+            ? { ...receipt, ...patch, ...(patch.error !== undefined ? { error: sanitizeReceiptError(patch.error) } : {}) }
+            : receipt
         )),
         ...(markDirty
           ? {

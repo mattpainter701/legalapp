@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Raw nginx error page leaking into the call draft receipt trail:** when a
+  proxy/gateway rejected a request before it reached the app (nginx 429, or a
+  502/503/504), `normalizeApiError()` treated the raw HTML error page body as
+  the error message text. `retryReceipt()` in `useCallDrafts` then stored that
+  full HTML page as a receipt's `error` field with no length limit, and
+  `ReceiptTrail` rendered it verbatim and unbounded — dumping the entire nginx
+  error page into the small receipt card in the intake dashboard's Call
+  Capture section, corrupting the layout. Root cause traced from a 2026-07-06
+  429 burst against `/api/intake/drafts/*` (2,593 hits in nginx logs,
+  concentrated in the same few seconds — a request storm, not ordinary
+  concurrent usage) that predates and appears to have prompted the same-day
+  "stop draft autosave flood" fix; the corrupted receipt persisted in
+  localStorage afterward since nothing ever re-sanitized it. Fixed at three
+  layers: `normalizeApiError()` now recognizes HTML bodies and falls back to a
+  short status-based message (with a friendly 429/502/503/504 message) instead
+  of the raw page; `useCallDrafts` sanitizes any receipt error (including
+  already-persisted ones, on next load) that still looks like an HTML
+  document; `ReceiptTrail` truncates and line-clamps error text as a last line
+  of defense. This also fixes any already-corrupted receipt already sitting in
+  a user's browser without requiring them to clear storage.
+
 ### Added
 - **Favicon:** created `frontend/public/favicon.svg` (navy/gold "CL" mark
   matching the PWA icons) — `index.html` referenced it but the file never

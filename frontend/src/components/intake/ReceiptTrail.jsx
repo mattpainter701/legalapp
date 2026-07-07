@@ -17,7 +17,9 @@ function ReceiptLine({ receipt, onRetry }) {
           <p className="truncate font-bold text-brand-ink">{receipt.label || 'Action'}</p>
           <span className="text-[10px] text-brand-muted">{receipt.at ? new Date(receipt.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}</span>
         </div>
-        {receipt.error && <p className="mt-1 text-brand-rose">{receipt.error}</p>}
+        {receipt.error && (
+          <p className="mt-1 line-clamp-2 break-words text-brand-rose">{String(receipt.error).slice(0, 300)}</p>
+        )}
       </div>
       {canRetry && (
         <button

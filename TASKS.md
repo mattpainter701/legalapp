@@ -1,5 +1,37 @@
 # TASKS.md
 
+## Intake Call Draft: Raw Error Page Leak — 2026-07-07 (DONE)
+
+**Goal:** Fix user report of a raw nginx 429 HTML error page appearing inside
+the intake dashboard's call draft tab, and the surrounding "receipt trail"
+section looking broken as a result.
+
+- [x] Trace root cause: `normalizeApiError()` treated non-JSON proxy error
+      bodies (nginx's HTML error pages) as literal message text
+- [x] Confirm via nginx logs: a 2026-07-06 429 burst (2,593 hits in seconds,
+      same draft IDs) predates and appears to have triggered the earlier
+      "stop draft autosave flood" fix; `retryReceipt()` stored that page's
+      full HTML as a receipt's `error` with no sanitization or length limit
+- [x] Fix `normalizeApiError()` to detect HTML bodies and fall back to a
+      short status-based message (friendly text for 429/502/503/504)
+- [x] Sanitize receipt errors in `useCallDrafts` (including already-persisted
+      ones, on next load) so any prior corrupted receipt self-heals
+- [x] Truncate/line-clamp receipt error text in `ReceiptTrail` as a render-
+      layer defense
+- [x] Verify fix logic against the exact HTML body from the user's report
+      (node simulation) and confirm frontend build passes
+
+Summary: root cause was leaking a proxy/gateway's raw HTML error page as a
+user-facing message, not a still-live autosave loop — no new 429 flood was
+found in the last 24h of nginx logs; the only burst on record predates the
+earlier fix by ~5 minutes. The visible "weird" call-draft section was a
+stale, persisted receipt from that incident, now self-healed by the
+sanitization added at load time. Fixed in `frontend/src/api.js`,
+`frontend/src/hooks/useCallDrafts.js`, and
+`frontend/src/components/intake/ReceiptTrail.jsx`. No JS test framework
+exists in this repo; validated via a standalone node reproduction of the
+exact HTML payload plus a passing production build.
+
 ## Production Backend/Page Failure Triage — 2026-07-06 (DONE)
 
 **Goal:** Diagnose and fix the current production issue where pages appear not

@@ -37,6 +37,21 @@ const readValidationDetails = (detail) => {
     .filter(Boolean)
 }
 
+// A proxy/gateway that rejects a request before it reaches the app (nginx 429,
+// 502, 504, etc.) returns its own HTML error page, not JSON. Axios still hands
+// that page to us as a string in `data`. Never surface that markup as a user
+// message — detect it and fall back to a short status-based message instead.
+const isMarkupBody = (value) => (
+  typeof value === 'string' && /^\s*<(!doctype|html)/i.test(value)
+)
+
+const STATUS_FALLBACK_MESSAGES = {
+  429: 'Too many requests right now. Please wait a moment and try again.',
+  502: 'The server is temporarily unavailable. Please try again shortly.',
+  503: 'The server is temporarily unavailable. Please try again shortly.',
+  504: 'The request timed out. Please try again.',
+}
+
 export const normalizeApiError = (errorOrResponse) => {
   const response = errorOrResponse?.response || errorOrResponse
   const data = response?.data
@@ -44,12 +59,13 @@ export const normalizeApiError = (errorOrResponse) => {
   const headers = response?.headers
 
   const hasStructuredData = data && typeof data === 'object' && !Array.isArray(data)
-  const dataDetail = hasStructuredData ? (data.detail ?? data.error ?? data.message ?? '') : data
+  const rawDetail = hasStructuredData ? (data.detail ?? data.error ?? data.message ?? '') : data
+  const dataDetail = isMarkupBody(rawDetail) ? '' : rawDetail
   const validationErrors = readValidationDetails(dataDetail)
   const detail = validationErrors.length
     ? validationErrors.join('; ')
-    : (typeof dataDetail === 'string' ? dataDetail : '')
-  const statusMessage = response?.statusText || `HTTP ${status || 'error'}`
+    : (typeof dataDetail === 'string' ? dataDetail.slice(0, 500) : '')
+  const statusMessage = STATUS_FALLBACK_MESSAGES[status] || response?.statusText || `HTTP ${status || 'error'}`
   const message = validationErrors.length
     ? validationErrors.join('; ')
     : detail || statusMessage || 'Request failed'
