@@ -41,6 +41,11 @@
   PortalCasePage (×3).
 
 ### Fixed
+- **Google OAuth `at_hash` verification:** fixed Google login callbacks that
+  failed with `No access_token provided to compare against at_hash claim` when
+  Google included an `at_hash` in the ID token. The callback now passes the
+  provider access token into ID-token verification and focused tests cover a
+  signed Google ID token with a matching `at_hash`.
 - **Mobile OAuth callback duplicates:** fixed Google/Microsoft login failures
   where mobile browsers could request the same provider callback URL more than
   once, causing the second request to surface `Invalid or expired OAuth state`

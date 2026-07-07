@@ -65,6 +65,7 @@ async def verify_google_id_token(
     id_token: str,
     client_id: str,
     expected_nonce: Optional[str] = None,
+    access_token: Optional[str] = None,
 ) -> dict:
     """Verify a Google id_token's RS256 signature, audience, and nonce; return claims."""
     jwks = await _fetch_jwks(_GOOGLE_JWKS_URL)
@@ -82,6 +83,7 @@ async def verify_google_id_token(
             algorithms=["RS256"],
             audience=client_id,
             issuer=["https://accounts.google.com", "accounts.google.com"],
+            access_token=access_token,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Google id_token verification failed: {exc}")

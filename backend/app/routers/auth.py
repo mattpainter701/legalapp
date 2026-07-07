@@ -814,6 +814,7 @@ async def google_callback(
         id_token,
         client_id=settings.GOOGLE_CLIENT_ID,
         expected_nonce=expected_nonce,
+        access_token=token_data.get("access_token"),
     )
     if claims.get("email_verified") is not True:
         raise HTTPException(status_code=400, detail="Google email is not verified")

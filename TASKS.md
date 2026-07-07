@@ -1,5 +1,26 @@
 # TASKS.md
 
+## Production Backend/Page Failure Triage — 2026-07-06 (DONE)
+
+**Goal:** Diagnose and fix the current production issue where pages appear not
+to load or APIs fail after the latest OAuth hotfix deploy, without shipping the
+pending mobile/PWA frontend work until the backend health is understood.
+
+- [x] Check production health, container state, and recent backend/nginx logs
+- [x] Identify whether failures are 429 rate limit, auth/session, 500s, or app startup
+- [x] Apply the smallest safe fix or operational recovery
+- [x] Validate public pages/API health after recovery
+
+Summary: production health and authenticated Microsoft/mobile page APIs were
+responding, but persisted error logs showed Google login still failed with
+`Google id_token verification failed: No access_token provided to compare
+against at_hash claim`. The Google callback now passes the provider access
+token into `verify_google_id_token()`, allowing `python-jose` to validate
+Google's `at_hash` claim instead of rejecting valid callbacks. Added a focused
+regression that signs a Google ID token with a matching `at_hash`. Validation:
+20 focused OAuth tests passed, auth router/security helper syntax compile
+passed, and the frontend production build passed.
+
 ## Mobile/Tablet Frontend Audit + Design Polish — 2026-07-06 (DONE)
 
 **Goal:** Assess whether the installable web app (manifest-based, no service
