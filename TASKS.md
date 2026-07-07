@@ -1,5 +1,38 @@
 # TASKS.md
 
+## Intake Prod Session Follow-Ups — 2026-07-07 (DONE)
+
+**Goal:** Fix production-session issues reported after login: refresh should not
+log users out, call-capture draft cards need a close/delete affordance, Zoom
+Phone intake should refresh recent calls without requiring manual sync, intake
+tasks should carry caller context and working links, calendar events should name
+the task creator and link back to the task, and assigned users should receive an
+email notification.
+
+- [x] Trace auth/session refresh behavior
+- [x] Add call-capture draft close/delete control
+- [x] Improve Zoom Phone intake auto-sync behavior and DB logging confidence
+- [x] Fix intake-created task title/link/customer context
+- [x] Add creator context and task link to calendar/email notifications
+- [x] Validate focused backend/frontend paths
+
+Summary: refresh-after-login was not intentionally strict security; the
+frontend still treated the missing legacy localStorage bearer token as logged
+out even though production now relies on httpOnly auth cookies. Auth boot now
+checks `/auth/me` with cookie refresh before deciding the session is gone.
+Call-capture draft cards now have an X close/delete affordance, with a discard
+confirmation for non-empty drafts. The intake dashboard now triggers a
+throttled Zoom Phone sync on load for connected tenants, while the backend
+continues writing imported calls idempotently into `communication_logs`. Staff
+intake tasks now prefix the caller name in the task title, include the creator
+in the task description, and notification calendar/email payloads include
+creator/customer context plus a `/tasks/{id}` link. The frontend now serves
+`/tasks/{taskId}` and highlights the linked task. Validation: backend compile
+passed; non-DB task notification tests passed; frontend production build
+passed; `git diff --check` passed; DB-backed notification/intake regressions
+remain locally blocked by Postgres `ConnectionRefusedError` as in prior intake
+work.
+
 ## Admin Role-Assign Badge Never Updated — 2026-07-07 (DONE)
 
 **Goal:** Investigate user report of "inability to assign perm/roles to

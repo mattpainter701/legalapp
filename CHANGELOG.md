@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Fixed
+- **Intake production-session follow-ups:** refreshing the browser after login
+  no longer treats the user as logged out just because the legacy localStorage
+  bearer token is absent; app boot now verifies the httpOnly cookie session via
+  `/auth/me` and lets the normal refresh-cookie path run before clearing auth
+  state. Call Capture draft tabs now include an X close/delete affordance with
+  a discard confirmation for non-empty drafts, so users can clean up extra
+  local/server draft cards without submitting them or accidentally losing
+  typed call notes. The intake dashboard also starts a throttled Zoom Phone
+  sync on load for connected tenants, so recent Zoom calls are pulled in
+  without requiring the manual Sync button every time. Intake-created staff
+  tasks now include the
+  caller name in the title (`Caller - Call back caller`), include the creator
+  in the task description, and task notification emails/calendar events include
+  creator/customer context plus a functional `/tasks/{id}` link. The frontend
+  now serves `/tasks/:taskId`, loads the linked task if filters omit it, and
+  scrolls/highlights it.
 - **Admin → Users role-assign badge never reflected the actual assignment:**
   the per-user role badge in `RoleAssignCell` always displayed the legacy
   single `user.role` string, regardless of which custom roles were actually

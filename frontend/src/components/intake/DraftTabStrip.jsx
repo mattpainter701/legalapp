@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { CircleDashed, Plus, PlusCircle } from 'lucide-react'
+import { CircleDashed, Plus, PlusCircle, X } from 'lucide-react'
 
 function formatLabel(draft) {
   const fallback = [draft?.caller_name, draft?.phone]
@@ -38,6 +38,7 @@ export default function DraftTabStrip({
   activeDraftId = null,
   onSwitch,
   onNew,
+  onClose,
   disabled,
 }) {
   const sorted = useMemo(() => [...drafts].sort((a, b) => {
@@ -52,10 +53,8 @@ export default function DraftTabStrip({
         const isActive = draft.draft_id === activeDraftId
         const state = statusText(draft)
         return (
-          <button
+          <div
             key={draft.draft_id || index}
-            type="button"
-            onClick={() => onSwitch(draft.draft_id)}
             className={`relative inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border px-2.5 py-1.5 text-left text-xs font-bold transition-all ${
               isActive
                 ? 'border-brand-ink bg-white text-brand-ink shadow-sm'
@@ -63,16 +62,36 @@ export default function DraftTabStrip({
             }`}
           >
             {isActive && <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-brand-accent" />}
-            <span className="max-w-[130px] truncate">
-              {formatLabel(draft)}
-            </span>
-            {draft.phone && <span className="truncate text-[10px] font-normal text-brand-muted">• {draft.phone}</span>}
-            <span className={`inline-flex items-center gap-1 text-[10px] ${statusClass(state)}`}>
-              {(draft.dirty || draft._dirty || draft._localOnly || draft._local_only) ? <CircleDashed size={11} /> : <span />}
-              {formatElapsed(draft.created_at || draft.updated_at)}
-            </span>
-            <span className={`text-[10px] ${statusClass(state)}`}>{state}</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => onSwitch(draft.draft_id)}
+              disabled={disabled}
+              className="inline-flex min-w-0 items-center gap-2 text-left"
+            >
+              <span className="max-w-[130px] truncate">
+                {formatLabel(draft)}
+              </span>
+              {draft.phone && <span className="truncate text-[10px] font-normal text-brand-muted">• {draft.phone}</span>}
+              <span className={`inline-flex items-center gap-1 text-[10px] ${statusClass(state)}`}>
+                {(draft.dirty || draft._dirty || draft._localOnly || draft._local_only) ? <CircleDashed size={11} /> : <span />}
+                {formatElapsed(draft.created_at || draft.updated_at)}
+              </span>
+              <span className={`text-[10px] ${statusClass(state)}`}>{state}</span>
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onClose?.(draft.draft_id)
+              }}
+              disabled={disabled}
+              title="Close draft"
+              aria-label={`Close ${formatLabel(draft)} draft`}
+              className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose disabled:opacity-40"
+            >
+              <X size={12} />
+            </button>
+          </div>
         )
       })}
       <button

@@ -80,6 +80,31 @@ const EMPTY_CALL_FORM = {
   source_communication_id: null,
 }
 
+const DRAFT_DISCARD_FIELDS = [
+  'caller_name',
+  'phone',
+  'purpose',
+  'notes',
+  'custom_task_title',
+  'source_communication_id',
+  'selected_staff_id',
+  'linked_history_contact_id',
+  'linked_history_lead_id',
+  'linked_history_result_id',
+  'linked_history_title',
+  'linked_history_phone',
+]
+
+function hasDraftWork(draft) {
+  if (!draft) return false
+  if (DRAFT_DISCARD_FIELDS.some((key) => {
+    const value = draft[key]
+    return typeof value === 'string' ? value.trim().length > 0 : Boolean(value)
+  })) return true
+  return ['practice_area', 'outcome', 'task_mode', 'task_title', 'qualified', 'auto_assign']
+    .some((key) => draft[key] !== undefined && draft[key] !== EMPTY_CALL_FORM[key])
+}
+
 function ResultCard({ item, selected, onSelect, onAssign }) {
   const isLead = item.result_type === 'lead'
   return (
@@ -441,6 +466,7 @@ export default function IntakeDashboardPage() {
   const [staffUsers, setStaffUsers] = useState([])
   const [selectedStaff, setSelectedStaff] = useState(null)
   const [message, setMessage] = useState(null)
+  const zoomAutoSyncAttemptedRef = useRef(false)
   const {
     drafts,
     activeDraft,
@@ -460,6 +486,16 @@ export default function IntakeDashboardPage() {
     onToast: (type, title, toastMessage) => toast.show({ type, title, message: toastMessage }),
   })
   const form = activeDraft || EMPTY_CALL_FORM
+
+  const closeDraft = useCallback(async (draftId) => {
+    const draft = drafts.find((entry) => entry.draft_id === draftId)
+    if (hasDraftWork(draft) && typeof window !== 'undefined') {
+      const label = draft?.caller_name || draft?.phone || 'this call'
+      const confirmed = window.confirm(`Discard the draft for ${label}? This cannot be undone.`)
+      if (!confirmed) return
+    }
+    await removeDraft(draftId)
+  }, [drafts, removeDraft])
 
   const setForm = useCallback((updater) => {
     if (!activeDraftId) return
@@ -708,6 +744,21 @@ export default function IntakeDashboardPage() {
       setZoomPhoneSyncing(false)
     }
   }
+
+  useEffect(() => {
+    if (!zoomConnected || zoomAutoSyncAttemptedRef.current) return
+    zoomAutoSyncAttemptedRef.current = true
+    try {
+      const key = `intake.zoom.autoSync.${user?.tenant_id || 'tenant'}`
+      const now = Date.now()
+      const last = Number(window.localStorage.getItem(key) || 0)
+      if (last && now - last < 5 * 60 * 1000) return
+      window.localStorage.setItem(key, String(now))
+    } catch {
+      // Storage can be blocked in hardened browsers; one in-memory attempt is fine.
+    }
+    syncZoomPhoneCalls().catch(() => {})
+  }, [zoomConnected, user?.tenant_id])
 
   const assignLead = async (leadId) => {
     setMessage(null)
@@ -1004,6 +1055,7 @@ export default function IntakeDashboardPage() {
                   activeDraftId={activeDraftId}
                   onSwitch={setActiveDraft}
                   onNew={() => createDraft()}
+                  onClose={closeDraft}
                   disabled={draftsLoading}
                 />
               </div>

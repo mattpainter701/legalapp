@@ -535,6 +535,7 @@ class EmailService:
         matter_name: Optional[str] = None,
         source: Optional[str] = None,
         assigner_note: Optional[str] = None,
+        task_url: Optional[str] = None,
     ) -> bool:
         """Send an immediate alert when a task is assigned."""
         subject = f"New task assigned: {task_title}"
@@ -569,6 +570,7 @@ class EmailService:
               {row("Customer", customer_name)}
               {row("Matter", matter_name)}
               {row("Source", source)}
+              {row("Task link", task_url)}
               {row("Message from assigner", assigner_note, strong=True)}
               {row("Reason / Description", description)}
             </tbody>
@@ -600,6 +602,8 @@ class EmailService:
             text_lines.append(f"Matter: {matter_name}")
         if source:
             text_lines.append(f"Source: {source}")
+        if task_url:
+            text_lines.append(f"Task link: {task_url}")
         if assigner_note:
             text_lines.extend(["", "Message from assigner:", assigner_note])
         if description:

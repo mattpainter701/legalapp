@@ -632,6 +632,8 @@ async def test_dashboard_call_create_lead_specific_staff_keeps_post_commit_conte
     task = await db_session.get(Task, uuid.UUID(data["task_id"]))
     assert task.assigned_to_user_id == staff.id
     assert task.contact_id == uuid.UUID(data["contact_id"])
+    assert task.title == "Lena Lead - Follow up with Lena Lead"
+    assert "Created by:" in task.description
     assert f"Linked lead: {data['lead_id']}" in task.description
 
     assignment = (

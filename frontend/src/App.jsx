@@ -60,7 +60,7 @@ export function AuthProvider({ children }) {
 
   const fetchUser = useCallback(async (tok) => {
     try {
-      const me = await getMe()
+      const me = await getMe({ _suppressAuthRedirect: true })
       setUser(me)
       return me
     } catch {
@@ -73,12 +73,8 @@ export function AuthProvider({ children }) {
   }, [])
 
   useEffect(() => {
-    if (token) {
-      fetchUser(token).finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
-  }, [token, fetchUser])
+    fetchUser(token).finally(() => setLoading(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const login = useCallback(async (newToken) => {
     localStorage.setItem('token', newToken)
@@ -278,6 +274,10 @@ export default function App() {
         />
         <Route
           path="/tasks"
+          element={<ShellRoute title="Tasks" module="tasks"><TasksPage /></ShellRoute>}
+        />
+        <Route
+          path="/tasks/:taskId"
           element={<ShellRoute title="Tasks" module="tasks"><TasksPage /></ShellRoute>}
         />
         <Route

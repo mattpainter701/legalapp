@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   getTasks,
+  getTask,
   createTask,
   updateTask,
   deleteTask,
@@ -813,6 +814,7 @@ function CloseTaskModal({ task, onClose, onClosed }) {
 
 function TaskRow({
   task,
+  highlighted = false,
   currentUserId,
   canOpenMatters,
   onComplete,
@@ -855,7 +857,10 @@ function TaskRow({
   }
 
   return (
-    <div className={`flex items-center gap-3 px-4 py-3 group hover:bg-brand-bg-soft transition-colors ${isOverdue ? 'bg-brand-rose/3' : ''}`}>
+    <div
+      id={`task-${task.id}`}
+      className={`flex items-center gap-3 px-4 py-3 group hover:bg-brand-bg-soft transition-colors ${isOverdue ? 'bg-brand-rose/3' : ''} ${highlighted ? 'bg-brand-accent/10 ring-1 ring-inset ring-brand-accent/40' : ''}`}
+    >
       <button
         onClick={() => onComplete(task)}
         className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
@@ -1019,6 +1024,7 @@ function SectionHeader({ title, count, icon: Icon, color = '' }) {
 
 export default function TasksPage() {
   const { user } = useAuth()
+  const { taskId } = useParams()
   const navigate = useNavigate()
   const [tasks, setTasks] = useState([])
   const [overdue, setOverdue] = useState([])
@@ -1055,6 +1061,14 @@ export default function TasksPage() {
         getOverdueTasks(),
       ])
       const allTasks = tasksData.items || []
+      if (taskId && !allTasks.some(t => t.id === taskId)) {
+        try {
+          const linkedTask = await getTask(taskId)
+          allTasks.unshift(linkedTask)
+        } catch {
+          setActionError('That task link could not be opened. It may have been deleted or you may not have access.')
+        }
+      }
       const overdueIds = new Set((overdueData.items || []).map(t => t.id))
       setTasks(allTasks.filter(t => !overdueIds.has(t.id)))
       setOverdue(overdueData.items || [])
@@ -1065,9 +1079,14 @@ export default function TasksPage() {
     } finally {
       setLoading(false)
     }
-  }, [filterStatus, filterPriority, filterType])
+  }, [filterStatus, filterPriority, filterType, taskId])
 
   useEffect(() => { loadTasks() }, [loadTasks])
+
+  useEffect(() => {
+    if (!taskId || loading) return
+    document.getElementById(`task-${taskId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [taskId, loading, tasks, overdue])
 
   // Read receipt: rendering this page shows the assignee their tasks, so mark
   // any of the current user's unviewed tasks as seen (fire-and-forget).
@@ -1252,7 +1271,7 @@ export default function TasksPage() {
                 <SectionHeader title="Overdue" count={overdue.length} icon={AlertCircle} color="!bg-brand-rose/5" />
                 {overdue.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} {...taskRowActions} />
+                    <TaskRow task={t} highlighted={t.id === taskId} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -1264,7 +1283,7 @@ export default function TasksPage() {
                 <SectionHeader title="Due Today" count={todayTasks.length} icon={Calendar} />
                 {todayTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} {...taskRowActions} />
+                    <TaskRow task={t} highlighted={t.id === taskId} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -1276,7 +1295,7 @@ export default function TasksPage() {
                 <SectionHeader title="Upcoming" count={upcomingTasks.length} icon={Calendar} />
                 {upcomingTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} {...taskRowActions} />
+                    <TaskRow task={t} highlighted={t.id === taskId} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -1288,7 +1307,7 @@ export default function TasksPage() {
                 <SectionHeader title="No Due Date" count={noDueTasks.length} />
                 {noDueTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : ''}>
-                    <TaskRow task={t} {...taskRowActions} />
+                    <TaskRow task={t} highlighted={t.id === taskId} {...taskRowActions} />
                   </div>
                 ))}
               </div>
@@ -1303,7 +1322,7 @@ export default function TasksPage() {
                 </summary>
                 {completedTasks.map((t, i) => (
                   <div key={t.id} className={i > 0 ? 'border-t border-brand-line/50' : 'border-t border-brand-line/50'}>
-                    <TaskRow task={t} {...taskRowActions} />
+                    <TaskRow task={t} highlighted={t.id === taskId} {...taskRowActions} />
                   </div>
                 ))}
               </details>

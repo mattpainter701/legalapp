@@ -7,8 +7,9 @@ import pytest
 from app.models.contact import Contact
 from app.models.task import Task
 from app.models.user import User
-from app.services.email import EmailService
 from app.services import task_notifications
+from app.services.email import EmailService
+from app.services.task_notifications import _calendar_description
 
 
 @pytest.mark.asyncio
@@ -104,8 +105,11 @@ async def test_notify_task_created_pushes_calendar_and_assignment_email(
     assert email_calls[0]["customer_name"] == "Jane Doe"
     assert email_calls[0]["source"] == "intake_dashboard"
     assert email_calls[0]["description"] == "Call Jane Doe back."
+    assert email_calls[0]["task_url"].endswith(f"/tasks/{task.id}")
     assert len(calendar_calls) == 2
     assert {call["user_id"] for call in calendar_calls} == {str(assignee.id)}
+    assert all("Created by: Reception User" in call["description"] for call in calendar_calls)
+    assert all(f"Task link: " in call["description"] for call in calendar_calls)
 
 
 @pytest.mark.asyncio
@@ -140,6 +144,7 @@ async def test_task_assignment_email_includes_ticket_fields_and_escapes_html():
             customer_name="Jane Doe",
             matter_name="Jane Doe Intake",
             source="intake_dashboard",
+            task_url="https://legalapp.example/tasks/123",
         )
     finally:
         monkeypatch.undo()
@@ -154,9 +159,32 @@ async def test_task_assignment_email_includes_ticket_fields_and_escapes_html():
     assert "Partner User" in html
     assert "Customer" in html
     assert "Jane Doe" in html
+    assert "Task link" in html
+    assert "https://legalapp.example/tasks/123" in html
     assert "Reason / Description" in html
     assert "<script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "Created by: Reception User" in text
     assert "Customer: Jane Doe" in text
+    assert "Task link: https://legalapp.example/tasks/123" in text
     assert "Reason / Description:" in text
+
+
+def test_calendar_description_includes_creator_customer_and_task_link():
+    task = Task(
+        id=uuid.uuid4(),
+        title="Wanda Archer - Call back caller",
+        description="Task detail: answered",
+    )
+
+    description = _calendar_description(
+        task,
+        creator_name="Reception User",
+        customer_name="Wanda Archer",
+        task_url=f"https://legalapp.example/tasks/{task.id}",
+    )
+
+    assert "Task detail: answered" in description
+    assert "Created by: Reception User" in description
+    assert "Customer: Wanda Archer" in description
+    assert f"Task link: https://legalapp.example/tasks/{task.id}" in description

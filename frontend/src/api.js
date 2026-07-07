@@ -188,7 +188,11 @@ api.interceptors.response.use(
     const url = config.url || ''
     if (config._retried) {
       // Already retried once; give up and return the user to login.
-      redirectToLogin()
+      if (config._suppressAuthRedirect) {
+        clearAuthState()
+      } else {
+        redirectToLogin()
+      }
       return Promise.reject(normalizedError)
     }
     if (NO_REFRESH_PATHS.some((p) => url.includes(p))) {
@@ -201,7 +205,11 @@ api.interceptors.response.use(
     try {
       await refreshAuthSession()
     } catch (refreshError) {
-      redirectToLogin()
+      if (config._suppressAuthRedirect) {
+        clearAuthState()
+      } else {
+        redirectToLogin()
+      }
       return Promise.reject(normalizeApiError(refreshError))
     }
 
@@ -235,7 +243,7 @@ api.interceptors.response.use(
 )
 
 // Auth
-export const getMe = () => api.get('/auth/me').then((r) => r.data)
+export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
 
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
