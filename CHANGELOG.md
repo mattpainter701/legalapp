@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Fixed
+- **Admin → Users role-assign badge never reflected the actual assignment:**
+  the per-user role badge in `RoleAssignCell` always displayed the legacy
+  single `user.role` string, regardless of which custom roles were actually
+  assigned via the checkbox dropdown. `PUT /api/admin/roles/assign/{user_id}`
+  was working correctly the whole time (confirmed via nginx logs: three
+  successful `200` responses) and every tenant has at least one user holding
+  `manage_roles` (confirmed via direct DB query) — the backend was never
+  broken. The badge now derives its label from the user's actual assigned
+  role names (`role_ids` from the backend), falling back to the legacy role
+  string only when no manual role assignment exists, so a successful
+  assignment is now visibly reflected instead of looking like a no-op.
 - **Raw nginx error page leaking into the call draft receipt trail:** when a
   proxy/gateway rejected a request before it reached the app (nginx 429, or a
   502/503/504), `normalizeApiError()` treated the raw HTML error page body as

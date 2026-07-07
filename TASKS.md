@@ -1,5 +1,29 @@
 # TASKS.md
 
+## Admin Role-Assign Badge Never Updated — 2026-07-07 (DONE)
+
+**Goal:** Investigate user report of "inability to assign perm/roles to
+users" in Admin → Users.
+
+- [x] Ruled out backend failure: nginx logs show 3 successful `200`
+      responses on `PUT /api/admin/roles/assign/{user_id}` minutes before
+      the report
+- [x] Ruled out lockout/missing-role data: direct DB query confirms every
+      tenant has 1+ users holding `manage_roles`, and no user in any tenant
+      has zero `user_roles` rows (migration 068's backfill held)
+- [x] Found actual bug: `RoleAssignCell`'s badge label was hard-coded to the
+      legacy `user.role` string and never reflected the roles actually
+      assigned via the checkbox dropdown — a successful assignment looked
+      like a no-op, which is why it appeared broken
+- [x] Fixed: badge now derives its label from the user's real assigned role
+      names, falling back to the legacy role only when no manual assignment
+      exists
+- [x] Verified frontend production build passes
+
+Summary: this was a pure UX defect, not a backend bug — assignments were
+always succeeding. Fixed in `frontend/src/pages/AdminPage.jsx`
+(`RoleAssignCell`).
+
 ## Intake Call Draft: Raw Error Page Leak — 2026-07-07 (DONE)
 
 **Goal:** Fix user report of a raw nginx 429 HTML error page appearing inside
