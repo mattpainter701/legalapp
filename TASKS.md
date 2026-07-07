@@ -1,5 +1,32 @@
 # TASKS.md
 
+## Mobile OAuth Callback Duplicate Handling — 2026-07-06 (DONE)
+
+**Goal:** Fix mobile Google/Microsoft login failures where provider callback
+URLs can be requested more than once, causing one-time OAuth state/code
+handling to surface "Invalid or expired OAuth state" instead of completing or
+returning the user to login gracefully.
+
+- [x] Reproduce/confirm production callback failure mode from logs
+- [x] Patch OAuth callback/exchange handling for duplicate mobile redirects
+- [x] Add focused regression coverage
+- [x] Validate backend/frontend auth flow checks
+- [x] Commit, push, deploy, and verify production OAuth redirects
+
+Summary: production logs showed mobile Chrome repeatedly requesting the same
+Google/Microsoft OAuth provider callback URL after login redirects. The first
+callback consumes the one-time CSRF state and the duplicate previously surfaced
+`Invalid or expired OAuth state` as a raw API error page, even when the first
+Microsoft callback had already produced a frontend exchange code. The auth
+router now records a 60-second replay entry bound to the exact provider
+`state` + authorization code after a successful callback, waits briefly for
+in-flight duplicates, and mints a fresh frontend callback exchange code for
+safe duplicate callbacks without reusing the provider authorization code.
+Google token exchange failures are now logged with provider status/body for
+diagnosis. Validation: focused OAuth replay tests passed, route-client
+contract passed with 394 matched frontend API call sites, frontend production
+build passed, and auth router syntax compile passed.
+
 ## Intake Draft Autosave Hotfix — 2026-07-06 (DONE)
 
 **Goal:** Stop the intake dashboard from creating endless draft autosave

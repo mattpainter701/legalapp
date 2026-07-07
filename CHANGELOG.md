@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- **Mobile OAuth callback duplicates:** fixed Google/Microsoft login failures
+  where mobile browsers could request the same provider callback URL more than
+  once, causing the second request to surface `Invalid or expired OAuth state`
+  as a raw API error page. Successful provider callbacks now keep a
+  60-second replay record bound to the exact OAuth `state` + authorization
+  code, and duplicate callbacks mint a fresh frontend exchange code without
+  reusing the provider authorization code. Google token-exchange failures now
+  log the provider status/body for diagnosis.
 - **Intake draft autosave flood:** fixed a production issue where the call
   draft hook could rehydrate repeatedly, sync untouched cards, and continue
   autosave attempts after nginx returned 429s, consuming the shared API rate
