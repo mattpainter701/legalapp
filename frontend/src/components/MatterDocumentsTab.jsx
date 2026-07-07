@@ -505,7 +505,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
           </p>
         </div>
       ) : (
-        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
           <table className="w-full text-[13px] font-sans">
             <thead>
               <tr className="border-b border-brand-line bg-brand-bg-soft/50">

@@ -137,7 +137,7 @@ export default function AppShell({ children, title }) {
 
   return (
     <AppShellContext.Provider value={ctxValue}>
-      <div className="flex h-screen bg-brand-bg overflow-hidden">
+      <div className="flex h-screen [height:100dvh] bg-brand-bg overflow-hidden">
         <Sidebar
           user={user}
           onLogout={handleLogout}
@@ -200,7 +200,7 @@ export default function AppShell({ children, title }) {
             {children}
           </main>
 
-          <nav className="md:hidden h-16 bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
+          <nav className="md:hidden min-h-[4rem] pb-[env(safe-area-inset-bottom)] bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
             {MOBILE_NAV_ITEMS.filter(({ path }) => {
               if (path === '/matters' || path === '/tasks') return canSeeModule('matters')
               if (path === '/chat') return canSeeModule('chat')

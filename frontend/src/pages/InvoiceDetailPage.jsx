@@ -6,12 +6,12 @@ import { getInvoice, updateInvoice, recordPayment, exportInvoice, syncInvoiceToQ
 const QBO_GREEN = '#2CA01C'
 
 const STATUS_COLORS = {
-  draft: { bg: '#f3f4f6', color: '#374151' },
-  sent: { bg: '#dbeafe', color: '#1e40af' },
-  invoiced: { bg: '#dbeafe', color: '#1e40af' },
-  paid: { bg: '#d1fae5', color: '#065f46' },
-  partially_paid: { bg: '#fef3c7', color: '#92400e' },
-  overdue: { bg: '#fee2e2', color: '#991b1b' },
+  draft: { bg: '#EFE8DA', color: '#2D3F55' },
+  sent: { bg: '#E7EDE7', color: '#426146' },
+  invoiced: { bg: '#E7EDE7', color: '#426146' },
+  paid: { bg: '#E7EDE7', color: '#426146' },
+  partially_paid: { bg: '#F5E9CE', color: '#8A6220' },
+  overdue: { bg: '#F6E4E0', color: '#9C4F3F' },
 }
 
 export default function InvoiceDetailPage() {
@@ -121,7 +121,7 @@ export default function InvoiceDetailPage() {
         style={{
           display: 'flex', alignItems: 'center', gap: 4,
           background: 'none', border: 'none', cursor: 'pointer',
-          color: '#6b7280', fontSize: 13, marginBottom: 16,
+          color: '#6A7587', fontSize: 13, marginBottom: 16,
         }}
       >
         <ArrowLeft size={16} /> Back to Invoices
@@ -131,7 +131,7 @@ export default function InvoiceDetailPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 24 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>{invoice.invoice_number}</h1>
-          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
+          <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
             Issued {invoice.issue_date} · Due {invoice.due_date}
           </p>
         </div>
@@ -141,7 +141,7 @@ export default function InvoiceDetailPage() {
               onClick={() => handleStatusChange('sent')}
               style={{
                 padding: '6px 14px', fontSize: 13, borderRadius: 6,
-                border: 'none', cursor: 'pointer', background: '#2563eb', color: '#fff', fontWeight: 600,
+                border: 'none', cursor: 'pointer', background: '#426146', color: '#fff', fontWeight: 600,
               }}
             >
               Send Invoice
@@ -152,7 +152,7 @@ export default function InvoiceDetailPage() {
               onClick={() => handleStatusChange('paid')}
               style={{
                 padding: '6px 14px', fontSize: 13, borderRadius: 6,
-                border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+                border: '1px solid #CFC4AE', cursor: 'pointer', background: '#fff',
               }}
             >
               Mark Paid
@@ -163,7 +163,7 @@ export default function InvoiceDetailPage() {
               onClick={() => handleStatusChange('void')}
               style={{
                 padding: '6px 14px', fontSize: 13, borderRadius: 6,
-                border: '1px solid #fca5a5', cursor: 'pointer', background: '#fff', color: '#b91c1c',
+                border: '1px solid #E0AB9E', cursor: 'pointer', background: '#fff', color: '#9C4F3F',
               }}
             >
               Void
@@ -182,7 +182,7 @@ export default function InvoiceDetailPage() {
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
-              border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+              border: '1px solid #CFC4AE', cursor: 'pointer', background: '#fff',
             }}
           >
             <Printer size={14} /> Print
@@ -192,7 +192,7 @@ export default function InvoiceDetailPage() {
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
-              border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+              border: '1px solid #CFC4AE', cursor: 'pointer', background: '#fff',
             }}
           >
             <Download size={14} /> Export PDF
@@ -203,10 +203,10 @@ export default function InvoiceDetailPage() {
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 14px', fontSize: 13, borderRadius: 6,
-              border: invoice.qbo_sync_status === 'synced' ? 'none' : '1px solid #d1d5db',
+              border: invoice.qbo_sync_status === 'synced' ? 'none' : '1px solid #CFC4AE',
               cursor: syncing ? 'wait' : 'pointer',
               background: invoice.qbo_sync_status === 'synced' ? QBO_GREEN : '#fff',
-              color: invoice.qbo_sync_status === 'synced' ? '#fff' : '#374151',
+              color: invoice.qbo_sync_status === 'synced' ? '#fff' : '#2D3F55',
               opacity: syncing || invoice.status === 'draft' ? 0.7 : 1,
             }}
             title={
@@ -238,8 +238,8 @@ export default function InvoiceDetailPage() {
         display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
         gap: 16, marginBottom: 24,
       }}>
-        <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8 }}>
-          <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Status</p>
+        <div style={{ background: '#FBF8F2', padding: 16, borderRadius: 8 }}>
+          <p style={{ fontSize: 12, color: '#6A7587', margin: 0 }}>Status</p>
           <span style={{
             fontSize: 13, padding: '2px 10px', borderRadius: 10,
             background: cs.bg, color: cs.color, fontWeight: 600,
@@ -247,13 +247,13 @@ export default function InvoiceDetailPage() {
             {invoice.status.replace('_', ' ')}
           </span>
         </div>
-        <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8 }}>
-          <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Total</p>
+        <div style={{ background: '#FBF8F2', padding: 16, borderRadius: 8 }}>
+          <p style={{ fontSize: 12, color: '#6A7587', margin: 0 }}>Total</p>
           <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0' }}>${Number(invoice.total).toFixed(2)}</p>
         </div>
-        <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8 }}>
-          <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Balance Due</p>
-          <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0', color: balance > 0 ? '#dc2626' : '#059669' }}>
+        <div style={{ background: '#FBF8F2', padding: 16, borderRadius: 8 }}>
+          <p style={{ fontSize: 12, color: '#6A7587', margin: 0 }}>Balance Due</p>
+          <p style={{ fontSize: 20, fontWeight: 700, margin: '4px 0 0', color: balance > 0 ? '#B5604E' : '#5A7A5C' }}>
             ${Number(balance).toFixed(2)}
           </p>
         </div>
@@ -261,9 +261,10 @@ export default function InvoiceDetailPage() {
 
       {/* Line items */}
       <h3 style={{ fontSize: 15, marginBottom: 8 }}>Line Items</h3>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 24 }}>
+      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', marginBottom: 24 }}>
+      <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
-          <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+          <tr style={{ borderBottom: '2px solid #E1D9C9', textAlign: 'left' }}>
             <th style={{ padding: 8 }}>Description</th>
             <th style={{ padding: 8 }}>Type</th>
             <th style={{ padding: 8 }}>Qty</th>
@@ -273,10 +274,10 @@ export default function InvoiceDetailPage() {
         </thead>
         <tbody>
           {(invoice.line_items || []).map((li) => (
-            <tr key={li.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+            <tr key={li.id} style={{ borderBottom: '1px solid #EFE8DA' }}>
               <td style={{ padding: 8 }}>{li.description}</td>
               <td style={{ padding: 8 }}>
-                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#e5e7eb' }}>
+                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#E1D9C9' }}>
                   {li.source_type}
                 </span>
               </td>
@@ -301,6 +302,7 @@ export default function InvoiceDetailPage() {
           </tr>
         </tfoot>
       </table>
+      </div>
 
       {/* Payments */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -311,13 +313,13 @@ export default function InvoiceDetailPage() {
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 12px', fontSize: 12, borderRadius: 6,
-              border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff',
+              border: '1px solid #CFC4AE', cursor: 'pointer', background: '#fff',
             }}
           >
             <CreditCard size={14} /> Record Payment
           </button>
         ) : invoice.status === 'draft' ? (
-          <span style={{ fontSize: 12, color: '#9ca3af' }}>Send the invoice to record payments</span>
+          <span style={{ fontSize: 12, color: '#6A7587' }}>Send the invoice to record payments</span>
         ) : null}
       </div>
 
@@ -325,27 +327,27 @@ export default function InvoiceDetailPage() {
         <form
           onSubmit={handleRecordPayment}
           style={{
-            background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
+            background: '#FBF8F2', border: '1px solid #E1D9C9', borderRadius: 8,
             padding: 16, marginBottom: 16, display: 'grid',
             gridTemplateColumns: '1fr 1fr 1fr auto', gap: 12, alignItems: 'end',
           }}
         >
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Amount</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Amount</label>
             <input
               type="number" step="0.01"
               value={paymentForm.amount}
               onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
               required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Method</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Method</label>
             <select
               value={paymentForm.method}
               onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             >
               <option value="bank_transfer">Bank Transfer</option>
               <option value="check">Check</option>
@@ -356,18 +358,18 @@ export default function InvoiceDetailPage() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Date</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Date</label>
             <input
               type="date"
               value={paymentForm.payment_date}
               onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             />
           </div>
           <button
             type="submit"
             style={{
-              padding: '6px 16px', background: '#059669', color: '#fff',
+              padding: '6px 16px', background: '#5A7A5C', color: '#fff',
               border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13,
             }}
           >
@@ -377,11 +379,12 @@ export default function InvoiceDetailPage() {
       )}
 
       {(invoice.payments || []).length === 0 ? (
-        <p style={{ color: '#9ca3af', fontSize: 13 }}>No payments recorded.</p>
+        <p style={{ color: '#6A7587', fontSize: 13 }}>No payments recorded.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <table style={{ width: '100%', minWidth: 480, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ borderBottom: '1px solid #e5e7eb', textAlign: 'left' }}>
+            <tr style={{ borderBottom: '1px solid #E1D9C9', textAlign: 'left' }}>
               <th style={{ padding: 6 }}>Date</th>
               <th style={{ padding: 6 }}>Method</th>
               <th style={{ padding: 6 }}>Reference</th>
@@ -390,10 +393,10 @@ export default function InvoiceDetailPage() {
           </thead>
           <tbody>
             {invoice.payments.map((p) => (
-              <tr key={p.id} style={{ borderBottom: '1px solid #f9fafb' }}>
+              <tr key={p.id} style={{ borderBottom: '1px solid #FBF8F2' }}>
                 <td style={{ padding: 6 }}>{p.payment_date}</td>
                 <td style={{ padding: 6 }}>
-                  <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#e5e7eb' }}>{p.method}</span>
+                  <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#E1D9C9' }}>{p.method}</span>
                 </td>
                 <td style={{ padding: 6 }}>{p.reference_number || '—'}</td>
                 <td style={{ padding: 6, textAlign: 'right', fontWeight: 500 }}>${Number(p.amount).toFixed(2)}</td>
@@ -401,6 +404,7 @@ export default function InvoiceDetailPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )

@@ -436,7 +436,7 @@ export default function TrustAccountDetail() {
               <p className="text-sm text-brand-muted font-sans">Post a deposit or disbursement to start the ledger.</p>
             </div>
           ) : (
-            <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-brand-line bg-brand-surface-2">

@@ -285,7 +285,8 @@ function PaymentLedger({ caseId, order, onChange }) {
         <button onClick={submit} className="px-3 py-1.5 bg-brand-ink text-white text-[12px] font-medium rounded-lg">Record Payment</button>
       </div>
       {payments.length === 0 ? <p className="text-[12px] text-brand-muted">No payments recorded.</p> : (
-        <table className="w-full text-left">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[440px] text-left">
           <thead><tr className="text-[10px] uppercase tracking-widest text-brand-muted">
             <th className="py-1">Date</th><th>Amount</th><th>To Current</th><th>To Arrears</th><th></th></tr></thead>
           <tbody className="divide-y divide-brand-line">
@@ -301,6 +302,7 @@ function PaymentLedger({ caseId, order, onChange }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
@@ -313,7 +315,7 @@ function CalculationsTab({ caseId }) {
     <div>
       <h3 className="font-serif font-bold text-lg text-brand-ink mb-4">Saved Calculations</h3>
       {items.length === 0 ? <Empty msg="No saved calculations yet. Run one in the Support Calculator tab." /> : (
-        <div className="bg-brand-surface border border-brand-line rounded-xl overflow-hidden shadow-sm">
+        <div className="bg-brand-surface border border-brand-line rounded-xl overflow-x-auto shadow-sm">
           <table className="min-w-full text-left">
             <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">
               {['Label', 'State', 'Children', 'Obligor', 'Presumptive', 'Final', 'Date', ''].map((h) => (
@@ -356,7 +358,7 @@ function DataTable({ loading, items, columns, row, onDelete, empty }) {
   if (loading) return <Loading />
   if (!items || items.length === 0) return <Empty msg={empty} />
   return (
-    <div className="bg-brand-surface border border-brand-line rounded-xl overflow-hidden shadow-sm">
+    <div className="bg-brand-surface border border-brand-line rounded-xl overflow-x-auto shadow-sm">
       <table className="min-w-full text-left">
         <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">
           {columns.map((h) => <th key={h} className="px-4 py-3 text-[10px] font-bold text-brand-muted uppercase tracking-widest">{h}</th>)}

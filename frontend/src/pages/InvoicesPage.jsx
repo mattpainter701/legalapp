@@ -6,14 +6,14 @@ import { getInvoices, generateInvoice, getMattersV2 } from '../api'
 const QBO_GREEN = '#2CA01C'
 
 const STATUS_COLORS = {
-  draft: { bg: '#f3f4f6', color: '#374151' },
-  sent: { bg: '#dbeafe', color: '#1e40af' },
-  invoiced: { bg: '#dbeafe', color: '#1e40af' },
-  paid: { bg: '#d1fae5', color: '#065f46' },
-  partially_paid: { bg: '#fef3c7', color: '#92400e' },
-  overdue: { bg: '#fee2e2', color: '#991b1b' },
-  void: { bg: '#f3f4f6', color: '#9ca3af' },
-  written_off: { bg: '#f3f4f6', color: '#9ca3af' },
+  draft: { bg: '#EFE8DA', color: '#2D3F55' },
+  sent: { bg: '#E7EDE7', color: '#426146' },
+  invoiced: { bg: '#E7EDE7', color: '#426146' },
+  paid: { bg: '#E7EDE7', color: '#426146' },
+  partially_paid: { bg: '#F5E9CE', color: '#8A6220' },
+  overdue: { bg: '#F6E4E0', color: '#9C4F3F' },
+  void: { bg: '#EFE8DA', color: '#6A7587' },
+  written_off: { bg: '#EFE8DA', color: '#6A7587' },
 }
 
 const FILTERS = [
@@ -82,10 +82,10 @@ export default function InvoicesPage() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Invoices</h1>
-          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
+          <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
             {invoices.length} invoices · ${Number(totalOutstanding).toFixed(2)} outstanding
             {overdueCount > 0 && (
-              <span style={{ color: '#b91c1c' }}> · {overdueCount} overdue</span>
+              <span style={{ color: '#9C4F3F' }}> · {overdueCount} overdue</span>
             )}
           </p>
         </div>
@@ -93,7 +93,7 @@ export default function InvoicesPage() {
           onClick={() => setShowGenerate(!showGenerate)}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '8px 16px', background: '#2563eb', color: '#fff',
+            padding: '8px 16px', background: '#426146', color: '#fff',
             border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13,
           }}
         >
@@ -106,26 +106,26 @@ export default function InvoicesPage() {
         <form
           onSubmit={handleGenerate}
           style={{
-            background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
+            background: '#FBF8F2', border: '1px solid #E1D9C9', borderRadius: 8,
             padding: 16, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12,
           }}
         >
           {generateError && (
             <div style={{
-              padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca',
-              borderRadius: 6, color: '#b91c1c', fontSize: 13,
+              padding: '8px 12px', background: '#FBF1EF', border: '1px solid #EDC9C0',
+              borderRadius: 6, color: '#9C4F3F', fontSize: 13,
             }}>
               {generateError}
             </div>
           )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Matter</label>
+              <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
               <select
                 value={generateForm.matter_id}
                 onChange={(e) => setGenerateForm({ matter_id: e.target.value })}
                 required
-                style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+                style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
               >
                 <option value="">Select matter...</option>
                 {matters.map((m) => (
@@ -136,14 +136,14 @@ export default function InvoicesPage() {
             <button
               type="submit"
               style={{
-                padding: '6px 16px', background: '#059669', color: '#fff',
+                padding: '6px 16px', background: '#5A7A5C', color: '#fff',
                 border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13,
               }}
             >
               Generate Draft
             </button>
           </div>
-          <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>
+          <p style={{ margin: 0, fontSize: 12, color: '#6A7587' }}>
             Pulls all unbilled time entries and expenses for the matter into a draft invoice you can review before sending.
           </p>
         </form>
@@ -157,8 +157,8 @@ export default function InvoicesPage() {
             onClick={() => setFilter(f.key)}
             style={{
               padding: '4px 12px', fontSize: 12, borderRadius: 12,
-              border: '1px solid #d1d5db', cursor: 'pointer',
-              background: filter === f.key ? '#e5e7eb' : '#fff',
+              border: '1px solid #CFC4AE', cursor: 'pointer',
+              background: filter === f.key ? '#E1D9C9' : '#fff',
             }}
           >
             {f.label}
@@ -168,14 +168,14 @@ export default function InvoicesPage() {
 
       {/* Invoices table */}
       {loading ? (
-        <p style={{ color: '#9ca3af', fontSize: 13 }}>Loading...</p>
+        <p style={{ color: '#6A7587', fontSize: 13 }}>Loading...</p>
       ) : invoices.length === 0 ? (
-        <p style={{ color: '#9ca3af', fontSize: 13 }}>No invoices yet. Generate a draft from unbilled time entries.</p>
+        <p style={{ color: '#6A7587', fontSize: 13 }}>No invoices yet. Generate a draft from unbilled time entries.</p>
       ) : (
         <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <tr style={{ borderBottom: '2px solid #E1D9C9', textAlign: 'left' }}>
               <th style={{ padding: 8 }}>Invoice #</th>
               <th style={{ padding: 8 }}>Matter</th>
               <th style={{ padding: 8 }}>Issue Date</th>
@@ -195,14 +195,14 @@ export default function InvoicesPage() {
                 <tr
                   key={inv.id}
                   onClick={() => navigate(`/invoices/${inv.id}`)}
-                  style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}
+                  style={{ borderBottom: '1px solid #EFE8DA', cursor: 'pointer' }}
                 >
-                  <td style={{ padding: 8, color: '#2563eb', fontWeight: 500 }}>{inv.invoice_number}</td>
-                  <td style={{ padding: 8, color: '#6b7280' }}>{inv.matter_name || '—'}</td>
+                  <td style={{ padding: 8, color: '#426146', fontWeight: 500 }}>{inv.invoice_number}</td>
+                  <td style={{ padding: 8, color: '#6A7587' }}>{inv.matter_name || '—'}</td>
                   <td style={{ padding: 8 }}>{inv.issue_date}</td>
-                  <td style={{ padding: 8, color: inv.is_overdue ? '#b91c1c' : undefined }}>{inv.due_date}</td>
+                  <td style={{ padding: 8, color: inv.is_overdue ? '#9C4F3F' : undefined }}>{inv.due_date}</td>
                   <td style={{ padding: 8, fontWeight: 600 }}>${Number(inv.total).toFixed(2)}</td>
-                  <td style={{ padding: 8, fontWeight: 600, color: Number(inv.balance_due) > 0 ? '#b91c1c' : '#059669' }}>
+                  <td style={{ padding: 8, fontWeight: 600, color: Number(inv.balance_due) > 0 ? '#9C4F3F' : '#5A7A5C' }}>
                     ${Number(inv.balance_due ?? inv.total).toFixed(2)}
                   </td>
                   <td style={{ padding: 8 }}>
@@ -219,7 +219,7 @@ export default function InvoicesPage() {
                       style={{
                         display: 'inline-block',
                         width: 10, height: 10, borderRadius: '50%',
-                        background: qboSynced ? QBO_GREEN : '#d1d5db',
+                        background: qboSynced ? QBO_GREEN : '#CFC4AE',
                       }}
                     />
                   </td>

@@ -48,7 +48,8 @@ export default function RolesTab() {
           Create role
         </button>
       </form>
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[480px] text-sm">
         <thead><tr><th className="text-left">Role</th><th className="text-left">Capabilities</th><th /></tr></thead>
         <tbody>
           {roles.map((r) => (
@@ -64,6 +65,7 @@ export default function RolesTab() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+- **Favicon:** created `frontend/public/favicon.svg` (navy/gold "CL" mark
+  matching the PWA icons) — `index.html` referenced it but the file never
+  existed, so browser tabs showed a blank icon. Also added
+  `apple-touch-icon` and `theme-color` meta tags to `index.html`.
+
+### Changed
+- **Brand palette harmonization:** InvoicesPage, InvoiceDetailPage,
+  TimeTrackingPage, and ProfilePage used generic Tailwind-gray/blue/green/red
+  inline hex colors that clashed with the app's warm cream/ink/sage design
+  system. All ~155 hex values remapped onto the brand palette (lines →
+  `#E1D9C9`/`#CFC4AE`, muted text → `#6A7587`, links/success → sage
+  `#426146`/`#5A7A5C`, errors → brand rose, warnings → brand amber). QBO
+  brand green left untouched.
+
+### Fixed (mobile/tablet audit)
+- **Mobile viewport height:** AppShell used `h-screen` (100vh), which on
+  mobile browsers includes the URL bar — the bottom tab bar could sit
+  partially off-screen. Now uses `100dvh` with `h-screen` fallback.
+- **Safe-area support:** added `viewport-fit=cover` to the viewport meta and
+  `env(safe-area-inset-bottom)` padding on the mobile bottom nav so it clears
+  the iPhone home indicator in installed (standalone PWA) mode.
+- **iOS input auto-zoom:** app inputs are 13–14px, which makes iOS Safari
+  zoom the page on focus. Added an iOS-only CSS rule (`-webkit-touch-callout`
+  supports guard, ≤767px) forcing 16px font-size on inputs/selects/textareas.
+- **Pages overflowing the shell:** CalendarPage and CommunicationsPage used
+  `h-screen` while rendered inside AppShell (which already reserves header +
+  mobile-nav height), making content taller than the viewport. Changed to
+  `h-full`, matching ChatPage.
+- **Tables clipping on narrow screens:** 16 tables across 12 files either had
+  no horizontal-scroll wrapper or sat in `overflow-hidden` containers that
+  clipped columns on mobile. Containers switched to `overflow-x-auto` (still
+  clips rounded corners) or gained scroll wrappers with sensible `min-width`:
+  RolesTab, BillingPage, MatterPartiesTab, MatterDocumentsTab,
+  InvoiceDetailPage (×2), ProfilePage, TrustAccountDetail,
+  TrustAccountReconcile, TrustAccountingPage, DomesticDetailPage (×3),
+  PortalCasePage (×3).
+
 ### Fixed
 - **Mobile OAuth callback duplicates:** fixed Google/Microsoft login failures
   where mobile browsers could request the same provider callback URL more than

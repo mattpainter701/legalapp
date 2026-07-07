@@ -1,5 +1,50 @@
 # TASKS.md
 
+## Mobile/Tablet Frontend Audit + Design Polish — 2026-07-06 (DONE)
+
+**Goal:** Assess whether the installable web app (manifest-based, no service
+worker) is sufficient for mobile users, fix critical/high mobile issues, add
+the missing favicon, and harmonize off-brand pages with the design system.
+
+- [x] Verdict: current PWA-lite setup is sufficient — installable via
+      manifest, shell already has hamburger + bottom tab nav + 44px tap
+      targets; no native app or service worker needed for this user base
+- [x] Fix `h-screen` → `100dvh` in AppShell (bottom nav cut off by mobile
+      browser URL bar)
+- [x] Add `viewport-fit=cover` + safe-area padding on mobile bottom nav
+      (iPhone home indicator in standalone mode)
+- [x] iOS-only 16px input font-size rule (prevents Safari focus auto-zoom)
+- [x] Fix CalendarPage/CommunicationsPage `h-screen`-inside-AppShell overflow
+      (→ `h-full`)
+- [x] Add horizontal-scroll wrappers / `overflow-x-auto` to 16 tables across
+      12 files that clipped on narrow screens
+- [x] Create missing `favicon.svg` (referenced by index.html but absent);
+      add apple-touch-icon + theme-color meta
+- [x] Remap ~155 off-brand inline hex colors in InvoicesPage,
+      InvoiceDetailPage, TimeTrackingPage, ProfilePage onto the brand palette
+- [x] Production build verified (vite build passes)
+
+### Backlog (mobile/design, lower priority)
+- [ ] **Code-split the JS bundle (P1):** single 1.65 MB chunk (390 KB gzip) —
+      slow first load on cellular. Route-level `React.lazy` or Rollup
+      `manualChunks`.
+- [ ] **Card-style mobile layouts for dense tables (P2):** horizontal scroll
+      is a stopgap; portfolio/invoice/time tables would read better as
+      stacked cards under `md:`.
+- [ ] **Convert inline-styled pages to Tailwind (P2):** InvoicesPage,
+      InvoiceDetailPage, TimeTrackingPage, ProfilePage still use inline
+      styles (colors now on-brand); converting to Tailwind brand classes +
+      serif headings would finish the visual unification.
+- [ ] **PWA maturity (P3):** service worker + explicit update prompt +
+      offline shell. Deliberately deferred — offline caching of legal
+      documents needs an encryption/privacy design first.
+- [ ] **Touch-target audit (P3):** some icon buttons (e.g. 13–15px trash
+      icons in table rows) are below the 44px guideline.
+- [ ] **Real-device pass (P3):** Calendar drag interactions, Reports charts,
+      and Communications three-pane layout on an actual phone/tablet.
+- [ ] **Frontend dependency updates (P3):** routine minor bumps + planned
+      major migrations (React 19, Vite 7, Tailwind 4) from `npm outdated`.
+
 ## Mobile OAuth Callback Duplicate Handling — 2026-07-06 (DONE)
 
 **Goal:** Fix mobile Google/Microsoft login failures where provider callback

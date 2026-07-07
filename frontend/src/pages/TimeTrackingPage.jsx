@@ -202,7 +202,7 @@ export default function TimeTrackingPage() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22 }}>Time Tracking</h1>
-          <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
+          <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
             {totalHours.toFixed(1)}h logged · ${Number(totalAmount).toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
           </p>
         </div>
@@ -214,7 +214,7 @@ export default function TimeTrackingPage() {
               title={form.matter_id ? 'Start a live timer for the selected matter' : 'Select a matter below, then start the timer'}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', background: '#059669', color: '#fff',
+                padding: '8px 16px', background: '#5A7A5C', color: '#fff',
                 border: 'none', borderRadius: 6, cursor: timerBusy ? 'wait' : 'pointer', fontSize: 13,
               }}
             >
@@ -225,7 +225,7 @@ export default function TimeTrackingPage() {
             onClick={() => setShowForm(!showForm)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '8px 16px', background: '#2563eb', color: '#fff',
+              padding: '8px 16px', background: '#426146', color: '#fff',
               border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13,
             }}
           >
@@ -238,14 +238,14 @@ export default function TimeTrackingPage() {
       {activeTimer && (
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-          background: '#ecfdf5', border: '1px solid #6ee7b7', borderRadius: 8,
+          background: '#F1F5F1', border: '1px solid #6ee7b7', borderRadius: 8,
           padding: '12px 16px', marginBottom: 20,
         }}>
-          <Clock size={18} color="#059669" />
-          <span style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 700, color: '#065f46' }}>
+          <Clock size={18} color="#5A7A5C" />
+          <span style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 700, color: '#426146' }}>
             {formatElapsed(activeTimer.timer_started_at)}
           </span>
-          <span style={{ fontSize: 13, color: '#065f46', flex: 1 }}>
+          <span style={{ fontSize: 13, color: '#426146', flex: 1 }}>
             {matterNames[activeTimer.matter_id] || 'Matter'} — {activeTimer.description}
           </span>
           <button
@@ -253,7 +253,7 @@ export default function TimeTrackingPage() {
             disabled={timerBusy}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', background: '#059669', color: '#fff',
+              padding: '6px 14px', background: '#5A7A5C', color: '#fff',
               border: 'none', borderRadius: 6, cursor: timerBusy ? 'wait' : 'pointer', fontSize: 13,
             }}
           >
@@ -265,8 +265,8 @@ export default function TimeTrackingPage() {
             title="Discard without logging time"
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
-              padding: '6px 10px', background: 'none', color: '#6b7280',
-              border: '1px solid #d1d5db', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+              padding: '6px 10px', background: 'none', color: '#6A7587',
+              border: '1px solid #CFC4AE', borderRadius: 6, cursor: 'pointer', fontSize: 13,
             }}
           >
             <X size={14} /> Discard
@@ -279,26 +279,26 @@ export default function TimeTrackingPage() {
         <form
           onSubmit={handleSubmit}
           style={{
-            background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8,
+            background: '#FBF8F2', border: '1px solid #E1D9C9', borderRadius: 8,
             padding: 16, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12,
           }}
         >
           {formError && (
             <div style={{
-              padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca',
-              borderRadius: 6, color: '#b91c1c', fontSize: 13,
+              padding: '8px 12px', background: '#FBF1EF', border: '1px solid #EDC9C0',
+              borderRadius: 6, color: '#9C4F3F', fontSize: 13,
             }}>
               {formError}
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Matter</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
             <select
               value={form.matter_id}
               onChange={(e) => setForm({ ...form, matter_id: e.target.value })}
               required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             >
               <option value="">Select matter...</option>
               {matters.map((m) => (
@@ -307,33 +307,33 @@ export default function TimeTrackingPage() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Description</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Description</label>
             <input
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               required
               placeholder="Work description"
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Hours</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Hours</label>
             <input
               type="number" step="0.25" min="0.25"
               value={form.hours}
               onChange={(e) => setForm({ ...form, hours: e.target.value })}
               required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6b7280', display: 'block' }}>Rate ($)</label>
+            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Rate ($)</label>
             <input
               type="number" step="1" min="0"
               value={form.hourly_rate}
               onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
               placeholder={user?.default_billing_rate ? String(user.default_billing_rate) : '0'}
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13 }}
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
             />
           </div>
           <div>
@@ -341,7 +341,7 @@ export default function TimeTrackingPage() {
               type="submit"
               disabled={saving}
               style={{
-                padding: '6px 16px', background: saving ? '#9ca3af' : '#059669', color: '#fff',
+                padding: '6px 16px', background: saving ? '#6A7587' : '#5A7A5C', color: '#fff',
                 border: 'none', borderRadius: 4, cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13,
               }}
             >
@@ -360,8 +360,8 @@ export default function TimeTrackingPage() {
             onClick={() => setFilter(f)}
             style={{
               padding: '4px 12px', fontSize: 12, borderRadius: 12,
-              border: '1px solid #d1d5db', cursor: 'pointer',
-              background: filter === f ? '#e5e7eb' : '#fff',
+              border: '1px solid #CFC4AE', cursor: 'pointer',
+              background: filter === f ? '#E1D9C9' : '#fff',
             }}
           >
             {f === 'all' ? 'All' : f}
@@ -371,14 +371,14 @@ export default function TimeTrackingPage() {
 
       {/* Entries table */}
       {loading ? (
-        <p style={{ color: '#9ca3af', fontSize: 13 }}>Loading...</p>
+        <p style={{ color: '#6A7587', fontSize: 13 }}>Loading...</p>
       ) : visibleEntries.length === 0 ? (
-        <p style={{ color: '#9ca3af', fontSize: 13 }}>No time entries found.</p>
+        <p style={{ color: '#6A7587', fontSize: 13 }}>No time entries found.</p>
       ) : (
         <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <tr style={{ borderBottom: '2px solid #E1D9C9', textAlign: 'left' }}>
               <th style={{ padding: 8 }}>Date</th>
               <th style={{ padding: 8 }}>Matter</th>
               <th style={{ padding: 8 }}>Description</th>
@@ -390,11 +390,11 @@ export default function TimeTrackingPage() {
           </thead>
           <tbody>
             {visibleEntries.map((e) => (
-              <tr key={e.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+              <tr key={e.id} style={{ borderBottom: '1px solid #EFE8DA' }}>
                 <td style={{ padding: 8 }}>{e.date}</td>
-                <td style={{ padding: 8, color: '#6b7280' }}>{matterNames[e.matter_id] || '—'}</td>
+                <td style={{ padding: 8, color: '#6A7587' }}>{matterNames[e.matter_id] || '—'}</td>
                 <td style={{ padding: 8 }}>
-                  <span style={{ cursor: 'pointer', color: '#2563eb' }}>
+                  <span style={{ cursor: 'pointer', color: '#426146' }}>
                     {e.description}
                   </span>
                 </td>
@@ -403,8 +403,8 @@ export default function TimeTrackingPage() {
                 <td style={{ padding: 8 }}>
                   <span style={{
                     fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                    background: e.status === 'invoiced' ? '#d1fae5' : '#fef3c7',
-                    color: e.status === 'invoiced' ? '#065f46' : '#92400e',
+                    background: e.status === 'invoiced' ? '#E7EDE7' : '#F5E9CE',
+                    color: e.status === 'invoiced' ? '#426146' : '#8A6220',
                   }}>
                     {e.status}
                   </span>
@@ -413,7 +413,7 @@ export default function TimeTrackingPage() {
                   {e.status !== 'invoiced' && (
                     <button
                       onClick={() => handleDelete(e.id)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 4 }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B5604E', padding: 4 }}
                     >
                       <Trash2 size={14} />
                     </button>
