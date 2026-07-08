@@ -2044,12 +2044,36 @@ function formatSignatureDate(value) {
   }
 }
 
+const SIGNER_ROLE_OPTIONS = [
+  { value: 'client', label: 'Client' },
+  { value: 'co_client', label: 'Co-client' },
+  { value: 'attorney_countersigner', label: 'Attorney countersigner' },
+  { value: 'witness', label: 'Witness' },
+  { value: 'signer', label: 'Signer' },
+]
+
+const newSignerRow = () => ({ name: '', email: '', role: 'client' })
+
+function formatSignerRole(role) {
+  const match = SIGNER_ROLE_OPTIONS.find((option) => option.value === role)
+  return match ? match.label : (role || 'Signer').replace(/_/g, ' ')
+}
+
+function signerStatusLabel(signer) {
+  if (signer.status === 'signed') return `Signed ${formatSignatureDate(signer.signed_at)}`
+  if (signer.status === 'declined') return `Declined ${formatSignatureDate(signer.declined_at)}`
+  return 'Pending signature'
+}
+
 function SignatureRequestsPanel({ matterId }) {
   const [requests, setRequests] = useState([])
   const [docs, setDocs] = useState([])
   const [docId, setDocId] = useState('')
-  const [signerName, setSignerName] = useState('')
-  const [signerEmail, setSignerEmail] = useState('')
+  const [signers, setSigners] = useState([newSignerRow()])
+  const [expiresOn, setExpiresOn] = useState('')
+  const [reminderDays, setReminderDays] = useState('7,1')
+  const [enforceSigningOrder, setEnforceSigningOrder] = useState(true)
+  const [voidReasonById, setVoidReasonById] = useState({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [notice, setNotice] = useState('')
@@ -2067,21 +2091,51 @@ function SignatureRequestsPanel({ matterId }) {
     return acc
   }, {})
 
+  const updateSigner = (idx, key, value) => {
+    setSigners((prev) => prev.map((row, i) => i === idx ? { ...row, [key]: value } : row))
+  }
+
+  const addSigner = () => setSigners((prev) => [...prev, newSignerRow()])
+
+  const removeSigner = (idx) => {
+    setSigners((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx))
+  }
+
   const create = async (e) => {
     e.preventDefault()
     setErr('')
     setNotice('')
     if (!docId) { setErr('Choose a document to send for signature.'); return }
-    if (!signerName.trim() || !signerEmail.trim()) { setErr('Signer name and email are required.'); return }
+    const preparedSigners = signers.map((s, idx) => ({
+      name: s.name.trim(),
+      email: s.email.trim(),
+      role: s.role || 'signer',
+      sign_order: idx,
+    }))
+    if (preparedSigners.some((s) => !s.name || !s.email)) {
+      setErr('Each signer needs a name and email.')
+      return
+    }
+    const parsedReminderDays = reminderDays
+      .split(/[\s,]+/)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isInteger(value) && value > 0)
     setBusy(true)
     try {
       const req = await createSignatureRequest(matterId, {
         document_id: docId,
-        signers: [{ name: signerName.trim(), email: signerEmail.trim() }],
+        signers: preparedSigners,
+        expires_at: expiresOn ? new Date(`${expiresOn}T23:59:59`).toISOString() : null,
+        reminder_days: parsedReminderDays,
+        enforce_signing_order: enforceSigningOrder,
       })
       await sendSignatureRequest(matterId, req.id)
-      setSignerName(''); setSignerEmail(''); setDocId('')
-      setNotice('Signature request sent. The signer will see it in their client portal Signatures tab.')
+      setSigners([newSignerRow()])
+      setDocId('')
+      setExpiresOn('')
+      setReminderDays('7,1')
+      setEnforceSigningOrder(true)
+      setNotice('Signature request sent. Signers will see it in their client portal Signatures tab when it is their turn.')
       load()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'Failed to create signature request.')
@@ -2094,8 +2148,10 @@ function SignatureRequestsPanel({ matterId }) {
     setErr('')
     setNotice('')
     try {
-      await voidSignatureRequest(matterId, id)
+      const reason = (voidReasonById[id] || '').trim()
+      await voidSignatureRequest(matterId, id, reason ? { reason } : undefined)
       setNotice('Signature request voided.')
+      setVoidReasonById((prev) => ({ ...prev, [id]: '' }))
       load()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to void signature request.')
@@ -2108,6 +2164,8 @@ function SignatureRequestsPanel({ matterId }) {
       sent: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
       partially_signed: 'bg-brand-accent/10 text-brand-accent border-brand-accent/20',
       voided: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+      declined: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
+      expired: 'bg-brand-bg-soft text-brand-muted border-brand-line',
       draft: 'bg-brand-bg-soft text-brand-muted border-brand-line',
     }
     return styles[status] || styles.draft
@@ -2137,15 +2195,32 @@ function SignatureRequestsPanel({ matterId }) {
         <form onSubmit={create} className="rounded-2xl border border-brand-line bg-white p-4 space-y-4">
           <div>
             <h3 className="text-sm font-sans font-semibold text-brand-ink">New request</h3>
-            <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signer who should sign it.</p>
+            <p className="text-xs text-brand-muted mt-0.5">Choose a matter document and the portal signers who should sign it.</p>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             <select value={docId} onChange={(e) => setDocId(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
               <option value="">Select document…</option>
               {docs.map((d) => <option key={d.id} value={d.id}>{d.filename}</option>)}
             </select>
-            <input value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Signer full name" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
-            <input type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="Signer email" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+            <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+            <input value={reminderDays} onChange={(e) => setReminderDays(e.target.value)} placeholder="Reminder days: 7,1" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+          </div>
+          <label className="inline-flex items-center gap-2 text-xs text-brand-muted">
+            <input type="checkbox" checked={enforceSigningOrder} onChange={(e) => setEnforceSigningOrder(e.target.checked)} />
+            <span>Require signers to complete in listed order</span>
+          </label>
+          <div className="space-y-2">
+            {signers.map((signer, idx) => (
+              <div key={idx} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_190px_auto] gap-2 rounded-xl bg-brand-bg-soft p-3">
+                <input value={signer.name} onChange={(e) => updateSigner(idx, 'name', e.target.value)} placeholder={`Signer ${idx + 1} full name`} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+                <input type="email" value={signer.email} onChange={(e) => updateSigner(idx, 'email', e.target.value)} placeholder="Signer email" className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40" />
+                <select value={signer.role} onChange={(e) => updateSigner(idx, 'role', e.target.value)} className="border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40">
+                  {SIGNER_ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <button type="button" onClick={() => removeSigner(idx)} disabled={signers.length === 1} className="px-3 py-2 text-xs font-semibold text-brand-rose disabled:text-brand-muted disabled:cursor-not-allowed">Remove</button>
+              </div>
+            ))}
+            <button type="button" onClick={addSigner} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Add signer</button>
           </div>
           <button type="submit" disabled={busy} className="px-4 py-2 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50">
             {busy ? 'Sending…' : 'Send for signature'}
@@ -2169,21 +2244,36 @@ function SignatureRequestsPanel({ matterId }) {
                     <div>
                       <p className="text-brand-ink font-medium">{r.document_name || 'Document'}</p>
                       <p className="text-xs text-brand-muted mt-1">Sent {formatSignatureDate(r.sent_at)} · Created {formatSignatureDate(r.created_at)}</p>
+                      <p className="text-xs text-brand-muted mt-1">
+                        Expires {formatSignatureDate(r.expires_at)}
+                        {r.enforce_signing_order ? ' · Sequential signing' : ''}
+                      </p>
+                      {(r.decline_reason || r.void_reason) && (
+                        <p className="text-xs text-brand-rose mt-1">{r.decline_reason || r.void_reason}</p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold capitalize ${statusBadge(r.status)}`}>{r.status.replace('_', ' ')}</span>
                       {r.signed_document_id && (
                         <a href={getMatterDocumentDownloadUrl(matterId, r.signed_document_id)} className="text-xs font-semibold text-brand-accent hover:text-brand-ink">Download executed copy</a>
                       )}
-                      {!['completed', 'voided'].includes(r.status) && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
+                      {!['completed', 'voided', 'declined', 'expired'].includes(r.status) && <button onClick={() => voidReq(r.id)} className="text-brand-rose hover:underline text-xs font-medium">Void</button>}
                     </div>
                   </div>
+                  {!['completed', 'voided', 'declined', 'expired'].includes(r.status) && (
+                    <input
+                      value={voidReasonById[r.id] || ''}
+                      onChange={(e) => setVoidReasonById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                      placeholder="Void reason"
+                      className="mt-3 w-full border border-brand-line rounded-lg px-3 py-2 text-xs font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                    />
+                  )}
                   <div className="mt-3 grid gap-2">
                     {r.signers?.map((s, idx) => (
                       <div key={s.id} className="flex items-center justify-between rounded-lg bg-brand-bg-soft px-3 py-2 text-xs">
-                        <span className="text-brand-ink">{idx + 1}. {s.name} · {s.email}</span>
-                        <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : 'text-brand-amber font-semibold'}>
-                          {s.status === 'signed' ? `Signed ${formatSignatureDate(s.signed_at)}` : 'Pending signature'}
+                        <span className="text-brand-ink">{idx + 1}. {formatSignerRole(s.role)} · {s.name} · {s.email}</span>
+                        <span className={s.status === 'signed' ? 'text-brand-green font-semibold' : s.status === 'declined' ? 'text-brand-rose font-semibold' : 'text-brand-amber font-semibold'}>
+                          {signerStatusLabel(s)}
                         </span>
                       </div>
                     ))}

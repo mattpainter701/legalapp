@@ -258,7 +258,7 @@ export default function App() {
         />
         <Route
           path="/templates"
-          element={<ShellRoute title="Templates" module="templates"><TemplatesPage /></ShellRoute>}
+          element={<ShellRoute title="Document Automation" module="templates"><TemplatesPage /></ShellRoute>}
         />
         <Route
           path="/billing"

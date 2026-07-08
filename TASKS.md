@@ -1925,3 +1925,20 @@ Planning docs: `docs/probate-estate-workflow-plan.md`, `docs/module-template-ind
 - [ ] Add tenant branding for templates, packet cover pages, e-sign emails, client portal screens, delivery notices, logos, colors, letterhead, and disclaimers
 - [ ] Add document tracking and lifecycle events for generated, edited, approved, sent, viewed, signed, declined, expired, filed, delivered, and closed states
 - [ ] Add immutable template versions, generated-output snapshots, variable provenance, compare/clone/rollback flows, and locks for signed/filed/final documents
+
+Research note (2026-07-08): added
+`docs/research/2026-07-08-document-automation-esign-enhancements.md`, comparing
+Gavel, Clio Draft, Docassemble, Dropbox Sign, DocuSign, PandaDoc, and Documenso
+against Clarity's current Markdown template renderer and internal portal typed
+signature flow. Recommended first release: office-ready Template Studio,
+smart-fill/provenance, engagement-letter/fee-agreement generation, and Dropbox
+Sign provider wiring around the existing e-sign provider interface.
+
+Implementation slice (2026-07-08): added the first Document Automation
+workspace pass by reframing the Templates page as a tabbed Document Automation
+tool, preserving `/templates` while adding template/generate/e-sign/approval/
+branding panes. Backend templates now have additive lifecycle/metadata fields
+and `POST /api/templates/{id}/smart-fill-preview` for deterministic suggestions
+from matter, linked client contact, attorney, and current user context. Native
+e-sign now supports multiple signers, signer roles, sequential signing,
+expiration, reminder metadata, decline/void reasons, and portal decline.

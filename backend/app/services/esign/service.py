@@ -20,6 +20,50 @@ from app.services.matter_file_store import MatterFileStore
 _file_store = MatterFileStore()
 
 
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def request_is_expired(
+    request: SignatureRequest,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if not request.expires_at or request.status not in ("sent", "partially_signed"):
+        return False
+    now = now or datetime.now(timezone.utc)
+    return _as_aware_utc(request.expires_at) <= _as_aware_utc(now)
+
+
+def mark_request_expired_if_needed(
+    request: SignatureRequest,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if not request_is_expired(request, now=now):
+        return False
+    request.status = "expired"
+    return True
+
+
+def next_pending_signers(request: SignatureRequest) -> list[SignatureSigner]:
+    pending = [s for s in request.signers if s.status == "pending"]
+    if not pending:
+        return []
+    min_order = min(s.sign_order for s in pending)
+    return [s for s in pending if s.sign_order == min_order]
+
+
+def signer_can_act_now(request: SignatureRequest, signer: SignatureSigner) -> bool:
+    if signer.status != "pending":
+        return False
+    if not request.enforce_signing_order:
+        return True
+    return signer in next_pending_signers(request)
+
+
 async def record_portal_signature(
     signer: SignatureSigner,
     *,
@@ -38,6 +82,31 @@ async def record_portal_signature(
         "typed_signature": typed_signature,
         "method": "portal_typed",
     }
+
+
+async def record_portal_decline(
+    request: SignatureRequest,
+    signer: SignatureSigner,
+    *,
+    reason: str | None,
+    ip: str | None,
+) -> None:
+    """Mark one signer as declined and close the request (does not commit)."""
+    now = datetime.now(timezone.utc)
+    clean_reason = reason.strip() if reason and reason.strip() else None
+    signer.status = "declined"
+    signer.declined_at = now
+    signer.decline_reason = clean_reason
+    signer.audit = {
+        **(signer.audit or {}),
+        "declined_at": now.isoformat(),
+        "ip": ip,
+        "reason": clean_reason,
+        "method": "portal_decline",
+    }
+    request.status = "declined"
+    request.declined_at = now
+    request.decline_reason = clean_reason
 
 
 async def complete_request_if_done(

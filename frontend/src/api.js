@@ -943,8 +943,8 @@ export const getSignatureRequest = (matterId, requestId) =>
 export const sendSignatureRequest = (matterId, requestId) =>
   api.post(`/matters/${matterId}/signatures/${requestId}/send`).then((r) => r.data)
 
-export const voidSignatureRequest = (matterId, requestId) =>
-  api.post(`/matters/${matterId}/signatures/${requestId}/void`).then((r) => r.data)
+export const voidSignatureRequest = (matterId, requestId, data) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/void`, data).then((r) => r.data)
 
 // E-signature (client portal side)
 export const listClientPortalSignatures = () =>
@@ -952,6 +952,9 @@ export const listClientPortalSignatures = () =>
 
 export const signClientPortalSignature = (requestId, data) =>
   clientPortalApi.post(`/portal/client/signatures/${requestId}/sign`, data).then((r) => r.data)
+
+export const declineClientPortalSignature = (requestId, data) =>
+  clientPortalApi.post(`/portal/client/signatures/${requestId}/decline`, data).then((r) => r.data)
 
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
@@ -1366,8 +1369,8 @@ export const deleteScheduledEvent = (id) =>
 
 // ── Document Templates ──────────────────────────────────────────────────────
 
-export const getTemplates = () =>
-  api.get('/templates').then(r => r.data)
+export const getTemplates = (params = {}) =>
+  api.get('/templates', { params }).then(r => r.data)
 
 export const createTemplate = (data) =>
   api.post('/templates', data).then(r => r.data)
@@ -1383,6 +1386,9 @@ export const deleteTemplate = (id) =>
 
 export const renderTemplate = (id, data) =>
   api.post(`/templates/${id}/render`, data).then(r => r.data)
+
+export const discoverTemplateVariables = (id, data = {}) =>
+  api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
 // ── Reports / Budget ──────────────────────────────────────────────────────────
 

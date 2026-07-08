@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+- **Document automation and e-sign enhancement research:** added
+  `docs/research/2026-07-08-document-automation-esign-enhancements.md`,
+  comparing Gavel, Clio Draft, Docassemble, Dropbox Sign, DocuSign, PandaDoc,
+  and Documenso against the current Clarity template/e-sign implementation.
+  The recommended path is an office-user Template Studio, deterministic
+  smart-fill with provenance, engagement-letter/fee-agreement generation, and
+  Dropbox Sign provider wiring around the existing native e-sign interface.
+- **Document Automation workspace foundation:** reframed the Templates page as
+  a tabbed Document Automation workspace while keeping `/templates` stable,
+  added matter-aware Generate/Smart Fill flow hooks, template lifecycle metadata
+  fields, and `POST /api/templates/{id}/smart-fill-preview` for deterministic
+  suggestions from matter, linked client contact, attorney, and current-user
+  context. Existing template CRUD/render callers remain backward-compatible.
+- **Office-ready native e-sign metadata:** signature requests now support
+  multiple signers, signer roles, sequential signing, expiration, reminder
+  metadata, decline/void reasons, and portal decline handling. Existing
+  internal portal typed signatures still create the executed certificate matter
+  document on completion.
+
 ### Fixed
 - **Google/Microsoft integration scope visibility:** `/api/admin/permissions`
   now returns each provider's required OAuth scopes explicitly, and the

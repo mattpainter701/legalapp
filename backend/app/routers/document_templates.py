@@ -6,16 +6,21 @@ Document Templates router — CRUD + variable substitution rendering.
   GET    /api/templates/{id}         get template detail
   PATCH  /api/templates/{id}         update template fields
   DELETE /api/templates/{id}         delete template
+  POST   /api/templates/{id}/smart-fill-preview
   POST   /api/templates/{id}/render  render template with variables
 """
 
 import os
 import re
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import get_db, set_tenant_context
@@ -30,11 +35,15 @@ from app.schemas.document_template import (
     DocumentTemplateRenderRequest,
     DocumentTemplateRenderResponse,
     DocumentTemplateResponse,
+    DocumentTemplateSmartFillRequest,
+    DocumentTemplateSmartFillResponse,
     DocumentTemplateUpdate,
+    DocumentTemplateVariableSuggestion,
 )
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
 settings = get_settings()
+VARIABLE_PATTERN = re.compile(r"\{\{(.+?)\}\}")
 
 
 def render_template(template_body: str, variables: dict[str, str]) -> str:
@@ -44,23 +53,280 @@ def render_template(template_body: str, variables: dict[str, str]) -> str:
         key = match.group(1).strip()
         return variables.get(key, match.group(0))
 
-    return re.sub(r"\{\{(.+?)\}\}", replacer, template_body)
+    return VARIABLE_PATTERN.sub(replacer, template_body)
+
+
+def extract_template_variables(template_body: str) -> list[str]:
+    variables: list[str] = []
+    seen: set[str] = set()
+    for match in VARIABLE_PATTERN.finditer(template_body):
+        variable = match.group(1).strip()
+        if variable and variable not in seen:
+            variables.append(variable)
+            seen.add(variable)
+    return variables
+
+
+def _normalize_variable_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _stringify_suggestion(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return str(value)
+    text = str(value).strip()
+    return text or None
+
+
+def _add_candidate(
+    candidates: dict[str, DocumentTemplateVariableSuggestion],
+    alias: str,
+    value: Any,
+    *,
+    source_type: str,
+    source_field: str,
+    record_id: uuid.UUID | str | None = None,
+    confidence: float = 1.0,
+    review_required: bool = False,
+) -> None:
+    suggested_value = _stringify_suggestion(value)
+    if suggested_value is None:
+        return
+    key = _normalize_variable_name(alias)
+    candidates.setdefault(
+        key,
+        DocumentTemplateVariableSuggestion(
+            variable=alias,
+            suggested_value=suggested_value,
+            source_type=source_type,
+            source_field=source_field,
+            provenance={
+                "source_type": source_type,
+                "source_field": source_field,
+                "record_id": str(record_id) if record_id else None,
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+            },
+            confidence=confidence,
+            review_required=review_required,
+        ),
+    )
+
+
+def _address_value(address: dict | None, key: str) -> str | None:
+    if not isinstance(address, dict):
+        return None
+    return _stringify_suggestion(address.get(key))
+
+
+def _collect_smart_fill_candidates(
+    *,
+    matter: Matter | None,
+    current_user,
+) -> dict[str, DocumentTemplateVariableSuggestion]:
+    candidates: dict[str, DocumentTemplateVariableSuggestion] = {}
+
+    _add_candidate(
+        candidates,
+        "current_user_name",
+        getattr(current_user, "full_name", None),
+        source_type="current_user",
+        source_field="full_name",
+        record_id=getattr(current_user, "id", None),
+    )
+    _add_candidate(
+        candidates,
+        "current_user_email",
+        getattr(current_user, "email", None),
+        source_type="current_user",
+        source_field="email",
+        record_id=getattr(current_user, "id", None),
+    )
+    _add_candidate(
+        candidates,
+        "prepared_by",
+        getattr(current_user, "full_name", None)
+        or getattr(current_user, "email", None),
+        source_type="current_user",
+        source_field="full_name",
+        record_id=getattr(current_user, "id", None),
+    )
+
+    if not matter:
+        return candidates
+
+    matter_fields = {
+        "matter_id": matter.id,
+        "matter_name": matter.matter_name,
+        "matter_type": matter.matter_type,
+        "matter_description": matter.description,
+        "matter_status": matter.status,
+        "matter_stage": matter.stage,
+        "matter_jurisdiction": matter.jurisdiction,
+        "jurisdiction": matter.jurisdiction,
+        "case_number": matter.case_number,
+        "court": matter.court,
+        "judge": matter.judge,
+        "billing_method": matter.billing_method,
+        "billing_cycle": matter.billing_cycle,
+        "hourly_rate": matter.hourly_rate,
+        "budget_amount": matter.budget_amount,
+        "counterparty": matter.counterparty,
+    }
+    for alias, value in matter_fields.items():
+        _add_candidate(
+            candidates,
+            alias,
+            value,
+            source_type="matter",
+            source_field=alias,
+            record_id=matter.id,
+        )
+
+    client = getattr(matter, "client", None)
+    if client:
+        _add_candidate(
+            candidates,
+            "client_name",
+            client.display_name,
+            source_type="contact",
+            source_field="display_name",
+            record_id=client.id,
+        )
+        _add_candidate(
+            candidates,
+            "client_email",
+            client.email,
+            source_type="contact",
+            source_field="email",
+            record_id=client.id,
+        )
+        _add_candidate(
+            candidates,
+            "client_phone",
+            client.phone,
+            source_type="contact",
+            source_field="phone",
+            record_id=client.id,
+        )
+        address = client.address
+        for alias, key in {
+            "client_street": "street",
+            "client_city": "city",
+            "client_state": "state",
+            "client_zip": "zip",
+            "client_country": "country",
+        }.items():
+            _add_candidate(
+                candidates,
+                alias,
+                _address_value(address, key),
+                source_type="contact",
+                source_field=f"address.{key}",
+                record_id=client.id,
+            )
+
+    attorney = getattr(matter, "attorney_of_record", None)
+    if attorney:
+        _add_candidate(
+            candidates,
+            "attorney_name",
+            attorney.full_name,
+            source_type="user",
+            source_field="full_name",
+            record_id=attorney.id,
+        )
+        _add_candidate(
+            candidates,
+            "attorney_email",
+            attorney.email,
+            source_type="user",
+            source_field="email",
+            record_id=attorney.id,
+        )
+
+    return candidates
+
+
+async def _load_matter_context(
+    *,
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    matter_id: str | None,
+) -> Matter | None:
+    if not matter_id:
+        return None
+    try:
+        parsed_matter_id = uuid.UUID(matter_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid matter_id") from exc
+
+    result = await db.execute(
+        select(Matter)
+        .options(
+            selectinload(Matter.client),
+            selectinload(Matter.attorney_of_record),
+        )
+        .where(
+            Matter.id == parsed_matter_id,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+    return matter
+
+
+async def build_variable_suggestions(
+    *,
+    template: DocumentTemplate,
+    requested_variables: list[str] | None,
+    matter_id: str | None,
+    tenant_id: uuid.UUID,
+    current_user,
+    db: AsyncSession,
+) -> tuple[str | None, list[DocumentTemplateVariableSuggestion]]:
+    matter = await _load_matter_context(db=db, tenant_id=tenant_id, matter_id=matter_id)
+    variables = requested_variables or extract_template_variables(template.body)
+    candidates = _collect_smart_fill_candidates(
+        matter=matter, current_user=current_user
+    )
+
+    suggestions: list[DocumentTemplateVariableSuggestion] = []
+    for variable in variables:
+        candidate = candidates.get(_normalize_variable_name(variable))
+        if candidate:
+            suggestions.append(candidate.model_copy(update={"variable": variable}))
+            continue
+        suggestions.append(
+            DocumentTemplateVariableSuggestion(
+                variable=variable,
+                provenance={"status": "no_deterministic_source"},
+                review_required=True,
+            )
+        )
+
+    return str(matter.id) if matter else None, suggestions
 
 
 @router.get("", response_model=DocumentTemplateListResponse)
 async def list_templates(
+    include_inactive: bool = Query(False),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
+    filters = [DocumentTemplate.tenant_id == uuid.UUID(tenant_id)]
+    if not include_inactive:
+        filters.append(DocumentTemplate.is_active.is_(True))
+
     stmt = (
         select(DocumentTemplate)
-        .where(
-            DocumentTemplate.tenant_id == uuid.UUID(tenant_id),
-            DocumentTemplate.is_active.is_(True),
-        )
+        .where(*filters)
         .order_by(DocumentTemplate.created_at.desc())
     )
 
@@ -93,9 +359,7 @@ async def create_template(
 
     template = DocumentTemplate(
         tenant_id=uuid.UUID(tenant_id),
-        title=payload.title,
-        body=payload.body,
-        category=payload.category,
+        **payload.model_dump(exclude_none=True),
     )
     db.add(template)
     await db.commit()
@@ -150,7 +414,6 @@ async def update_template(
             status_code=422,
             detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
         )
-
     for field, value in updates.items():
         setattr(template, field, value)
 
@@ -182,7 +445,51 @@ async def delete_template(
     await db.commit()
 
 
-@router.post("/{template_id}/render", response_model=DocumentTemplateRenderResponse)
+@router.post(
+    "/{template_id}/smart-fill-preview",
+    response_model=DocumentTemplateSmartFillResponse,
+)
+async def smart_fill_preview(
+    template_id: uuid.UUID,
+    payload: DocumentTemplateSmartFillRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = str(current_user.tenant_id)
+    parsed_tenant_id = uuid.UUID(tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(DocumentTemplate).where(
+            DocumentTemplate.id == template_id,
+            DocumentTemplate.tenant_id == parsed_tenant_id,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    resolved_matter_id, suggestions = await build_variable_suggestions(
+        template=template,
+        requested_variables=payload.variables,
+        matter_id=payload.matter_id,
+        tenant_id=parsed_tenant_id,
+        current_user=current_user,
+        db=db,
+    )
+
+    return DocumentTemplateSmartFillResponse(
+        template_id=str(template.id),
+        matter_id=resolved_matter_id,
+        variables=suggestions,
+    )
+
+
+@router.post(
+    "/{template_id}/render",
+    response_model=DocumentTemplateRenderResponse,
+    response_model_exclude_none=True,
+)
 async def render_template_endpoint(
     template_id: uuid.UUID,
     payload: DocumentTemplateRenderRequest,
@@ -192,10 +499,11 @@ async def render_template_endpoint(
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
 
+    parsed_tenant_id = uuid.UUID(tenant_id)
     result = await db.execute(
         select(DocumentTemplate).where(
             DocumentTemplate.id == template_id,
-            DocumentTemplate.tenant_id == uuid.UUID(tenant_id),
+            DocumentTemplate.tenant_id == parsed_tenant_id,
         )
     )
     template = result.scalar_one_or_none()
@@ -203,6 +511,16 @@ async def render_template_endpoint(
         raise HTTPException(status_code=404, detail="Template not found")
 
     rendered = render_template(template.body, payload.variables)
+    variable_suggestions = None
+    if payload.include_suggestions:
+        _, variable_suggestions = await build_variable_suggestions(
+            template=template,
+            requested_variables=None,
+            matter_id=payload.matter_id,
+            tenant_id=parsed_tenant_id,
+            current_user=current_user,
+            db=db,
+        )
 
     matter_document_id = None
     if payload.matter_id:
@@ -252,4 +570,5 @@ async def render_template_endpoint(
     return DocumentTemplateRenderResponse(
         rendered=rendered,
         matter_document_id=matter_document_id,
+        variable_suggestions=variable_suggestions,
     )

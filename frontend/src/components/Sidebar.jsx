@@ -23,7 +23,7 @@ const NAV_GROUPS = [
       { path: '/contacts',       label: 'Contacts',       icon: Users, module: 'contacts' },
       { path: '/intake/dashboard', label: 'Call Intake',   icon: PhoneCall, module: 'intake-dashboard' },
       { path: '/intake',         label: 'Intake',         icon: ClipboardList, module: 'intake' },
-      { path: '/templates',      label: 'Templates',      icon: FileSignature, module: 'templates' },
+      { path: '/templates',      label: 'Document Automation', icon: FileSignature, module: 'templates' },
     ],
   },
   {
