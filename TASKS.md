@@ -1839,7 +1839,7 @@ Summary: added migration `082_integration_observability` (renumbered from `075` 
 - [x] Implement cloud document delete for Google Drive, OneDrive, and SharePoint
 - [x] Add focused storage/delete regression tests and verification
 
-Summary: added migration `083_matter_document_storage_metadata` (renumbered from `076` after reconciling with `main`'s migration chain) and explicit
+Summary: added migration `083_matter_doc_storage_meta` (renumbered from `076` and shortened from `083_matter_document_storage_metadata`, which at 36 chars exceeded the `alembic_version.version_num` VARCHAR(32) column and failed at deploy time, after reconciling with `main`'s migration chain) and explicit
 matter-document storage metadata for provider/backend, provider object ID,
 drive ID, parent ID, and storage errors while preserving legacy URL-derived
 behavior. Matter file uploads now return a structured `StorageResult` for new
