@@ -49,6 +49,41 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
 
+def _user_response(user: User) -> UserResponse:
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        license_active=user.license_active,
+        payg_monthly_budget=(
+            float(user.payg_monthly_budget)
+            if user.payg_monthly_budget is not None
+            else None
+        ),
+        default_billing_rate=(
+            float(user.default_billing_rate)
+            if user.default_billing_rate is not None
+            else None
+        ),
+        created_at=user.created_at,
+    )
+
+
+async def _active_admin_count(db: AsyncSession, tenant_id) -> int:
+    return (
+        await db.scalar(
+            select(func.count(User.id)).where(
+                User.tenant_id == tenant_id,
+                User.role == "admin",
+                User.is_active.is_(True),
+            )
+        )
+        or 0
+    )
+
+
 @router.get("/users", response_model=UserList)
 async def list_users(
     request: Request,
@@ -65,20 +100,7 @@ async def list_users(
     )
     users = result.scalars().all()
 
-    return UserList(
-        users=[
-            UserResponse(
-                id=str(u.id),
-                email=u.email,
-                full_name=u.full_name,
-                role=u.role,
-                is_active=u.is_active,
-                created_at=u.created_at,
-            )
-            for u in users
-        ],
-        total=len(users),
-    )
+    return UserList(users=[_user_response(u) for u in users], total=len(users))
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -124,6 +146,14 @@ async def deactivate_user(
             raise HTTPException(
                 status_code=400,
                 detail=f"This user granted org-wide OAuth consent for {', '.join(providers)}. Deactivating will break integrations. Re-authorize with another admin first, or use ?force=true.",
+            )
+
+    if target_user.role == "admin" and target_user.is_active:
+        admin_count = await _active_admin_count(db, admin.tenant_id)
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot deactivate the last active admin in this tenant",
             )
 
     target_user.is_active = False
@@ -1297,6 +1327,13 @@ async def patch_user(
             raise HTTPException(
                 status_code=400, detail="role must be 'admin' or 'user'"
             )
+        if user.role == "admin" and body.role != "admin" and user.is_active:
+            admin_count = await _active_admin_count(db, admin.tenant_id)
+            if admin_count <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot remove the last active admin in this tenant",
+                )
         user.role = body.role
 
     if body.full_name is not None:
@@ -1318,14 +1355,7 @@ async def patch_user(
 
     await db.commit()
     await db.refresh(user)
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        full_name=user.full_name,
-        role=user.role,
-        is_active=user.is_active,
-        created_at=user.created_at,
-    )
+    return _user_response(user)
 
 
 @router.post("/users/{user_id}/reactivate", status_code=200)
@@ -1376,13 +1406,16 @@ async def invite_user(
             detail="A user with this email already exists in your tenant.",
         )
 
+    if body.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
+
     # Create inactive user with a random password (they will set their own via invite link)
     invite_token = secrets.token_urlsafe(32)
     new_user = User(
         tenant_id=admin.tenant_id,
         email=body.email,
         full_name=body.full_name,
-        role=body.role if body.role in ("admin", "user") else "user",
+        role=body.role,
         is_active=False,
         license_active=True,
         # Store invite token temporarily in password_hash field (hashed prefix)

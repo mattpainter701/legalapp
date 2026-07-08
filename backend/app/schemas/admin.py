@@ -31,6 +31,9 @@ class UserResponse(BaseModel):
     full_name: Optional[str] = None
     role: str
     is_active: bool
+    license_active: bool = True
+    payg_monthly_budget: Optional[float] = None
+    default_billing_rate: Optional[float] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
