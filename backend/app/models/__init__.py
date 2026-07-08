@@ -48,7 +48,11 @@ from app.models.teams_notification_setting import TeamsNotificationSetting
 from app.models.error_log import ErrorLog
 from app.models.integration_sync_run import IntegrationSyncRun
 from app.models.contact import Contact, Lead
-from app.models.intake_dashboard import LegacyCallRecord, PartnerRotationState
+from app.models.intake_dashboard import (
+    IntakeCallDraft,
+    LegacyCallRecord,
+    PartnerRotationState,
+)
 from app.models.client_portal import ClientPortalInvite
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.models.task import Task
@@ -142,6 +146,7 @@ __all__ = [
     "Contact",
     "Lead",
     "LegacyCallRecord",
+    "IntakeCallDraft",
     "PartnerRotationState",
     "ClientPortalInvite",
     "SignatureRequest",

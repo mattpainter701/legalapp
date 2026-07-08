@@ -178,7 +178,8 @@ export default function BillingPage({ embedded = false }) {
         {/* Pricing reference */}
         <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6">
           <p className="text-sm font-semibold text-brand-ink font-sans mb-3">Pricing reference</p>
-          <table className="w-full text-sm font-sans">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[400px] text-sm font-sans">
             <thead>
               <tr className="text-xs text-brand-muted uppercase">
                 <th className="text-left pb-2">Model</th>
@@ -199,6 +200,7 @@ export default function BillingPage({ embedded = false }) {
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

@@ -2,6 +2,105 @@ import axios from 'axios'
 
 const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 export const API_BASE_URL = BASE_URL
+const USE_LEGACY_TOKEN_FALLBACK = import.meta.env.DEV && import.meta.env.VITE_LEGACY_TOKEN_AUTH === 'true'
+
+const getHeaderValue = (headers, name) => {
+  if (!headers) return undefined
+  if (typeof headers.get === 'function') {
+    return headers.get(name) || headers.get(name.toLowerCase()) || headers.get(name.toUpperCase())
+  }
+  const lower = String(name).toLowerCase()
+  const upper = String(name).toUpperCase()
+  if (Object.prototype.hasOwnProperty.call(headers, name)) return headers[name]
+  if (Object.prototype.hasOwnProperty.call(headers, lower)) return headers[lower]
+  if (Object.prototype.hasOwnProperty.call(headers, upper)) return headers[upper]
+  return undefined
+}
+
+const getLegacyToken = () => (typeof window !== 'undefined' ? window.localStorage.getItem('token') : null)
+
+const buildLegacyAuthHeaders = (headers = {}) => {
+  if (!USE_LEGACY_TOKEN_FALLBACK) return headers
+  const token = getLegacyToken()
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
+}
+
+const readValidationDetails = (detail) => {
+  if (!Array.isArray(detail)) return []
+  return detail
+    .map((entry) => {
+      const message = entry?.msg || entry?.message
+      const field = Array.isArray(entry?.loc) ? entry.loc.filter(Boolean).join('.') : ''
+      if (!message) return ''
+      return field ? `${field}: ${message}` : String(message)
+    })
+    .filter(Boolean)
+}
+
+// A proxy/gateway that rejects a request before it reaches the app (nginx 429,
+// 502, 504, etc.) returns its own HTML error page, not JSON. Axios still hands
+// that page to us as a string in `data`. Never surface that markup as a user
+// message — detect it and fall back to a short status-based message instead.
+const isMarkupBody = (value) => (
+  typeof value === 'string' && /^\s*<(!doctype|html)/i.test(value)
+)
+
+const STATUS_FALLBACK_MESSAGES = {
+  429: 'Too many requests right now. Please wait a moment and try again.',
+  502: 'The server is temporarily unavailable. Please try again shortly.',
+  503: 'The server is temporarily unavailable. Please try again shortly.',
+  504: 'The request timed out. Please try again.',
+}
+
+export const normalizeApiError = (errorOrResponse) => {
+  const response = errorOrResponse?.response || errorOrResponse
+  const data = response?.data
+  const status = response?.status
+  const headers = response?.headers
+
+  const hasStructuredData = data && typeof data === 'object' && !Array.isArray(data)
+  const rawDetail = hasStructuredData ? (data.detail ?? data.error ?? data.message ?? '') : data
+  const dataDetail = isMarkupBody(rawDetail) ? '' : rawDetail
+  const validationErrors = readValidationDetails(dataDetail)
+  const detail = validationErrors.length
+    ? validationErrors.join('; ')
+    : (typeof dataDetail === 'string' ? dataDetail.slice(0, 500) : '')
+  const statusMessage = STATUS_FALLBACK_MESSAGES[status] || response?.statusText || `HTTP ${status || 'error'}`
+  const message = validationErrors.length
+    ? validationErrors.join('; ')
+    : detail || statusMessage || 'Request failed'
+
+  const requestId = getHeaderValue(headers, 'x-request-id') || data?.request_id || data?.requestId
+  const errorId = getHeaderValue(headers, 'x-error-id') || data?.error_id || data?.errorId
+
+  const normalized = errorOrResponse instanceof Error ? errorOrResponse : new Error(message)
+  normalized.message = String(message)
+  normalized.name = 'ApiError'
+  normalized.status = status
+  normalized.request_id = requestId
+  normalized.error_id = errorId
+  normalized.detail = detail
+  normalized.validationErrors = validationErrors
+
+  if (!normalized.response) {
+    normalized.response = {
+      status,
+      data: data ?? { detail },
+      headers,
+      statusText: response?.statusText,
+    }
+  } else if (normalized.response && normalized.response.data == null && data != null) {
+    normalized.response.data = data
+  }
+  if (normalized.response && normalized.response.data && typeof normalized.response.data === 'object' && !Array.isArray(normalized.response.data)) {
+    if (!normalized.response.data.request_id && requestId) normalized.response.data.request_id = requestId
+    if (!normalized.response.data.error_id && errorId) normalized.response.data.error_id = errorId
+    normalized.response.data.detail = detail || normalized.response.data.detail
+    normalized.response.data.validationErrors = validationErrors
+    if (!normalized.response.data.message && normalized.message) normalized.response.data.message = normalized.message
+  }
+  return normalized
+}
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -15,6 +114,37 @@ const api = axios.create({
 // reads or stores the access/refresh token in localStorage, so an XSS payload
 // cannot exfiltrate a live session. `withCredentials: true` above is what
 // actually authenticates every request; no Authorization header is needed.
+// USE_LEGACY_TOKEN_FALLBACK is a dev-only opt-in escape hatch (off by default,
+// and always off in production) for local setups where cookies don't work
+// across ports.
+if (typeof window !== 'undefined' && !USE_LEGACY_TOKEN_FALLBACK) {
+  window.localStorage.removeItem('token')
+  window.localStorage.removeItem('user')
+}
+
+// Request interceptor: browsers send httpOnly cookies automatically. Add a localStorage
+// bearer fallback only when explicitly enabled for local development.
+api.interceptors.request.use(
+  (config) => {
+    if (!USE_LEGACY_TOKEN_FALLBACK) {
+      return config
+    }
+
+    const token = getLegacyToken()
+    if (token) {
+      if (typeof config.headers?.set === 'function') {
+        config.headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        config.headers = {
+          ...(config.headers || {}),
+          Authorization: `Bearer ${token}`,
+        }
+      }
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
 
 // Response interceptor: on 401, attempt a single rotating-refresh, then retry the
 // original request once. Concurrent 401s share one in-flight refresh (single-flight)
@@ -24,6 +154,13 @@ let refreshPromise = null
 // Paths for which a 401 must NOT trigger a refresh attempt (would loop / is terminal).
 const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/register', '/auth/logout']
 
+const clearAuthState = () => {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('token')
+    window.localStorage.removeItem('user')
+  }
+}
+
 const redirectToLogin = () => {
   if (window.location.pathname !== '/login') {
     window.location.href = '/login'
@@ -32,7 +169,13 @@ const redirectToLogin = () => {
 
 const refreshAuthSession = async () => {
   if (!refreshPromise) {
-    refreshPromise = api.post('/auth/refresh').finally(() => {
+    refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
+      if (USE_LEGACY_TOKEN_FALLBACK) {
+        const freshToken = refreshResponse?.data?.access_token
+        if (freshToken) window.localStorage.setItem('token', freshToken)
+      }
+      return refreshResponse
+    }).finally(() => {
       refreshPromise = null
     })
   }
@@ -42,37 +185,70 @@ const refreshAuthSession = async () => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const { response, config } = error
+    const normalizedError = normalizeApiError(error)
+    const { response, config } = normalizedError
     if (!response || response.status !== 401 || !config) {
-      return Promise.reject(error)
+      return Promise.reject(normalizedError)
     }
     const url = config.url || ''
     if (config._retried) {
       // Already retried once; give up and return the user to login.
-      redirectToLogin()
-      return Promise.reject(error)
+      if (config._suppressAuthRedirect) {
+        clearAuthState()
+      } else {
+        redirectToLogin()
+      }
+      return Promise.reject(normalizedError)
     }
     if (NO_REFRESH_PATHS.some((p) => url.includes(p))) {
       // Auth endpoint failures should surface to the current form instead of
       // forcing a reload that clears the page-level error message.
-      return Promise.reject(error)
+      clearAuthState()
+      return Promise.reject(normalizedError)
     }
 
     try {
       await refreshAuthSession()
     } catch (refreshError) {
-      redirectToLogin()
-      return Promise.reject(refreshError)
+      if (config._suppressAuthRedirect) {
+        clearAuthState()
+      } else {
+        redirectToLogin()
+      }
+      return Promise.reject(normalizeApiError(refreshError))
     }
 
     // Refresh succeeded (new cookies set) — retry the original request once.
     config._retried = true
+    if (typeof config.headers?.set === 'function') {
+      if (USE_LEGACY_TOKEN_FALLBACK) {
+        const freshToken = getLegacyToken()
+        if (freshToken) {
+          config.headers.set('Authorization', `Bearer ${freshToken}`)
+        } else {
+          config.headers.delete('Authorization')
+        }
+      } else {
+        config.headers.delete('Authorization')
+      }
+    } else if (config.headers) {
+      if (USE_LEGACY_TOKEN_FALLBACK) {
+        const freshToken = getLegacyToken()
+        if (freshToken) {
+          config.headers.Authorization = `Bearer ${freshToken}`
+        } else {
+          delete config.headers.Authorization
+        }
+      } else {
+        delete config.headers.Authorization
+      }
+    }
     return api(config)
   }
 )
 
 // Auth
-export const getMe = () => api.get('/auth/me').then((r) => r.data)
+export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
 
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
@@ -125,6 +301,45 @@ export const sendMessage = (conversationId, content, includePublic = true, usePr
     })
     .then((r) => r.data)
 
+const streamErrorFromResponse = async (response) => {
+  const status = response?.status
+  const statusText = response?.statusText
+  const headers = response?.headers
+  const raw = await response.text().catch(() => '')
+
+  let data = raw
+  const contentType = (response?.headers?.get('content-type') || '')
+    .toLowerCase()
+  if (raw && contentType.includes('json')) {
+    try {
+      data = JSON.parse(raw)
+    } catch {
+      data = raw
+    }
+  }
+
+  const isJsonObject = data && typeof data === 'object' && !Array.isArray(data)
+  const detail = isJsonObject && (data.detail || data.error || data.message)
+    ? (data.detail || data.error || data.message)
+    : raw || statusText || `HTTP error! status: ${status}`
+
+  const baseError = new Error(typeof detail === 'string' ? detail : `HTTP error! status: ${status}`)
+  baseError.response = {
+    status,
+    statusText,
+    headers,
+    data: isJsonObject ? data : { detail, raw },
+  }
+  const normalizedError = normalizeApiError(baseError)
+  if (status === 504) {
+    normalizedError.message = 'The AI service is warming up. Please try your query again in a moment.'
+    if (normalizedError.response.data && typeof normalizedError.response.data === 'object' && !Array.isArray(normalizedError.response.data)) {
+      normalizedError.response.data.detail = normalizedError.message
+    }
+  }
+  return normalizedError
+}
+
 export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) {
   const body = JSON.stringify({
     content,
@@ -135,7 +350,7 @@ export const streamMessage = async function* (conversationId, content, includePu
   const request = () => fetch(`${BASE_URL}/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildLegacyAuthHeaders({ 'Content-Type': 'application/json' }),
     body,
   })
   let response = await request()
@@ -152,11 +367,7 @@ export const streamMessage = async function* (conversationId, content, includePu
     if (response.status === 401) {
       redirectToLogin()
     }
-    // 504 Gateway Timeout is common on cold starts — surface a clear message
-    if (response.status === 504) {
-      throw new Error('The AI service is warming up. Please try your query again in a moment.')
-    }
-    throw new Error(`HTTP error! status: ${response.status}`)
+    throw await streamErrorFromResponse(response)
   }
 
   const reader = response.body.getReader()
@@ -737,8 +948,8 @@ export const getSignatureRequest = (matterId, requestId) =>
 export const sendSignatureRequest = (matterId, requestId) =>
   api.post(`/matters/${matterId}/signatures/${requestId}/send`).then((r) => r.data)
 
-export const voidSignatureRequest = (matterId, requestId) =>
-  api.post(`/matters/${matterId}/signatures/${requestId}/void`).then((r) => r.data)
+export const voidSignatureRequest = (matterId, requestId, data) =>
+  api.post(`/matters/${matterId}/signatures/${requestId}/void`, data).then((r) => r.data)
 
 // E-signature (client portal side)
 export const listClientPortalSignatures = () =>
@@ -746,6 +957,9 @@ export const listClientPortalSignatures = () =>
 
 export const signClientPortalSignature = (requestId, data) =>
   clientPortalApi.post(`/portal/client/signatures/${requestId}/sign`, data).then((r) => r.data)
+
+export const declineClientPortalSignature = (requestId, data) =>
+  clientPortalApi.post(`/portal/client/signatures/${requestId}/decline`, data).then((r) => r.data)
 
 // Billing
 export const getBillingStatus = () => api.get('/billing/status').then((r) => r.data)
@@ -999,6 +1213,15 @@ export const getIntakeAssignmentAvailability = (params = {}) =>
 export const createIntakeDashboardCall = (data) =>
   api.post('/intake/dashboard/calls', data).then(r => r.data)
 
+export const getIntakeDrafts = () =>
+  api.get('/intake/drafts').then((r) => r.data)
+
+export const upsertIntakeDraft = (draftId, data) =>
+  api.put(`/intake/drafts/${draftId}`, data).then((r) => r.data)
+
+export const deleteIntakeDraft = (draftId) =>
+  api.delete(`/intake/drafts/${draftId}`).then((r) => r.data)
+
 export const assignNextPartner = (leadId) =>
   api.post(`/intake/dashboard/leads/${leadId}/assign-next`).then(r => r.data)
 
@@ -1151,8 +1374,8 @@ export const deleteScheduledEvent = (id) =>
 
 // ── Document Templates ──────────────────────────────────────────────────────
 
-export const getTemplates = () =>
-  api.get('/templates').then(r => r.data)
+export const getTemplates = (params = {}) =>
+  api.get('/templates', { params }).then(r => r.data)
 
 export const createTemplate = (data) =>
   api.post('/templates', data).then(r => r.data)
@@ -1168,6 +1391,9 @@ export const deleteTemplate = (id) =>
 
 export const renderTemplate = (id, data) =>
   api.post(`/templates/${id}/render`, data).then(r => r.data)
+
+export const discoverTemplateVariables = (id, data = {}) =>
+  api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)
 
 // ── Reports / Budget ──────────────────────────────────────────────────────────
 
@@ -1269,6 +1495,22 @@ export const updateTimeEntry = (id, data) =>
   api.patch(`/billing/time-entries/${id}`, data).then(r => r.data)
 export const deleteTimeEntry = (id) =>
   api.delete(`/billing/time-entries/${id}`)
+
+// Live timer
+export const startTimer = (data) =>
+  api.post('/billing/time-entries/timer/start', data).then(r => r.data)
+export const stopTimer = (data = {}) =>
+  api.post('/billing/time-entries/timer/stop', data).then(r => r.data)
+export const getActiveTimer = () =>
+  api.get('/billing/time-entries/timer').then(r => r.data)
+export const cancelTimer = () =>
+  api.delete('/billing/time-entries/timer')
+
+// Billing settings
+export const getBillingSettings = () =>
+  api.get('/billing/settings').then(r => r.data)
+export const updateBillingSettings = (data) =>
+  api.put('/billing/settings', data).then(r => r.data)
 
 export const getInvoices = (params) =>
   api.get('/billing/invoices', { params }).then(r => r.data)

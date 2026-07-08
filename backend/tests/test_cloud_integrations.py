@@ -9,6 +9,7 @@ These cover the pure logic and wiring that don't require a live database:
 import pytest
 
 from app.services import cloud_search
+from app.services.cloud_sync import CloudSyncService
 from app.services.cloud_search import (
     _INDEX_SOURCE_MAP,
     _cloud_metadata_scope_folder_ids,
@@ -34,6 +35,61 @@ def test_cloud_sync_agent_registered():
     # rejected, a known one is accepted (we don't execute it here).
     sched = LegalScheduler()
     assert hasattr(sched, "run_cloud_sync")
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_rebinds_tenant_context_around_each_provider(monkeypatch):
+    service = CloudSyncService()
+    tenant_id = "9ff4a695-826c-422c-bb7f-6037495a2c4e"
+    scoped = False
+    provider_calls: list[str] = []
+    rebinds: list[str] = []
+
+    class DummyDb:
+        async def rollback(self):
+            raise AssertionError("rollback should not run for successful providers")
+
+    async def fake_set_tenant_context(_db, tid):
+        nonlocal scoped
+        scoped = True
+        rebinds.append(tid)
+
+    def provider(name, count):
+        async def _provider(_db, tid):
+            nonlocal scoped
+            assert tid == tenant_id
+            assert scoped is True
+            provider_calls.append(name)
+            scoped = False
+            return count
+
+        return _provider
+
+    monkeypatch.setattr(
+        "app.services.cloud_sync.set_tenant_context",
+        fake_set_tenant_context,
+    )
+    monkeypatch.setattr(service, "sync_google_drive", provider("google_drive", 2))
+    monkeypatch.setattr(service, "sync_gmail_metadata", provider("gmail", 3))
+    monkeypatch.setattr(service, "sync_onedrive", provider("onedrive", 5))
+    monkeypatch.setattr(service, "sync_sharepoint", provider("sharepoint", 7))
+    monkeypatch.setattr(service, "sync_outlook_mail", provider("outlook", 11))
+
+    result = await service.sync_all(DummyDb(), tenant_id)
+
+    assert result == {
+        "google": {"files": 2, "emails": 3},
+        "microsoft": {"files": 12, "emails": 11},
+    }
+    assert provider_calls == [
+        "google_drive",
+        "gmail",
+        "onedrive",
+        "sharepoint",
+        "outlook",
+    ]
+    assert rebinds == [tenant_id] * 10
+    assert scoped is True
 
 
 def test_index_source_map_targets_valid_fetch_sources():

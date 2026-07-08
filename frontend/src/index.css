@@ -171,6 +171,17 @@
   }
 }
 
+/* iOS Safari auto-zooms the page when a focused input's font-size is < 16px.
+   Force 16px on iOS phones only (-webkit-touch-callout is iOS-specific) so
+   focusing a field doesn't zoom-and-shift the layout. */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 767px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

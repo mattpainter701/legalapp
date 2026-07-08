@@ -1,0 +1,770 @@
+{
+  "ai_routes": [
+    {
+      "api_base": "default/provider",
+      "api_key_env": "os.environ/OPENROUTER_API_KEY",
+      "provider_model": "openrouter/google/gemma-4-31b-it:free",
+      "route_name": "clarity-standard",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "https://opencode.ai/zen/v1",
+      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "provider_model": "openai/nemotron-3-ultra-free",
+      "route_name": "clarity-standard-zen-nemotron",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "https://opencode.ai/zen/v1",
+      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "provider_model": "openai/deepseek-v4-flash-free",
+      "route_name": "clarity-standard-deepseek-flash-free",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "os.environ/DEEPSEEK_API_KEY",
+      "provider_model": "openai/deepseek-v4-pro",
+      "route_name": "clarity-premium",
+      "source": "litellm_config.yaml"
+    },
+    {
+      "api_base": "default/provider",
+      "api_key_env": "os.environ/OPENROUTER_API_KEY",
+      "provider_model": "openrouter/google/gemma-4-31b-it:free",
+      "route_name": "clarity-premium-openrouter-gemma",
+      "source": "litellm_config.yaml"
+    }
+  ],
+  "compose_images": [
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 3,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "redis:7-alpine",
+      "line": 17,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "postgres:16-alpine",
+      "line": 27,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "legalapp-litellm:main-v1.72.6",
+      "line": 44,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 27,
+      "pinned_by_digest": false,
+      "source": "docker-compose.local.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 44,
+      "pinned_by_digest": false,
+      "source": "docker-compose.local.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 3,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "redis:7-alpine",
+      "line": 18,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "postgres:16-alpine",
+      "line": 29,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "legalapp-litellm:main-latest",
+      "line": 46,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 25,
+      "pinned_by_digest": false,
+      "source": "docker-compose.override.yml"
+    },
+    {
+      "image": "pgvector/pgvector:pg16",
+      "line": 34,
+      "pinned_by_digest": false,
+      "source": "docker-compose.override.yml"
+    }
+  ],
+  "container_bases": [
+    {
+      "image": "python:3.11-slim",
+      "line": 4,
+      "pinned_by_digest": false,
+      "source": "backend/Dockerfile",
+      "stage_reference": false
+    },
+    {
+      "image": "base",
+      "line": 17,
+      "pinned_by_digest": false,
+      "source": "backend/Dockerfile",
+      "stage_reference": true
+    },
+    {
+      "image": "base",
+      "line": 23,
+      "pinned_by_digest": false,
+      "source": "backend/Dockerfile",
+      "stage_reference": true
+    },
+    {
+      "image": "node:20-alpine",
+      "line": 1,
+      "pinned_by_digest": false,
+      "source": "frontend/Dockerfile",
+      "stage_reference": false
+    },
+    {
+      "image": "node:20-alpine",
+      "line": 10,
+      "pinned_by_digest": false,
+      "source": "frontend/Dockerfile",
+      "stage_reference": false
+    },
+    {
+      "image": "nginx:alpine",
+      "line": 1,
+      "pinned_by_digest": false,
+      "source": "nginx/Dockerfile",
+      "stage_reference": false
+    },
+    {
+      "image": "docker.litellm.ai/berriai/litellm:main-latest",
+      "line": 1,
+      "pinned_by_digest": false,
+      "source": "litellm/Dockerfile",
+      "stage_reference": false
+    },
+    {
+      "image": "python:3.12-slim",
+      "line": 1,
+      "pinned_by_digest": false,
+      "source": "mcp-server/Dockerfile",
+      "stage_reference": false
+    }
+  ],
+  "dependencies": [
+    {
+      "ecosystem": "npm",
+      "name": "@microsoft/teams-js",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^2.53.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "axios",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^1.7.9"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "date-fns",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^4.1.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lucide-react",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^0.475.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^18.3.1"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react-dom",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^18.3.1"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react-dropzone",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^14.3.5"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react-markdown",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^9.0.1"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "react-router-dom",
+      "scope": "dependencies",
+      "source": "frontend/package.json",
+      "specifier": "^6.28.0"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vitejs/plugin-react",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^4.3.4"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "autoprefixer",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^10.4.20"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postcss",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^8.4.49"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "tailwindcss",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^3.4.17"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vite",
+      "scope": "devDependencies",
+      "source": "frontend/package.json",
+      "specifier": "^6.0.3"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "http-server",
+      "scope": "devDependencies",
+      "source": "word-addin/package.json",
+      "specifier": "^14.1.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest",
+      "scope": "optional:dev",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=8.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest-asyncio",
+      "scope": "optional:dev",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=0.23"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "ruff",
+      "scope": "optional:dev",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=0.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "aiosqlite",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=0.20.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "cryptography",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=42.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "httpx",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=0.27.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pypdf",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=4.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-docx",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=1.1.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "smbprotocol",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=1.16.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "tomli",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=2.0;python_version<'3.11'"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "tomli_w",
+      "scope": "runtime",
+      "source": "agent/pyproject.toml",
+      "specifier": ">=1.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "aiofiles",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==24.1.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "aiosmtplib",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==3.0.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "alembic",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.14.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "apscheduler",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==3.10.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "asyncpg",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.30.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "authlib",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.3.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "bcrypt",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": ">=4.0,<5.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "cryptography",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==44.0.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "email-validator",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.2.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "fastapi",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.115.5"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "google-api-python-client",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.160.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "google-auth-oauthlib",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.2.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "httpx",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.28.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "itsdangerous",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.2.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "openai",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.58.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pgvector",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.3.6"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "psycopg2-binary",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.9.10"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pydantic",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.10.3"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pydantic-settings",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.6.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pypdf",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==5.1.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==8.3.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest-asyncio",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.24.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pytest-env",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.1.5"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-dateutil",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.9.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-docx",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.1.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-dotenv",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==1.0.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-jose[cryptography]",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==3.3.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-multipart",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.0.20"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "redis",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==5.2.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "reportlab",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==4.2.5"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "ruff",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.8.4"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "sqlalchemy",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==2.0.36"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "stripe",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==11.3.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "tiktoken",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.8.0"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "uvicorn[standard]",
+      "scope": "runtime/dev",
+      "source": "backend/requirements.txt",
+      "specifier": "==0.32.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "fastapi",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==0.115.5"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "httpx",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==0.28.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pgvector",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==0.3.6"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "psycopg2-binary",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==2.9.10"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pydantic",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==2.10.3"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-dotenv",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==1.0.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "uvicorn[standard]",
+      "scope": "runtime/dev",
+      "source": "mcp-server/requirements.txt",
+      "specifier": "==0.32.1"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "httpx",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "openai",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pgvector",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "psycopg2-binary",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "python-dotenv",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "tiktoken",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "tqdm",
+      "scope": "runtime/dev",
+      "source": "scripts/requirements.txt",
+      "specifier": "unbounded"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "cryptography",
+      "scope": "runtime/dev",
+      "source": "scripts/tabs3_export/requirements.txt",
+      "specifier": "==44.0.2"
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "pyodbc",
+      "scope": "runtime/dev",
+      "source": "scripts/tabs3_export/requirements.txt",
+      "specifier": "==5.2.0"
+    }
+  ],
+  "generated_at": "generated from current working tree",
+  "manifests": [
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "backend/requirements.txt",
+      "type": "python requirements"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "mcp-server/requirements.txt",
+      "type": "python requirements"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "scripts/requirements.txt",
+      "type": "python requirements"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "scripts/tabs3_export/requirements.txt",
+      "type": "python requirements"
+    },
+    {
+      "lockfile_present": true,
+      "lockfiles": [
+        "frontend/package-lock.json"
+      ],
+      "path": "frontend/package.json",
+      "type": "npm package"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "word-addin/package.json",
+      "type": "npm package"
+    },
+    {
+      "lockfile_present": false,
+      "lockfiles": [],
+      "path": "agent/pyproject.toml",
+      "type": "python project"
+    }
+  ],
+  "repository": "legalapp",
+  "tracking_requirements": [
+    "component identity and source manifest",
+    "version/specifier and package URL when available",
+    "license and attribution obligation",
+    "vulnerability severity, exploitability, owner, SLA, due date, and exception expiry",
+    "affected deployment image, release, git SHA, and SBOM artifact digest",
+    "data class exposure, DLP policy outcome, and audit correlation ID",
+    "AI provider/model route, retention/training setting, region, and subprocessor status",
+    "insurance coverage relevance and customer notification decision"
+  ]
+}

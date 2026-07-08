@@ -1,15 +1,15 @@
-"""076 - matter document storage metadata
+"""083 - matter document storage metadata
 
-Revision ID: 076_matter_document_storage_metadata
-Revises: 075_integration_observability
+Revision ID: 083_matter_document_storage_metadata
+Revises: 082_integration_observability
 Create Date: 2026-07-02
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "076_matter_document_storage_metadata"
-down_revision = "075_integration_observability"
+revision = "083_matter_document_storage_metadata"
+down_revision = "082_integration_observability"
 branch_labels = None
 depends_on = None
 

@@ -8,6 +8,7 @@ notification dispatch catches them and degrades to a no-op.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from typing import Any
@@ -322,7 +323,7 @@ async def send_channel_message(
                 {
                     "id": "card1",
                     "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": _json_dumps(adaptive_card),
+                    "content": json.dumps(adaptive_card),
                 }
             ],
         }
@@ -347,13 +348,6 @@ async def send_channel_message(
             )
         return False
     return True
-
-
-def _json_dumps(obj: dict) -> str:
-    import json
-
-    return json.dumps(obj)
-
 
 def build_matter_card(
     title: str,

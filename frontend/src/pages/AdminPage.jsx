@@ -383,6 +383,17 @@ function RoleAssignCell({ user, roles, saving, disabled, onAssign }) {
     onAssign(selected)
   }
 
+  // The badge must reflect what's actually assigned (confirmed role_ids from
+  // the backend), not the legacy single `user.role` string — otherwise a
+  // successful assignment looks like it did nothing.
+  const assignedIds = Array.isArray(user.role_ids)
+    ? user.role_ids.map(String)
+    : (Array.isArray(user.roles) ? user.roles.map((r) => String(r.id ?? r)) : [])
+  const assignedNames = assignedIds
+    .map((id) => roles.find((r) => String(r.id) === id)?.name)
+    .filter(Boolean)
+  const label = assignedNames.length ? assignedNames.join(', ') : user.role
+
   if (disabled) {
     return (
       <span className="inline-flex px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide bg-brand-line/50 text-brand-muted border border-brand-line">
@@ -400,7 +411,7 @@ function RoleAssignCell({ user, roles, saving, disabled, onAssign }) {
         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-sans font-bold uppercase tracking-wide cursor-pointer hover:opacity-80 transition-colors bg-brand-line/50 text-brand-muted border border-brand-line disabled:opacity-50"
         title="Assign roles"
       >
-        {saving ? '…' : user.role}
+        <span className="max-w-[140px] truncate">{saving ? '…' : label}</span>
         <ChevronDown size={12} />
       </button>
       {open && (

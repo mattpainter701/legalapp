@@ -1,14 +1,16 @@
-import uuid
+import asyncio
 import csv
 import io
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
 from app.models.intake_dashboard import (
+    IntakeCallDraft,
     LegacyCallRecord,
     PartnerAssignmentLog,
     PartnerRotationState,
@@ -17,6 +19,7 @@ from app.models.tenant import Tenant
 from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
+from app.routers import intake_dashboard as intake_dashboard_router
 from app.services.intake_archive_import import (
     import_legacy_call_csv,
     normalize_phone,
@@ -564,6 +567,85 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
     assert row["outcome"] == "log_only"
     assert row["assigned_to_name"] == "Service Provider"
     assert row["task_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_call_create_lead_specific_staff_keeps_post_commit_context(
+    client, db_session, test_tenant, monkeypatch
+):
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="leadstaff@testfirm.com",
+        full_name="Lead Staff",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(staff)
+    await db_session.commit()
+
+    original_refresh = db_session.refresh
+
+    async def fail_communication_log_refresh(instance, *args, **kwargs):
+        if isinstance(instance, CommunicationLog):
+            raise AssertionError("post-commit communication log refresh is unsafe")
+        return await original_refresh(instance, *args, **kwargs)
+
+    notified = {}
+
+    async def assert_scoped_notification(db, task, tenant_id, assignment_note=None):
+        current_tenant = (
+            await db.execute(
+                text("SELECT current_setting('app.current_tenant_id', true)")
+            )
+        ).scalar_one()
+        assert current_tenant == tenant_id
+        notified["task_id"] = task.id
+
+    monkeypatch.setattr(db_session, "refresh", fail_communication_log_refresh)
+    monkeypatch.setattr(
+        intake_dashboard_router, "notify_task_created", assert_scoped_notification
+    )
+
+    resp = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "caller_name": "Lena Lead",
+            "phone": "(701) 555-9191",
+            "practice_area": "family",
+            "purpose": "Needs attorney review and staff follow-up",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Follow up with Lena Lead",
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["created_lead"] is True
+    assert data["lead_id"]
+    assert data["task_id"]
+    assert notified["task_id"] == uuid.UUID(data["task_id"])
+
+    task = await db_session.get(Task, uuid.UUID(data["task_id"]))
+    assert task.assigned_to_user_id == staff.id
+    assert task.contact_id == uuid.UUID(data["contact_id"])
+    assert task.title == "Lena Lead - Follow up with Lena Lead"
+    assert "Created by:" in task.description
+    assert f"Linked lead: {data['lead_id']}" in task.description
+
+    assignment = (
+        await db_session.execute(
+            select(PartnerAssignmentLog).where(
+                PartnerAssignmentLog.communication_id
+                == uuid.UUID(data["communication_id"])
+            )
+        )
+    ).scalar_one()
+    assert assignment.assignment_method == "specific_staff"
+    assert assignment.assigned_to_user_id == staff.id
 
 
 @pytest.mark.asyncio
@@ -1395,3 +1477,214 @@ async def test_recent_callers_batched_enrichment_matches(
     assert caller["assigned_to_name"] == "Batch Partner"
     assert caller["task_status"] == "pending"
     assert caller["created_by_name"] in (test_user.full_name, test_user.email)
+
+
+@pytest.mark.asyncio
+async def test_intake_drafts_crud_and_upsert_is_idempotent(
+    client, db_session, test_tenant, test_user
+):
+    draft_id = uuid.uuid4()
+    initial_payload = {
+        "caller_name": "Jane Doe",
+        "phone": "7015558888",
+        "notes": "Initial intake note",
+    }
+
+    created = await client.put(
+        f"/api/intake/drafts/{draft_id}",
+        json={"payload": initial_payload},
+    )
+    assert created.status_code == 200
+    created_data = created.json()
+    assert created_data["id"] == str(draft_id)
+    assert created_data["tenant_id"] == str(test_tenant.id)
+    assert created_data["created_by_user_id"] == str(test_user.id)
+    assert created_data["payload"] == initial_payload
+
+    list_after_create = await client.get("/api/intake/drafts")
+    assert list_after_create.status_code == 200
+    drafts = list_after_create.json()
+    assert len(drafts) == 1
+    assert drafts[0]["id"] == str(draft_id)
+    assert drafts[0]["payload"] == initial_payload
+
+    updated_payload = {
+        "caller_name": "Jane Doe",
+        "phone": "7015558888",
+        "notes": "Updated intake note",
+        "status": "in_progress",
+    }
+    updated = await client.put(
+        f"/api/intake/drafts/{draft_id}",
+        json={"payload": updated_payload},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["payload"] == updated_payload
+    assert updated.json()["id"] == str(draft_id)
+
+    row_count = await db_session.scalar(
+        select(func.count()).select_from(IntakeCallDraft).where(
+            IntakeCallDraft.id == draft_id
+        )
+    )
+    assert row_count == 1
+
+    draft_record = (
+        await db_session.execute(
+            select(IntakeCallDraft)
+            .where(IntakeCallDraft.id == draft_id)
+        )
+    ).scalar_one()
+    assert draft_record.payload == updated_payload
+    assert draft_record.created_by_user_id == test_user.id
+    assert draft_record.tenant_id == test_tenant.id
+
+    deleted = await client.delete(f"/api/intake/drafts/{draft_id}")
+    assert deleted.status_code == 204
+
+    list_after_delete = await client.get("/api/intake/drafts")
+    assert list_after_delete.status_code == 200
+    assert list_after_delete.json() == []
+
+
+@pytest.mark.asyncio
+async def test_intake_drafts_are_scoped_by_current_user_and_tenant(
+    client, db_session, test_tenant, test_user
+):
+    peer = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="peer@testfirm.com",
+        full_name="Peer User",
+        role="user",
+        is_active=True,
+        oauth_provider="google",
+        oauth_subject="peer-subject",
+    )
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Other Firm",
+        domain="other-firm.example",
+        billing_tier="payg",
+        is_active=True,
+    )
+    other_tenant_user = User(
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email="other@testfirm.com",
+        full_name="Other Tenant User",
+        role="admin",
+        is_active=True,
+        oauth_provider="google",
+        oauth_subject="other-subject",
+    )
+    peer_draft_id = uuid.uuid4()
+    other_tenant_draft_id = uuid.uuid4()
+
+    db_session.add_all(
+        [
+            peer,
+            other_tenant,
+            other_tenant_user,
+            IntakeCallDraft(
+                id=peer_draft_id,
+                tenant_id=test_tenant.id,
+                created_by_user_id=peer.id,
+                payload={"owner": "peer"},
+            ),
+            IntakeCallDraft(
+                id=other_tenant_draft_id,
+                tenant_id=other_tenant.id,
+                created_by_user_id=other_tenant_user.id,
+                payload={"owner": "other_tenant"},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    mine_payload = {"caller_name": "Mine"}
+    created = await client.put(
+        f"/api/intake/drafts/{uuid.uuid4()}",
+        json={"payload": mine_payload},
+    )
+    assert created.status_code == 200
+
+    listing = await client.get("/api/intake/drafts")
+    assert listing.status_code == 200
+    ids = {item["id"] for item in listing.json()}
+    assert created.json()["id"] in ids
+    assert peer_draft_id not in ids
+    assert other_tenant_draft_id not in ids
+
+    assert (
+        await client.delete(f"/api/intake/drafts/{peer_draft_id}")
+    ).status_code == 404
+    assert (
+        await client.delete(f"/api/intake/drafts/{other_tenant_draft_id}")
+    ).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_intake_drafts_idempotent_put_rejects_other_tenant_id_collision(
+    client, db_session, test_tenant, test_user
+):
+    other_tenant = Tenant(
+        id=uuid.uuid4(),
+        name="Collision Tenant",
+        domain="collision.example",
+        billing_tier="payg",
+        is_active=True,
+    )
+    collision_id = uuid.uuid4()
+
+    db_session.add_all(
+        [
+            other_tenant,
+            IntakeCallDraft(
+                id=collision_id,
+                tenant_id=other_tenant.id,
+                created_by_user_id=uuid.uuid4(),
+                payload={"status": "stale"},
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/intake/drafts/{collision_id}",
+        json={"payload": {"status": "fresh"}},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_intake_drafts_updated_at_is_server_authored(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+):
+    draft_id = uuid.uuid4()
+
+    created = await client.put(
+        f"/api/intake/drafts/{draft_id}",
+        json={"payload": {"notes": "first"}},
+    )
+    assert created.status_code == 200
+    created_data = created.json()
+    created_updated_at = datetime.fromisoformat(
+        created_data["updated_at"].replace("Z", "+00:00")
+    )
+
+    await asyncio.sleep(0.01)
+    updated = await client.put(
+        f"/api/intake/drafts/{draft_id}",
+        json={"payload": {"notes": "second"}},
+    )
+    assert updated.status_code == 200
+    updated_data = updated.json()
+    updated_updated_at = datetime.fromisoformat(
+        updated_data["updated_at"].replace("Z", "+00:00")
+    )
+
+    assert updated_updated_at > created_updated_at

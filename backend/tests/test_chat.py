@@ -1,6 +1,7 @@
 """Tests for conversation and message endpoints."""
 
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ from app.routers.chat import (
     _stream_progress_event,
     _stream_source_counts,
 )
+from app.schemas.chat import ChatAttachmentResponse
 from app.models.conversation import Conversation
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
@@ -166,6 +168,25 @@ def test_conversation_belongs_to_user_does_not_grant_admin_override():
         conv=type("Conv", (), {"user_id": other_user_id})(),
         user=type("User", (), {"id": user_id, "role": "admin"})(),
     ) is False
+
+
+def test_chat_attachment_response_serializes_uuid_id_to_string():
+    doc_id = uuid.uuid4()
+    doc = Document(
+        id=doc_id,
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        filename="client-note.txt",
+        content_type="text/plain",
+        file_size=128,
+        status="ready",
+        chunk_count=0,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    response = ChatAttachmentResponse.model_validate(doc)
+
+    assert response.id == str(doc_id)
 
 
 @pytest.mark.asyncio

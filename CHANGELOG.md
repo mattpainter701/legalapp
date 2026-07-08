@@ -3,6 +3,252 @@
 ## [Unreleased]
 
 ### Added
+- **Document automation and e-sign enhancement research:** added
+  `docs/research/2026-07-08-document-automation-esign-enhancements.md`,
+  comparing Gavel, Clio Draft, Docassemble, Dropbox Sign, DocuSign, PandaDoc,
+  and Documenso against the current Clarity template/e-sign implementation.
+  The recommended path is an office-user Template Studio, deterministic
+  smart-fill with provenance, engagement-letter/fee-agreement generation, and
+  Dropbox Sign provider wiring around the existing native e-sign interface.
+- **Document Automation workspace foundation:** reframed the Templates page as
+  a tabbed Document Automation workspace while keeping `/templates` stable,
+  added matter-aware Generate/Smart Fill flow hooks, template lifecycle metadata
+  fields, and `POST /api/templates/{id}/smart-fill-preview` for deterministic
+  suggestions from matter, linked client contact, attorney, and current-user
+  context. Existing template CRUD/render callers remain backward-compatible.
+- **Office-ready native e-sign metadata:** signature requests now support
+  multiple signers, signer roles, sequential signing, expiration, reminder
+  metadata, decline/void reasons, and portal decline handling. Existing
+  internal portal typed signatures still create the executed certificate matter
+  document on completion.
+
+### Fixed
+- **Google/Microsoft integration scope visibility:** `/api/admin/permissions`
+  now returns each provider's required OAuth scopes explicitly, and the
+  Integrations panel shows required, granted, and missing scope counts with an
+  alias-safe required-scope list plus any extra granted scopes.
+- **Chat LiteLLM hypervisor redeploy:** redeployed the hypervisor stack from
+  `fa580e5` with `docker compose -f docker-compose.hypervisor.yml up -d
+  --build`, including the LiteLLM and LiteLLM Postgres services. Production
+  health, LiteLLM/backend/frontend container health, OAuth redirect smoke
+  checks, cloudflared, and pre/post data guard all passed.
+- **Recent merge-stack integration:** reviewed the newly fetched SBOM,
+  probate/template, RBAC/admin-users, Teams, Zoom, and add-on workflow branch
+  stack and integrated only the low-risk pieces. The old Zoom recordings
+  `call_intake` router remains unmerged because current `main` already has the
+  newer Zoom Phone call-history/webhook intake flow; the large add-on UI patch
+  remains a follow-up instead of being merged over newer matter/contact/plugin
+  work.
+- **Admin Users RBAC response contract:** `/api/admin/users` now returns manual
+  RBAC role assignment IDs and names alongside license, PAYG budget, and default
+  billing-rate fields, so the Users tab can render the actual assigned roles
+  after save/reload instead of falling back to the legacy `user.role` string.
+  Last-admin deactivation now checks `admin_settings` capability holders, and
+  legacy `accountant` role support remains intact for finance-access flows.
+- **Teams reauthorization and notification safety:** generic Microsoft
+  reauthorization now preserves Teams scopes for tenants that already granted
+  them, Google integration status coerces missing user-sync totals to `0`, and
+  Teams notification dispatch no longer mutates the caller's field dictionary
+  while building Adaptive Cards.
+- **Intake production-session follow-ups:** refreshing the browser after login
+  no longer treats the user as logged out just because the legacy localStorage
+  bearer token is absent; app boot now verifies the httpOnly cookie session via
+  `/auth/me` and lets the normal refresh-cookie path run before clearing auth
+  state. Call Capture draft tabs now include an X close/delete affordance with
+  a discard confirmation for non-empty drafts, so users can clean up extra
+  local/server draft cards without submitting them or accidentally losing
+  typed call notes. The intake dashboard also starts a throttled Zoom Phone
+  sync on load for connected tenants, so recent Zoom calls are pulled in
+  without requiring the manual Sync button every time. Intake-created staff
+  tasks now include the
+  caller name in the title (`Caller - Call back caller`), include the creator
+  in the task description, and task notification emails/calendar events include
+  creator/customer context plus a functional `/tasks/{id}` link. The frontend
+  now serves `/tasks/:taskId`, loads the linked task if filters omit it, and
+  scrolls/highlights it.
+- **Admin → Users role-assign badge never reflected the actual assignment:**
+  the per-user role badge in `RoleAssignCell` always displayed the legacy
+  single `user.role` string, regardless of which custom roles were actually
+  assigned via the checkbox dropdown. `PUT /api/admin/roles/assign/{user_id}`
+  was working correctly the whole time (confirmed via nginx logs: three
+  successful `200` responses) and every tenant has at least one user holding
+  `manage_roles` (confirmed via direct DB query) — the backend was never
+  broken. The badge now derives its label from the user's actual assigned
+  role names (`role_ids` from the backend), falling back to the legacy role
+  string only when no manual role assignment exists, so a successful
+  assignment is now visibly reflected instead of looking like a no-op.
+- **Raw nginx error page leaking into the call draft receipt trail:** when a
+  proxy/gateway rejected a request before it reached the app (nginx 429, or a
+  502/503/504), `normalizeApiError()` treated the raw HTML error page body as
+  the error message text. `retryReceipt()` in `useCallDrafts` then stored that
+  full HTML page as a receipt's `error` field with no length limit, and
+  `ReceiptTrail` rendered it verbatim and unbounded — dumping the entire nginx
+  error page into the small receipt card in the intake dashboard's Call
+  Capture section, corrupting the layout. Root cause traced from a 2026-07-06
+  429 burst against `/api/intake/drafts/*` (2,593 hits in nginx logs,
+  concentrated in the same few seconds — a request storm, not ordinary
+  concurrent usage) that predates and appears to have prompted the same-day
+  "stop draft autosave flood" fix; the corrupted receipt persisted in
+  localStorage afterward since nothing ever re-sanitized it. Fixed at three
+  layers: `normalizeApiError()` now recognizes HTML bodies and falls back to a
+  short status-based message (with a friendly 429/502/503/504 message) instead
+  of the raw page; `useCallDrafts` sanitizes any receipt error (including
+  already-persisted ones, on next load) that still looks like an HTML
+  document; `ReceiptTrail` truncates and line-clamps error text as a last line
+  of defense. This also fixes any already-corrupted receipt already sitting in
+  a user's browser without requiring them to clear storage.
+
+### Added
+- **SBOM and AI-BOM inventory tracking:** added a standard-library inventory
+  generator, `make sbom-inventory`, generated JSON/Markdown inventory outputs,
+  and an AI/SBOM/DLP risk roadmap. This is a tracking artifact for current
+  manifests, Docker bases, compose images, and LiteLLM routes, not a replacement
+  for formal CycloneDX/SPDX release SBOMs.
+- **Probate, estate planning, and template automation plans:** imported the
+  probate/estate workflow, cross-module template index, and competitive
+  document automation planning docs, and tracked the work as backlog items
+  `BK12`-`BK17` instead of duplicating Sprint 15 task IDs.
+- **Favicon:** created `frontend/public/favicon.svg` (navy/gold "CL" mark
+  matching the PWA icons) — `index.html` referenced it but the file never
+  existed, so browser tabs showed a blank icon. Also added
+  `apple-touch-icon` and `theme-color` meta tags to `index.html`.
+
+### Changed
+- **Brand palette harmonization:** InvoicesPage, InvoiceDetailPage,
+  TimeTrackingPage, and ProfilePage used generic Tailwind-gray/blue/green/red
+  inline hex colors that clashed with the app's warm cream/ink/sage design
+  system. All ~155 hex values remapped onto the brand palette (lines →
+  `#E1D9C9`/`#CFC4AE`, muted text → `#6A7587`, links/success → sage
+  `#426146`/`#5A7A5C`, errors → brand rose, warnings → brand amber). QBO
+  brand green left untouched.
+
+### Fixed (mobile/tablet audit)
+- **Mobile viewport height:** AppShell used `h-screen` (100vh), which on
+  mobile browsers includes the URL bar — the bottom tab bar could sit
+  partially off-screen. Now uses `100dvh` with `h-screen` fallback.
+- **Safe-area support:** added `viewport-fit=cover` to the viewport meta and
+  `env(safe-area-inset-bottom)` padding on the mobile bottom nav so it clears
+  the iPhone home indicator in installed (standalone PWA) mode.
+- **iOS input auto-zoom:** app inputs are 13–14px, which makes iOS Safari
+  zoom the page on focus. Added an iOS-only CSS rule (`-webkit-touch-callout`
+  supports guard, ≤767px) forcing 16px font-size on inputs/selects/textareas.
+- **Pages overflowing the shell:** CalendarPage and CommunicationsPage used
+  `h-screen` while rendered inside AppShell (which already reserves header +
+  mobile-nav height), making content taller than the viewport. Changed to
+  `h-full`, matching ChatPage.
+- **Tables clipping on narrow screens:** 16 tables across 12 files either had
+  no horizontal-scroll wrapper or sat in `overflow-hidden` containers that
+  clipped columns on mobile. Containers switched to `overflow-x-auto` (still
+  clips rounded corners) or gained scroll wrappers with sensible `min-width`:
+  RolesTab, BillingPage, MatterPartiesTab, MatterDocumentsTab,
+  InvoiceDetailPage (×2), ProfilePage, TrustAccountDetail,
+  TrustAccountReconcile, TrustAccountingPage, DomesticDetailPage (×3),
+  PortalCasePage (×3).
+
+### Fixed
+- **Google OAuth `at_hash` verification:** fixed Google login callbacks that
+  failed with `No access_token provided to compare against at_hash claim` when
+  Google included an `at_hash` in the ID token. The callback now passes the
+  provider access token into ID-token verification and focused tests cover a
+  signed Google ID token with a matching `at_hash`.
+- **Mobile OAuth callback duplicates:** fixed Google/Microsoft login failures
+  where mobile browsers could request the same provider callback URL more than
+  once, causing the second request to surface `Invalid or expired OAuth state`
+  as a raw API error page. Successful provider callbacks now keep a
+  60-second replay record bound to the exact OAuth `state` + authorization
+  code, and duplicate callbacks mint a fresh frontend exchange code without
+  reusing the provider authorization code. Google token-exchange failures now
+  log the provider status/body for diagnosis.
+- **Intake draft autosave flood:** fixed a production issue where the call
+  draft hook could rehydrate repeatedly, sync untouched cards, and continue
+  autosave attempts after nginx returned 429s, consuming the shared API rate
+  limit and making unrelated pages appear broken. Draft hydration is now
+  stable, blank cards do not sync to the backend, 429 autosave failures do not
+  auto-retry or stack toasts, duplicate in-flight saves are blocked, and the
+  capture form flushes only when focus leaves the form rather than during
+  normal field-to-field movement. Also fixed the intake rotation admin panel's
+  invalid hook dependency list and added migration
+  `079_error_logs_system_policy` so tenantless/system error-log rows can pass
+  the nullable `error_logs.tenant_id` RLS policy.
+
+### Added
+- **Intake call drafts and action receipts:** added
+  `intake_call_drafts` (`078_intake_call_drafts`) with hardened tenant RLS,
+  current-user draft list/upsert/delete endpoints at `/api/intake/drafts`,
+  server-authored draft timestamps, and frontend two-tier draft persistence
+  through `useCallDrafts()` (localStorage immediacy plus backend durability).
+  The intake dashboard now has a call-card strip above Call Capture, `Alt+1..9`
+  card switching, `Alt+Shift+N` new draft, shared `ToastProvider`,
+  `AsyncButton`, and per-draft `ReceiptTrail` retry support for failed draft
+  saves, lead assignment, and call submission.
+- **API error observability and route-client contract checks:** added
+  request-id middleware (`X-Request-ID`), migration
+  `077_error_logs_nullable_tenant` for durable tenantless/system error logs,
+  focused error-observability/startup tests, and
+  `backend/scripts/route_client_contract.py` plus a pytest wrapper to verify
+  frontend API call sites still match backend route methods/paths.
+- **API/frontend/backend error-readiness map**
+  (`docs/api-front-backend-map-eval-2026-07-05.md`): mapped 511 backend routes
+  and 339 frontend API call sites, reviewed exception/error-log/access-log
+  paths, and documented the next stability priorities: request/error IDs in
+  safe 500 responses, tenantless/system error logging, production DB
+  fail-closed startup, shared frontend API error normalization, removal or
+  dev-gating of bearer-token localStorage fallback, and route/client contract
+  smokes.
+- **Tenant-context RLS hardening:** migration
+  `076_harden_strict_tenant_rls` recreates the strict legacy
+  contacts/tasks/communication_logs/leads tenant policies with
+  `current_setting(..., true)` + `NULLIF`, and focused regressions now cover
+  post-commit tenant context re-binding, Stripe webhook tenant resolution,
+  recurring billing tenant loops, cloud-sync provider rebinds, and chat
+  attachment UUID serialization.
+- **Backend 500 root-cause review** (`docs/backend-500-review-2026-07-05.md`):
+  full-codebase audit of the recurring "Internal server error" class. Root
+  cause: RLS tenant context is a transaction-local GUC dropped by every
+  `db.commit()`; ~122 vulnerable commit sites enumerated across 30+ routers
+  and 3 services, verified against production `error_logs`/`pg_policies`.
+  Also documents three confirmed silent failures (Stripe payment webhook
+  reconciliation, recurring-invoice generation, multi-provider cloud sync)
+  and the recommended systemic fix (auto re-bind on transaction begin in
+  `get_db`, hardening migration for 4 strict legacy RLS policies, regression
+  test). Review only — no code changes.
+- **Time tracking, invoicing & QBO overhaul:** live billing timers with one
+  running timer per user (`POST/GET/DELETE /api/billing/time-entries/timer`,
+  start/stop endpoints; elapsed time rounds UP to the tenant's billing
+  increment — default 6 minutes, minimum one increment), tenant billing
+  settings (`GET/PUT /api/billing/settings`: default hourly rate + timer
+  rounding), and a Start Timer / Stop & Log / Discard timer bar with live
+  elapsed display on the Time Tracking page (plus a Matter column). Invoices
+  now generate as **drafts** with sequential per-tenant numbers
+  (`INV-YYYY-NNNN` instead of random hex) and billing-period dates derived
+  from the billed entries; status transitions are validated
+  (draft→sent→paid/partially_paid, void/written_off rules), `sent_at` is
+  stamped on send, payments are blocked on draft/void invoices, and voiding
+  an invoice releases its time entries and expenses back to the unbilled
+  pool for re-invoicing. Invoice APIs return `amount_paid`, `balance_due`,
+  `is_overdue` (computed from due date — no cron needed), and `matter_name`;
+  the Invoices page gained status/overdue filters, matter + balance columns,
+  and overdue badges; the invoice detail page gained Send Invoice / Mark
+  Paid / Void actions. Time-entry list gained `date_from`/`date_to`/
+  `user_id`/`billable_only` filters and pagination with SQL-side totals.
+  QBO sync fixes: the automatic invoice/payment sync on status change was
+  silently broken (it read nonexistent plaintext-token attributes off the
+  integration row — it now resolves a fresh decrypted token via the token
+  vault, honoring refresh); QBO `CustomerRef` now uses the customer **Id**
+  (find-or-create) instead of a name-only reference that QBO rejects;
+  TimeActivity sync is idempotent via a new `qbo_timeactivity_id` column
+  (full syncs no longer duplicate time in QBO); invoice updates fetch the
+  current `SyncToken`; payment sync includes the required `CustomerRef`
+  and is skipped when already synced; `sync/all` now also pushes pending
+  payments and reports `payments_synced`; expense invoice lines resolve
+  their category-specific QBO item mapping. Migration
+  `075_billing_timer_and_qbo_dedupe`.
+- **Production deploy data guard:** added `scripts/prod_data_guard.sh` to take
+  a custom-format Postgres dump and exact public-table/per-tenant row-count
+  snapshot before production deploys, then fail the post-deploy check if any
+  existing count decreases. The legacy deploy script now runs the guard before
+  build/restart and verifies counts after health checks, and no longer uses
+  `--remove-orphans` during the main app restart.
 - **Call Intake tasks: assigner notes, closure reasons, customer-history
   documentation:** task assignment emails can now carry a personal message
   from the assigner (`assignment_note` on `POST /api/tasks` and on reassign
@@ -76,6 +322,45 @@
 - **Gateway privacy defaults:** LiteLLM message logging remains disabled and the base config no longer enables success/failure callbacks. LegalApp gateway usage, MCP usage, and error logs now suppress raw prompt/query text by default behind `GATEWAY_RAW_TEXT_RETENTION_ENABLED=false`; chat sends only metadata fields (`tenant_id`, `user_id`, `conversation_id`, `operation_type`, `matter_id`, `plugin`, `skill`, `premium`) to LiteLLM. Retention defaults are documented as 30 days for gateway logs, 7 days for debug logs, and 365 days for spend logs.
 - **Gateway operator audit logs:** added `operator_audit_logs` plus metadata-only audit entries for Platform AI route saves, provider key disable/delete actions, and synthetic model tests. A shared tenant debug-mode audit payload helper is ready for the 1203 debug-mode UI without logging prompts, responses, keys, or raw customer content.
 
+### Changed
+- **Intake call capture:** the existing Call Capture form is now backed by the
+  active draft while preserving the dashboard layout. Selecting history
+  matches, recent callers, phone context, notes, task routing, and staff
+  assignment updates the active draft and flushes to backend on blur/card
+  switch.
+- **Production deploy:** shipped `25a9238` for the systemic API/RLS/error
+  observability hardening to the hypervisor after local backend/frontend
+  validation, staged secret scan, production env guard, and predeploy
+  dump/count snapshot. Rebuilt and recreated backend/frontend, ran migrations
+  through `077_error_logs_nullable_tenant`, verified local and public health,
+  Microsoft/Google OAuth 307 redirects, active cloudflared, request-id headers,
+  closed docs/dev routes, and passed the postdeploy production data guard.
+- **Assistant chat source/reference UX:** chat turns now retain source
+  retrieval context after streaming and refresh. User prompts and assistant
+  answers both show a compact References strip with matter, upload,
+  firm/cloud, and CourtListener counts, and the final answer ledger is now
+  labeled for mixed sources and references instead of only authorities.
+- **Production deploy:** shipped `d2e7851` for the Matter create API 500 fix
+  to the hypervisor after a predeploy dump/count snapshot; rebuilt
+  backend/frontend, recreated the app containers, verified
+  health/OAuth/cloudflared/closed docs-dev routes, and passed the postdeploy
+  production data guard.
+- **Production deploy:** shipped `acbbe64` for the Call Intake
+  create-lead/staff-task 500 fix to the hypervisor after a predeploy dump/count
+  snapshot; rebuilt backend/frontend, recreated the app containers, verified
+  health/OAuth/cloudflared/closed docs-dev routes, and passed the postdeploy
+  production data guard.
+- **Production deploy:** pulled and deployed merge `4e70405` for the billing
+  timer/invoicing/QBO overhaul after rotating the placeholder `SECRET_KEY`,
+  setting production `DEV_MODE=false`, taking a predeploy DB dump/count
+  snapshot, and verifying the postdeploy data guard, health checks, OAuth
+  redirects, closed dev/docs routes, and Alembic revision
+  `075_billing_timer_and_qbo_dedupe`.
+- **Git/deploy hygiene:** cleaned merged local and remote branches after the
+  production data guard landed, removed stale clean worktrees, preserved
+  unmerged in-flight integration work, and re-verified the production data
+  guard snapshot plus public health before resuming feature work from `main`.
+
 ### Fixed
 - **Matter cloud-folder sync scope:** the per-matter cloud folder sync endpoint
   now refreshes only that matter's mapped primary, subfolder, and context
@@ -83,6 +368,41 @@
 - **Google Drive folder provisioning race:** Google folder creation now
   re-lists and reuses the existing folder when a concurrent create returns 409,
   matching the OneDrive/SharePoint duplicate-recovery behavior.
+- **Opaque production API failures:** safe error responses now include
+  `request_id` and captured `error_id`, request IDs persist in `error_logs`,
+  tenantless/system errors no longer skip logging, and production startup
+  fails closed when the initial DB connectivity probe fails. Frontend API
+  handling now normalizes Axios and streaming-fetch failures, preserves
+  request/error IDs from response bodies/headers, parses validation details,
+  and removes the production localStorage bearer-token fallback unless
+  explicitly enabled for dev.
+- **Assistant chat reference ledger wrapping:** long unbroken citations,
+  source excerpts, and message/reference text now wrap inside the chat card
+  instead of overflowing across the page.
+- **Systemic post-commit RLS 500s:** request DB sessions now attach a
+  per-session SQLAlchemy `after_begin` listener that re-binds both tenant GUCs
+  on every new transaction, so any DB work after `db.commit()` remains scoped
+  instead of returning empty RLS reads or `Could not refresh instance` 500s.
+  Auth register/signup explicitly re-enable the transaction-local RLS bypass
+  after their first commit. Stripe payment webhooks resolve and bind tenant
+  context before invoice/payment reconciliation, recurring billing runs per
+  active tenant with tenant context, cloud sync re-binds around each provider,
+  and chat attachment responses serialize UUID IDs as strings.
+- **Matter create API 500:** `POST /api/matters` now explicitly binds tenant
+  context before writing and re-binds it after commit before refreshing/reloading
+  the created matter, preventing production RLS from hiding the just-created
+  row during response construction.
+- **Call Intake create lead + staff task 500:** stopped refreshing the
+  `CommunicationLog` after commit in `POST /api/intake/dashboard/calls` and
+  re-bound tenant context before task notifications so production RLS no
+  longer hides the just-created call row during the combined lead/staff-task
+  workflow.
+- **Zoom Phone intake call-feed sync:** fixed a production 500 where tenants
+  with connected Zoom Phone grants could fetch call history but inserts into
+  `communication_logs` failed RLS because legacy policies still read
+  `app.tenant_id` while newer request setup only set `app.current_tenant_id`.
+  The shared tenant-context helper now keeps both GUC names synchronized and
+  clears them to a fail-closed sentinel UUID.
 - **Backend/API security hardening (prod-readiness pass):** frontend auth now
   lives entirely in httpOnly cookies — the SPA no longer reads, writes, or
   falls back to a bearer token in `localStorage`, closing an XSS session-theft
@@ -282,6 +602,31 @@
   with a throwaway `TOKEN_ENCRYPTION_KEY`, and `npm run build` in `frontend/`.
   DB-backed integration readiness tests still cannot run locally because the
   test Postgres connection is refused.
+- **Intake call drafts:** added focused backend coverage for draft CRUD,
+  idempotent upsert, current-user/tenant scoping, cross-tenant draft-id
+  collision handling, and server-authored `updated_at`. Verification passed
+  for backend compile, route-client contract (`394` frontend API call sites),
+  and frontend production build. Local DB-backed intake tests remain blocked
+  by unavailable Postgres (`ConnectionRefusedError`, `WinError 1225`) after 6
+  non-DB tests passed.
+- **Matter create RLS regression:** added `backend\tests\test_matters.py` to
+  cover `POST /api/matters`, primary assignment/event creation, and the
+  post-commit tenant-context requirement before refreshing the created matter.
+  Verification: `backend\tests\test_matters.py`,
+  `backend\tests\test_module_guard.py`, backend compile, and frontend
+  production build.
+- **Call Intake create lead + staff task regression:** added coverage for the
+  exact `create_lead` + `specific_staff` dashboard action, including a guard
+  against post-commit communication-log refreshes and a tenant-context check
+  before notifications. Verification: targeted regression, full
+  `backend\tests\test_intake_dashboard.py`, backend compile, and frontend
+  production build.
+- **Zoom Phone intake RLS regression:** expanded the tenant-isolation test to
+  assert both current and legacy tenant-context GUCs are set/cleared together,
+  and made it honor `TEST_DATABASE_URL` so the non-superuser RLS probe runs
+  against the local test Postgres port. Verification:
+  `py -m pytest backend\tests\test_tenant_isolation.py backend\tests\test_intake_dashboard.py -q`
+  and `py -m compileall -q backend\app`.
 - **Client portal remediation:** added unit regressions for invite-bound portal
   JWTs, dedicated portal cookie naming, revoked invite rejection, legacy token
   rejection, and contact/email-bound portal signer matching. Verification:

@@ -71,6 +71,16 @@ class TimeEntry(Base):
     status: Mapped[str] = mapped_column(
         String(50), default="draft", server_default="draft"
     )
+    timer_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Set while a live timer is running for this entry",
+    )
+    qbo_timeactivity_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="QBO TimeActivity.Id once synced (prevents duplicate sync)",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -203,6 +213,11 @@ class Invoice(Base):
     )
     billing_period_start: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     billing_period_end: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the invoice transitioned from draft to sent",
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),

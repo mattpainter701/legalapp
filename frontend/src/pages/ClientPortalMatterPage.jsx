@@ -9,6 +9,7 @@ import {
   listClientPortalInvoices,
   listClientPortalSignatures,
   signClientPortalSignature,
+  declineClientPortalSignature,
 } from '../api'
 import {
   ShieldCheck, MessageSquare, FileText, Receipt, Send,
@@ -338,11 +339,24 @@ function formatSignatureDate(value) {
   }
 }
 
+function formatSignerRole(role) {
+  return (role || 'signer').replace(/_/g, ' ')
+}
+
+function portalSignatureStatus(req) {
+  if (req.status === 'expired') return 'Expired'
+  if (req.status === 'declined') return 'Declined'
+  if (req.status === 'voided') return 'Voided'
+  return 'Action required'
+}
+
 function SignaturesTab() {
   const [requests, setRequests] = useState([])
   const [signing, setSigning] = useState(null) // request id being signed
+  const [declining, setDeclining] = useState(null)
   const [typedByRequest, setTypedByRequest] = useState({})
   const [acceptedByRequest, setAcceptedByRequest] = useState({})
+  const [declineReasonByRequest, setDeclineReasonByRequest] = useState({})
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(true)
@@ -374,6 +388,23 @@ function SignaturesTab() {
       setErr(e?.response?.data?.detail || 'Failed to sign. Please try again.')
     } finally {
       setSigning(null)
+    }
+  }
+
+  const decline = async (req) => {
+    setErr('')
+    setSuccess('')
+    const reason = (declineReasonByRequest[req.id] || '').trim()
+    setDeclining(req.id)
+    try {
+      await declineClientPortalSignature(req.id, { reason })
+      setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: '' }))
+      setSuccess('Signature request declined. Your legal team will see the reason.')
+      load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'Failed to decline. Please try again.')
+    } finally {
+      setDeclining(null)
     }
   }
 
@@ -420,15 +451,22 @@ function SignaturesTab() {
       {requests.map((req) => {
         const typed = typedByRequest[req.id] || ''
         const accepted = Boolean(acceptedByRequest[req.id])
+        const canAct = ['sent', 'partially_signed'].includes(req.status)
+        const declineReason = declineReasonByRequest[req.id] || ''
         return (
           <Card key={req.id}>
             <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
               <div>
-                <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-brand-amber/10 text-brand-amber text-xs font-semibold uppercase tracking-wide mb-3">
-                  Action required
+                <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide mb-3 ${canAct ? 'bg-brand-amber/10 text-brand-amber' : 'bg-brand-bg-soft text-brand-ink-2'}`}>
+                  {portalSignatureStatus(req)}
                 </div>
                 <p className="text-base font-serif font-bold text-brand-ink">{req.document_name || 'Document'}</p>
-                <p className="text-xs text-brand-ink-2 mt-1">Sent {formatSignatureDate(req.sent_at)} · {req.signers?.length || 0} signer(s)</p>
+                <p className="text-xs text-brand-ink-2 mt-1">
+                  Sent {formatSignatureDate(req.sent_at)} · Expires {formatSignatureDate(req.expires_at)} · {req.signers?.length || 0} signer(s)
+                </p>
+                {(req.decline_reason || req.void_reason) && (
+                  <p className="text-xs text-brand-rose mt-1">{req.decline_reason || req.void_reason}</p>
+                )}
               </div>
               <PenLine size={22} className="text-brand-accent" />
             </div>
@@ -438,38 +476,60 @@ function SignaturesTab() {
                 <div key={s.id} className="flex items-center justify-between gap-3 px-3 py-2 border-b border-brand-line last:border-b-0 bg-white/60">
                   <div>
                     <p className="text-sm text-brand-ink">{idx + 1}. {s.name}</p>
+                    <p className="text-xs text-brand-ink-2 capitalize">{formatSignerRole(s.role)}</p>
                     <p className="text-xs text-brand-ink-2">{s.email}</p>
                   </div>
-                  <span className={`text-xs font-semibold capitalize ${s.status === 'signed' ? 'text-brand-green' : 'text-brand-amber'}`}>
-                    {s.status === 'signed' ? `Signed ${formatSignatureDate(s.signed_at)}` : 'Pending'}
+                  <span className={`text-xs font-semibold capitalize ${s.status === 'signed' ? 'text-brand-green' : s.status === 'declined' ? 'text-brand-rose' : 'text-brand-amber'}`}>
+                    {s.status === 'signed' ? `Signed ${formatSignatureDate(s.signed_at)}` : s.status === 'declined' ? 'Declined' : 'Pending'}
                   </span>
                 </div>
               ))}
             </div>
 
-            <label className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
-            <input
-              value={typed}
-              onChange={(e) => setTypedByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
-              placeholder="Type your full legal name"
-              className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
-            />
-            <label className="flex items-start gap-2 mt-3 text-xs text-brand-ink-2">
-              <input
-                type="checkbox"
-                checked={accepted}
-                onChange={(e) => setAcceptedByRequest((prev) => ({ ...prev, [req.id]: e.target.checked }))}
-                className="mt-0.5"
-              />
-              <span>I consent to use an electronic signature and understand this typed name will be attached to this document's completion certificate.</span>
-            </label>
-            <button
-              onClick={() => sign(req)}
-              disabled={signing === req.id || !typed.trim() || !accepted}
-              className="mt-4 w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {signing === req.id ? 'Capturing signature…' : 'Sign document'}
-            </button>
+            {canAct ? (
+              <>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
+                <input
+                  value={typed}
+                  onChange={(e) => setTypedByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                  placeholder="Type your full legal name"
+                  className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                />
+                <label className="flex items-start gap-2 mt-3 text-xs text-brand-ink-2">
+                  <input
+                    type="checkbox"
+                    checked={accepted}
+                    onChange={(e) => setAcceptedByRequest((prev) => ({ ...prev, [req.id]: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>I consent to use an electronic signature and understand this typed name will be attached to this document's completion certificate.</span>
+                </label>
+                <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={() => sign(req)}
+                    disabled={signing === req.id || !typed.trim() || !accepted}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-lg hover:bg-brand-ink-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {signing === req.id ? 'Capturing signature…' : 'Sign document'}
+                  </button>
+                  <button
+                    onClick={() => decline(req)}
+                    disabled={declining === req.id}
+                    className="w-full sm:w-auto px-5 py-2.5 border border-brand-rose text-brand-rose text-sm font-sans font-semibold rounded-lg hover:bg-brand-rose/5 transition-all disabled:opacity-50"
+                  >
+                    {declining === req.id ? 'Declining…' : 'Decline'}
+                  </button>
+                </div>
+                <input
+                  value={declineReason}
+                  onChange={(e) => setDeclineReasonByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
+                  placeholder="Decline reason"
+                  className="mt-3 w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent/40"
+                />
+              </>
+            ) : (
+              <p className="text-sm text-brand-ink-2">This signature request is no longer open for signing.</p>
+            )}
           </Card>
         )
       })}

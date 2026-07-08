@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -16,12 +17,14 @@ from app.middleware.tenant import get_current_user
 from app.services.access_control import require_finance_admin
 from app.models.billing import TimeEntry, Expense, Invoice, InvoiceLineItem, Payment
 from app.models.plugin import Matter
-from app.models.tenant import TenantSettings
+from app.models.tenant import Tenant, TenantSettings
 from app.schemas.billing import (
     TimeEntryCreate,
     TimeEntryUpdate,
     TimeEntryResponse,
     TimeEntryListResponse,
+    TimerStartRequest,
+    TimerStopRequest,
     ExpenseCreate,
     ExpenseUpdate,
     ExpenseResponse,
@@ -35,6 +38,15 @@ from app.schemas.billing import (
     PaymentResponse,
     StripePaymentLinkResponse,
     InvoiceExportRequest,
+    BillingSettingsResponse,
+    BillingSettingsUpdate,
+)
+from app.services.billing_workflow import (
+    DEFAULT_ROUNDING_MINUTES,
+    can_transition_invoice,
+    is_invoice_overdue,
+    next_invoice_number,
+    round_timer_hours,
 )
 
 settings = get_settings()
@@ -48,6 +60,52 @@ logger = logging.getLogger(__name__)
 def _tenant_filter(tenant_id: uuid.UUID):
     """Return filter kwargs for tenant-scoped queries."""
     return {"tenant_id": tenant_id}
+
+
+async def _get_billing_config(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """Return the tenant's billing config dict from TenantSettings.custom_config."""
+    ts_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
+    )
+    ts = ts_result.scalar_one_or_none()
+    if ts and ts.custom_config:
+        return (ts.custom_config or {}).get("billing", {}) or {}
+    return {}
+
+
+async def _resolve_hourly_rate(
+    db: AsyncSession,
+    user,
+    matter_obj: Matter,
+    explicit_rate: Decimal | None,
+) -> Decimal | None:
+    """Rate resolution: explicit > matter override > user default > tenant default."""
+    rate = explicit_rate or matter_obj.hourly_rate or user.default_billing_rate
+    if not rate:
+        billing_cfg = await _get_billing_config(db, user.tenant_id)
+        tenant_default = billing_cfg.get("default_hourly_rate")
+        if tenant_default:
+            rate = Decimal(str(tenant_default))
+    return rate
+
+
+async def _get_matter_or_404(
+    db: AsyncSession, matter_id: str, tenant_id: uuid.UUID
+) -> Matter:
+    try:
+        matter_uuid = uuid.UUID(matter_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid matter ID format")
+    matter_result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_uuid,
+            Matter.tenant_id == tenant_id,
+        )
+    )
+    matter_obj = matter_result.scalar_one_or_none()
+    if not matter_obj:
+        raise HTTPException(status_code=404, detail="Matter not found")
+    return matter_obj
 
 
 # ── Time Entries ────────────────────────────────────────────────────────────
@@ -64,40 +122,9 @@ async def create_time_entry(
 
     # Verify matter belongs to tenant
     await set_tenant_context(db, str(user.tenant_id))
+    matter_obj = await _get_matter_or_404(db, body.matter_id, user.tenant_id)
 
-    # Validate matter_id is a valid UUID
-    try:
-        matter_uuid = uuid.UUID(body.matter_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid matter ID format")
-
-    matter_result = await db.execute(
-        select(Matter).where(
-            Matter.id == matter_uuid,
-            Matter.tenant_id == user.tenant_id,
-        )
-    )
-    matter_obj = matter_result.scalar_one_or_none()
-    if not matter_obj:
-        raise HTTPException(status_code=404, detail="Matter not found")
-
-    # Rate resolution: explicit > matter override > user default > tenant default
-    hourly_rate = (
-        body.hourly_rate or matter_obj.hourly_rate or user.default_billing_rate
-    )
-    if not hourly_rate:
-        # Try tenant-level default as final fallback
-        ts_result = await db.execute(
-            select(TenantSettings).where(
-                TenantSettings.tenant_id == user.tenant_id,
-            )
-        )
-        ts = ts_result.scalar_one_or_none()
-        if ts and ts.custom_config:
-            billing_cfg = (ts.custom_config or {}).get("billing", {}) or {}
-            tenant_default = billing_cfg.get("default_hourly_rate")
-            if tenant_default:
-                hourly_rate = Decimal(str(tenant_default))
+    hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
     if not hourly_rate:
         raise HTTPException(
             status_code=400,
@@ -108,7 +135,7 @@ async def create_time_entry(
         amount = body.hours * hourly_rate
         entry = TimeEntry(
             tenant_id=user.tenant_id,
-            matter_id=matter_uuid,
+            matter_id=matter_obj.id,
             user_id=user.id,
             description=body.description,
             hours=body.hours,
@@ -133,43 +160,249 @@ async def create_time_entry(
     return TimeEntryResponse.model_validate(entry, from_attributes=True)
 
 
+def _time_entry_filters(
+    tenant_id: uuid.UUID,
+    matter_id: str | None,
+    status: str | None,
+    unbilled_only: bool,
+    user_id: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    billable_only: bool,
+):
+    """Shared WHERE clauses for the time-entry list and its totals query."""
+    conditions = [TimeEntry.tenant_id == tenant_id]
+    if matter_id:
+        conditions.append(TimeEntry.matter_id == matter_id)
+    if status:
+        conditions.append(TimeEntry.status == status)
+    if unbilled_only:
+        conditions.append(TimeEntry.invoice_id.is_(None))
+    if user_id:
+        conditions.append(TimeEntry.user_id == user_id)
+    if date_from:
+        conditions.append(TimeEntry.date >= date_from)
+    if date_to:
+        conditions.append(TimeEntry.date <= date_to)
+    if billable_only:
+        conditions.append(TimeEntry.is_billable.is_(True))
+    return conditions
+
+
 @router.get("/time-entries")
 async def list_time_entries(
     matter_id: str | None = Query(None),
     status: str | None = Query(None),
     unbilled_only: bool = Query(False),
+    user_id: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    billable_only: bool = Query(False),
+    limit: int = Query(500, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ) -> TimeEntryListResponse:
-    """List time entries with optional filters."""
+    """List time entries with optional filters and pagination.
+
+    Totals (count/hours/amount) cover the whole filtered set, not just the
+    returned page.
+    """
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    stmt = select(TimeEntry).where(TimeEntry.tenant_id == user.tenant_id)
+    conditions = _time_entry_filters(
+        user.tenant_id,
+        matter_id,
+        status,
+        unbilled_only,
+        user_id,
+        date_from,
+        date_to,
+        billable_only,
+    )
 
-    if matter_id:
-        stmt = stmt.where(TimeEntry.matter_id == matter_id)
-    if status:
-        stmt = stmt.where(TimeEntry.status == status)
-    if unbilled_only:
-        stmt = stmt.where(TimeEntry.invoice_id.is_(None))
+    totals_result = await db.execute(
+        select(
+            func.count(TimeEntry.id),
+            func.coalesce(func.sum(TimeEntry.hours), 0),
+            func.coalesce(func.sum(TimeEntry.amount), 0),
+        ).where(*conditions)
+    )
+    total_count, total_hours, total_amount = totals_result.one()
 
-    stmt = stmt.order_by(TimeEntry.date.desc(), TimeEntry.created_at.desc())
-
+    stmt = (
+        select(TimeEntry)
+        .where(*conditions)
+        .order_by(TimeEntry.date.desc(), TimeEntry.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     result = await db.execute(stmt)
     entries = result.scalars().all()
-
-    total_hours = sum((e.hours for e in entries), Decimal("0"))
-    total_amount = sum((e.amount for e in entries), Decimal("0"))
 
     return TimeEntryListResponse(
         items=[
             TimeEntryResponse.model_validate(e, from_attributes=True) for e in entries
         ],
-        total=len(entries),
-        total_hours=total_hours,
-        total_amount=total_amount,
+        total=total_count,
+        total_hours=Decimal(str(total_hours)),
+        total_amount=Decimal(str(total_amount)),
     )
+
+
+# ── Live Timer ──────────────────────────────────────────────────────────────
+# NOTE: these routes must be declared before /time-entries/{entry_id} so
+# "timer" isn't captured as an entry_id path parameter.
+
+
+@router.post("/time-entries/timer/start", status_code=201)
+async def start_timer(
+    body: TimerStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TimeEntryResponse:
+    """Start a live timer for the current user on a matter.
+
+    Creates a time entry in 'running' status; hours/amount are computed on
+    stop. Only one timer may run per user at a time.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    matter_obj = await _get_matter_or_404(db, body.matter_id, user.tenant_id)
+
+    existing = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.tenant_id == user.tenant_id,
+            TimeEntry.user_id == user.id,
+            TimeEntry.timer_started_at.is_not(None),
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="A timer is already running. Stop it before starting a new one.",
+        )
+
+    hourly_rate = await _resolve_hourly_rate(db, user, matter_obj, body.hourly_rate)
+    if not hourly_rate:
+        raise HTTPException(
+            status_code=400,
+            detail="No hourly rate provided and no default billing rate set on your profile. Please contact your administrator.",
+        )
+
+    now = datetime.now(timezone.utc)
+    entry = TimeEntry(
+        tenant_id=user.tenant_id,
+        matter_id=matter_obj.id,
+        user_id=user.id,
+        description=body.description or "Timer session",
+        hours=Decimal("0"),
+        hourly_rate=hourly_rate,
+        amount=Decimal("0"),
+        date=now.date(),
+        is_billable=body.is_billable,
+        status="running",
+        timer_started_at=now,
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
+
+
+@router.get("/time-entries/timer")
+async def get_active_timer(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TimeEntryResponse | None:
+    """Return the current user's running timer, or null if none."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.tenant_id == user.tenant_id,
+            TimeEntry.user_id == user.id,
+            TimeEntry.timer_started_at.is_not(None),
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        return None
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
+
+
+@router.post("/time-entries/timer/stop")
+async def stop_timer(
+    body: TimerStopRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TimeEntryResponse:
+    """Stop the current user's running timer.
+
+    Elapsed time is rounded UP to the tenant's billing increment (default
+    6 minutes) with a one-increment minimum, and the entry becomes a normal
+    draft time entry ready for invoicing.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.tenant_id == user.tenant_id,
+            TimeEntry.user_id == user.id,
+            TimeEntry.timer_started_at.is_not(None),
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="No running timer found")
+
+    billing_cfg = await _get_billing_config(db, user.tenant_id)
+    rounding_minutes = int(
+        billing_cfg.get("time_rounding_minutes") or DEFAULT_ROUNDING_MINUTES
+    )
+
+    started_at = entry.timer_started_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
+
+    entry.hours = round_timer_hours(elapsed, rounding_minutes)
+    entry.amount = entry.hours * entry.hourly_rate
+    entry.status = "draft"
+    entry.timer_started_at = None
+    if body.description is not None and body.description.strip():
+        entry.description = body.description.strip()
+
+    await db.commit()
+    await db.refresh(entry)
+    return TimeEntryResponse.model_validate(entry, from_attributes=True)
+
+
+@router.delete("/time-entries/timer", status_code=204)
+async def cancel_timer(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel the current user's running timer without logging time."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.tenant_id == user.tenant_id,
+            TimeEntry.user_id == user.id,
+            TimeEntry.timer_started_at.is_not(None),
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="No running timer found")
+
+    await db.delete(entry)
+    await db.commit()
 
 
 @router.get("/time-entries/{entry_id}")
@@ -217,6 +450,11 @@ async def update_time_entry(
         raise HTTPException(
             status_code=400,
             detail="Cannot modify a billed time entry",
+        )
+    if entry.timer_started_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Stop the running timer before editing this entry",
         )
 
     update_data = body.model_dump(exclude_unset=True)
@@ -425,13 +663,20 @@ async def delete_expense(
 # ── Invoices ────────────────────────────────────────────────────────────────
 
 
-def _next_invoice_number(tenant_id: str, year: int | None = None) -> str:
-    """Generate next invoice number: INV-YYYY-NNNN."""
+async def _next_invoice_number(
+    db: AsyncSession, tenant_id: uuid.UUID, year: int | None = None
+) -> str:
+    """Next sequential invoice number for the tenant: INV-YYYY-NNNN."""
     if year is None:
         year = datetime.now(timezone.utc).year
-    # Simple sequential — in production, use a DB sequence or counter table
-    suffix = uuid.uuid4().hex[:6].upper()
-    return f"INV-{year}-{suffix}"
+    result = await db.execute(
+        select(Invoice.invoice_number).where(
+            Invoice.tenant_id == tenant_id,
+            Invoice.invoice_number.like(f"INV-{year}-%"),
+        )
+    )
+    existing = [row[0] for row in result.all()]
+    return next_invoice_number(existing, year)
 
 
 @router.post("/invoices/generate", status_code=201)
@@ -442,7 +687,6 @@ async def generate_invoice(
 ) -> InvoiceResponse:
     """Generate an invoice from unbilled time entries and expenses for a matter. Admin only."""
     user = await require_finance_admin(request, db)
-    tenant_id = str(user.tenant_id)
 
     # Verify matter
     matter_result = await db.execute(
@@ -524,16 +768,20 @@ async def generate_invoice(
     tax_amount = (subtotal * tax_rate).quantize(Decimal("0.01"))
     total = subtotal + tax_amount
 
-    # Create invoice
+    # Create invoice as a draft — it must be reviewed and explicitly sent
+    # (PATCH status → "sent") before it counts as outstanding A/R or syncs
+    # to QuickBooks.
     issue_date = body.issue_date or date.today()
     due_date = issue_date + timedelta(days=body.due_date_days)
-    invoice_number = _next_invoice_number(tenant_id)
+    invoice_number = await _next_invoice_number(db, user.tenant_id)
+
+    billed_dates = [e.date for e in time_entries] + [x.date for x in expenses]
 
     invoice = Invoice(
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(body.matter_id),
         invoice_number=invoice_number,
-        status="sent",
+        status="draft",
         issue_date=issue_date,
         due_date=due_date,
         subtotal=subtotal,
@@ -541,6 +789,8 @@ async def generate_invoice(
         total=total,
         notes=body.notes,
         payment_terms=body.payment_terms,
+        billing_period_start=min(billed_dates) if billed_dates else None,
+        billing_period_end=max(billed_dates) if billed_dates else None,
         created_by=user.id,
     )
     db.add(invoice)
@@ -575,7 +825,16 @@ async def generate_invoice(
             if exp:
                 exp.invoice_id = invoice.id
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Lost a race for the next sequential invoice number — rare enough
+        # that asking the caller to retry beats holding a tenant-wide lock.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Invoice number conflict — another invoice was generated concurrently. Please retry.",
+        )
     await db.refresh(invoice)
 
     # Reload with relationships
@@ -611,6 +870,13 @@ async def _load_invoice_response(
     )
     payments = pay_result.scalars().all()
 
+    matter_result = await db.execute(
+        select(Matter.matter_name).where(Matter.id == invoice.matter_id)
+    )
+    matter_name = matter_result.scalar_one_or_none()
+
+    amount_paid = sum((p.amount for p in payments), Decimal("0"))
+
     return InvoiceResponse(
         id=str(invoice.id),
         tenant_id=str(invoice.tenant_id),
@@ -631,6 +897,11 @@ async def _load_invoice_response(
         retainer_id=str(invoice.retainer_id) if invoice.retainer_id else None,
         billing_period_start=invoice.billing_period_start,
         billing_period_end=invoice.billing_period_end,
+        sent_at=invoice.sent_at,
+        amount_paid=amount_paid,
+        balance_due=invoice.total - amount_paid,
+        is_overdue=is_invoice_overdue(invoice.status, invoice.due_date),
+        matter_name=matter_name,
         created_by=str(invoice.created_by),
         line_items=[
             InvoiceLineItemResponse.model_validate(li, from_attributes=True)
@@ -648,14 +919,17 @@ async def _load_invoice_response(
 async def list_invoices(
     matter_id: str | None = Query(None),
     status: str | None = Query(None),
+    overdue_only: bool = Query(False),
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ) -> InvoiceListResponse:
-    """List invoices with optional filters."""
+    """List invoices with optional filters, including paid/balance amounts."""
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    stmt = select(Invoice).where(Invoice.tenant_id == user.tenant_id)
+    stmt = select(Invoice, Matter.matter_name).join(
+        Matter, Matter.id == Invoice.matter_id
+    ).where(Invoice.tenant_id == user.tenant_id)
     if matter_id:
         stmt = stmt.where(Invoice.matter_id == matter_id)
     if status:
@@ -664,11 +938,23 @@ async def list_invoices(
     stmt = stmt.order_by(Invoice.created_at.desc())
 
     result = await db.execute(stmt)
-    invoices = result.scalars().all()
+    rows = result.all()
+
+    # One grouped query for payment totals instead of N per-invoice queries
+    paid_result = await db.execute(
+        select(Payment.invoice_id, func.sum(Payment.amount))
+        .where(Payment.tenant_id == user.tenant_id)
+        .group_by(Payment.invoice_id)
+    )
+    paid_by_invoice = {row[0]: row[1] for row in paid_result.all()}
 
     items = []
     total_amount = Decimal("0")
-    for inv in invoices:
+    for inv, matter_name in rows:
+        overdue = is_invoice_overdue(inv.status, inv.due_date)
+        if overdue_only and not overdue:
+            continue
+        amount_paid = paid_by_invoice.get(inv.id, Decimal("0"))
         total_amount += inv.total
         items.append(
             InvoiceResponse(
@@ -691,6 +977,11 @@ async def list_invoices(
                 retainer_id=str(inv.retainer_id) if inv.retainer_id else None,
                 billing_period_start=inv.billing_period_start,
                 billing_period_end=inv.billing_period_end,
+                sent_at=inv.sent_at,
+                amount_paid=amount_paid,
+                balance_due=inv.total - amount_paid,
+                is_overdue=overdue,
+                matter_name=matter_name,
                 created_by=str(inv.created_by),
                 line_items=[],
                 payments=[],
@@ -717,24 +1008,43 @@ async def get_invoice(
     return await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
 
-async def _trigger_qbo_sync_invoice(
-    invoice_id: str, tenant_id: str, access_token: str, sandbox: bool = True
-):
-    """Fire-and-forget QBO invoice sync with retry."""
+async def _trigger_qbo_sync_invoice(invoice_id: str, tenant_id: str):
+    """Fire-and-forget QBO invoice sync with retry.
+
+    Resolves a fresh (auto-refreshed) access token inside the task's own
+    session — the tokens are stored Fernet-encrypted, so they must go through
+    the token vault rather than being read off the integration row.
+    """
+    from app.routers.qbo import _get_fresh_qbo_token, _get_qbo_integration
     from app.services.qbo_sync import QBOSyncService
 
     async with async_session_maker() as session:
+        access_token = await _get_fresh_qbo_token(session, tenant_id)
+        if not access_token:
+            logger.warning(
+                f"QBO invoice sync skipped for {invoice_id}: no valid token"
+            )
+            return
+        qbo = await _get_qbo_integration(session, tenant_id)
+        sandbox = qbo.sandbox_mode if qbo else True
         service = QBOSyncService(session, tenant_id, access_token, sandbox)
         await service.sync_invoice_with_retry(invoice_id)
 
 
-async def _trigger_qbo_sync_payment(
-    payment_id: str, tenant_id: str, access_token: str, sandbox: bool = True
-):
-    """Fire-and-forget QBO payment sync with retry."""
+async def _trigger_qbo_sync_payment(payment_id: str, tenant_id: str):
+    """Fire-and-forget QBO payment sync with retry (fresh token, own session)."""
+    from app.routers.qbo import _get_fresh_qbo_token, _get_qbo_integration
     from app.services.qbo_sync import QBOSyncService
 
     async with async_session_maker() as session:
+        access_token = await _get_fresh_qbo_token(session, tenant_id)
+        if not access_token:
+            logger.warning(
+                f"QBO payment sync skipped for {payment_id}: no valid token"
+            )
+            return
+        qbo = await _get_qbo_integration(session, tenant_id)
+        sandbox = qbo.sandbox_mode if qbo else True
         service = QBOSyncService(session, tenant_id, access_token, sandbox)
         await service.sync_payment_with_retry(payment_id)
 
@@ -761,13 +1071,49 @@ async def update_invoice(
 
     old_status = invoice.status
     update_data = body.model_dump(exclude_unset=True)
+    new_status = update_data.get("status", old_status)
+
+    if new_status != old_status:
+        if not can_transition_invoice(old_status, new_status):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot change invoice status from '{old_status}' to '{new_status}'",
+            )
+        if new_status == "void":
+            paid_result = await db.execute(
+                select(func.count(Payment.id)).where(
+                    Payment.invoice_id == invoice.id
+                )
+            )
+            if (paid_result.scalar() or 0) > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot void an invoice with recorded payments",
+                )
+        if new_status == "sent" and invoice.sent_at is None:
+            invoice.sent_at = datetime.now(timezone.utc)
+
     for key, value in update_data.items():
         setattr(invoice, key, value)
+
+    # Voiding an invoice releases its time entries and expenses back to the
+    # unbilled pool so they can be corrected and re-invoiced.
+    if new_status == "void" and old_status != "void":
+        time_result = await db.execute(
+            select(TimeEntry).where(TimeEntry.invoice_id == invoice.id)
+        )
+        for entry in time_result.scalars().all():
+            entry.invoice_id = None
+            entry.status = "draft"
+        exp_result = await db.execute(
+            select(Expense).where(Expense.invoice_id == invoice.id)
+        )
+        for exp in exp_result.scalars().all():
+            exp.invoice_id = None
 
     await db.commit()
 
     # Trigger QBO sync on status transitions that need it
-    new_status = update_data.get("status", old_status)
     if old_status != new_status and new_status in ("sent", "paid", "partially_paid"):
         try:
             from app.models.qbo import QBOIntegration
@@ -783,9 +1129,7 @@ async def update_invoice(
                 invoice.qbo_sync_status = "syncing"
                 await db.commit()
                 asyncio.create_task(
-                    _trigger_qbo_sync_invoice(
-                        invoice_id, str(user.tenant_id), qbo.access_token, qbo.sandbox
-                    )
+                    _trigger_qbo_sync_invoice(invoice_id, str(user.tenant_id))
                 )
         except Exception:
             logger.warning("QBO invoice sync task failed", exc_info=True)
@@ -815,6 +1159,11 @@ async def create_payment(
     invoice = inv_result.scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in ("draft", "void", "written_off"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot record a payment against a '{invoice.status}' invoice. Send it first.",
+        )
 
     payment = Payment(
         tenant_id=user.tenant_id,
@@ -862,9 +1211,7 @@ async def create_payment(
         qbo = qbo_result.scalar_one_or_none()
         if qbo:
             asyncio.create_task(
-                _trigger_qbo_sync_payment(
-                    payment_id_str, tenant_id_str, qbo.access_token, qbo.sandbox
-                )
+                _trigger_qbo_sync_payment(payment_id_str, tenant_id_str)
             )
     except Exception:
         logger.warning("QBO payment sync task failed", exc_info=True)
@@ -913,10 +1260,10 @@ async def create_stripe_payment_link(
     user = await get_current_user(request, db)
     inv = await _load_invoice_response(db, uuid.UUID(invoice_id), user.tenant_id)
 
-    if inv.status not in ("draft", "sent"):
+    if inv.status not in ("sent", "partially_paid"):
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot create payment link for invoice in '{inv.status}' status",
+            detail=f"Cannot create payment link for invoice in '{inv.status}' status. Send the invoice first.",
         )
 
     # Get the invoice from DB to update
@@ -1041,6 +1388,65 @@ async def export_invoice(
         )
 
 
+# ── Billing Settings ────────────────────────────────────────────────────────
+
+
+@router.get("/settings")
+async def get_billing_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> BillingSettingsResponse:
+    """Return tenant-level billing defaults (rate, timer rounding). Admin only."""
+    user = await require_finance_admin(request, db)
+    billing_cfg = await _get_billing_config(db, user.tenant_id)
+    rate = billing_cfg.get("default_hourly_rate")
+    return BillingSettingsResponse(
+        default_hourly_rate=Decimal(str(rate)) if rate else None,
+        time_rounding_minutes=int(
+            billing_cfg.get("time_rounding_minutes") or DEFAULT_ROUNDING_MINUTES
+        ),
+    )
+
+
+@router.put("/settings")
+async def update_billing_settings(
+    body: BillingSettingsUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> BillingSettingsResponse:
+    """Update tenant-level billing defaults. Admin only."""
+    user = await require_finance_admin(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    ts_result = await db.execute(
+        select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
+    )
+    ts = ts_result.scalar_one_or_none()
+    if not ts:
+        ts = TenantSettings(tenant_id=user.tenant_id, custom_config={})
+        db.add(ts)
+
+    # Reassign (rather than mutate) the JSON column so SQLAlchemy detects the change
+    custom_config = dict(ts.custom_config or {})
+    billing_cfg = dict(custom_config.get("billing", {}) or {})
+    if body.default_hourly_rate is not None:
+        billing_cfg["default_hourly_rate"] = str(body.default_hourly_rate)
+    if body.time_rounding_minutes is not None:
+        billing_cfg["time_rounding_minutes"] = body.time_rounding_minutes
+    custom_config["billing"] = billing_cfg
+    ts.custom_config = custom_config
+
+    await db.commit()
+
+    rate = billing_cfg.get("default_hourly_rate")
+    return BillingSettingsResponse(
+        default_hourly_rate=Decimal(str(rate)) if rate else None,
+        time_rounding_minutes=int(
+            billing_cfg.get("time_rounding_minutes") or DEFAULT_ROUNDING_MINUTES
+        ),
+    )
+
+
 # ── Stripe Webhook ─────────────────────────────────────────────────────────
 
 
@@ -1099,11 +1505,62 @@ async def stripe_webhook(
     return {"status": "received"}
 
 
+def _uuid_from_stripe_metadata(metadata: dict, key: str) -> uuid.UUID | None:
+    value = metadata.get(key)
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        logger.warning("Stripe webhook metadata has invalid %s: %r", key, value)
+        return None
+
+
+async def _resolve_and_bind_stripe_tenant(
+    db: AsyncSession, metadata: dict
+) -> uuid.UUID | None:
+    tenant_id = _uuid_from_stripe_metadata(metadata, "tenant_id")
+    if tenant_id:
+        await set_tenant_context(db, str(tenant_id))
+        return tenant_id
+
+    invoice_id = _uuid_from_stripe_metadata(metadata, "invoice_id")
+    if not invoice_id:
+        return None
+
+    tenant_result = await db.execute(select(Tenant.id))
+    for candidate_tenant_id in tenant_result.scalars().all():
+        await set_tenant_context(db, str(candidate_tenant_id))
+        inv_result = await db.execute(
+            select(Invoice.tenant_id).where(Invoice.id == invoice_id)
+        )
+        resolved_tenant_id = inv_result.scalar_one_or_none()
+        if resolved_tenant_id:
+            return resolved_tenant_id
+
+    return None
+
+
 async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     """Handle payment_intent.succeeded: create Payment + update invoice status."""
     stripe_payment_intent_id = intent["id"]
     metadata = intent.get("metadata", {})
     invoice_id = metadata.get("invoice_id")
+
+    if not invoice_id:
+        logger.warning(
+            f"payment_intent.succeeded without invoice_id metadata: {stripe_payment_intent_id}"
+        )
+        return
+
+    tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+    if not tenant_id:
+        logger.warning(
+            "Stripe webhook: unable to resolve tenant for invoice %s and PI %s",
+            invoice_id,
+            stripe_payment_intent_id,
+        )
+        return
 
     # Idempotency check: skip if this payment intent was already recorded
     existing = await db.execute(
@@ -1121,19 +1578,15 @@ async def _handle_payment_intent_succeeded(db: AsyncSession, intent: dict):
     payment_date = date.today()
     method = "stripe"
 
-    if not invoice_id:
-        # No invoice metadata — create an unlinked payment for tracking
-        logger.warning(
-            f"payment_intent.succeeded without invoice_id metadata: {stripe_payment_intent_id}"
-        )
-        return
-
     # Verify invoice exists
     inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
     invoice = inv_result.scalar_one_or_none()
     if not invoice:
         logger.warning(
-            f"Stripe webhook: invoice {invoice_id} not found for PI {stripe_payment_intent_id}"
+            "Stripe webhook: invoice %s not found for PI %s in tenant %s",
+            invoice_id,
+            stripe_payment_intent_id,
+            tenant_id,
         )
         return
 
@@ -1188,6 +1641,14 @@ async def _handle_payment_intent_failed(db: AsyncSession, intent: dict):
 
     # Optionally mark invoice for follow-up
     if invoice_id:
+        tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+        if not tenant_id:
+            logger.warning(
+                "Stripe webhook: unable to resolve tenant for failed payment on invoice %s",
+                invoice_id,
+            )
+            return
+
         inv_result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
         invoice = inv_result.scalar_one_or_none()
         if invoice and invoice.status not in ("paid", "written_off"):
@@ -1212,6 +1673,14 @@ async def _handle_checkout_session_completed(db: AsyncSession, session: dict):
 
     # If we have a payment intent, delegate to the payment_intent handler
     if payment_intent_id:
+        tenant_id = await _resolve_and_bind_stripe_tenant(db, metadata)
+        if not tenant_id:
+            logger.warning(
+                "Stripe webhook: unable to resolve tenant for checkout invoice %s",
+                invoice_id,
+            )
+            return
+
         # Check if already processed
         existing = await db.execute(
             select(Payment).where(Payment.stripe_payment_intent_id == payment_intent_id)
@@ -1226,7 +1695,16 @@ async def _handle_checkout_session_completed(db: AsyncSession, session: dict):
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            await _handle_payment_intent_succeeded(db, intent)
+            intent_payload = (
+                intent.to_dict_recursive()
+                if hasattr(intent, "to_dict_recursive")
+                else dict(intent)
+            )
+            intent_payload["metadata"] = {
+                **metadata,
+                **(intent_payload.get("metadata") or {}),
+            }
+            await _handle_payment_intent_succeeded(db, intent_payload)
         except stripe.StripeError as exc:
             logger.error(
                 f"Failed to retrieve payment intent {payment_intent_id}: {exc}"

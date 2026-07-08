@@ -43,6 +43,11 @@ def _sign(priv_pem: str, claims: dict) -> str:
     return jose_jwt.encode(claims, priv_pem, algorithm="RS256", headers={"kid": "test-kid"})
 
 
+def _at_hash(access_token: str) -> str:
+    digest = hashlib.sha256(access_token.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest[: len(digest) // 2]).rstrip(b"=").decode()
+
+
 def _patch_jwks(monkeypatch, jwks: dict):
     async def fake_get(self, url, *args, **kwargs):
         return httpx.Response(200, json=jwks, request=httpx.Request("GET", url))
@@ -125,6 +130,31 @@ class TestVerifyGoogleIdToken:
                 token, client_id="my-client-id", expected_nonce="different-nonce"
             )
         assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_at_hash_token_accepts_matching_access_token(
+        self, rsa_keypair, monkeypatch
+    ):
+        priv_pem, jwks = rsa_keypair
+        _patch_jwks(monkeypatch, jwks)
+        access_token = "google-access-token"
+        token = _sign(
+            priv_pem,
+            {
+                "sub": "123",
+                "aud": "my-client-id",
+                "iss": "https://accounts.google.com",
+                "email": "user@example.com",
+                "email_verified": True,
+                "at_hash": _at_hash(access_token),
+            },
+        )
+        claims = await oauth_sec.verify_google_id_token(
+            token,
+            client_id="my-client-id",
+            access_token=access_token,
+        )
+        assert claims["email"] == "user@example.com"
 
     @pytest.mark.asyncio
     async def test_wrong_audience_rejected(self, rsa_keypair, monkeypatch):

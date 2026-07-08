@@ -195,7 +195,7 @@ export default function TrustAccountReconcile({ accountId }) {
           {Array.isArray(display.reconciling_items) && display.reconciling_items.length > 0 && (
             <div className="mt-4">
               <div className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-2">Reconciling Items</div>
-              <div className="bg-brand-surface-2 border border-brand-line rounded-xl overflow-hidden">
+              <div className="bg-brand-surface-2 border border-brand-line rounded-xl overflow-x-auto">
                 <table className="w-full text-sm">
                   <tbody>
                     {display.reconciling_items.map((item, i) => (

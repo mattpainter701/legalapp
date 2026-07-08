@@ -23,15 +23,20 @@ from app.models.plugin import Matter
 from app.models.signature import SignatureRequest, SignatureSigner
 from app.routers.client_portal import ClientPortalContext, get_client_portal_context
 from app.schemas.signature import (
+    PortalDeclineRequest,
     PortalSignRequest,
     SignatureRequestCreate,
     SignatureRequestResponse,
+    SignatureRequestVoid,
     SignerResponse,
 )
 from app.services.esign import (
     complete_request_if_done,
     get_provider,
+    mark_request_expired_if_needed,
+    record_portal_decline,
     record_portal_signature,
+    signer_can_act_now,
 )
 
 router = APIRouter(prefix="/api/matters", tags=["esignature"])
@@ -63,6 +68,13 @@ async def _to_response(
         provider=req.provider,
         sent_at=req.sent_at,
         completed_at=req.completed_at,
+        expires_at=req.expires_at,
+        reminders=req.reminders,
+        enforce_signing_order=bool(req.enforce_signing_order),
+        declined_at=req.declined_at,
+        decline_reason=req.decline_reason,
+        voided_at=req.voided_at,
+        void_reason=req.void_reason,
         created_at=req.created_at,
         signed_document_id=signed_document_id,
         signers=[
@@ -70,9 +82,12 @@ async def _to_response(
                 id=str(s.id),
                 name=s.name,
                 email=s.email,
+                role=s.role or "signer",
                 sign_order=s.sign_order,
                 status=s.status,
                 signed_at=s.signed_at,
+                declined_at=s.declined_at,
+                decline_reason=s.decline_reason,
             )
             for s in sorted(req.signers, key=lambda s: s.sign_order)
         ],
@@ -111,6 +126,56 @@ def _portal_signer_matches_context(
     return False
 
 
+async def _expire_and_commit_if_needed(db: AsyncSession, req: SignatureRequest) -> bool:
+    expired = mark_request_expired_if_needed(req)
+    if expired:
+        await db.commit()
+    return expired
+
+
+def _build_reminders(body: SignatureRequestCreate) -> dict | None:
+    reminders = dict(body.reminders or {})
+    reminder_days = sorted(
+        {
+            int(day)
+            for day in body.reminder_days
+            if isinstance(day, int) or str(day).strip().isdigit()
+        }
+    )
+    if reminder_days:
+        reminders["days_before_expiration"] = reminder_days
+    return reminders or None
+
+
+def _expires_in_past(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value <= datetime.now(timezone.utc)
+
+
+def _matching_portal_signer(
+    req: SignatureRequest,
+    ctx: ClientPortalContext,
+    signer_id: str | None,
+) -> SignatureSigner | None:
+    if signer_id:
+        signer = next((s for s in req.signers if str(s.id) == signer_id), None)
+        if signer and _portal_signer_matches_context(signer, ctx):
+            return signer
+        return None
+    pending = sorted(
+        (
+            s
+            for s in req.signers
+            if _portal_signer_matches_context(s, ctx) and signer_can_act_now(req, s)
+        ),
+        key=lambda s: s.sign_order,
+    )
+    return pending[0] if pending else None
+
+
 # ── Firm side ───────────────────────────────────────────────────────────────
 
 
@@ -141,6 +206,11 @@ async def create_signature_request(
 
     if not body.signers:
         raise HTTPException(status_code=400, detail="At least one signer is required")
+    if _expires_in_past(body.expires_at):
+        raise HTTPException(
+            status_code=422,
+            detail="Signature request expiration must be in the future",
+        )
 
     # Validate the document belongs to this matter.
     doc = await db.get(MatterDocument, uuid.UUID(body.document_id))
@@ -159,9 +229,13 @@ async def create_signature_request(
         status="draft",
         provider=body.provider or "internal",
         created_by_user_id=user.id,
+        expires_at=body.expires_at,
+        reminders=_build_reminders(body),
+        enforce_signing_order=bool(body.enforce_signing_order),
     )
     db.add(req)
     for i, s in enumerate(body.signers):
+        role = (s.role or "signer").strip() or "signer"
         db.add(
             SignatureSigner(
                 id=uuid.uuid4(),
@@ -170,6 +244,7 @@ async def create_signature_request(
                 contact_id=uuid.UUID(s.contact_id) if s.contact_id else None,
                 name=s.name,
                 email=s.email,
+                role=role[:100],
                 sign_order=s.sign_order if s.sign_order is not None else i,
                 status="pending",
             )
@@ -196,7 +271,10 @@ async def list_signature_requests(
         )
         .order_by(SignatureRequest.created_at.desc())
     )
-    return [await _to_response(db, r) for r in result.scalars().all()]
+    requests = result.scalars().all()
+    if any(mark_request_expired_if_needed(r) for r in requests):
+        await db.commit()
+    return [await _to_response(db, r) for r in requests]
 
 
 @router.get(
@@ -212,6 +290,7 @@ async def get_signature_request(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
+    await _expire_and_commit_if_needed(db, req)
     return await _to_response(db, req)
 
 
@@ -228,9 +307,17 @@ async def send_signature_request(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
+    await _expire_and_commit_if_needed(db, req)
     if req.status != "draft":
         raise HTTPException(
             status_code=409, detail=f"Cannot send from status '{req.status}'"
+        )
+    if _expires_in_past(req.expires_at):
+        req.status = "expired"
+        await db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot send an expired signature request",
         )
     provider = get_provider(req.provider)
     envelope_id = await provider.send(req)
@@ -251,16 +338,21 @@ async def void_signature_request(
     matter_id: str,
     request_id: str,
     request: Request,
+    body: SignatureRequestVoid | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
+    await _expire_and_commit_if_needed(db, req)
     if req.status in ("completed", "voided"):
         raise HTTPException(
             status_code=409, detail=f"Cannot void from status '{req.status}'"
         )
     req.status = "voided"
+    req.voided_at = datetime.now(timezone.utc)
+    reason = body.reason if body else None
+    req.void_reason = reason.strip() if reason and reason.strip() else None
     await db.commit()
     req = await _load_request(db, request_id, matter_id, user.tenant_id)
     return await _to_response(db, req)
@@ -281,15 +373,24 @@ async def portal_list_signatures(
         .where(
             SignatureRequest.matter_id == ctx.matter_id,
             SignatureRequest.tenant_id == ctx.tenant_id,
-            SignatureRequest.status.in_(("sent", "partially_signed")),
+            SignatureRequest.status.in_(
+                ("sent", "partially_signed", "declined", "expired", "voided")
+            ),
         )
         .order_by(SignatureRequest.created_at.desc())
     )
+    all_requests = result.scalars().all()
+    if any(mark_request_expired_if_needed(r) for r in all_requests):
+        await db.commit()
     requests = [
         r
-        for r in result.scalars().all()
+        for r in all_requests
         if any(
-            s.status == "pending" and _portal_signer_matches_context(s, ctx)
+            _portal_signer_matches_context(s, ctx)
+            and (
+                r.status in ("declined", "expired", "voided")
+                or signer_can_act_now(r, s)
+            )
             for s in r.signers
         )
     ]
@@ -321,37 +422,25 @@ async def portal_sign(
     req = result.scalar_one_or_none()
     if req is None:
         raise HTTPException(status_code=404, detail="Signature request not found")
+    await _expire_and_commit_if_needed(db, req)
     if req.status not in ("sent", "partially_signed"):
         raise HTTPException(
             status_code=409, detail="This request is not open for signing"
         )
 
     # Resolve the signer: explicit signer_id, else the next pending in order.
-    signer = None
-    if body.signer_id:
-        signer = next((s for s in req.signers if str(s.id) == body.signer_id), None)
-        if signer is None:
-            raise HTTPException(status_code=404, detail="Signer not found")
-        if not _portal_signer_matches_context(signer, ctx):
-            raise HTTPException(
-                status_code=403, detail="Signer does not match portal session"
-            )
-        if signer.status != "pending":
-            raise HTTPException(status_code=409, detail="Signer already actioned")
-    else:
-        pending = sorted(
-            (
-                s
-                for s in req.signers
-                if s.status == "pending" and _portal_signer_matches_context(s, ctx)
-            ),
-            key=lambda s: s.sign_order,
+    signer = _matching_portal_signer(req, ctx, body.signer_id)
+    if signer is None:
+        raise HTTPException(
+            status_code=403,
+            detail="No pending signer is currently available for this portal session",
         )
-        if not pending:
-            raise HTTPException(
-                status_code=403, detail="No pending signer for this portal session"
-            )
-        signer = pending[0]
+    if signer.status != "pending":
+        raise HTTPException(status_code=409, detail="Signer already actioned")
+    if not signer_can_act_now(req, signer):
+        raise HTTPException(
+            status_code=409, detail="An earlier signer must complete first"
+        )
 
     ip = request.client.host if request.client else None
     await record_portal_signature(
@@ -360,6 +449,59 @@ async def portal_sign(
 
     matter = await db.get(Matter, req.matter_id)
     await complete_request_if_done(db, req, matter)
+    await db.commit()
+
+    result = await db.execute(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(SignatureRequest.id == request_id)
+    )
+    req = result.scalar_one()
+    return await _to_response(db, req)
+
+
+@portal_router.post(
+    "/signatures/{request_id}/decline", response_model=SignatureRequestResponse
+)
+async def portal_decline(
+    request_id: str,
+    body: PortalDeclineRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    ctx = await get_client_portal_context(request, db)
+
+    result = await db.execute(
+        select(SignatureRequest)
+        .options(selectinload(SignatureRequest.signers))
+        .where(
+            SignatureRequest.id == request_id,
+            SignatureRequest.matter_id == ctx.matter_id,
+            SignatureRequest.tenant_id == ctx.tenant_id,
+        )
+    )
+    req = result.scalar_one_or_none()
+    if req is None:
+        raise HTTPException(status_code=404, detail="Signature request not found")
+    await _expire_and_commit_if_needed(db, req)
+    if req.status not in ("sent", "partially_signed"):
+        raise HTTPException(
+            status_code=409, detail="This request is not open for decline"
+        )
+
+    signer = _matching_portal_signer(req, ctx, body.signer_id)
+    if signer is None:
+        raise HTTPException(
+            status_code=403,
+            detail="No pending signer is currently available for this portal session",
+        )
+    if not signer_can_act_now(req, signer):
+        raise HTTPException(
+            status_code=409, detail="An earlier signer must complete first"
+        )
+
+    ip = request.client.host if request.client else None
+    await record_portal_decline(req, signer, reason=body.reason, ip=ip)
     await db.commit()
 
     result = await db.execute(

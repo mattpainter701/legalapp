@@ -59,6 +59,14 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
 
   echo "==> Current commit: \$(git log --oneline -1)"
 
+  DATA_GUARD_COUNTS=""
+  if [[ -f scripts/prod_data_guard.sh ]]; then
+    echo "==> Backing up database and capturing pre-deploy data counts"
+    DATA_GUARD_OUTPUT=\$(COMPOSE_FILES="$COMPOSE_FILES" BACKUP_DIR=backups bash scripts/prod_data_guard.sh pre)
+    echo "\$DATA_GUARD_OUTPUT"
+    DATA_GUARD_COUNTS=\$(printf '%s\n' "\$DATA_GUARD_OUTPUT" | awk -F= '/^PREDEPLOY_COUNTS=/ {print \$2}')
+  fi
+
   if [[ "$MODE" == "--pull" ]]; then
     echo "==> Pulling images from registry"
     docker compose $COMPOSE_FILES pull
@@ -68,7 +76,7 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
   fi
 
   echo "==> Rolling restart (migrator init container will run migrations)"
-  docker compose $COMPOSE_FILES up -d --remove-orphans
+  docker compose $COMPOSE_FILES up -d
 
   echo "==> Waiting for health check…"
   for i in \$(seq 1 12); do
@@ -85,6 +93,11 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
     echo "ERROR: Backend did not become healthy. Check logs:"
     docker compose $COMPOSE_FILES logs --tail=50 backend
     exit 1
+  fi
+
+  if [[ -n "\$DATA_GUARD_COUNTS" ]]; then
+    echo "==> Verifying post-deploy data counts"
+    COMPOSE_FILES="$COMPOSE_FILES" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "\$DATA_GUARD_COUNTS"
   fi
 
   echo "==> Cleaning up old images"

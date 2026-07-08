@@ -172,7 +172,7 @@ export default function TrustAccountingPage() {
           </button>
         </div>
       ) : (
-        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-brand-line bg-brand-surface-2">

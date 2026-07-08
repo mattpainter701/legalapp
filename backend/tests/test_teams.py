@@ -87,6 +87,34 @@ class TestGating:
         assert resp.json()[0]["display_name"] == "Litigation"
 
 
+# ── Scope preservation on re-auth ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestReauthScopePreservation:
+    async def test_reauth_without_flag_keeps_teams_scopes(self, client, ms_connected):
+        resp = await client.get(
+            "/api/integrations/microsoft/connect?intent=admin",
+            follow_redirects=False,
+        )
+
+        assert resp.status_code in (302, 307)
+        assert "ChannelMessage.Send" in resp.headers["location"]
+
+    async def test_reauth_without_teams_history_stays_base(
+        self, client, db_session, test_tenant
+    ):
+        await _add_ms_credential(db_session, test_tenant.id, "offline_access User.Read.All")
+
+        resp = await client.get(
+            "/api/integrations/microsoft/connect?intent=admin",
+            follow_redirects=False,
+        )
+
+        assert resp.status_code in (302, 307)
+        assert "ChannelMessage.Send" not in resp.headers["location"]
+
+
 # ── Status endpoint ───────────────────────────────────────────────────────
 
 
@@ -314,16 +342,19 @@ class TestDispatch:
 
         monkeypatch.setattr(teams_service, "send_channel_message", fake_send)
 
+        fields = {"matter_name": "Acme v. Globex", "Due": "2026-07-01"}
+
         sent = await teams_notify.notify(
             str(test_tenant.id),
             "deadline_approaching",
             title="Deadline approaching",
-            fields={"matter_name": "Acme v. Globex", "Due": "2026-07-01"},
+            fields=fields,
             matter_id=str(matter.id),
             deep_link="https://app/matters/x",
         )
 
         assert sent == 1
+        assert fields == {"matter_name": "Acme v. Globex", "Due": "2026-07-01"}
         assert captured["channel"] == "chan-1"
         card = captured["card"]
         assert card["type"] == "AdaptiveCard"

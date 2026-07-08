@@ -44,6 +44,7 @@ import PortalAcceptPage from './pages/PortalAcceptPage'
 import PortalCasePage from './pages/PortalCasePage'
 import ClientPortalAcceptPage from './pages/ClientPortalAcceptPage'
 import ClientPortalMatterPage from './pages/ClientPortalMatterPage'
+import { ToastProvider } from './components/toast/ToastProvider'
 import { getMe } from './api'
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ export function AuthProvider({ children }) {
   // derived by asking the API who the current cookie belongs to.
   const fetchUser = useCallback(async () => {
     try {
-      const me = await getMe()
+      const me = await getMe({ _suppressAuthRedirect: true })
       setUser(me)
       return me
     } catch {
@@ -186,7 +187,8 @@ function LegacyBillingRedirect() {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
+      <ToastProvider>
+        <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -253,7 +255,7 @@ export default function App() {
         />
         <Route
           path="/templates"
-          element={<ShellRoute title="Templates" module="templates"><TemplatesPage /></ShellRoute>}
+          element={<ShellRoute title="Document Automation" module="templates"><TemplatesPage /></ShellRoute>}
         />
         <Route
           path="/billing"
@@ -269,6 +271,10 @@ export default function App() {
         />
         <Route
           path="/tasks"
+          element={<ShellRoute title="Tasks" module="tasks"><TasksPage /></ShellRoute>}
+        />
+        <Route
+          path="/tasks/:taskId"
           element={<ShellRoute title="Tasks" module="tasks"><TasksPage /></ShellRoute>}
         />
         <Route
@@ -350,7 +356,8 @@ export default function App() {
         {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+        </Routes>
+      </ToastProvider>
     </AuthProvider>
   )
 }

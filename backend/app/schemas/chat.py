@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ConversationCreate(BaseModel):
@@ -69,5 +69,12 @@ class ChatAttachmentResponse(BaseModel):
     file_size: Optional[int] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def serialize_uuid_id(cls, value):
+        if value is None:
+            return value
+        return str(value)
 
     model_config = {"from_attributes": True}

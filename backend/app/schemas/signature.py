@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Firm-side: create ───────────────────────────────────────────────────────
@@ -12,6 +12,7 @@ class SignerCreate(BaseModel):
     name: str
     email: str
     contact_id: str | None = None
+    role: str | None = "signer"
     sign_order: int = 0
 
 
@@ -19,6 +20,14 @@ class SignatureRequestCreate(BaseModel):
     document_id: str
     signers: list[SignerCreate]
     provider: str = "internal"
+    expires_at: datetime | None = None
+    reminders: dict | None = None
+    reminder_days: list[int] = Field(default_factory=list)
+    enforce_signing_order: bool = False
+
+
+class SignatureRequestVoid(BaseModel):
+    reason: str | None = None
 
 
 # ── Responses ───────────────────────────────────────────────────────────────
@@ -28,9 +37,12 @@ class SignerResponse(BaseModel):
     id: str
     name: str
     email: str
+    role: str = "signer"
     sign_order: int
     status: str
     signed_at: datetime | None = None
+    declined_at: datetime | None = None
+    decline_reason: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,6 +56,13 @@ class SignatureRequestResponse(BaseModel):
     provider: str
     sent_at: datetime | None = None
     completed_at: datetime | None = None
+    expires_at: datetime | None = None
+    reminders: dict | None = None
+    enforce_signing_order: bool = False
+    declined_at: datetime | None = None
+    decline_reason: str | None = None
+    voided_at: datetime | None = None
+    void_reason: str | None = None
     created_at: datetime
     signers: list[SignerResponse] = []
     signed_document_id: str | None = None
@@ -57,3 +76,8 @@ class SignatureRequestResponse(BaseModel):
 class PortalSignRequest(BaseModel):
     typed_signature: str
     signer_id: str | None = None  # optional; defaults to next pending signer
+
+
+class PortalDeclineRequest(BaseModel):
+    reason: str | None = None
+    signer_id: str | None = None

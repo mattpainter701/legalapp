@@ -346,7 +346,7 @@ export default function CalendarPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-brand-bg">
+    <div className="flex flex-col h-full bg-brand-bg">
       {/* Header */}
       <div className="h-16 flex items-center px-6 border-b border-brand-line bg-brand-surface-2 shrink-0">
         <CalendarDays className="w-5 h-5 mr-2 text-brand-accent" strokeWidth={1.5} />

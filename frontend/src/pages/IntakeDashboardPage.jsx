@@ -28,12 +28,17 @@ import {
   updateRotationRules,
 } from '../api'
 import { useAuth } from '../App'
+import AsyncButton from '../components/AsyncButton'
 import CallFeed from '../components/intake/CallFeed'
 import CallFacts from '../components/intake/CallFacts'
+import DraftTabStrip from '../components/intake/DraftTabStrip'
 import NewCallToasts from '../components/intake/NewCallToasts'
 import RecordsTabs from '../components/intake/RecordsTabs'
+import ReceiptTrail from '../components/intake/ReceiptTrail'
+import { useToast } from '../components/toast/useToast'
 import { useCallFeedPolling } from '../hooks/useCallFeedPolling'
 import { useCallAlerts } from '../hooks/useCallAlerts'
+import useCallDrafts from '../hooks/useCallDrafts'
 
 const PRACTICE_AREAS = [
   'divorce',
@@ -58,6 +63,46 @@ const RESULT_LABELS = {
   matter: 'Matter history',
   call_log: 'Call log',
   legacy_call: 'Legacy call',
+}
+
+const EMPTY_CALL_FORM = {
+  caller_name: '',
+  phone: '',
+  practice_area: 'divorce',
+  purpose: '',
+  notes: '',
+  qualified: true,
+  outcome: 'create_lead',
+  task_mode: 'partner_rotation',
+  task_title: 'Call back caller',
+  custom_task_title: '',
+  auto_assign: true,
+  source_communication_id: null,
+}
+
+const DRAFT_DISCARD_FIELDS = [
+  'caller_name',
+  'phone',
+  'purpose',
+  'notes',
+  'custom_task_title',
+  'source_communication_id',
+  'selected_staff_id',
+  'linked_history_contact_id',
+  'linked_history_lead_id',
+  'linked_history_result_id',
+  'linked_history_title',
+  'linked_history_phone',
+]
+
+function hasDraftWork(draft) {
+  if (!draft) return false
+  if (DRAFT_DISCARD_FIELDS.some((key) => {
+    const value = draft[key]
+    return typeof value === 'string' ? value.trim().length > 0 : Boolean(value)
+  })) return true
+  return ['practice_area', 'outcome', 'task_mode', 'task_title', 'qualified', 'auto_assign']
+    .some((key) => draft[key] !== undefined && draft[key] !== EMPTY_CALL_FORM[key])
 }
 
 function ResultCard({ item, selected, onSelect, onAssign }) {
@@ -403,6 +448,7 @@ function PartnerLogPanel() {
 
 export default function IntakeDashboardPage() {
   const { user } = useAuth()
+  const toast = useToast()
   const [q, setQ] = useState('')
   const [phone, setPhone] = useState('')
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
@@ -420,21 +466,46 @@ export default function IntakeDashboardPage() {
   const [staffUsers, setStaffUsers] = useState([])
   const [selectedStaff, setSelectedStaff] = useState(null)
   const [message, setMessage] = useState(null)
-  const [form, setForm] = useState({
-    caller_name: '',
-    practice_area: 'divorce',
-    purpose: '',
-    notes: '',
-    qualified: true,
-    outcome: 'create_lead',
-    task_mode: 'partner_rotation',
-    task_title: 'Call back caller',
-    custom_task_title: '',
-    auto_assign: true,
-    source_communication_id: null,
+  const zoomAutoSyncAttemptedRef = useRef(false)
+  const {
+    drafts,
+    activeDraft,
+    activeDraftId,
+    loading: draftsLoading,
+    storageHealthy,
+    setActiveDraft,
+    createDraft,
+    updateDraftField,
+    removeDraft,
+    addReceipt,
+    updateReceipt,
+    retryReceipt,
+    executeOnBlur,
+    flushBackendDraft,
+  } = useCallDrafts({
+    onToast: (type, title, toastMessage) => toast.show({ type, title, message: toastMessage }),
   })
+  const form = activeDraft || EMPTY_CALL_FORM
 
-  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const closeDraft = useCallback(async (draftId) => {
+    const draft = drafts.find((entry) => entry.draft_id === draftId)
+    if (hasDraftWork(draft) && typeof window !== 'undefined') {
+      const label = draft?.caller_name || draft?.phone || 'this call'
+      const confirmed = window.confirm(`Discard the draft for ${label}? This cannot be undone.`)
+      if (!confirmed) return
+    }
+    await removeDraft(draftId)
+  }, [drafts, removeDraft])
+
+  const setForm = useCallback((updater) => {
+    if (!activeDraftId) return
+    const next = typeof updater === 'function' ? updater(form) : updater
+    updateDraftField(activeDraftId, next)
+  }, [activeDraftId, form, updateDraftField])
+
+  const set = useCallback((key, value) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }, [setForm])
 
   // Surface action feedback wherever the user is on a long mobile page.
   const messageRef = useRef(null)
@@ -447,6 +518,39 @@ export default function IntakeDashboardPage() {
   const { callers: feedCallers, loading: feedLoading, newCallIds, refresh: refreshFeed } =
     useCallFeedPolling(20)
   const { toasts, notify, dismiss, muted, toggleMute, soundReady } = useCallAlerts(user?.tenant_id)
+
+  useEffect(() => {
+    if (!activeDraft) return
+    setQ(activeDraft.caller_name || '')
+    setPhone(activeDraft.phone || '')
+    setSelectedStaff(activeDraft.selected_staff_id
+      ? {
+          id: activeDraft.selected_staff_id,
+          full_name: activeDraft.selected_staff_name || '',
+          email: activeDraft.selected_staff_email || '',
+        }
+      : null)
+    setStaffQuery(activeDraft.selected_staff_name || activeDraft.selected_staff_email || '')
+  }, [activeDraftId])
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.altKey && event.shiftKey && String(event.key).toLowerCase() === 'n') {
+        event.preventDefault()
+        createDraft()
+        return
+      }
+      if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return
+      const index = Number(event.key)
+      if (!Number.isInteger(index) || index < 1 || index > 9) return
+      const target = drafts[index - 1]
+      if (!target) return
+      event.preventDefault()
+      setActiveDraft(target.draft_id)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [createDraft, drafts, setActiveDraft])
 
   useEffect(() => {
     let cancelled = false
@@ -474,9 +578,6 @@ export default function IntakeDashboardPage() {
       .then((data) => {
         if (cancelled) return
         setAssignmentAvailability(data)
-        if (!data.can_assign) {
-          setForm((current) => ({ ...current, auto_assign: false }))
-        }
       })
       .catch(() => {
         if (!cancelled) setAssignmentAvailability(null)
@@ -486,6 +587,11 @@ export default function IntakeDashboardPage() {
       })
     return () => { cancelled = true }
   }, [form.outcome, form.practice_area, form.task_mode])
+
+  const handleCaptureBlur = useCallback((event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return
+    executeOnBlur(activeDraftId)
+  }, [activeDraftId, executeOnBlur])
 
   useEffect(() => {
     if (form.task_mode !== 'specific_staff' || staffQuery.trim().length < 2) {
@@ -577,8 +683,15 @@ export default function IntakeDashboardPage() {
     setForm((current) => ({
       ...current,
       caller_name: item.title || current.caller_name,
+      phone: item.phone || current.phone,
       practice_area: item.practice_area || current.practice_area,
       purpose: item.subtitle || current.purpose,
+      linked_history_contact_id: item.contact_id || null,
+      linked_history_lead_id: item.lead_id || null,
+      linked_history_result_id: item.id || null,
+      linked_history_result_type: item.result_type || null,
+      linked_history_title: item.title || '',
+      linked_history_phone: item.phone || '',
     }))
     if (item.phone) setPhone(item.phone)
   }
@@ -592,6 +705,7 @@ export default function IntakeDashboardPage() {
     setForm((current) => ({
       ...current,
       caller_name: nextName || current.caller_name,
+      phone: nextPhone || current.phone,
       practice_area: caller.practice_area || current.practice_area,
       purpose: caller.purpose || current.purpose,
       notes: caller.notes || current.notes,
@@ -609,25 +723,72 @@ export default function IntakeDashboardPage() {
   const syncZoomPhoneCalls = async () => {
     setZoomPhoneSyncing(true)
     setMessage(null)
+    const receiptId = activeDraftId ? addReceipt(activeDraftId, {
+      label: 'Zoom Phone sync',
+      status: 'pending',
+      retry: null,
+    }) : null
     try {
       const result = await syncZoomPhoneIntakeCalls({ days: 7 })
-      setMessage(`Zoom Phone sync imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped}.`)
+      const successMessage = `Zoom Phone sync imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped}.`
+      if (receiptId) updateReceipt(activeDraftId, receiptId, { status: 'ok', error: '' })
+      setMessage(successMessage)
+      toast.success('Zoom sync complete', { message: successMessage })
       await refreshFeed()
     } catch (err) {
-      setMessage(err?.response?.data?.detail || 'Zoom Phone sync failed.')
+      const errorMessage = err?.response?.data?.detail || 'Zoom Phone sync failed.'
+      if (receiptId) updateReceipt(activeDraftId, receiptId, { status: 'failed', error: errorMessage })
+      setMessage(errorMessage)
+      toast.error('Zoom sync failed', { message: errorMessage })
     } finally {
       setZoomPhoneSyncing(false)
     }
   }
 
+  useEffect(() => {
+    if (!zoomConnected || zoomAutoSyncAttemptedRef.current) return
+    zoomAutoSyncAttemptedRef.current = true
+    try {
+      const key = `intake.zoom.autoSync.${user?.tenant_id || 'tenant'}`
+      const now = Date.now()
+      const last = Number(window.localStorage.getItem(key) || 0)
+      if (last && now - last < 5 * 60 * 1000) return
+      window.localStorage.setItem(key, String(now))
+    } catch {
+      // Storage can be blocked in hardened browsers; one in-memory attempt is fine.
+    }
+    syncZoomPhoneCalls().catch(() => {})
+  }, [zoomConnected, user?.tenant_id])
+
   const assignLead = async (leadId) => {
     setMessage(null)
+    const receiptId = activeDraftId ? addReceipt(activeDraftId, {
+      label: 'Assign lead',
+      status: 'pending',
+      retry: null,
+    }) : null
     try {
       const result = await assignNextPartner(leadId)
-      setMessage(`Assigned to ${result.assigned_to_name || 'next partner'}.`)
+      const successMessage = `Assigned to ${result.assigned_to_name || 'next partner'}.`
+      if (receiptId) updateReceipt(activeDraftId, receiptId, { status: 'ok', error: '' })
+      setMessage(successMessage)
+      toast.success('Lead assigned', { message: successMessage })
       await refreshSearchSilently()
     } catch (err) {
-      setMessage(err?.response?.data?.detail || 'Assignment failed.')
+      const errorMessage = err?.response?.data?.detail || 'Assignment failed.'
+      if (receiptId) {
+        updateReceipt(activeDraftId, receiptId, {
+          status: 'failed',
+          error: errorMessage,
+          retry: {
+            method: 'POST',
+            url: `/intake/dashboard/leads/${leadId}/assign-next`,
+            payload: {},
+          },
+        })
+      }
+      setMessage(errorMessage)
+      toast.error('Assignment failed', { message: errorMessage })
     }
   }
 
@@ -650,12 +811,17 @@ export default function IntakeDashboardPage() {
   }
 
   const submitCall = async (event) => {
-    event.preventDefault()
+    event?.preventDefault()
     setMessage(null)
+    const receiptId = activeDraftId ? addReceipt(activeDraftId, {
+      label: form.outcome === 'create_lead' ? 'Create lead' : 'Log call',
+      status: 'pending',
+      retry: null,
+    }) : null
     try {
       const payload = {
         caller_name: form.caller_name || q || selected?.title || undefined,
-        phone: phone || selected?.phone || undefined,
+        phone: form.phone || phone || selected?.phone || undefined,
         practice_area: form.practice_area || undefined,
         purpose: form.purpose || undefined,
         notes: form.notes || undefined,
@@ -673,6 +839,12 @@ export default function IntakeDashboardPage() {
         assigned_to_user_id: form.task_mode === 'partner_rotation' ? searchData?.recommended_attorney_user_id || undefined : undefined,
       }
       if (form.task_mode === 'specific_staff' && !selectedStaff?.id) {
+        if (receiptId) {
+          updateReceipt(activeDraftId, receiptId, {
+            status: 'failed',
+            error: 'Select a staff member before creating a general task.',
+          })
+        }
         setMessage('Select a staff member before creating a general task.')
         return
       }
@@ -682,7 +854,12 @@ export default function IntakeDashboardPage() {
         assignedText = form.task_mode === 'specific_staff'
           ? ` General task assigned to ${selectedStaff?.full_name || selectedStaff?.email || 'staff'}.`
           : ' Urgent follow-up task created.'
-      } else if (form.task_mode === 'partner_rotation' && form.auto_assign && result.lead_id) {
+      } else if (
+        form.task_mode === 'partner_rotation'
+        && form.auto_assign
+        && assignmentAvailability?.can_assign !== false
+        && result.lead_id
+      ) {
         if (assignmentAvailability && !assignmentAvailability.can_assign) {
           assignedText = ` Assignment skipped: ${assignmentAvailability.reason || 'no matching rotation rule'}.`
         } else {
@@ -694,12 +871,46 @@ export default function IntakeDashboardPage() {
           }
         }
       }
-      setMessage(`${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`)
-      setForm((current) => ({ ...current, purpose: '', notes: '', source_communication_id: null }))
+      const successMessage = `${result.created_lead ? 'Lead created' : 'Call logged'}.${assignedText}`
+      if (receiptId) updateReceipt(activeDraftId, receiptId, { status: 'ok', error: '' })
+      setMessage(successMessage)
+      toast.success(successMessage)
+      if (activeDraftId) await removeDraft(activeDraftId)
       await refreshSearchSilently()
       await refreshFeed()
     } catch (err) {
-      setMessage(err?.response?.data?.detail || 'Failed to log call.')
+      const errorMessage = err?.response?.data?.detail || 'Failed to log call.'
+      if (receiptId) {
+        updateReceipt(activeDraftId, receiptId, {
+          status: 'failed',
+          error: errorMessage,
+          retry: {
+            method: 'POST',
+            url: '/intake/dashboard/calls',
+            payload: {
+              caller_name: form.caller_name || q || selected?.title || undefined,
+              phone: form.phone || phone || selected?.phone || undefined,
+              practice_area: form.practice_area || undefined,
+              purpose: form.purpose || undefined,
+              notes: form.notes || undefined,
+              outcome: form.outcome,
+              task_mode: form.task_mode,
+              task_assigned_to_user_id: form.task_mode === 'specific_staff' ? selectedStaff?.id : undefined,
+              task_title: form.task_mode === 'specific_staff'
+                ? (form.task_title === 'Custom task' ? form.custom_task_title : form.task_title)
+                : undefined,
+              task_description: form.task_mode === 'specific_staff' ? form.notes || form.purpose || undefined : undefined,
+              qualified: Boolean(form.qualified),
+              existing_contact_id: selected?.contact_id || undefined,
+              existing_lead_id: selected?.lead_id || undefined,
+              existing_communication_id: form.source_communication_id || undefined,
+              assigned_to_user_id: form.task_mode === 'partner_rotation' ? searchData?.recommended_attorney_user_id || undefined : undefined,
+            },
+          },
+        })
+      }
+      setMessage(errorMessage)
+      toast.error('Call capture failed', { message: errorMessage })
     }
   }
 
@@ -786,7 +997,10 @@ export default function IntakeDashboardPage() {
                 </div>
                 <input
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    setPhone(e.target.value)
+                    set('phone', e.target.value)
+                  }}
                   placeholder="Phone context"
                   className="rounded-2xl border border-brand-line px-3 py-3 text-sm outline-none focus:border-brand-accent"
                 />
@@ -835,7 +1049,28 @@ export default function IntakeDashboardPage() {
                 <h2 className="font-serif text-lg font-bold text-brand-ink">Call Capture</h2>
               </div>
 
-              <form onSubmit={submitCall} className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div className="mt-4">
+                <DraftTabStrip
+                  drafts={drafts}
+                  activeDraftId={activeDraftId}
+                  onSwitch={setActiveDraft}
+                  onNew={() => createDraft()}
+                  onClose={closeDraft}
+                  disabled={draftsLoading}
+                />
+              </div>
+
+              {!storageHealthy && (
+                <div className="mt-3 rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
+                  Drafts are staying in memory for this browser session because local storage is unavailable.
+                </div>
+              )}
+
+              <form
+                onSubmit={submitCall}
+                onBlur={handleCaptureBlur}
+                className="mt-4 grid gap-4 lg:grid-cols-2"
+              >
                 <div className="lg:col-span-2">
                   <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Caller</label>
                   <input
@@ -924,6 +1159,12 @@ export default function IntakeDashboardPage() {
                         setSelectedStaff(null)
                         setStaffQuery('')
                         setStaffUsers([])
+                        setForm((current) => ({
+                          ...current,
+                          selected_staff_id: null,
+                          selected_staff_name: '',
+                          selected_staff_email: '',
+                        }))
                       }
                     }}
                     className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
@@ -952,7 +1193,15 @@ export default function IntakeDashboardPage() {
                           <span>Assigned to <span className="font-bold">{selectedStaff.full_name || selectedStaff.email}</span></span>
                           <button
                             type="button"
-                            onClick={() => setSelectedStaff(null)}
+                            onClick={() => {
+                              setSelectedStaff(null)
+                              setForm((current) => ({
+                                ...current,
+                                selected_staff_id: null,
+                                selected_staff_name: '',
+                                selected_staff_email: '',
+                              }))
+                            }}
                             className="font-bold text-brand-muted hover:text-brand-ink"
                           >
                             Change
@@ -969,6 +1218,12 @@ export default function IntakeDashboardPage() {
                                 setSelectedStaff(staff)
                                 setStaffQuery(staff.full_name || staff.email)
                                 setStaffUsers([])
+                                setForm((current) => ({
+                                  ...current,
+                                  selected_staff_id: staff.id,
+                                  selected_staff_name: staff.full_name || '',
+                                  selected_staff_email: staff.email || '',
+                                }))
                               }}
                               className="rounded-full border border-brand-line bg-white px-3 py-1 text-xs text-brand-ink hover:border-brand-accent"
                             >
@@ -1016,7 +1271,7 @@ export default function IntakeDashboardPage() {
                   <label className="lg:col-span-2 flex items-center gap-2 rounded-xl border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink">
                     <input
                       type="checkbox"
-                      checked={form.auto_assign}
+                      checked={form.auto_assign && assignmentAvailability?.can_assign !== false}
                       onChange={(e) => set('auto_assign', e.target.checked)}
                       disabled={form.outcome !== 'create_lead' || assignmentChecking || assignmentAvailability?.can_assign === false}
                     />
@@ -1048,16 +1303,26 @@ export default function IntakeDashboardPage() {
                   </div>
                 )}
 
-                <button
-                  type="submit"
+                <AsyncButton
+                  type="button"
+                  onClick={submitCall}
                   className="lg:col-span-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-ink px-4 py-3 text-sm font-bold text-white"
+                  loadingLabel={form.outcome === 'create_lead' ? 'Creating...' : 'Logging...'}
+                  successLabel="Saved"
                 >
                   {form.outcome === 'create_lead' ? <UserPlus size={16} /> : <ShieldCheck size={16} />}
                   {form.outcome === 'create_lead'
                     ? (form.task_mode === 'specific_staff' ? 'Create Lead + Staff Task' : 'Create Lead + Log Call')
                     : (form.task_mode === 'specific_staff' ? 'Log Call + Staff Task' : 'Log Call Only')}
-                </button>
+                </AsyncButton>
               </form>
+
+              <div className="mt-4">
+                <ReceiptTrail
+                  receipts={form.receipts || []}
+                  onRetry={(receiptId) => retryReceipt(activeDraftId, receiptId)}
+                />
+              </div>
             </section>
 
             <RecordsTabs

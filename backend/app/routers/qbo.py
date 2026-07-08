@@ -582,10 +582,15 @@ async def qbo_sync_all(
     summary = await svc.sync_all()
 
     completed_at = datetime.now(timezone.utc)
+    synced_anything = (
+        summary["invoices_synced"] > 0
+        or summary["time_activities_synced"] > 0
+        or summary["payments_synced"] > 0
+    )
     status = (
         "success"
         if not summary["errors"]
-        else ("partial" if summary["invoices_synced"] > 0 else "failed")
+        else ("partial" if synced_anything else "failed")
     )
 
     if qbo:
@@ -600,6 +605,7 @@ async def qbo_sync_all(
         status=status,
         invoices_synced=summary["invoices_synced"],
         time_activities_synced=summary["time_activities_synced"],
+        payments_synced=summary["payments_synced"],
         errors=summary["errors"],
         started_at=started_at,
         completed_at=completed_at,

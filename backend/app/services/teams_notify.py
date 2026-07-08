@@ -68,7 +68,12 @@ async def notify(
                 )
             )
             rows = list(settings_rows.scalars().all())
-            matter_specific = [r for r in rows if str(r.matter_id) == str(matter_id)]
+            if matter_id is not None:
+                matter_specific = [
+                    r for r in rows if str(r.matter_id) == str(matter_id)
+                ]
+            else:
+                matter_specific = []
             chosen = matter_specific if matter_specific else [
                 r for r in rows if r.matter_id is None
             ]
@@ -78,12 +83,13 @@ async def notify(
         if not targets:
             return 0
 
-        # Resolve a matter label for the card (best-effort).
-        matter_name = fields.pop("matter_name", None) or "Matter"
+        # Resolve a matter label for the card without mutating caller state.
+        matter_name = fields.get("matter_name") or "Matter"
+        card_fields = {k: v for k, v in fields.items() if k != "matter_name"}
         card = teams_service.build_matter_card(
             title=title,
             matter_name=matter_name,
-            fields=fields,
+            fields=card_fields,
             deep_link=deep_link,
         )
 

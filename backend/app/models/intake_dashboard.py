@@ -76,6 +76,47 @@ class LegacyCallRecord(Base):
     )
 
 
+class IntakeCallDraft(Base):
+    """Persisted intake call capture draft.
+
+    The payload stores the caller-capture form and any draft-side metadata such as
+    linked history matches, pending action receipts, and autosave markers.
+    """
+
+    __tablename__ = "intake_call_drafts"
+    __table_args__ = (
+        Index("idx_intake_call_drafts_tenant", "tenant_id"),
+        Index("idx_intake_call_drafts_created_by", "tenant_id", "created_by"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        "created_by",
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class PartnerRotationState(Base):
     """Per-practice next-in-line assignment configuration."""
 

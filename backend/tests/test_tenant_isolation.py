@@ -1,8 +1,8 @@
 """Row Level Security tenant-isolation seed test.
 
 This is the SEED of the full cross-tenant isolation matrix (epic task 1304).
-It proves the core RLS mechanism works: the ``app.current_tenant_id`` GUC drives
-per-tenant visibility, an unset context is fail-closed (zero rows), and the auth
+It proves the core RLS mechanism works: the tenant-context GUCs drive
+per-tenant visibility, cleared context is fail-closed (zero rows), and the auth
 ``app.rls_bypass`` GUC re-opens visibility for the cross-tenant auth path.
 
 Critical environment fact this test encodes:
@@ -20,33 +20,56 @@ and installs policies mirroring production. It skips cleanly (never errors at
 collection) when Postgres is unavailable.
 """
 
+import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import String, select, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app import database
 from app.database import (
     clear_tenant_context,
     enable_rls_bypass,
+    NO_TENANT_CONTEXT,
     set_tenant_context,
 )
 
 pytestmark = pytest.mark.asyncio
 
 # Superuser URL (same convention as conftest.py) — used for DDL/seeding.
-TEST_DB_URL = "postgresql+asyncpg://test:test@localhost:5432/legalapp_test"
+TEST_DB_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://test:test@localhost:5432/legalapp_test",
+)
 # Non-superuser role the assertions run as, so RLS is actually enforced.
 _RLS_ROLE = "rls_probe_role"
 _RLS_PW = "rls_probe_pw"
-RLS_ROLE_URL = (
-    f"postgresql+asyncpg://{_RLS_ROLE}:{_RLS_PW}@localhost:5432/legalapp_test"
-)
+RLS_ROLE_URL = make_url(TEST_DB_URL).set(
+    username=_RLS_ROLE, password=_RLS_PW
+).render_as_string(hide_password=False)
 
 # A dedicated throwaway table so we never depend on the real schema / FKs.
 _TABLE = "rls_seed_probe"
+
+
+class ProbeBase(DeclarativeBase):
+    pass
+
+
+class RLSProbe(ProbeBase):
+    __tablename__ = _TABLE
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+
 
 TENANT_A = str(uuid.uuid4())
 TENANT_B = str(uuid.uuid4())
@@ -117,6 +140,14 @@ async def rls_session():
                 )
             )
             await conn.execute(
+                text(
+                    f"""
+                    ALTER ROLE {_RLS_ROLE} LOGIN PASSWORD '{_RLS_PW}'
+                      NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE
+                    """
+                )
+            )
+            await conn.execute(
                 text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}")
             )
             await conn.execute(
@@ -183,9 +214,42 @@ async def test_tenant_context_isolates_rows(rls_session):
     assert await _count(rls_session, "b") == 0  # tenant B invisible
 
 
+async def test_tenant_context_sets_current_and_legacy_gucs(rls_session):
+    """Both policy generations must see the same tenant id."""
+    await set_tenant_context(rls_session, TENANT_A)
+
+    current, legacy = (
+        await rls_session.execute(
+            text(
+                """
+                SELECT
+                  current_setting('app.current_tenant_id', true),
+                  current_setting('app.tenant_id', true)
+                """
+            )
+        )
+    ).one()
+
+    assert current == TENANT_A
+    assert legacy == TENANT_A
+
+
 async def test_no_context_is_fail_closed(rls_session):
-    """With no tenant context set, the GUC is empty => zero rows (fail-closed)."""
+    """With no tenant context set, the sentinel UUID sees zero rows."""
     await clear_tenant_context(rls_session)
+    current, legacy = (
+        await rls_session.execute(
+            text(
+                """
+                SELECT
+                  current_setting('app.current_tenant_id', true),
+                  current_setting('app.tenant_id', true)
+                """
+            )
+        )
+    ).one()
+    assert current == NO_TENANT_CONTEXT
+    assert legacy == NO_TENANT_CONTEXT
     assert await _count(rls_session) == 0
 
 
@@ -198,3 +262,39 @@ async def test_rls_bypass_reveals_all_rows(rls_session):
     # Bypass on: all three rows (both tenants) become visible.
     await enable_rls_bypass(rls_session)
     assert await _count(rls_session) == 3
+
+
+async def test_get_db_rebinds_tenant_context_after_commit_for_refresh(
+    monkeypatch, rls_session
+):
+    class ExistingSessionContext:
+        async def __aenter__(self):
+            return rls_session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr(
+        database, "async_session_maker", lambda: ExistingSessionContext()
+    )
+    request = SimpleNamespace(state=SimpleNamespace(tenant_id=TENANT_A))
+    db_stream = database.get_db(request)
+
+    try:
+        db = await db_stream.__anext__()
+        await db.commit()
+
+        current = (
+            await db.execute(text("SELECT current_setting('app.current_tenant_id')"))
+        ).scalar_one()
+        assert current == TENANT_A
+
+        row = (
+            await db.execute(select(RLSProbe).where(RLSProbe.label == "a1"))
+        ).scalar_one()
+        await db.commit()
+
+        await db.refresh(row)
+        assert row.label == "a1"
+    finally:
+        await db_stream.aclose()

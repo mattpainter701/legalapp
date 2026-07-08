@@ -40,9 +40,21 @@ function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbac
 
   if (!hasFreshAssistant && fallbackAssistantMessage?.content) {
     next.push(fallbackAssistantMessage)
+  } else if (hasFreshAssistant && fallbackAssistantMessage?.progress) {
+    const assistantIndex = next.findIndex((msg) => {
+      if (msg.role !== 'assistant') return false
+      const createdAt = Date.parse(msg.created_at)
+      return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
+    })
+    if (assistantIndex >= 0 && !next[assistantIndex].progress) {
+      next[assistantIndex] = {
+        ...next[assistantIndex],
+        progress: fallbackAssistantMessage.progress,
+      }
+    }
   }
 
-  return next
+  return attachTurnReferences(next)
 }
 
 function deriveKeyphrases(text) {
@@ -88,6 +100,86 @@ function mergeStreamProgress(current, event, content) {
     counts,
     keyphrases: event.keyphrases || current?.keyphrases || deriveKeyphrases(content),
   }
+}
+
+function countSourcesByType(sources) {
+  const counts = {
+    matter: 0,
+    uploads: 0,
+    firm: 0,
+    courtlistener: 0,
+    total: 0,
+  }
+
+  for (const src of Array.isArray(sources) ? sources : []) {
+    const type = src?.source_type || ''
+    if (type === 'public_authority') {
+      counts.courtlistener += 1
+    } else if (type === 'matter_context') {
+      counts.matter += 1
+    } else {
+      counts.firm += 1
+    }
+  }
+  counts.total = counts.matter + counts.uploads + counts.firm + counts.courtlistener
+  return counts
+}
+
+function buildReferenceContext({ progress, sources, status } = {}) {
+  const sourceList = Array.isArray(sources) ? sources : []
+  const progressCounts = progress?.counts || null
+  const derivedCounts = countSourcesByType(sourceList)
+  const counts = {
+    matter: Number(progressCounts?.matter ?? derivedCounts.matter ?? 0),
+    uploads: Number(progressCounts?.uploads ?? derivedCounts.uploads ?? 0),
+    firm: Number(progressCounts?.firm ?? derivedCounts.firm ?? 0),
+    courtlistener: Number(progressCounts?.courtlistener ?? derivedCounts.courtlistener ?? 0),
+  }
+  counts.total = Number(progressCounts?.total ?? (counts.matter + counts.uploads + counts.firm + counts.courtlistener))
+  const hasContext = counts.total > 0 || sourceList.length > 0 || progress?.status || status
+  if (!hasContext) return null
+
+  return {
+    counts,
+    source_count: sourceList.length,
+    status: status || progress?.status || (sourceList.length ? 'Sources attached to answer' : ''),
+    complete: Boolean(progress?.complete),
+  }
+}
+
+function attachTurnReferences(messages) {
+  const next = (Array.isArray(messages) ? messages : []).map((msg) => ({ ...msg }))
+
+  for (let i = 0; i < next.length; i += 1) {
+    if (next[i].role !== 'user') continue
+    let assistantIndex = -1
+    for (let idx = i + 1; idx < next.length; idx += 1) {
+      if (next[idx].role === 'user') break
+      if (next[idx].role === 'assistant') {
+        assistantIndex = idx
+        break
+      }
+    }
+    if (assistantIndex < 0) continue
+
+    const assistant = next[assistantIndex]
+    const context = buildReferenceContext({
+      progress: assistant.progress,
+      sources: assistant.sources,
+    })
+    if (!context) continue
+
+    next[i] = {
+      ...next[i],
+      referenceContext: next[i].referenceContext || context,
+    }
+    next[assistantIndex] = {
+      ...assistant,
+      referenceContext: assistant.referenceContext || context,
+    }
+  }
+
+  return next
 }
 
 export default function ChatPage() {
@@ -168,7 +260,7 @@ export default function ChatPage() {
     setActiveConvId(id)
     try {
       const data = await getConversation(id)
-      setMessages(data.messages || [])
+      setMessages(attachTurnReferences(data.messages || []))
       setActiveConvTitle(data.conversation?.title || 'Untitled')
       if (data.conversation) {
         setConversations((prev) =>
@@ -297,15 +389,18 @@ export default function ChatPage() {
       }
     }
 
+    const attachmentIds = pendingAttachments.map((a) => a.id)
+    let streamProgress = initialStreamProgress(content, attachmentIds.length)
+    const initialReferenceContext = buildReferenceContext({ progress: streamProgress })
+
     const userMessage = {
       id: `temp-${Date.now()}`,
       role: 'user',
       content,
       sources: [],
+      referenceContext: initialReferenceContext,
       created_at: new Date().toISOString(),
     }
-
-    const attachmentIds = pendingAttachments.map((a) => a.id)
 
     setMessages((prev) => [...prev, userMessage])
     setInputValue('')
@@ -314,13 +409,13 @@ export default function ChatPage() {
 
     try {
       const assistantMsgId = `stream-${Date.now()}`
-      let streamProgress = initialStreamProgress(content, attachmentIds.length)
       const assistantMsg = {
         id: assistantMsgId,
         role: 'assistant',
         content: '',
         sources: [],
         progress: streamProgress,
+        referenceContext: initialReferenceContext,
         created_at: new Date().toISOString(),
       }
       setMessages((prev) => [...prev, assistantMsg])
@@ -331,10 +426,13 @@ export default function ChatPage() {
       for await (const token of streamMessage(convId, content, includePublic, usePremium, attachmentIds)) {
         if (token?.type === 'progress') {
           streamProgress = mergeStreamProgress(streamProgress, token, content)
+          const referenceContext = buildReferenceContext({ progress: streamProgress })
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
-                ? { ...msg, progress: streamProgress }
+                ? { ...msg, progress: streamProgress, referenceContext }
+                : msg.id === userMessage.id
+                  ? { ...msg, referenceContext }
                 : msg
             )
           )
@@ -342,10 +440,13 @@ export default function ChatPage() {
         }
         if (token === '[STREAM_COMPLETE]') {
           streamProgress = { ...streamProgress, complete: true, status: 'Response complete' }
+          const referenceContext = buildReferenceContext({ progress: streamProgress })
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMsgId
-                ? { ...msg, progress: streamProgress }
+                ? { ...msg, progress: streamProgress, referenceContext }
+                : msg.id === userMessage.id
+                  ? { ...msg, referenceContext }
                 : msg
             )
           )
@@ -369,7 +470,14 @@ export default function ChatPage() {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMsgId
-              ? { ...msg, content: `An error occurred: ${streamError}`, progress: { ...streamProgress, complete: true } }
+              ? {
+                  ...msg,
+                  content: `An error occurred: ${streamError}`,
+                  progress: { ...streamProgress, complete: true },
+                  referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
+                }
+              : msg.id === userMessage.id
+                ? { ...msg, referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }) }
               : msg
           )
         )
@@ -386,6 +494,7 @@ export default function ChatPage() {
               ...assistantMsg,
               content: accumulatedText,
               progress: { ...streamProgress, complete: true },
+              referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
             })
           )
           setActiveConvTitle(refreshed.conversation?.title || activeConvTitle)

@@ -228,7 +228,7 @@ export default function PortalCasePage() {
             {my_assets.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">No items yet</p><p className="text-brand-muted text-sm font-sans">Add your assets and debts for disclosure. Submit them for attorney review when ready.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
                   <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Description','Type','Category','Value','Owned By','Status','Actions'].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
@@ -265,7 +265,7 @@ export default function PortalCasePage() {
             {shared_assets.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">Nothing shared yet</p><p className="text-brand-muted text-sm font-sans">No assets have been sent to you for review.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
                   <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Description','Type','Category','Value','Owned By','Status',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">
@@ -318,7 +318,7 @@ export default function PortalCasePage() {
             {documents.length === 0 ? (
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-16 text-center shadow-sm"><p className="text-brand-ink font-serif text-lg font-bold mb-1">No documents</p><p className="text-brand-muted text-sm font-sans">Upload supporting documents here.</p></div>
             ) : (
-              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
                 <table className="min-w-full text-left">
                   <thead><tr className="bg-brand-bg-soft/50 border-b border-brand-line">{['Filename','Description','Type','Size','Uploaded',''].map((h) => <th key={h} className="px-5 py-3 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans">{h}</th>)}</tr></thead>
                   <tbody className="divide-y divide-brand-line">

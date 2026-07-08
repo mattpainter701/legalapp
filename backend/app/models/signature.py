@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -45,7 +46,7 @@ class SignatureRequest(Base):
         ForeignKey("matter_documents.id", ondelete="SET NULL"),
         nullable=True,
     )
-    # draft | sent | partially_signed | completed | declined | voided
+    # draft | sent | partially_signed | completed | declined | expired | voided
     status: Mapped[str] = mapped_column(
         String(50), default="draft", server_default="draft"
     )
@@ -65,6 +66,21 @@ class SignatureRequest(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reminders: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    enforce_signing_order: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    declined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -102,6 +118,9 @@ class SignatureSigner(Base):
     )
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(100), default="signer", server_default="signer"
+    )
     sign_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # pending | signed | declined
     status: Mapped[str] = mapped_column(
@@ -112,6 +131,10 @@ class SignatureSigner(Base):
     )
     signed_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     typed_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+    declined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     audit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     request: Mapped["SignatureRequest"] = relationship(

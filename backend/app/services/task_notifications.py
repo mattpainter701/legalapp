@@ -9,6 +9,7 @@ from typing import Coroutine
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models.contact import Contact
 from app.models.plugin import Matter
 from app.models.task import Task
@@ -17,6 +18,7 @@ from app.services import google_calendar, microsoft_calendar
 from app.services.email import email_service
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 def _fire_and_log(coro: Coroutine, *, task_id: str, action: str) -> None:
@@ -62,7 +64,75 @@ def _format_task_due(task: Task) -> str:
     return due
 
 
-def push_task_to_calendars(task: Task, tenant_id: str) -> None:
+def _task_url(task: Task) -> str:
+    return f"{settings.FRONTEND_URL.rstrip('/')}/tasks/{task.id}"
+
+
+def _calendar_description(
+    task: Task,
+    *,
+    creator_name: str | None = None,
+    customer_name: str | None = None,
+    task_url: str | None = None,
+) -> str:
+    lines = [task.description or ""]
+    metadata = [
+        f"Created by: {creator_name}" if creator_name else "",
+        f"Customer: {customer_name}" if customer_name else "",
+        f"Task link: {task_url}" if task_url else "",
+    ]
+    metadata = [line for line in metadata if line]
+    if metadata:
+        if lines[0]:
+            lines.append("")
+        lines.extend(metadata)
+    return "\n".join(line for line in lines if line)
+
+
+async def _load_task_context(
+    db: AsyncSession, task: Task
+) -> tuple[User | None, Contact | None, Matter | None]:
+    creator = None
+    if task.created_by_user_id:
+        creator = (
+            await db.execute(
+                select(User).where(
+                    User.id == task.created_by_user_id,
+                    User.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    contact = None
+    if task.contact_id:
+        contact = (
+            await db.execute(
+                select(Contact).where(
+                    Contact.id == task.contact_id,
+                    Contact.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    matter = None
+    if task.matter_id:
+        matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == task.matter_id,
+                    Matter.tenant_id == task.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+    return creator, contact, matter
+
+
+def push_task_to_calendars(
+    task: Task,
+    tenant_id: str,
+    *,
+    creator_name: str | None = None,
+    customer_name: str | None = None,
+    task_url: str | None = None,
+) -> None:
     """Fire-and-forget upsert of a task's event to Google and Microsoft."""
     if not task.due_date:
         return
@@ -74,7 +144,12 @@ def push_task_to_calendars(task: Task, tenant_id: str) -> None:
         task_id=task_id,
         title=task.title or task.task_type or "",
         due_date=task.due_date.isoformat(),
-        description=task.description or "",
+        description=_calendar_description(
+            task,
+            creator_name=creator_name,
+            customer_name=customer_name,
+            task_url=task_url,
+        ),
         is_completed=is_completed,
         user_id=user_id,
     )
@@ -170,6 +245,7 @@ async def send_task_assignment_alert(
         matter_name=matter.matter_name if matter else None,
         source=task.source,
         assigner_note=assignment_note,
+        task_url=_task_url(task),
     )
 
 
@@ -180,7 +256,14 @@ async def notify_task_created(
     assignment_note: str | None = None,
 ) -> bool:
     """Notify external systems and assignee after a new task is created."""
-    push_task_to_calendars(task, tenant_id)
+    creator, contact, _matter = await _load_task_context(db, task)
+    push_task_to_calendars(
+        task,
+        tenant_id,
+        creator_name=_user_label(creator),
+        customer_name=contact.display_name if contact else None,
+        task_url=_task_url(task),
+    )
     if task.assigned_to_user_id:
         return await send_task_assignment_alert(db, task, assignment_note)
     return False

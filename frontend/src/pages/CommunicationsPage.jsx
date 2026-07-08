@@ -485,7 +485,7 @@ export default function CommunicationsPage() {
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
 
   return (
-    <div className="flex h-screen bg-brand-bg text-brand-ink">
+    <div className="flex h-full bg-brand-bg text-brand-ink">
       {/* Left filter panel */}
       <aside className="w-64 shrink-0 border-r border-brand-line flex flex-col bg-brand-surface-2">
         <div className="px-5 py-4 border-b border-brand-line">

@@ -15,6 +15,7 @@ from app.middleware.tenant import require_admin as _require_admin
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.integration_sync_run import IntegrationSyncRun
+from app.models.rbac import Role, UserRole
 from app.models.tenant import Tenant, TenantSettings
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
@@ -41,14 +42,105 @@ from app.schemas.admin import (
     ErrorResolveRequest,
     ErrorResolveResponse,
 )
-from app.services.llm_routing import VALID_LLM_PROVIDERS
 from app.services.access_control import normalize_role
+from app.services.llm_routing import VALID_LLM_PROVIDERS
+from app.services.rbac_service import get_user_capabilities
 
 settings = get_settings()
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_user_role(role: str) -> str:
+    normalized = normalize_role(role)
+    if normalized != (role or "").strip().lower():
+        raise HTTPException(
+            status_code=400,
+            detail="role must be 'admin', 'accountant', or 'user'",
+        )
+    return normalized
+
+
+async def _user_role_assignments(db: AsyncSession, user_ids: list[uuid.UUID]) -> dict:
+    assignments: dict[uuid.UUID, dict] = {}
+    if not user_ids:
+        return assignments
+
+    rows = (
+        await db.execute(
+            select(UserRole.user_id, Role.id, Role.name)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                UserRole.user_id.in_(user_ids),
+                UserRole.source == "manual",
+            )
+            .order_by(Role.name.asc())
+        )
+    ).all()
+    for user_id, role_id, role_name in rows:
+        user_roles = assignments.setdefault(user_id, {"role_ids": [], "roles": []})
+        user_roles["role_ids"].append(str(role_id))
+        user_roles["roles"].append({"id": str(role_id), "name": role_name})
+    return assignments
+
+
+def _user_response(user: User, assignments: dict | None = None) -> UserResponse:
+    assigned = (assignments or {}).get(user.id, {})
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        role_ids=assigned.get("role_ids", []),
+        roles=assigned.get("roles", []),
+        is_active=user.is_active,
+        license_active=user.license_active,
+        payg_monthly_budget=(
+            float(user.payg_monthly_budget)
+            if user.payg_monthly_budget is not None
+            else None
+        ),
+        default_billing_rate=(
+            float(user.default_billing_rate)
+            if user.default_billing_rate is not None
+            else None
+        ),
+        created_at=user.created_at,
+    )
+
+
+async def _is_admin_settings_holder(db: AsyncSession, user: User) -> bool:
+    return "admin_settings" in await get_user_capabilities(db, user.id)
+
+
+async def _active_admin_access_count(db: AsyncSession, tenant_id: uuid.UUID) -> int:
+    legacy_rows = (
+        await db.execute(
+            select(User.id).where(
+                User.tenant_id == tenant_id,
+                User.role == "admin",
+                User.is_active.is_(True),
+            )
+        )
+    ).scalars()
+    admin_user_ids = set(legacy_rows)
+
+    rbac_rows = (
+        await db.execute(
+            select(UserRole.user_id)
+            .join(Role, Role.id == UserRole.role_id)
+            .join(User, User.id == UserRole.user_id)
+            .where(
+                UserRole.tenant_id == tenant_id,
+                User.is_active.is_(True),
+                Role.capabilities.contains(["admin_settings"]),
+            )
+        )
+    ).scalars()
+    admin_user_ids.update(rbac_rows)
+    return len(admin_user_ids)
 
 
 @router.get("/users", response_model=UserList)
@@ -66,36 +158,10 @@ async def list_users(
         .order_by(User.created_at.asc())
     )
     users = result.scalars().all()
-
-    from app.models.rbac import UserRole
-
-    user_ids = [u.id for u in users]
-    role_map: dict = {}
-    if user_ids:
-        rows = (
-            await db.execute(
-                select(UserRole.user_id, UserRole.role_id).where(
-                    UserRole.user_id.in_(user_ids),
-                    UserRole.source == "manual",
-                )
-            )
-        ).all()
-        for uid, rid in rows:
-            role_map.setdefault(uid, []).append(str(rid))
+    assignments = await _user_role_assignments(db, [u.id for u in users])
 
     return UserList(
-        users=[
-            UserResponse(
-                id=str(u.id),
-                email=u.email,
-                full_name=u.full_name,
-                role=u.role,
-                role_ids=role_map.get(u.id, []),
-                is_active=u.is_active,
-                created_at=u.created_at,
-            )
-            for u in users
-        ],
+        users=[_user_response(u, assignments) for u in users],
         total=len(users),
     )
 
@@ -128,6 +194,19 @@ async def deactivate_user(
 
     if target_user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if (
+        target_user.is_active
+        and (
+            target_user.role == "admin"
+            or await _is_admin_settings_holder(db, target_user)
+        )
+        and await _active_admin_access_count(db, admin.tenant_id) <= 1
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot deactivate the last active admin in this tenant",
+        )
 
     # Check if this user granted org-wide OAuth consent
     if not force:
@@ -1326,6 +1405,7 @@ async def get_permissions_audit(
         if not match or not match.scopes:
             return {
                 "connected": False,
+                "required_scopes": required,
                 "granted_scopes": [],
                 "missing_required": required,
                 "extra_scopes": [],
@@ -1350,6 +1430,7 @@ async def get_permissions_audit(
             effective_health = "missing_scopes"
         return {
             "connected": True,
+            "required_scopes": required,
             "granted_scopes": granted,
             "missing_required": missing,
             "extra_scopes": extra,
@@ -1424,13 +1505,21 @@ async def patch_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     if body.role is not None:
-        normalized_role = normalize_role(body.role)
-        if normalized_role != body.role.strip().lower():
+        new_role = _validate_user_role(body.role)
+        has_admin_settings = await _is_admin_settings_holder(db, user)
+        had_admin_access = user.role == "admin" or has_admin_settings
+        would_have_admin_access = new_role == "admin" or has_admin_settings
+        if (
+            user.is_active
+            and had_admin_access
+            and not would_have_admin_access
+            and await _active_admin_access_count(db, admin.tenant_id) <= 1
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="role must be 'admin', 'accountant', or 'user'",
+                detail="Cannot remove the last active admin in this tenant",
             )
-        user.role = normalized_role
+        user.role = new_role
 
     if body.full_name is not None:
         user.full_name = body.full_name
@@ -1459,14 +1548,8 @@ async def patch_user(
 
     await db.commit()
     await db.refresh(user)
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        full_name=user.full_name,
-        role=user.role,
-        is_active=user.is_active,
-        created_at=user.created_at,
-    )
+    assignments = await _user_role_assignments(db, [user.id])
+    return _user_response(user, assignments)
 
 
 @router.post("/users/{user_id}/reactivate", status_code=200)
@@ -1517,13 +1600,15 @@ async def invite_user(
             detail="A user with this email already exists in your tenant.",
         )
 
+    role = _validate_user_role(body.role)
+
     # Create inactive user with a random password (they will set their own via invite link)
     invite_token = secrets.token_urlsafe(32)
     new_user = User(
         tenant_id=admin.tenant_id,
         email=body.email,
         full_name=body.full_name,
-        role=normalize_role(body.role),
+        role=role,
         is_active=False,
         license_active=True,
         # Store invite token temporarily in password_hash field (hashed prefix)

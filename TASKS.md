@@ -1,5 +1,635 @@
 # TASKS.md
 
+## Recent Merge Review And Plan Integration — 2026-07-08 (DONE)
+
+**Goal:** Pull local state current, review the recent unmerged merge stack and
+planning branches, integrate the low-risk pieces in a sensible order, and leave
+superseded/high-conflict branch work out of `main`.
+
+- [x] Confirm local `main` pull state and identify new remote branches
+- [x] Integrate SBOM/AI-BOM inventory tracking from the SBOM planning branch
+- [x] Integrate probate, estate, and template automation plans without
+      duplicating Sprint 15 or task IDs
+- [x] Repair Admin Users/RBAC response contract so assigned role badges reload
+      from backend role assignment data
+- [x] Preserve legacy accountant role support while fixing admin user contract
+- [x] Selectively port Teams reauthorization/notification safety fixes
+- [x] Leave old Zoom recordings call-intake router and large add-on UI patch
+      unmerged as superseded/high-conflict follow-ups
+
+Summary: `git pull --ff-only` was already current; local `main` remains one
+commit ahead of `origin/main`. The recent stack should not be merged wholesale:
+it conflicts in `TASKS.md`, `backend/app/main.py`,
+`backend/app/routers/admin.py`, `backend/app/routers/integrations.py`, and
+`frontend/src/pages/MatterPortfolioPage.jsx`. Integrated the clean SBOM
+inventory generator/docs, imported probate planning as backlog `BK12`-`BK17`
+instead of a duplicate Sprint 15, fixed `/api/admin/users` to return manual
+RBAC `role_ids`/`roles` plus billing/license fields, preserved accountant as a
+valid legacy role, and manually ported the Teams scope-preservation and
+non-mutating notification fixes around the current PKCE OAuth flow. The old
+Zoom recordings router remains skipped because current `main` already has the
+newer Zoom Phone call-history/webhook intake path.
+
+## Intake Prod Session Follow-Ups — 2026-07-07 (DONE)
+
+**Goal:** Fix production-session issues reported after login: refresh should not
+log users out, call-capture draft cards need a close/delete affordance, Zoom
+Phone intake should refresh recent calls without requiring manual sync, intake
+tasks should carry caller context and working links, calendar events should name
+the task creator and link back to the task, and assigned users should receive an
+email notification.
+
+- [x] Trace auth/session refresh behavior
+- [x] Add call-capture draft close/delete control
+- [x] Improve Zoom Phone intake auto-sync behavior and DB logging confidence
+- [x] Fix intake-created task title/link/customer context
+- [x] Add creator context and task link to calendar/email notifications
+- [x] Validate focused backend/frontend paths
+
+Summary: refresh-after-login was not intentionally strict security; the
+frontend still treated the missing legacy localStorage bearer token as logged
+out even though production now relies on httpOnly auth cookies. Auth boot now
+checks `/auth/me` with cookie refresh before deciding the session is gone.
+Call-capture draft cards now have an X close/delete affordance, with a discard
+confirmation for non-empty drafts. The intake dashboard now triggers a
+throttled Zoom Phone sync on load for connected tenants, while the backend
+continues writing imported calls idempotently into `communication_logs`. Staff
+intake tasks now prefix the caller name in the task title, include the creator
+in the task description, and notification calendar/email payloads include
+creator/customer context plus a `/tasks/{id}` link. The frontend now serves
+`/tasks/{taskId}` and highlights the linked task. Validation: backend compile
+passed; non-DB task notification tests passed; frontend production build
+passed; `git diff --check` passed; DB-backed notification/intake regressions
+remain locally blocked by Postgres `ConnectionRefusedError` as in prior intake
+work.
+
+## Admin Role-Assign Badge Never Updated — 2026-07-07 (DONE)
+
+**Goal:** Investigate user report of "inability to assign perm/roles to
+users" in Admin → Users.
+
+- [x] Ruled out backend failure: nginx logs show 3 successful `200`
+      responses on `PUT /api/admin/roles/assign/{user_id}` minutes before
+      the report
+- [x] Ruled out lockout/missing-role data: direct DB query confirms every
+      tenant has 1+ users holding `manage_roles`, and no user in any tenant
+      has zero `user_roles` rows (migration 068's backfill held)
+- [x] Found actual bug: `RoleAssignCell`'s badge label was hard-coded to the
+      legacy `user.role` string and never reflected the roles actually
+      assigned via the checkbox dropdown — a successful assignment looked
+      like a no-op, which is why it appeared broken
+- [x] Fixed: badge now derives its label from the user's real assigned role
+      names, falling back to the legacy role only when no manual assignment
+      exists
+- [x] Verified frontend production build passes
+
+Summary: this was a pure UX defect, not a backend bug — assignments were
+always succeeding. Fixed in `frontend/src/pages/AdminPage.jsx`
+(`RoleAssignCell`).
+
+## Intake Call Draft: Raw Error Page Leak — 2026-07-07 (DONE)
+
+**Goal:** Fix user report of a raw nginx 429 HTML error page appearing inside
+the intake dashboard's call draft tab, and the surrounding "receipt trail"
+section looking broken as a result.
+
+- [x] Trace root cause: `normalizeApiError()` treated non-JSON proxy error
+      bodies (nginx's HTML error pages) as literal message text
+- [x] Confirm via nginx logs: a 2026-07-06 429 burst (2,593 hits in seconds,
+      same draft IDs) predates and appears to have triggered the earlier
+      "stop draft autosave flood" fix; `retryReceipt()` stored that page's
+      full HTML as a receipt's `error` with no sanitization or length limit
+- [x] Fix `normalizeApiError()` to detect HTML bodies and fall back to a
+      short status-based message (friendly text for 429/502/503/504)
+- [x] Sanitize receipt errors in `useCallDrafts` (including already-persisted
+      ones, on next load) so any prior corrupted receipt self-heals
+- [x] Truncate/line-clamp receipt error text in `ReceiptTrail` as a render-
+      layer defense
+- [x] Verify fix logic against the exact HTML body from the user's report
+      (node simulation) and confirm frontend build passes
+
+Summary: root cause was leaking a proxy/gateway's raw HTML error page as a
+user-facing message, not a still-live autosave loop — no new 429 flood was
+found in the last 24h of nginx logs; the only burst on record predates the
+earlier fix by ~5 minutes. The visible "weird" call-draft section was a
+stale, persisted receipt from that incident, now self-healed by the
+sanitization added at load time. Fixed in `frontend/src/api.js`,
+`frontend/src/hooks/useCallDrafts.js`, and
+`frontend/src/components/intake/ReceiptTrail.jsx`. No JS test framework
+exists in this repo; validated via a standalone node reproduction of the
+exact HTML payload plus a passing production build.
+
+## Production Backend/Page Failure Triage — 2026-07-06 (DONE)
+
+**Goal:** Diagnose and fix the current production issue where pages appear not
+to load or APIs fail after the latest OAuth hotfix deploy, without shipping the
+pending mobile/PWA frontend work until the backend health is understood.
+
+- [x] Check production health, container state, and recent backend/nginx logs
+- [x] Identify whether failures are 429 rate limit, auth/session, 500s, or app startup
+- [x] Apply the smallest safe fix or operational recovery
+- [x] Validate public pages/API health after recovery
+
+Summary: production health and authenticated Microsoft/mobile page APIs were
+responding, but persisted error logs showed Google login still failed with
+`Google id_token verification failed: No access_token provided to compare
+against at_hash claim`. The Google callback now passes the provider access
+token into `verify_google_id_token()`, allowing `python-jose` to validate
+Google's `at_hash` claim instead of rejecting valid callbacks. Added a focused
+regression that signs a Google ID token with a matching `at_hash`. Validation:
+20 focused OAuth tests passed, auth router/security helper syntax compile
+passed, and the frontend production build passed.
+
+## Mobile/Tablet Frontend Audit + Design Polish — 2026-07-06 (DONE)
+
+**Goal:** Assess whether the installable web app (manifest-based, no service
+worker) is sufficient for mobile users, fix critical/high mobile issues, add
+the missing favicon, and harmonize off-brand pages with the design system.
+
+- [x] Verdict: current PWA-lite setup is sufficient — installable via
+      manifest, shell already has hamburger + bottom tab nav + 44px tap
+      targets; no native app or service worker needed for this user base
+- [x] Fix `h-screen` → `100dvh` in AppShell (bottom nav cut off by mobile
+      browser URL bar)
+- [x] Add `viewport-fit=cover` + safe-area padding on mobile bottom nav
+      (iPhone home indicator in standalone mode)
+- [x] iOS-only 16px input font-size rule (prevents Safari focus auto-zoom)
+- [x] Fix CalendarPage/CommunicationsPage `h-screen`-inside-AppShell overflow
+      (→ `h-full`)
+- [x] Add horizontal-scroll wrappers / `overflow-x-auto` to 16 tables across
+      12 files that clipped on narrow screens
+- [x] Create missing `favicon.svg` (referenced by index.html but absent);
+      add apple-touch-icon + theme-color meta
+- [x] Remap ~155 off-brand inline hex colors in InvoicesPage,
+      InvoiceDetailPage, TimeTrackingPage, ProfilePage onto the brand palette
+- [x] Production build verified (vite build passes)
+
+### Backlog (mobile/design, lower priority)
+- [ ] **Code-split the JS bundle (P1):** single 1.65 MB chunk (390 KB gzip) —
+      slow first load on cellular. Route-level `React.lazy` or Rollup
+      `manualChunks`.
+- [ ] **Card-style mobile layouts for dense tables (P2):** horizontal scroll
+      is a stopgap; portfolio/invoice/time tables would read better as
+      stacked cards under `md:`.
+- [ ] **Convert inline-styled pages to Tailwind (P2):** InvoicesPage,
+      InvoiceDetailPage, TimeTrackingPage, ProfilePage still use inline
+      styles (colors now on-brand); converting to Tailwind brand classes +
+      serif headings would finish the visual unification.
+- [ ] **PWA maturity (P3):** service worker + explicit update prompt +
+      offline shell. Deliberately deferred — offline caching of legal
+      documents needs an encryption/privacy design first.
+- [ ] **Touch-target audit (P3):** some icon buttons (e.g. 13–15px trash
+      icons in table rows) are below the 44px guideline.
+- [ ] **Real-device pass (P3):** Calendar drag interactions, Reports charts,
+      and Communications three-pane layout on an actual phone/tablet.
+- [ ] **Frontend dependency updates (P3):** routine minor bumps + planned
+      major migrations (React 19, Vite 7, Tailwind 4) from `npm outdated`.
+
+## Mobile OAuth Callback Duplicate Handling — 2026-07-06 (DONE)
+
+**Goal:** Fix mobile Google/Microsoft login failures where provider callback
+URLs can be requested more than once, causing one-time OAuth state/code
+handling to surface "Invalid or expired OAuth state" instead of completing or
+returning the user to login gracefully.
+
+- [x] Reproduce/confirm production callback failure mode from logs
+- [x] Patch OAuth callback/exchange handling for duplicate mobile redirects
+- [x] Add focused regression coverage
+- [x] Validate backend/frontend auth flow checks
+- [x] Commit, push, deploy, and verify production OAuth redirects
+
+Summary: production logs showed mobile Chrome repeatedly requesting the same
+Google/Microsoft OAuth provider callback URL after login redirects. The first
+callback consumes the one-time CSRF state and the duplicate previously surfaced
+`Invalid or expired OAuth state` as a raw API error page, even when the first
+Microsoft callback had already produced a frontend exchange code. The auth
+router now records a 60-second replay entry bound to the exact provider
+`state` + authorization code after a successful callback, waits briefly for
+in-flight duplicates, and mints a fresh frontend callback exchange code for
+safe duplicate callbacks without reusing the provider authorization code.
+Google token exchange failures are now logged with provider status/body for
+diagnosis. Validation: focused OAuth replay tests passed, route-client
+contract passed with 394 matched frontend API call sites, frontend production
+build passed, and auth router syntax compile passed.
+
+## Intake Draft Autosave Hotfix — 2026-07-06 (DONE)
+
+**Goal:** Stop the intake dashboard from creating endless draft autosave
+errors when the page is opened or focus moves inside the call-capture form.
+
+- [x] Prevent untouched default call cards from syncing to the backend
+- [x] Stop form-level blur from flushing while focus remains inside the form
+- [x] Make autosave failures quiet and non-self-reinforcing under 429s
+- [x] Fix intake page admin rendering issues found during the hotfix
+- [x] Validate frontend build and targeted checks
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: fixed the intake draft loop that could flood nginx's general API
+rate limit and make unrelated pages appear broken. `useCallDrafts()` now keeps
+the toast callback in a ref so hydrate is stable, skips backend sync for blank
+untouched draft cards, suppresses 429 retry/toast storms, avoids duplicate
+in-flight saves, and no longer replays dirty drafts during hydration. The
+intake capture form only flushes on blur when focus leaves the form, not when
+tabbing between fields. The rotation admin panel no longer references
+out-of-scope dependencies, and migration `079_error_logs_system_policy` fixes
+tenantless `error_logs` inserts under RLS. Validation: frontend production
+build passed, migration compile passed, Alembic head is
+`079_error_logs_system_policy`, and `git diff --check` passed.
+
+## Intake Call Drafts + Action Receipts — 2026-07-05 (DONE)
+
+**Goal:** Implement the approved intake call draft persistence and action
+receipt design from
+`docs/superpowers/specs/2026-07-05-intake-call-drafts-design.md`, preserving
+the current intake dashboard layout while making in-progress call capture
+durable across refresh/navigation and surfacing mutation feedback clearly.
+
+- [x] Add backend draft persistence table, RLS, router endpoints, and tests
+- [x] Add frontend draft hook, tab strip, receipts, toasts, and async button
+- [x] Wire the active call-capture form to durable drafts without re-laying out
+      the dashboard
+- [x] Validate keyboard shortcuts, autosave, retry, and failure behavior
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: implemented the approved intake call draft persistence and action
+receipt design. Added migration `078_intake_call_drafts`, the
+`IntakeCallDraft` model, `/api/intake/drafts` list/upsert/delete endpoints
+with server-authored timestamps and current-user tenant scoping, plus focused
+CRUD/idempotency/isolation tests. Frontend call capture now runs from
+`useCallDrafts()` with immediate localStorage persistence, backend autosave,
+draft card switching (`Alt+1..9`) and new draft shortcut (`Alt+Shift+N`),
+shared `ToastProvider`, `AsyncButton`, and per-draft `ReceiptTrail` retry
+support. The existing dashboard layout is preserved. Validation: backend
+compile passed, route-client contract passed with 394 matched frontend call
+sites, and frontend production build passed. DB-backed intake tests reached
+the local Postgres fixture and then failed with `ConnectionRefusedError`
+(`WinError 1225`), so endpoint test execution remains environment-blocked
+locally.
+
+## API Reliability Production Deploy — 2026-07-05 (DONE)
+
+**Goal:** Commit, push, deploy, and validate the systemic API/RLS/error
+observability fixes on the hypervisor production stack.
+
+- [x] Confirm local and remote Git state are safe for deploy
+- [x] Run focused pre-deploy validation
+- [x] Commit and push the deployable changes
+- [x] Run production env/data guards before restart
+- [x] Deploy backend/frontend and validate health/OAuth/data guard
+- [x] Update TASKS.md and CHANGELOG.md with deploy result
+
+Summary: committed and deployed `25a9238` (`fix(api): harden tenant context
+and error handling`) to the hypervisor production stack at
+`https://legalapp.perevagagroup.com`. Local preflight passed: 32 focused
+backend tests, route-client contract script, frontend production build, and
+staged secret scan. Production env guard passed with `DEV_MODE=false`.
+Predeploy backups/counts were created, with the restart-protecting snapshot at
+`backups/legalapp-predeploy-20260705T232755Z.dump` and
+`backups/legalapp-predeploy-20260705T232755Z.counts.tsv`; postdeploy data
+guard passed with `backups/legalapp-postdeploy-20260705T233047Z.counts.tsv`.
+Backend/frontend were rebuilt and recreated, Alembic upgraded through
+`077_error_logs_nullable_tenant`, local and public health returned ok,
+Microsoft/Google OAuth returned 307, cloudflared was active, request IDs were
+present on API responses, and docs/dev routes returned 404.
+
+## API Error Observability & UX Hardening — 2026-07-05 (DONE)
+
+**Goal:** Resolve the API/front/backend map findings so production testing
+returns supportable errors instead of opaque "Internal server error" messages.
+
+- [x] Add request/error IDs and tenantless/system error logging
+- [x] Fail closed on production DB startup failure
+- [x] Normalize frontend API errors, including streaming fetch
+- [x] Remove or dev-gate localStorage bearer fallback
+- [x] Add route/client contract smoke coverage
+- [x] Validate focused backend/frontend checks
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: production API errors now have correlation handles instead of opaque
+500s. Added request-id middleware with `X-Request-ID`, included `request_id`
+and captured `error_id` in safe HTTP/generic error JSON, persisted request IDs
+to `error_logs`, and added migration `077_error_logs_nullable_tenant` so
+tenantless/system errors can be logged. Production startup now fails closed on
+DB connectivity probe failure. Frontend `api.js` now exports centralized
+`normalizeApiError()`, normalizes Axios and streaming fetch failures, preserves
+request/error IDs from body/headers, parses validation details, and removes
+production localStorage bearer fallback unless explicitly enabled for dev with
+`VITE_LEGACY_TOKEN_AUTH=true`. Added `backend/scripts/route_client_contract.py`
+and `backend/tests/test_route_client_contract.py`; standalone contract check
+currently matches 391 frontend API call sites to backend routes. Validation:
+32 focused backend tests passed, route-client script passed, backend compile
+passed, and frontend production build passed.
+
+## Assistant Chat Reference Ledger Wrap Bug — 2026-07-05 (DONE)
+
+**Goal:** Fix chat source/reference ledger and message text overflow when
+citations or excerpts contain long unbroken strings.
+
+- [x] Patch chat message wrapping styles
+- [x] Validate frontend build
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: chat message bodies, reference status strips, and source ledger
+excerpts now break long unspaced strings inside their containers instead of
+bleeding across the page. Validation passed with the frontend production
+build.
+
+## API / Frontend / Backend Error-Readiness Map — 2026-07-05 (DONE)
+
+**Goal:** Map the frontend API callers, backend routes, tenant/RLS/error
+handling, and production observability paths to identify why customer testing
+still surfaces generic "Internal server error" messages and what to harden
+next.
+
+- [x] Inventory frontend API client + backend route surface
+- [x] Review error propagation and user-facing API UX
+- [x] Run focused static/test probes for route/auth/migration/API drift
+- [x] Write findings and priority remediation plan
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: wrote `docs/api-front-backend-map-eval-2026-07-05.md`. The app has
+511 backend routes and 339 frontend API call sites; route auth coverage,
+Alembic head check, and frontend production build passed. Main remaining
+production-testing pain is API observability/UX, not another single endpoint:
+generic 500 responses have no request/error ID, tenantless/system failures can
+skip durable error logging, production startup does not fail closed on DB
+connection failure, frontend error handling is page-by-page instead of
+normalized, localStorage bearer fallback remains, and there is no route/client
+contract gate. Priority plan: request IDs + safe error IDs, tenantless/system
+error logging, DB fail-closed startup, shared frontend API error normalizer,
+remove/dev-gate bearer fallback, and add route/client/top-workflow smoke tests.
+
+## Assistant Chat Source/Reference Tracking UX — 2026-07-05 (DONE)
+
+**Goal:** Preserve visible source/reference context across assistant chat
+initiation, first response, follow-up prompts, and rendered results so users
+can track which sources informed each answer.
+
+- [x] Inspect assistant chat prompt/result data flow
+- [x] Refactor UI state/rendering for per-turn sources and references
+- [x] Validate with focused frontend checks
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: chat now keeps a per-turn reference context through streaming,
+refresh, and conversation reloads. User prompts and assistant answers both
+show a compact References strip with matter, upload, firm/cloud, and
+CourtListener counts, while the final answer retains a source-neutral
+"Sources & References" ledger with responsive columns. Validation passed with
+the frontend production build.
+
+## Backend/API 500 Review & Root-Cause Documentation — 2026-07-05 (DONE)
+
+**Goal:** Systematic review of all API routers for the recurring "internal
+server error" class (post-commit tenant-context loss → RLS empty reads),
+enumerate every vulnerable endpoint, document root cause + systemic fix.
+
+- [x] Confirm root cause mechanism (transaction-local GUC dropped on commit)
+- [x] Enumerate all vulnerable endpoints across 48 routers + services (subagents)
+- [x] Identify any other distinct 500 classes
+- [x] Write review document with systemic fix recommendation
+- [x] Update TASKS.md and CHANGELOG.md
+
+Summary: every production 500 in the last 7 days traces to one root cause —
+`set_tenant_context` binds a transaction-local GUC that every `db.commit()`
+silently drops; post-commit DB work then runs unscoped under RLS. Census via
+four parallel review agents found **~122 vulnerable commit sites** across 30+
+routers and 3 services. Verified against live `error_logs` and `pg_policies`.
+Also confirmed three **silent** failures: Stripe payment-reconciliation
+webhook (no tenant context, payments never marked paid), recurring-invoice
+job (generates nothing), and cloud sync (providers 2-5 unscoped). Full report
+with per-endpoint census and the recommended systemic fix (auto re-bind via
+SQLAlchemy `after_begin` in `get_db`, strict-policy hardening migration,
+regression test): `docs/backend-500-review-2026-07-05.md`. Fix work is a
+follow-up task — no code changed in this review.
+
+## Systemic Tenant-Context Fix (DONE)
+
+Priority order from `docs/backend-500-review-2026-07-05.md` §7:
+
+- [x] `get_db` auto re-bind (`after_begin` listener) + auth register/signup bypass re-invoke
+- [x] Stripe payment webhook tenant resolution (revenue)
+- [x] `recurring_billing.py` per-tenant loop (revenue)
+- [x] Migration hardening 4 strict RLS policies (contacts/tasks/communication_logs/leads)
+- [x] `cloud_sync.py` rebind per provider
+- [x] Regression test pinning post-commit GUC survival
+- [x] Chat attachment Pydantic UUID→str fix
+
+Summary: fixed the systemic post-commit RLS context loss by adding a
+per-session SQLAlchemy `after_begin` listener in `get_db` that re-binds both
+tenant GUCs on every new transaction, plus explicit auth bypass re-enable for
+the two signup routes after their first commit. Added migration
+`076_harden_strict_tenant_rls` to harden strict contacts/tasks/
+communication_logs/leads policies with `current_setting(..., true)` +
+`NULLIF`, converting missing tenant context from hard 500s to fail-closed
+empty reads. Stripe webhook reconciliation now resolves/binds tenant context
+before forced-RLS invoice/payment queries, recurring billing loops active
+tenants with per-tenant context, and cloud sync re-binds around each provider
+so internal commits cannot un-scope later providers. The chat attachment UUID
+serialization 500 is fixed. Focused validation passed for migrations,
+chat-attachment serialization, cloud sync, and revenue tenant-context tests;
+the DB-backed RLS contract test is present but skipped locally because
+Postgres refused the test connection.
+
+## Matter Create API 500 — 2026-07-05 (DONE)
+
+**Goal:** Fix `POST /api/matters` returning 500 in production after the latest
+merges, while preserving existing production matter/customer data.
+
+- [x] Confirm local/prod Git state and inspect current production logs
+- [x] Reproduce or cover the failing create-matter path with a focused test
+- [x] Patch the matter-create path and validate locally
+- [x] Deploy through production data guard if code changes are needed
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: current production logs after the previous restart did not retain a
+fresh `POST /api/matters` traceback, but the create route had the same
+post-commit RLS failure shape as the Call Intake fix: it committed, then
+refreshed/reloaded the created `Matter` after transaction-local tenant context
+was cleared. Patched `POST /api/matters` to explicitly bind tenant context at
+the start of create and re-bind it after commit before refreshing/reloading the
+new matter. Added `backend\tests\test_matters.py` to cover matter creation,
+primary assignment/event creation, and the post-commit tenant-context
+requirement. Local validation passed: `backend\tests\test_matters.py`,
+`backend\tests\test_module_guard.py`, backend compile, and frontend production
+build. Deployed commit `d2e7851` after predeploy backup
+`backups/legalapp-predeploy-20260705T203919Z.dump` and count snapshot
+`backups/legalapp-predeploy-20260705T203919Z.counts.tsv`; rebuilt
+backend/frontend, recreated containers, and postdeploy data guard passed with
+`backups/legalapp-postdeploy-20260705T204231Z.counts.tsv`. Health, public
+health, Microsoft/Google OAuth 307 redirects, cloudflared, closed docs/dev
+routes, fresh backend logs, and Alembic head `075_billing_timer_and_qbo_dedupe`
+all checked clean.
+
+---
+
+## Call Intake Create Lead Staff Task 500 — 2026-07-05 (DONE)
+
+**Goal:** Fix the Call Intake "create lead + staff task" action returning a
+500 after the latest merges, without disturbing production data or unrelated
+workflow branches.
+
+- [x] Confirm local/prod Git state and capture the production traceback
+- [x] Reproduce or cover the failing action with a focused test
+- [x] Patch the intake/task path and validate locally
+- [x] Deploy through production data guard if code changes are needed
+- [x] Update TASKS.md and CHANGELOG.md with the outcome
+
+Summary: production traceback showed
+`sqlalchemy.exc.InvalidRequestError: Could not refresh instance
+'<CommunicationLog ...>'` at `create_dashboard_call` after the combined
+`create_lead` + `specific_staff` workflow committed. Fixed the route to build
+the response from flushed IDs before commit, avoid the unsafe post-commit
+`CommunicationLog` refresh, and re-bind tenant context before task
+notifications. Added a regression that fails on post-commit communication-log
+refreshes and verifies tenant context is present for notifications. Local
+validation passed: targeted regression, full
+`backend\tests\test_intake_dashboard.py` (24 tests), backend compile, and
+frontend production build. Deployed commit `acbbe64` to the hypervisor after
+predeploy backup `backups/legalapp-predeploy-20260705T202925Z.dump` and count
+snapshot `backups/legalapp-predeploy-20260705T202925Z.counts.tsv`; rebuilt
+backend/frontend, recreated containers, and postdeploy data guard passed with
+`backups/legalapp-postdeploy-20260705T203245Z.counts.tsv`. Health, public
+health, Microsoft/Google OAuth 307 redirects, cloudflared, closed docs/dev
+routes, backend logs, and Alembic head `075_billing_timer_and_qbo_dedupe` all
+checked clean.
+
+---
+
+## Post-Merge Production Deploy — 2026-07-05 (DONE)
+
+**Goal:** Pull the newly merged changes to local `main`, validate them, and
+deploy to the hypervisor only through the data-preserving production path.
+
+- [x] Pull latest `origin/main` into local clean `main`
+- [x] Run focused build/test/preflight validations for the merged changes
+- [x] Run production env guard and data guard before any container restart
+- [x] Deploy to hypervisor if preflight is safe
+- [x] Run post-deploy health, OAuth, and data-guard validation
+- [x] Update TASKS.md and CHANGELOG.md with deploy result
+
+Summary: pulled `origin/main` from `65dc4ba` to merge commit `4e70405`
+(`claude/time-tracking-invoicing-overhaul-snuau0`). Local validation passed:
+38 focused backend billing/migration tests, backend compile, and frontend
+production build. Hardened the two production env blockers before restart:
+local and hypervisor `.env` now have a non-placeholder `SECRET_KEY` and
+`DEV_MODE=false`; backups were written as `.env.backup.pre-prod-*` locally and
+on the hypervisor. Predeploy data guard created
+`backups/legalapp-predeploy-20260705T150448Z.dump` plus count snapshot.
+Rebuilt backend/frontend and started the stack without `--remove-orphans`;
+postdeploy data guard passed. Production is at `4e70405`, Alembic is at
+`075_billing_timer_and_qbo_dedupe`, and the new billing timer/QBO columns plus
+partial running-timer index exist. Health checks passed locally and publicly,
+Microsoft/Google OAuth returned 307, cloudflared is active, and `/docs`,
+`/redoc`, `/openapi.json`, and `/api/dev/users` are closed.
+
+---
+
+## Production-Safe Dev Workflow And Git Cleanup — 2026-07-04 (DONE)
+
+**Goal:** Keep local development/debugging productive while making production
+deploys data-preserving by default, then clean Git state so work resumes from a
+clean `main`.
+
+- [x] Verify local and hypervisor Git state are on clean `main`
+- [x] Prune stale remote-tracking refs and remove safely merged local branches
+- [x] Preserve active/unmerged branch state without deleting in-flight work
+- [x] Validate the production data guard and health checks still pass
+- [x] Update task/changelog records and commit cleanup
+
+Summary: local and hypervisor checkouts are on `main` at
+`ae3184d`/`origin/main` before the ledger commit, with clean worktrees except
+for this task record. Removed stale clean worktrees
+`I:/deepseek/legalapp/legalapp-deploy-main` and
+`I:/deepseek/legalapp/legalapp-review-fixes`, deleted merged local branches
+`codex/fix-zoom-intake-feed-500`, `codex/recent-merge-fixes`,
+`codex/sprint-15-integration-health`, `feat/call-inbox-redesign`, and
+`feat/call-intake-standalone`, and deleted merged remote branches
+`claude/call-intake-prod-ready-kn4y20`,
+`claude/call-intake-task-tracking-j595dh`,
+`codex/finish-ux-for-e-sign-tool`, `codex/recent-merge-fixes`, and
+`feat/call-inbox-redesign`. Preserved unmerged local branch
+`codex/integration-remediation-reconcile` and unmerged remote branches for
+future review. Production guard snapshot returned 164 count rows and public
+health returned 200.
+
+### Before Prod
+
+- [ ] Rotate remaining production/provider secrets that were exposed during
+      incident inspection before treating the install as customer-safe.
+- [x] Replace placeholder-shaped `SECRET_KEY` in local `.env` and production
+      `.env`; keep local `.env` as the source of truth before copying to the
+      hypervisor.
+- [x] Set production `DEV_MODE=false`, restart backend, and verify `/api/dev/*`,
+      `/docs`, `/redoc`, and `/openapi.json` are not served.
+- [x] Keep `scripts/prod_data_guard.sh pre` + `post` in every deploy path; do
+      not build/restart production unless a fresh DB backup and row-count
+      snapshot exist.
+- [ ] Continue feature/debug work from clean `main`; preserve unmerged branches
+      until reviewed, merged, or explicitly discarded.
+
+---
+
+## Production Matter Data Visibility Incident — 2026-07-04 — BLOCKED
+
+**Goal:** Verify whether the affected tenant's matter records are missing,
+hidden by tenant/RLS/module behavior, or affected by the latest deploy, and
+preserve production data while restoring access.
+
+- [x] Snapshot current production data state without destructive changes
+- [x] Verify tenant matter counts directly in Postgres and through API behavior
+- [x] Identify whether deploy changed data, visibility, RLS context, or module access
+- [ ] Restore matter visibility safely if records still exist
+- [x] Add/update deployment guardrails so future deploys preserve existing tenant data
+
+Summary: production now has a fresh logical backup at
+`/home/varta/legalapp/backups/legalapp-prod-pre-matter-incident-20260704T165304Z.sql.gz`.
+Direct Postgres inspection shows tenant
+`9ff4a695-826c-422c-bb7f-6037495a2c4e` has 0 rows in `matters`, 0 matter
+references from documents/tasks/leads/time entries/communications, and 1134
+Zoom communication logs. The active backend DB role is `clarity_app` with RLS
+active, so this is not an RLS-hidden matter list. Obvious host backup
+locations did not contain an older app DB dump. Restoring matter records is
+blocked until an older Postgres dump, cloud export, legacy source export, or
+other historical source for that tenant is available.
+
+Guardrails added: `scripts/prod_data_guard.sh` creates a predeploy pg_dump and
+public-table/per-tenant row-count snapshot, then fails the post-deploy check if
+any existing count decreases. `scripts/backup_db.sh` no longer prunes backups
+unless explicitly confirmed. Production deploy memory and the deploy skill now
+require the guard before customer-facing deploys.
+
+Follow-up: production is currently running with `DEV_MODE=true`; set
+`DEV_MODE=false` after confirming non-placeholder production secrets, then
+restart and verify `/api/dev/*`, `/docs`, `/redoc`, and `/openapi.json` are not
+served. During incident inspection, the backend environment was accidentally
+printed to the tool log; rotate production secrets before treating the install
+as customer-safe.
+
+---
+
+## Zoom Phone Intake Feed Regression — 2026-07-04 (DONE)
+
+**Goal:** Restore the call intake dashboard feed for tenants with existing Zoom
+Phone grants when the integrations page reports connected but the call feed
+returns an internal server error.
+
+- [x] Identify the production 500 from backend logs and affected endpoint
+- [x] Add a focused regression for the failing intake/Zoom path
+- [x] Fix the backend behavior without breaking existing connected grants
+- [x] Validate locally and deploy to production if code or env changes are needed
+
+Summary: production `/api/intake/dashboard/zoom-phone/sync` was failing after
+Zoom returned call history because `communication_logs` still had a legacy RLS
+policy keyed to `app.tenant_id`, while app sessions only set
+`app.current_tenant_id`. The shared `set_tenant_context` helper now sets both
+GUC names, and `clear_tenant_context` resets both to an all-zero fail-closed
+UUID sentinel. Verified with a non-superuser RLS regression, focused intake
+tests, backend compile, frontend build, production health/OAuth checks, and a
+rollback-only production insert smoke. Re-ran the affected tenant's Zoom sync
+successfully after deploy.
+
+---
+
 ## Call Intake Task Tracking — Assigner Notes, Closure Reasons, Customer History — 2026-07-04 (DONE)
 
 **Goal:** Round out follow-up task accountability: let the assigner attach a
@@ -1200,7 +1830,7 @@ is set.
 - [x] Add admin integration health data/cards backed by token health and recent sync runs
 - [x] Add focused backend/frontend tests and update the remediation plan status
 
-Summary: added migration `075_integration_observability` with token-health/scope-audit columns on tenant and user OAuth credential tables plus tenant-scoped `integration_sync_runs`. Microsoft/Google OAuth callbacks now persist missing-scope audit results. Token refresh failures record `last_refresh_error`, and `invalid_grant` marks credentials revoked/inactive. Cloud/user/correspondence integration scheduler branches now write sync-run rows and admin-visible `ErrorLog` entries for per-tenant failures. Admin integration responses and cards show token health, refresh errors, reconnect state, and recent sync runs. Verification: backend compile passed, focused observability/token tests passed, frontend production build passed; DB-backed readiness tests remain blocked locally by refused Postgres connection.
+Summary: added migration `082_integration_observability` (renumbered from `075` after reconciling with `main`'s migration chain) with token-health/scope-audit columns on tenant and user OAuth credential tables plus tenant-scoped `integration_sync_runs`. Microsoft/Google OAuth callbacks now persist missing-scope audit results. Token refresh failures record `last_refresh_error`, and `invalid_grant` marks credentials revoked/inactive. Cloud/user/correspondence integration scheduler branches now write sync-run rows and admin-visible `ErrorLog` entries for per-tenant failures. Admin integration responses and cards show token health, refresh errors, reconnect state, and recent sync runs. Verification: backend compile passed, focused observability/token tests passed, frontend production build passed; DB-backed readiness tests remain blocked locally by refused Postgres connection.
 
 ### Integration Remediation Phase 3 — Storage Correctness (P1, LARGE)
 - [x] Add durable cloud storage metadata to matter documents
@@ -1209,7 +1839,7 @@ Summary: added migration `075_integration_observability` with token-health/scope
 - [x] Implement cloud document delete for Google Drive, OneDrive, and SharePoint
 - [x] Add focused storage/delete regression tests and verification
 
-Summary: added migration `076_matter_document_storage_metadata` and explicit
+Summary: added migration `083_matter_document_storage_metadata` (renumbered from `076` after reconciling with `main`'s migration chain) and explicit
 matter-document storage metadata for provider/backend, provider object ID,
 drive ID, parent ID, and storage errors while preserving legacy URL-derived
 behavior. Matter file uploads now return a structured `StorageResult` for new
@@ -1264,7 +1894,7 @@ compiled with a test-only `SECRET_KEY`.
 - [ ] Ensure `https://www.googleapis.com/auth/admin.directory.user.readonly` is requested during admin consent
 - [ ] Verify service account / domain-wide delegation if using service-account-based directory access
 - [ ] Re-auth flow should request all currently-configured scopes so missing scopes are added on re-authorize
-- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+- [x] Add scope diff display in Integrations panel: granted vs required vs missing
 
 ### BK02. QuickBooks Online — OAuth Fix (P0, MEDIUM)
 - [x] Investigated Content-Type header — `application/x-www-form-urlencoded` IS correct (no typo)
@@ -1278,7 +1908,7 @@ compiled with a test-only `SECRET_KEY`.
 - [x] Fixed scope audit mismatch: `SCOPES_REQUIRED_MS` in `admin.py` changed `Files.Read.All` → `Files.ReadWrite.All` to match OAuth request
 - [ ] 0 users synced likely due to: (a) `MICROSOFT_TENANT_ID` hardcoded to single tenant — verify correctness; (b) `User.Read.All` requires admin consent in Azure AD app registration; (c) users without `mail` or `userPrincipalName` are silently skipped
 - [ ] Verify `last_user_sync_*` columns are populated on sync completion
-- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+- [x] Add scope diff display in Integrations panel: granted vs required vs missing
 
 ### BK04. Mediation Module — Feature Parity Audit (P1, LARGE)
 - [x] Audit complete. Module is 97% production-ready. 24 firm + 12 portal endpoints (all real code, zero stubs). 7 models, 4 frontend pages, 34 API functions.
@@ -1312,11 +1942,12 @@ compiled with a test-only `SECRET_KEY`.
 - [x] `TimeTrackingPage.jsx` — matters load independently of entries (entries 500 no longer blocks matters)
 - [x] Explicit `sort_by=updated_at&sort_dir=desc` on `getMattersV2()` call sorts by recent activity
 
-### BK09. Chat — LiteLLM Gateway Connection Error (P0, SMALL)
+### BK09. Chat — LiteLLM Gateway Connection Error (P0, SMALL) — COMPLETED
 - [x] Root cause: `docker-compose.hypervisor.yml` had no `litellm` or `litellm-postgres` services, but backend routes all LLM calls through LiteLLM
 - [x] Added `litellm-postgres`, `litellm` services + `litellm_postgres_data` volume to `docker-compose.hypervisor.yml`
 - [x] Added `litellm: service_healthy` to backend's `depends_on` in hypervisor compose
-- [ ] Redeploy hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`
+- [x] Redeployed hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`
+- [x] Verified production health, LiteLLM/backend/frontend container health, OAuth redirects, cloudflared, and data guard
 
 ### BK10. Chat — Matter-linked conversation workflow (P1, SMALL)
 - [x] Backend: allow conversation title updates and matter link/unlink updates in one PATCH with tenant validation
@@ -1329,3 +1960,64 @@ compiled with a test-only `SECRET_KEY`.
 - [x] Backend: return `legal_eligible`, `legal_tier`, `eligibility_badges`, and `exclusion_reasons` in catalog rows
 - [x] Platform UI: add Recommended, Free Legal, All Free, and Excluded catalog tabs
 - [x] Tests: recommended legal model, document-capable model, coding-only exclusion, and slow-latency exclusion
+
+### BK12. Shared estate workflow foundation (P0, LARGE)
+Planning docs: `docs/probate-estate-workflow-plan.md`, `docs/module-template-index-plan.md`, and `docs/competitive-template-automation-review.md`.
+- [ ] Generalize portal checklists so matters can require fee-agreement signature before unlocking optional document uploads, asset inventory, final delivery, and module-specific tasks
+- [ ] Add estate source-document records for wills, codicils, trusts, death certificates, asset statements, and miscellaneous uploads
+- [ ] Track document-intelligence runs across PDF text extraction, PDF-to-Markdown, OCR, LLM vision, structured extraction, field-level citations, confidence, and attorney verification state
+- [ ] Add shared estate party graph records for decedents, heirs, beneficiaries, fiduciaries, next of kin, creditors, court contacts, and relationship edges
+- [ ] Add shared asset inventory records with values, ownership/title details, beneficiary designations, debts/liens, date-of-death valuation, and artifact uploads
+- [ ] Extend tenant-scoped document templates into global/core and module-specific visibility layers so all matter users keep access to fee agreements, contracts, and correspondence templates without add-on licenses
+
+### BK13. Probate opening packet automation (P0, LARGE)
+- [ ] Build portal flow for access link, portal account creation, fee-agreement execution, and optional will/testament and death-certificate upload
+- [ ] Define extraction schema for decedent facts, domicile, date of death, fiduciary nominations, heirs, beneficiaries, distributions, bond waivers, witnesses, notary details, and source contradictions
+- [ ] Build attorney workbench for cited facts, missing jurisdiction facts, duplicate/uncertain parties, responsible-party proposals, distribution summaries, and filing readiness
+- [ ] Generate ready-to-review probate order packets from master generic templates and jurisdiction variants; store as attorney-work-product matter documents until approval
+- [ ] Create tenant/module template index with multiple base templates, jurisdiction variants, tenant overrides, default rankings, approval status, and version history
+- [ ] Add upload-to-template conversion for DOCX/PDF sources with structure extraction, suggested placeholders, canonical field mapping, preview/diff, confidence labels, and attorney/admin approval before activation
+
+### BK14. Probate inventory, closing, and delivery (P1, LARGE)
+- [ ] Unlock client asset-inventory portal after opening order/appointment is documented
+- [ ] Let clients list asset category, description, value, ownership, beneficiary designation, liens/debts, valuation method, and statement/artifact uploads
+- [ ] Migrate verified inventory into court inventory, accounting, and final-submission templates
+- [ ] Close probate matter with final packet lock, attorney print/export, password-protected document ZIP, shared-folder link, separate password delivery event, and audit log
+
+### BK15. Will and testament lifecycle module (P1, LARGE)
+- [ ] Add attorney-configurable review cadence with yearly default plus quarterly, semiannual, every-two-years, custom date, and disabled options
+- [ ] Let living clients log into the portal to view wills, estate documents, asset lists, account details, approximate values, beneficiary designations, important contacts, and last-confirmed timestamps
+- [ ] Generate recurring portal review tasks and attorney dashboard reminders
+- [ ] Convert or link a planning profile into probate/trust administration after death, carrying forward verified documents, asset records, contacts, beneficiary hints, and review history for attorney verification
+
+### BK16. Cross-module template index rollout (P1, LARGE)
+- [ ] Build a shared template-index platform for module/stage/jurisdiction/template-kind metadata, visibility/entitlement, defaults, approval state, and versioning
+- [ ] Preserve `global_core` and `tenant_global` templates for all matter users while gating only specialized module seed packs, module overrides, extraction schemas, and packet automations
+- [ ] Define module template families for commercial, privacy, litigation, corporate, employment, product, IP, AI governance, regulatory, family/domestic, criminal defense, real estate, trust/estate, and mediation workflows
+- [ ] Implement shared upload-to-template conversion, variable mapping, repeatable sections, preview/diff, approval, activation, rollback, and packet assembly once for reuse across modules
+- [ ] Prioritize rollout after probate foundation: litigation, family/domestic, mediation, and real estate first; transactional/compliance modules after the core conversion/index platform is stable
+
+### BK17. Competitive document automation layer (P0, LARGE)
+- [ ] Add smart-fill from existing matter, contact, billing, party, asset, deadline, portal-answer, and verified extraction records before asking users to type duplicate data
+- [ ] Add AI-fill suggestions with source citations, confidence/review states, stale-value warnings, and attorney approval before finalization
+- [ ] Connect generated global/core templates, especially fee agreements and engagement letters, to the e-signature workflow with signer roles, countersignatures, reminders, expiration, decline/void status, and executed-copy/audit PDF storage
+- [ ] Add tenant branding for templates, packet cover pages, e-sign emails, client portal screens, delivery notices, logos, colors, letterhead, and disclaimers
+- [ ] Add document tracking and lifecycle events for generated, edited, approved, sent, viewed, signed, declined, expired, filed, delivered, and closed states
+- [ ] Add immutable template versions, generated-output snapshots, variable provenance, compare/clone/rollback flows, and locks for signed/filed/final documents
+
+Research note (2026-07-08): added
+`docs/research/2026-07-08-document-automation-esign-enhancements.md`, comparing
+Gavel, Clio Draft, Docassemble, Dropbox Sign, DocuSign, PandaDoc, and Documenso
+against Clarity's current Markdown template renderer and internal portal typed
+signature flow. Recommended first release: office-ready Template Studio,
+smart-fill/provenance, engagement-letter/fee-agreement generation, and Dropbox
+Sign provider wiring around the existing e-sign provider interface.
+
+Implementation slice (2026-07-08): added the first Document Automation
+workspace pass by reframing the Templates page as a tabbed Document Automation
+tool, preserving `/templates` while adding template/generate/e-sign/approval/
+branding panes. Backend templates now have additive lifecycle/metadata fields
+and `POST /api/templates/{id}/smart-fill-preview` for deterministic suggestions
+from matter, linked client contact, attorney, and current user context. Native
+e-sign now supports multiple signers, signer roles, sequential signing,
+expiration, reminder metadata, decline/void reasons, and portal decline.

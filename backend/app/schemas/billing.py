@@ -48,6 +48,7 @@ class TimeEntryResponse(BaseModel):
     utbms_activity_code: Optional[str] = None
     invoice_id: Optional[str] = None
     status: str
+    timer_started_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -71,6 +72,17 @@ class TimeEntryListResponse(BaseModel):
     total: int
     total_hours: Decimal
     total_amount: Decimal
+
+
+class TimerStartRequest(BaseModel):
+    matter_id: str
+    description: str = Field(default="", max_length=4000)
+    is_billable: bool = True
+    hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
+
+
+class TimerStopRequest(BaseModel):
+    description: Optional[str] = Field(default=None, max_length=4000)
 
 
 # ── Expenses ─────────────────────────────────────────────────────────────────
@@ -196,6 +208,11 @@ class InvoiceResponse(BaseModel):
     retainer_id: Optional[str] = None
     billing_period_start: Optional[date] = None
     billing_period_end: Optional[date] = None
+    sent_at: Optional[datetime] = None
+    amount_paid: Decimal = Decimal("0")
+    balance_due: Decimal = Decimal("0")
+    is_overdue: bool = False
+    matter_name: Optional[str] = None
     created_by: str
     line_items: list[InvoiceLineItemResponse] = []
     payments: list["PaymentResponse"] = []
@@ -280,3 +297,16 @@ class StripePaymentLinkResponse(BaseModel):
 
 class InvoiceExportRequest(BaseModel):
     format: str = "csv"  # csv, pdf, ledes1998b
+
+
+# ── Billing Settings ─────────────────────────────────────────────────────────
+
+
+class BillingSettingsResponse(BaseModel):
+    default_hourly_rate: Optional[Decimal] = None
+    time_rounding_minutes: int = 6
+
+
+class BillingSettingsUpdate(BaseModel):
+    default_hourly_rate: Optional[Decimal] = Field(default=None, gt=0)
+    time_rounding_minutes: Optional[int] = Field(default=None, ge=1, le=60)

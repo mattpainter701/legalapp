@@ -226,7 +226,8 @@ export default function MatterPartiesTab({ matterId }) {
             </p>
           </div>
         ) : (
-          <table className="w-full text-[14px] font-sans">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-[14px] font-sans">
             <thead>
               <tr className="border-b border-brand-line">
                 <th className="text-left text-[11px] font-bold text-brand-muted uppercase tracking-widest pb-3 pr-4">
@@ -277,6 +278,7 @@ export default function MatterPartiesTab({ matterId }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

@@ -473,7 +473,9 @@ async def portal_list_invoices(
         .where(
             Invoice.matter_id == ctx.matter_id,
             Invoice.tenant_id == ctx.tenant_id,
-            Invoice.status.in_(("sent", "paid", "overdue")),
+            # "overdue" is computed from due_date, never stored — an unpaid
+            # overdue invoice still carries "sent"/"partially_paid" status.
+            Invoice.status.in_(("sent", "partially_paid", "paid")),
         )
         .order_by(Invoice.issue_date.desc())
     )
