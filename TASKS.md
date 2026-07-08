@@ -1,5 +1,54 @@
 # TASKS.md
 
+## Sprint 15 — Probate, Wills, and Estate Workflow Planning
+
+**Goal:** Build a reusable estate-workflow foundation for probate administration, will-and-testament lifecycle management, trusts, and mediation-adjacent settlement workflows. The detailed design lives in [`docs/probate-estate-workflow-plan.md`](docs/probate-estate-workflow-plan.md), with the cross-module template/index expansion in [`docs/module-template-index-plan.md`](docs/module-template-index-plan.md) and competitive automation review in [`docs/competitive-template-automation-review.md`](docs/competitive-template-automation-review.md). Cross-cutting: reuse the client portal, e-signature, matter documents, document templates, LLM extraction, audit logging, and cloud/shared-folder delivery primitives rather than creating probate-only silos.
+
+### 1501. Shared estate workflow foundation (P0, LARGE) — PLANNED
+- [ ] Generalize portal checklists so matters can require fee-agreement signature before unlocking optional document uploads, asset inventory, final delivery, and module-specific tasks.
+- [ ] Add estate source-document records for wills, codicils, trusts, death certificates, asset statements, and miscellaneous uploads.
+- [ ] Track document-intelligence runs across PDF text extraction, PDF-to-Markdown, OCR, LLM vision, structured extraction, field-level citations, confidence, and attorney verification state.
+- [ ] Add shared estate party graph records for decedents, heirs, beneficiaries, fiduciaries, next of kin, creditors, court contacts, and relationship edges.
+- [ ] Add shared asset inventory records with values, ownership/title details, beneficiary designations, debts/liens, date-of-death valuation, and artifact uploads.
+- [ ] Extend the existing tenant-scoped document-template foundation into a global/core + module-specific template visibility model so all matter users keep access to fee agreements, contracts, and general correspondence templates even without add-on module licenses.
+
+### 1502. Probate opening packet automation (P0, LARGE) — PLANNED
+- [ ] Portal flow: send access link, create portal account, execute fee agreement, and optionally upload will/testament and death certificate.
+- [ ] Extraction schema: identify decedent facts, domicile, date of death, fiduciary nominations, heirs, beneficiaries, distributions, bond waivers, witnesses, notary details, and source contradictions.
+- [ ] Attorney workbench: show extracted facts with citations, missing jurisdiction facts, duplicate/uncertain parties, proposed responsible party, distribution summary, and filing readiness.
+- [ ] Generate ready-to-review probate order packet from master generic templates and jurisdiction variants; store as attorney-work-product matter documents until approval.
+- [ ] Create a tenant/module template index so each module can have multiple base templates, jurisdiction variants, tenant overrides, default rankings, approval status, and version history while preserving global/core matter templates for unlicensed add-on tenants.
+- [ ] Add upload-to-template conversion for DOCX/PDF sources with structure extraction, suggested placeholders, canonical field mapping, preview/diff, confidence labels, and attorney/admin approval before activation.
+
+### 1503. Probate inventory, closing, and delivery (P1, LARGE) — PLANNED
+- [ ] Unlock client asset-inventory portal after opening order/appointment is documented.
+- [ ] Let clients list asset category, description, value, ownership, beneficiary designation, liens/debts, valuation method, and statement/artifact uploads.
+- [ ] Migrate verified inventory into court inventory, accounting, and final-submission templates.
+- [ ] Close probate matter with final packet lock, attorney print/export, password-protected document ZIP, shared-folder link, separate password delivery event, and audit log.
+
+### 1504. Will and testament lifecycle module (P1, LARGE) — PLANNED
+- [ ] Add attorney-configurable review cadence with yearly default plus quarterly, semiannual, every-two-years, custom date, and disabled options.
+- [ ] Let living clients log into the portal to view wills, estate documents, asset lists, account details, approximate values, beneficiary designations, important contacts, and last-confirmed timestamps.
+- [ ] Generate recurring portal review tasks and attorney dashboard reminders.
+- [ ] Convert or link a planning profile into probate/trust administration after death, carrying forward verified documents, asset records, contacts, beneficiary hints, and review history for attorney verification.
+
+### 1505. Cross-module template index rollout (P1, LARGE) — PLANNED
+- [ ] Build a shared template-index platform that every module can use for module/stage/jurisdiction/template-kind metadata, visibility/entitlement, defaults, approval state, and versioning.
+- [ ] Preserve `global_core` and `tenant_global` templates for all matter users while gating only specialized module seed packs, module overrides, extraction schemas, and packet automations.
+- [ ] Define module template families for commercial, privacy, litigation, corporate, employment, product, IP, AI governance, regulatory, family/domestic, criminal defense, real estate, trust/estate, and mediation workflows.
+- [ ] Implement shared upload-to-template conversion, variable mapping, repeatable sections, preview/diff, approval, activation, rollback, and packet assembly once for reuse across modules.
+- [ ] Prioritize rollout after probate foundation: litigation, family/domestic, mediation, and real estate first; transactional/compliance modules after the core conversion/index platform is stable.
+
+### 1506. Competitive document automation layer (P0, LARGE) — PLANNED
+- [ ] Add smart-fill from existing matter, contact, billing, party, asset, deadline, portal-answer, and verified extraction records before asking users to type duplicate data.
+- [ ] Add AI-fill suggestions with source citations, confidence/review states, stale-value warnings, and attorney approval before finalization.
+- [ ] Connect generated global/core templates, especially fee agreements and engagement letters, to the e-signature workflow with signer roles, countersignatures, reminders, expiration, decline/void status, and executed-copy/audit PDF storage.
+- [ ] Add tenant branding for templates, packet cover pages, e-sign emails, client portal screens, delivery notices, logos, colors, letterhead, and disclaimers.
+- [ ] Add document tracking and lifecycle events for generated, edited, approved, sent, viewed, signed, declined, expired, filed, delivered, and closed states.
+- [ ] Add immutable template versions, generated-output snapshots, variable provenance, compare/clone/rollback flows, and locks for signed/filed/final documents.
+
+---
+
 ## Bug Fixes — 2026-06-11
 
 ### Fixed
