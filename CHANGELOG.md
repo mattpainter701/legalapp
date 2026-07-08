@@ -3,6 +3,24 @@
 ## [Unreleased]
 
 ### Fixed
+- **Recent merge-stack integration:** reviewed the newly fetched SBOM,
+  probate/template, RBAC/admin-users, Teams, Zoom, and add-on workflow branch
+  stack and integrated only the low-risk pieces. The old Zoom recordings
+  `call_intake` router remains unmerged because current `main` already has the
+  newer Zoom Phone call-history/webhook intake flow; the large add-on UI patch
+  remains a follow-up instead of being merged over newer matter/contact/plugin
+  work.
+- **Admin Users RBAC response contract:** `/api/admin/users` now returns manual
+  RBAC role assignment IDs and names alongside license, PAYG budget, and default
+  billing-rate fields, so the Users tab can render the actual assigned roles
+  after save/reload instead of falling back to the legacy `user.role` string.
+  Last-admin deactivation now checks `admin_settings` capability holders, and
+  legacy `accountant` role support remains intact for finance-access flows.
+- **Teams reauthorization and notification safety:** generic Microsoft
+  reauthorization now preserves Teams scopes for tenants that already granted
+  them, Google integration status coerces missing user-sync totals to `0`, and
+  Teams notification dispatch no longer mutates the caller's field dictionary
+  while building Adaptive Cards.
 - **Intake production-session follow-ups:** refreshing the browser after login
   no longer treats the user as logged out just because the legacy localStorage
   bearer token is absent; app boot now verifies the httpOnly cookie session via
@@ -52,6 +70,15 @@
   a user's browser without requiring them to clear storage.
 
 ### Added
+- **SBOM and AI-BOM inventory tracking:** added a standard-library inventory
+  generator, `make sbom-inventory`, generated JSON/Markdown inventory outputs,
+  and an AI/SBOM/DLP risk roadmap. This is a tracking artifact for current
+  manifests, Docker bases, compose images, and LiteLLM routes, not a replacement
+  for formal CycloneDX/SPDX release SBOMs.
+- **Probate, estate planning, and template automation plans:** imported the
+  probate/estate workflow, cross-module template index, and competitive
+  document automation planning docs, and tracked the work as backlog items
+  `BK12`-`BK17` instead of duplicating Sprint 15 task IDs.
 - **Favicon:** created `frontend/public/favicon.svg` (navy/gold "CL" mark
   matching the PWA icons) — `index.html` referenced it but the file never
   existed, so browser tabs showed a blank icon. Also added

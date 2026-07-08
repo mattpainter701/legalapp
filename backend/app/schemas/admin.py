@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, Field, field_serializer
 
 
 class UserDetailResponse(BaseModel):
@@ -25,13 +25,22 @@ class UserDetailResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UserRoleSummary(BaseModel):
+    id: str
+    name: str
+
+
 class UserResponse(BaseModel):
     id: str
     email: str
     full_name: Optional[str] = None
     role: str
-    role_ids: list[str] = []
+    role_ids: list[str] = Field(default_factory=list)
+    roles: list[UserRoleSummary] = Field(default_factory=list)
     is_active: bool
+    license_active: bool = True
+    payg_monthly_budget: Optional[float] = None
+    default_billing_rate: Optional[float] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -239,6 +239,20 @@ async def microsoft_connect(
     if intent == "admin" and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    teams_flag = bool(teams)
+    if intent == "admin" and not teams_flag:
+        await set_tenant_context(db, str(user.tenant_id))
+        existing = await db.execute(
+            select(TenantCredential).where(
+                TenantCredential.tenant_id == user.tenant_id,
+                TenantCredential.provider == "microsoft",
+                TenantCredential.is_active,
+            )
+        )
+        cred = existing.scalar_one_or_none()
+        if cred and not missing_teams_scopes(cred.scopes):
+            teams_flag = True
+
     state = secrets.token_urlsafe(32)
     code_verifier, code_challenge = generate_pkce_pair()
     await _save_state(
@@ -250,14 +264,14 @@ async def microsoft_connect(
             "user_id": str(user.id),
             "tenant_id": str(user.tenant_id),
             "role": user.role,
-            "teams": bool(teams),
+            "teams": teams_flag,
             "pkce_verifier": code_verifier,
         },
     )
 
     ms_tenant = settings.MICROSOFT_TENANT_ID
     redirect_uri = f"{settings.BACKEND_URL}/api/integrations/microsoft/callback"
-    scopes = _admin_scopes(bool(teams)) if intent == "admin" else MICROSOFT_USER_SCOPES
+    scopes = _admin_scopes(teams_flag) if intent == "admin" else MICROSOFT_USER_SCOPES
 
     authorize_url = (
         f"https://login.microsoftonline.com/{ms_tenant}/oauth2/v2.0/authorize"
@@ -1327,7 +1341,11 @@ async def integration_status(
         last_user_sync_at=google_row.last_user_sync_at if google_row else None,
         last_user_sync_status=google_row.last_user_sync_status if google_row else None,
         last_user_sync_error=google_row.last_user_sync_error if google_row else None,
-        last_user_sync_total=google_row.last_user_sync_total if google_row else 0,
+        last_user_sync_total=(
+            google_row.last_user_sync_total
+            if google_row and google_row.last_user_sync_total is not None
+            else 0
+        ),
     )
 
     return IntegrationsListResponse(

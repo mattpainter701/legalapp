@@ -1,5 +1,35 @@
 # TASKS.md
 
+## Recent Merge Review And Plan Integration — 2026-07-08 (DONE)
+
+**Goal:** Pull local state current, review the recent unmerged merge stack and
+planning branches, integrate the low-risk pieces in a sensible order, and leave
+superseded/high-conflict branch work out of `main`.
+
+- [x] Confirm local `main` pull state and identify new remote branches
+- [x] Integrate SBOM/AI-BOM inventory tracking from the SBOM planning branch
+- [x] Integrate probate, estate, and template automation plans without
+      duplicating Sprint 15 or task IDs
+- [x] Repair Admin Users/RBAC response contract so assigned role badges reload
+      from backend role assignment data
+- [x] Preserve legacy accountant role support while fixing admin user contract
+- [x] Selectively port Teams reauthorization/notification safety fixes
+- [x] Leave old Zoom recordings call-intake router and large add-on UI patch
+      unmerged as superseded/high-conflict follow-ups
+
+Summary: `git pull --ff-only` was already current; local `main` remains one
+commit ahead of `origin/main`. The recent stack should not be merged wholesale:
+it conflicts in `TASKS.md`, `backend/app/main.py`,
+`backend/app/routers/admin.py`, `backend/app/routers/integrations.py`, and
+`frontend/src/pages/MatterPortfolioPage.jsx`. Integrated the clean SBOM
+inventory generator/docs, imported probate planning as backlog `BK12`-`BK17`
+instead of a duplicate Sprint 15, fixed `/api/admin/users` to return manual
+RBAC `role_ids`/`roles` plus billing/license fields, preserved accountant as a
+valid legacy role, and manually ported the Teams scope-preservation and
+non-mutating notification fixes around the current PKCE OAuth flow. The old
+Zoom recordings router remains skipped because current `main` already has the
+newer Zoom Phone call-history/webhook intake path.
+
 ## Intake Prod Session Follow-Ups — 2026-07-07 (DONE)
 
 **Goal:** Fix production-session issues reported after login: refresh should not
@@ -1850,3 +1880,47 @@ Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug
 - [x] Backend: return `legal_eligible`, `legal_tier`, `eligibility_badges`, and `exclusion_reasons` in catalog rows
 - [x] Platform UI: add Recommended, Free Legal, All Free, and Excluded catalog tabs
 - [x] Tests: recommended legal model, document-capable model, coding-only exclusion, and slow-latency exclusion
+
+### BK12. Shared estate workflow foundation (P0, LARGE)
+Planning docs: `docs/probate-estate-workflow-plan.md`, `docs/module-template-index-plan.md`, and `docs/competitive-template-automation-review.md`.
+- [ ] Generalize portal checklists so matters can require fee-agreement signature before unlocking optional document uploads, asset inventory, final delivery, and module-specific tasks
+- [ ] Add estate source-document records for wills, codicils, trusts, death certificates, asset statements, and miscellaneous uploads
+- [ ] Track document-intelligence runs across PDF text extraction, PDF-to-Markdown, OCR, LLM vision, structured extraction, field-level citations, confidence, and attorney verification state
+- [ ] Add shared estate party graph records for decedents, heirs, beneficiaries, fiduciaries, next of kin, creditors, court contacts, and relationship edges
+- [ ] Add shared asset inventory records with values, ownership/title details, beneficiary designations, debts/liens, date-of-death valuation, and artifact uploads
+- [ ] Extend tenant-scoped document templates into global/core and module-specific visibility layers so all matter users keep access to fee agreements, contracts, and correspondence templates without add-on licenses
+
+### BK13. Probate opening packet automation (P0, LARGE)
+- [ ] Build portal flow for access link, portal account creation, fee-agreement execution, and optional will/testament and death-certificate upload
+- [ ] Define extraction schema for decedent facts, domicile, date of death, fiduciary nominations, heirs, beneficiaries, distributions, bond waivers, witnesses, notary details, and source contradictions
+- [ ] Build attorney workbench for cited facts, missing jurisdiction facts, duplicate/uncertain parties, responsible-party proposals, distribution summaries, and filing readiness
+- [ ] Generate ready-to-review probate order packets from master generic templates and jurisdiction variants; store as attorney-work-product matter documents until approval
+- [ ] Create tenant/module template index with multiple base templates, jurisdiction variants, tenant overrides, default rankings, approval status, and version history
+- [ ] Add upload-to-template conversion for DOCX/PDF sources with structure extraction, suggested placeholders, canonical field mapping, preview/diff, confidence labels, and attorney/admin approval before activation
+
+### BK14. Probate inventory, closing, and delivery (P1, LARGE)
+- [ ] Unlock client asset-inventory portal after opening order/appointment is documented
+- [ ] Let clients list asset category, description, value, ownership, beneficiary designation, liens/debts, valuation method, and statement/artifact uploads
+- [ ] Migrate verified inventory into court inventory, accounting, and final-submission templates
+- [ ] Close probate matter with final packet lock, attorney print/export, password-protected document ZIP, shared-folder link, separate password delivery event, and audit log
+
+### BK15. Will and testament lifecycle module (P1, LARGE)
+- [ ] Add attorney-configurable review cadence with yearly default plus quarterly, semiannual, every-two-years, custom date, and disabled options
+- [ ] Let living clients log into the portal to view wills, estate documents, asset lists, account details, approximate values, beneficiary designations, important contacts, and last-confirmed timestamps
+- [ ] Generate recurring portal review tasks and attorney dashboard reminders
+- [ ] Convert or link a planning profile into probate/trust administration after death, carrying forward verified documents, asset records, contacts, beneficiary hints, and review history for attorney verification
+
+### BK16. Cross-module template index rollout (P1, LARGE)
+- [ ] Build a shared template-index platform for module/stage/jurisdiction/template-kind metadata, visibility/entitlement, defaults, approval state, and versioning
+- [ ] Preserve `global_core` and `tenant_global` templates for all matter users while gating only specialized module seed packs, module overrides, extraction schemas, and packet automations
+- [ ] Define module template families for commercial, privacy, litigation, corporate, employment, product, IP, AI governance, regulatory, family/domestic, criminal defense, real estate, trust/estate, and mediation workflows
+- [ ] Implement shared upload-to-template conversion, variable mapping, repeatable sections, preview/diff, approval, activation, rollback, and packet assembly once for reuse across modules
+- [ ] Prioritize rollout after probate foundation: litigation, family/domestic, mediation, and real estate first; transactional/compliance modules after the core conversion/index platform is stable
+
+### BK17. Competitive document automation layer (P0, LARGE)
+- [ ] Add smart-fill from existing matter, contact, billing, party, asset, deadline, portal-answer, and verified extraction records before asking users to type duplicate data
+- [ ] Add AI-fill suggestions with source citations, confidence/review states, stale-value warnings, and attorney approval before finalization
+- [ ] Connect generated global/core templates, especially fee agreements and engagement letters, to the e-signature workflow with signer roles, countersignatures, reminders, expiration, decline/void status, and executed-copy/audit PDF storage
+- [ ] Add tenant branding for templates, packet cover pages, e-sign emails, client portal screens, delivery notices, logos, colors, letterhead, and disclaimers
+- [ ] Add document tracking and lifecycle events for generated, edited, approved, sent, viewed, signed, declined, expired, filed, delivered, and closed states
+- [ ] Add immutable template versions, generated-output snapshots, variable provenance, compare/clone/rollback flows, and locks for signed/filed/final documents
