@@ -1,6 +1,6 @@
 .PHONY: setup dev dev-build dev-down prod-up prod-down prod-build migrate \
         logs shell sync-public-db deploy-prod backup-db restore-db \
-        embed-bulk jetson-embed lint test clean
+        embed-bulk jetson-embed sbom-inventory lint test clean
 
 # ── First-time setup ─────────────────────────────────────────────────────────
 setup:
@@ -93,6 +93,10 @@ embed-bulk:
 # Phase 2: trigger Jetson workers (run on each Jetson via SSH)
 jetson-embed:
 	bash scripts/trigger_jetson_workers.sh
+
+# ── Security / SBOM ─────────────────────────────────────────────────────────
+sbom-inventory:
+	python scripts/generate_sbom_inventory.py
 
 # ── Code quality ─────────────────────────────────────────────────────────────
 lint:
