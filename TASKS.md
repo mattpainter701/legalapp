@@ -1815,7 +1815,7 @@ Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug
 - [ ] Ensure `https://www.googleapis.com/auth/admin.directory.user.readonly` is requested during admin consent
 - [ ] Verify service account / domain-wide delegation if using service-account-based directory access
 - [ ] Re-auth flow should request all currently-configured scopes so missing scopes are added on re-authorize
-- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+- [x] Add scope diff display in Integrations panel: granted vs required vs missing
 
 ### BK02. QuickBooks Online — OAuth Fix (P0, MEDIUM)
 - [x] Investigated Content-Type header — `application/x-www-form-urlencoded` IS correct (no typo)
@@ -1829,7 +1829,7 @@ Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug
 - [x] Fixed scope audit mismatch: `SCOPES_REQUIRED_MS` in `admin.py` changed `Files.Read.All` → `Files.ReadWrite.All` to match OAuth request
 - [ ] 0 users synced likely due to: (a) `MICROSOFT_TENANT_ID` hardcoded to single tenant — verify correctness; (b) `User.Read.All` requires admin consent in Azure AD app registration; (c) users without `mail` or `userPrincipalName` are silently skipped
 - [ ] Verify `last_user_sync_*` columns are populated on sync completion
-- [ ] Add scope diff display in Integrations panel: granted vs required vs missing
+- [x] Add scope diff display in Integrations panel: granted vs required vs missing
 
 ### BK04. Mediation Module — Feature Parity Audit (P1, LARGE)
 - [x] Audit complete. Module is 97% production-ready. 24 firm + 12 portal endpoints (all real code, zero stubs). 7 models, 4 frontend pages, 34 API functions.

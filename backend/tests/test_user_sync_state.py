@@ -313,6 +313,10 @@ async def test_permissions_returns_user_count_and_freshness(
     resp = await client.get("/api/admin/permissions")
     assert resp.status_code == 200
     data = resp.json()
+    assert (
+        "https://www.googleapis.com/auth/admin.directory.user.readonly"
+        in data["google"]["required_scopes"]
+    )
     assert data["google"]["user_count"] >= 1
     assert data["google"]["last_sync_total"] == 5
     assert data["google"]["last_sync_status"] == "ok"

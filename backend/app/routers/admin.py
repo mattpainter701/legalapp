@@ -1358,6 +1358,7 @@ async def get_permissions_audit(
         if not match or not match.scopes:
             return {
                 "connected": False,
+                "required_scopes": required,
                 "granted_scopes": [],
                 "missing_required": required,
                 "extra_scopes": [],
@@ -1377,6 +1378,7 @@ async def get_permissions_audit(
         ]
         return {
             "connected": True,
+            "required_scopes": required,
             "granted_scopes": granted,
             "missing_required": missing,
             "extra_scopes": extra,

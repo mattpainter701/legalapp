@@ -702,9 +702,12 @@ function SharePointBindingCard({ binding, onSaved, flash, onFlashClear }) {
 }
 
 function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTime, onSyncNow, syncing }) {
-  const allScopes = [...(info.granted_scopes || []), ...(info.missing_required || [])]
-  // Deduplicate while preserving order
-  const uniqueScopes = [...new Set(allScopes)]
+  const grantedScopes = info.granted_scopes || []
+  const missingScopes = info.missing_required || []
+  const requiredScopes = info.required_scopes || []
+  const extraScopes = info.extra_scopes || []
+  const requiredRows = requiredScopes.length ? requiredScopes : [...new Set([...grantedScopes, ...missingScopes])]
+  const grantedRequiredCount = info.connected ? Math.max(requiredRows.length - missingScopes.length, 0) : 0
 
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-6">
@@ -750,9 +753,27 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
         </div>
       </div>
 
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="px-3 py-2 rounded-lg bg-brand-bg">
+          <p className="text-[11px] uppercase text-brand-ink-2 font-bold">Required</p>
+          <p className="text-sm text-brand-ink font-bold">{requiredRows.length}</p>
+        </div>
+        <div className="px-3 py-2 rounded-lg bg-brand-bg">
+          <p className="text-[11px] uppercase text-brand-ink-2 font-bold">Granted</p>
+          <p className="text-sm text-green-700 font-bold">{grantedRequiredCount}</p>
+        </div>
+        <div className="px-3 py-2 rounded-lg bg-brand-bg">
+          <p className="text-[11px] uppercase text-brand-ink-2 font-bold">Missing</p>
+          <p className={`text-sm font-bold ${missingScopes.length ? 'text-red-600' : 'text-brand-ink'}`}>
+            {missingScopes.length}
+          </p>
+        </div>
+      </div>
+
       <div className="space-y-1.5">
-        {uniqueScopes.map((scope) => {
-          const granted = info.granted_scopes?.includes(scope)
+        {requiredRows.map((scope) => {
+          const missing = missingScopes.includes(scope)
+          const granted = info.connected && !missing
           const label = scopeLabels[scope] || scope
           return (
             <div key={scope} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-brand-bg">
@@ -765,12 +786,28 @@ function ProviderCard({ name, provider, info, scopeLabels, onReauthorize, relTim
                 {label}
               </span>
               {!granted && (
-                <span className="ml-auto text-xs text-red-500 font-medium">Required</span>
+                <span className="ml-auto text-xs text-red-500 font-medium">Missing</span>
+              )}
+              {granted && (
+                <span className="ml-auto text-xs text-green-700 font-medium">Granted</span>
               )}
             </div>
           )
         })}
-        {uniqueScopes.length === 0 && (
+        {extraScopes.length > 0 && (
+          <div className="pt-2">
+            <p className="text-[11px] uppercase text-brand-ink-2 font-bold mb-1.5">Additional granted scopes</p>
+            <div className="space-y-1.5">
+              {extraScopes.map((scope) => (
+                <div key={scope} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-brand-bg-soft">
+                  <span className="w-2 h-2 rounded-full bg-brand-ink-2" />
+                  <span className="text-sm text-brand-ink">{scopeLabels[scope] || scope}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {requiredRows.length === 0 && (
           <p className="text-brand-ink-2 font-sans text-sm py-2">Not connected. Grant access to enable integration features.</p>
         )}
       </div>

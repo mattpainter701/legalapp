@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- **Google/Microsoft integration scope visibility:** `/api/admin/permissions`
+  now returns each provider's required OAuth scopes explicitly, and the
+  Integrations panel shows required, granted, and missing scope counts with an
+  alias-safe required-scope list plus any extra granted scopes.
 - **Chat LiteLLM hypervisor redeploy:** redeployed the hypervisor stack from
   `fa580e5` with `docker compose -f docker-compose.hypervisor.yml up -d
   --build`, including the LiteLLM and LiteLLM Postgres services. Production
