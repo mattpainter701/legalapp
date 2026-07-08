@@ -1863,11 +1863,12 @@ Summary: LiteLLM callbacks are disabled by default, app-side gateway usage/debug
 - [x] `TimeTrackingPage.jsx` — matters load independently of entries (entries 500 no longer blocks matters)
 - [x] Explicit `sort_by=updated_at&sort_dir=desc` on `getMattersV2()` call sorts by recent activity
 
-### BK09. Chat — LiteLLM Gateway Connection Error (P0, SMALL)
+### BK09. Chat — LiteLLM Gateway Connection Error (P0, SMALL) — COMPLETED
 - [x] Root cause: `docker-compose.hypervisor.yml` had no `litellm` or `litellm-postgres` services, but backend routes all LLM calls through LiteLLM
 - [x] Added `litellm-postgres`, `litellm` services + `litellm_postgres_data` volume to `docker-compose.hypervisor.yml`
 - [x] Added `litellm: service_healthy` to backend's `depends_on` in hypervisor compose
-- [ ] Redeploy hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`
+- [x] Redeployed hypervisor: `docker compose -f docker-compose.hypervisor.yml up -d --build`
+- [x] Verified production health, LiteLLM/backend/frontend container health, OAuth redirects, cloudflared, and data guard
 
 ### BK10. Chat — Matter-linked conversation workflow (P1, SMALL)
 - [x] Backend: allow conversation title updates and matter link/unlink updates in one PATCH with tenant validation

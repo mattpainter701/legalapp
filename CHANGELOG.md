@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- **Chat LiteLLM hypervisor redeploy:** redeployed the hypervisor stack from
+  `fa580e5` with `docker compose -f docker-compose.hypervisor.yml up -d
+  --build`, including the LiteLLM and LiteLLM Postgres services. Production
+  health, LiteLLM/backend/frontend container health, OAuth redirect smoke
+  checks, cloudflared, and pre/post data guard all passed.
 - **Recent merge-stack integration:** reviewed the newly fetched SBOM,
   probate/template, RBAC/admin-users, Teams, Zoom, and add-on workflow branch
   stack and integrated only the low-risk pieces. The old Zoom recordings
