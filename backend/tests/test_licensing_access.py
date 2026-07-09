@@ -11,8 +11,6 @@ from app.database import get_db
 from app.main import app
 from app.models.tenant import TenantSettings
 from app.models.user import User
-from app.services.module_visibility import GENERAL_MODULES
-
 
 settings = get_settings()
 
@@ -65,7 +63,7 @@ async def test_unlicensed_user_gets_basic_addon_portal_only(db_session, test_ten
 
 
 @pytest.mark.asyncio
-async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenant):
+async def test_intake_only_tenant_gets_intake_and_tasks(db_session, test_tenant):
     user = User(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -87,9 +85,7 @@ async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenan
     app.dependency_overrides.clear()
     assert response.status_code == 200
     body = response.json()
-    # General workspace modules are always available; specialized add-ons and
-    # admin surfaces remain gated.
-    assert body["enabled_modules"] == GENERAL_MODULES
+    assert body["enabled_modules"] == ["tasks", "intake-dashboard"]
     assert body["default_route"] == "/intake/dashboard"
     assert body["plan"] == "intake-only"
     assert body["upsell_target"] == "full-platform"

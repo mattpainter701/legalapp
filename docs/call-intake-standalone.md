@@ -19,17 +19,16 @@ A `Plan` is the unit of sale: a named bundle of modules plus metadata.
 |-|-|
 | `id` | Stable identifier stored on the tenant (e.g. `intake-only`) |
 | `label` | Display name (`Call Intake`) |
-| `modules` | Module ids the plan unlocks (`["intake-dashboard"]`) |
+| `modules` | Module ids the plan unlocks (`["tasks", "intake-dashboard"]`) |
 | `default_module` | Landing module after login |
 | `billing_tier` | Mapped to `Tenant.billing_tier` at signup (`intake_trial`) |
 | `public_signup` | Whether the public signup endpoint may provision it |
 | `upsell_target` | Plan id to upsell toward (`full-platform`), or `null` |
 
 Current registry: `intake-only` (public, upsells to full) and `full-platform` (default,
-not public). The `intake-only` plan bundles `intake-dashboard` **and** `tasks` — call
-follow-up is task-driven, so assignees need the Tasks page to see and work their leads and
-the receptionist needs it to watch follow-up state. Admin/accountant users additionally get
-the `admin` module so an intake-only firm can manage its own users and partner rotation.
+not public). The `intake-only` plan exposes the Call Intake dashboard and Tasks so staff
+can receive, work, document, and close caller follow-ups. Contacts and communications
+remain server-side workflow dependencies rather than separate navigation modules.
 
 Adding a new tier = add one `Plan` entry. No endpoint or schema changes required.
 

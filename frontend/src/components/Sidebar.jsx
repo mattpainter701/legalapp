@@ -82,9 +82,7 @@ export default function Sidebar({
       if (item.adminOnly && user?.role !== 'admin') return null
       const moduleOk = canAccessModuleList(enabled, item.module)
       if (moduleOk) return item
-      // On a limited plan, show disabled modules as locked upsell teasers
-      // instead of hiding them. On full plans, hide as before.
-      return isLimited ? { ...item, locked: true } : null
+      return null
     }).filter(Boolean)
     return { ...group, items }
   }).filter((group) => group.items.length > 0)
@@ -128,22 +126,8 @@ export default function Sidebar({
                 </div>
               )}
               <div className="flex flex-col gap-0.5">
-                {group.items.map(({ path, label, icon: Icon, primary, locked }) => {
+                {group.items.map(({ path, label, icon: Icon, primary }) => {
                   const active = isActive(path)
-                  if (locked) {
-                    return (
-                      <button
-                        key={path}
-                        onClick={() => setUpgradeOpen(true)}
-                        title="Upgrade to unlock"
-                        className="sidebar-item w-full rounded sidebar-item-inactive opacity-50 hover:opacity-90"
-                      >
-                        <Icon className="w-4 h-4" />
-                        <span className="flex-1 text-left">{label}</span>
-                        <Lock className="w-3 h-3" />
-                      </button>
-                    )
-                  }
                   if (primary) {
                     return (
                       <button
@@ -168,6 +152,16 @@ export default function Sidebar({
               </div>
             </div>
           ))}
+          {isLimited && (
+            <button
+              type="button"
+              onClick={() => setUpgradeOpen(true)}
+              className="mt-5 flex w-full items-center gap-2 rounded-lg border border-brand-line bg-brand-bg-soft px-3 py-2.5 text-left text-xs font-semibold text-brand-ink hover:border-brand-accent"
+            >
+              <Lock className="h-3.5 w-3.5 text-brand-accent" />
+              <span>Explore the full platform</span>
+            </button>
+          )}
         </nav>
 
         {/* Footer / User info */}

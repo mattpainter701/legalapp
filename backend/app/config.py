@@ -63,11 +63,9 @@ class Settings(BaseSettings):
     ZOOM_PHONE_CLIENT_ID: str = ""
     ZOOM_PHONE_CLIENT_SECRET: str = ""
     ZOOM_PHONE_ACCOUNT_ID: str = ""
-    ZOOM_PHONE_SCOPES: str = (
-        "phone:read:list_call_logs:admin phone:read:call_log:admin "
-        "phone:read:list_call_recordings:admin phone:read:call_recording:admin "
-        "phone:read:recording_transcript:admin"
-    )
+    # Least-privilege scopes required for account call history and call-element
+    # detail. Recording content is not fetched by the intake integration.
+    ZOOM_PHONE_SCOPES: str = "phone:read:list_call_logs:admin phone:read:call_log:admin"
 
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
     # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
@@ -130,7 +128,9 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
-    STRIPE_MCP_METER_EVENT_NAME: str = ""  # Stripe Billing Meter event name for MCP product-key calls
+    STRIPE_MCP_METER_EVENT_NAME: str = (
+        ""  # Stripe Billing Meter event name for MCP product-key calls
+    )
     STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 

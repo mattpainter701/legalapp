@@ -23,6 +23,21 @@
   document on completion.
 
 ### Fixed
+- **First-customer Call Intake launch path:** the `intake-only` plan now exposes
+  Call Intake and Tasks as first-class workspaces, uses a focused navigation and
+  administration surface, avoids blocked Chat/Documents shell requests, and
+  gives tenant admins a direct Zoom Phone setup prompt. Mobile navigation now
+  presents Call Intake and Tasks without horizontal overflow.
+- **Plan-aware self-service signup:** `/signup?plan=intake-only` now provisions
+  the selected public plan through `/api/auth/signup/plan`, preserves firm
+  profile fields, displays the selected product, enforces the backend's
+  12-character password rule, and lands on the server-provided default route.
+  Generic OAuth shortcuts are hidden on plan signup until plan-aware OAuth
+  provisioning is supported.
+- **Zoom Phone 2026 API compatibility:** added current call-element completion
+  webhooks and `/phone/call_element/{id}` detail retrieval while retaining v2
+  call-history compatibility. Intake now requests only the two scopes it uses,
+  and non-admin status responses no longer expose OAuth app metadata.
 - **Google/Microsoft integration scope visibility:** `/api/admin/permissions`
   now returns each provider's required OAuth scopes explicitly, and the
   Integrations panel shows required, granted, and missing scope counts with an

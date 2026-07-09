@@ -18,6 +18,7 @@ import {
   assignUserRoles,
 } from '../api'
 import { format } from 'date-fns'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
 import MCPPage from './MCPPage'
@@ -73,6 +74,16 @@ const ADMIN_TABS = [
 
 const ACCOUNTANT_TABS = ADMIN_TABS.filter((tab) =>
   ['licensing', 'billing', 'usage', 'qbo'].includes(tab.id)
+)
+
+// Keep the standalone intake product focused on the few settings needed to
+// launch and operate a reception team. Unrelated platform integrations remain
+// hidden until the tenant upgrades.
+const INTAKE_ADMIN_TABS = ADMIN_TABS.filter((tab) =>
+  ['users', 'licensing', 'billing', 'usage', 'tenant', 'zoom', 'settings'].includes(tab.id)
+)
+const INTAKE_ACCOUNTANT_TABS = INTAKE_ADMIN_TABS.filter((tab) =>
+  ['licensing', 'billing', 'usage'].includes(tab.id)
 )
 
 // ── Invite Modal ──────────────────────────────────────────────────────────────
@@ -462,6 +473,7 @@ function RoleAssignCell({ user, roles, saving, disabled, onAssign }) {
 // ── Tab: Users ───────────────────────────────────────────────────────────────
 
 function UsersTab({ billingTier }) {
+  const confirmAction = useConfirm()
   const [users, setUsers] = useState([])
   const [usageByUser, setUsageByUser] = useState({})
   const [loading, setLoading] = useState(true)
@@ -509,7 +521,7 @@ function UsersTab({ billingTier }) {
     } catch (e) {
       const detail = e?.response?.data?.detail || 'Failed to update user status'
       if (!force && detail.includes('org-wide OAuth consent')) {
-        const proceed = window.confirm(`${detail} Turn this user inactive anyway?`)
+        const proceed = await confirmAction({ title: 'Deactivate consent owner?', message: `${detail} Turn this user inactive anyway?`, confirmLabel: 'Deactivate user', destructive: true })
         if (proceed) {
           setDeactivating(null)
           await handleDeactivate(u, true)
@@ -544,7 +556,7 @@ function UsersTab({ billingTier }) {
   }
 
   const handleAssignRoles = async (u, roleIds) => {
-    if (!window.confirm(`Update role assignments for ${u.email}?`)) return
+    if (!await confirmAction({ title: 'Update role assignments?', message: `Apply these role changes for ${u.email}?`, confirmLabel: 'Update roles' })) return
     setChangingRole(u.id)
     try {
       await assignUserRoles(u.id, roleIds)
@@ -1202,7 +1214,9 @@ export default function AdminPage() {
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTab = searchParams.get('tab')
-  const tabs = user?.role === 'accountant' ? ACCOUNTANT_TABS : ADMIN_TABS
+  const tabs = user?.plan === 'intake-only'
+    ? (user?.role === 'accountant' ? INTAKE_ACCOUNTANT_TABS : INTAKE_ADMIN_TABS)
+    : (user?.role === 'accountant' ? ACCOUNTANT_TABS : ADMIN_TABS)
   const defaultTab = tabs[0]?.id || 'licensing'
   const [activeTab, setActiveTab] = useState(
     tabs.some((t) => t.id === initialTab) ? initialTab : defaultTab

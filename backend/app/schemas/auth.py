@@ -36,6 +36,9 @@ class PlanSignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
     full_name: Optional[str] = None
+    staff_size: Optional[int] = Field(default=None, ge=1)
+    address: Optional[str] = Field(default=None, max_length=500)
+    phone: Optional[str] = Field(default=None, max_length=50)
 
     _validate_password = field_validator("password")(_reject_common_password)
 
@@ -56,8 +59,6 @@ class OAuthCallbackExchangeRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
     user_id: str
     tenant_id: str
     role: str

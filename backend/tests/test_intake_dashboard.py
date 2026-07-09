@@ -128,6 +128,34 @@ def test_extract_zoom_phone_webhook_call_logs_keeps_completed_inbound_callee_rec
     ]
 
 
+def test_extract_zoom_phone_v3_call_element_webhook():
+    event = {
+        "event": "phone.callee_call_element_completed",
+        "payload": {
+            "account_id": "acct-1",
+            "object": {
+                "call_elements": [
+                    {
+                        "call_element_id": "element-1",
+                        "call_history_uuid": "history-1",
+                        "call_id": "call-1",
+                        "direction": "inbound",
+                        "caller_name": "First Customer Caller",
+                        "caller_did_number": "+1 701-555-0101",
+                        "result": "answered",
+                    }
+                ]
+            },
+        },
+    }
+
+    logs = extract_zoom_phone_webhook_call_logs(event)
+
+    assert len(logs) == 1
+    assert logs[0]["call_element_id"] == "element-1"
+    assert logs[0]["call_history_uuid"] == "history-1"
+
+
 def test_parse_legacy_call_csv_validates_duplicates_and_dates():
     preview = parse_legacy_call_csv(
         "id,name,phone,date,case_type,attorney,notes\n"
@@ -540,7 +568,7 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
     assert data["task_id"]
 
     task = await db_session.get(Task, uuid.UUID(data["task_id"]))
-    assert task.title == "Route to service provider"
+    assert task.title == "Sam Caller - Route to service provider"
     assert task.assigned_to_user_id == staff.id
     assert task.source == "intake_dashboard"
     assert (
@@ -570,7 +598,9 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
 
 
 @pytest.mark.asyncio
-async def test_recent_callers_marks_internal_zoom_calls(client, db_session, test_tenant):
+async def test_recent_callers_marks_internal_zoom_calls(
+    client, db_session, test_tenant
+):
     log = CommunicationLog(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1565,16 +1595,15 @@ async def test_intake_drafts_crud_and_upsert_is_idempotent(
     assert updated.json()["id"] == str(draft_id)
 
     row_count = await db_session.scalar(
-        select(func.count()).select_from(IntakeCallDraft).where(
-            IntakeCallDraft.id == draft_id
-        )
+        select(func.count())
+        .select_from(IntakeCallDraft)
+        .where(IntakeCallDraft.id == draft_id)
     )
     assert row_count == 1
 
     draft_record = (
         await db_session.execute(
-            select(IntakeCallDraft)
-            .where(IntakeCallDraft.id == draft_id)
+            select(IntakeCallDraft).where(IntakeCallDraft.id == draft_id)
         )
     ).scalar_one()
     assert draft_record.payload == updated_payload
@@ -1584,7 +1613,7 @@ async def test_intake_drafts_crud_and_upsert_is_idempotent(
     deleted = await client.delete(f"/api/intake/drafts/{draft_id}")
     assert deleted.status_code == 204
     deleted_again = await client.delete(f"/api/intake/drafts/{draft_id}")
-    assert deleted_again.status_code == 204
+    assert deleted_again.status_code == 404
 
     list_after_delete = await client.get("/api/intake/drafts")
     assert list_after_delete.status_code == 200
@@ -1625,11 +1654,12 @@ async def test_intake_drafts_are_scoped_by_current_user_and_tenant(
     peer_draft_id = uuid.uuid4()
     other_tenant_draft_id = uuid.uuid4()
 
+    db_session.add(other_tenant)
+    await db_session.flush()
+    db_session.add_all([peer, other_tenant_user])
+    await db_session.flush()
     db_session.add_all(
         [
-            peer,
-            other_tenant,
-            other_tenant_user,
             IntakeCallDraft(
                 id=peer_draft_id,
                 tenant_id=test_tenant.id,
@@ -1679,18 +1709,27 @@ async def test_intake_drafts_idempotent_put_rejects_other_tenant_id_collision(
         billing_tier="payg",
         is_active=True,
     )
+    other_tenant_user = User(
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email=f"collision-{uuid.uuid4().hex[:8]}@testfirm.com",
+        full_name="Collision Tenant User",
+        role="admin",
+        is_active=True,
+    )
     collision_id = uuid.uuid4()
 
-    db_session.add_all(
-        [
-            other_tenant,
-            IntakeCallDraft(
-                id=collision_id,
-                tenant_id=other_tenant.id,
-                created_by_user_id=uuid.uuid4(),
-                payload={"status": "stale"},
-            ),
-        ]
+    db_session.add(other_tenant)
+    await db_session.flush()
+    db_session.add(other_tenant_user)
+    await db_session.flush()
+    db_session.add(
+        IntakeCallDraft(
+            id=collision_id,
+            tenant_id=other_tenant.id,
+            created_by_user_id=other_tenant_user.id,
+            payload={"status": "stale"},
+        )
     )
     await db_session.commit()
 

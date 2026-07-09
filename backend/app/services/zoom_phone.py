@@ -28,6 +28,8 @@ ZOOM_PHONE_PROVIDER = "zoom_phone"
 ZOOM_PHONE_HISTORY_COMPLETED_EVENTS = {
     "phone.callee_call_history_completed",
     "phone.caller_call_history_completed",
+    "phone.callee_call_element_completed",
+    "phone.caller_call_element_completed",
 }
 
 
@@ -138,7 +140,9 @@ def zoom_webhook_validation_response(
     plain_token: str, secret: str | None = None
 ) -> dict[str, str]:
     """Build Zoom endpoint.url_validation response."""
-    webhook_secret = secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
+    webhook_secret = (
+        secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
+    )
     encrypted = hmac.new(
         webhook_secret.encode("utf-8"),
         plain_token.encode("utf-8"),
@@ -155,7 +159,9 @@ def verify_zoom_webhook_signature(
     tolerance_seconds: int = 300,
 ) -> bool:
     """Validate Zoom webhook x-zm-signature."""
-    webhook_secret = secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
+    webhook_secret = (
+        secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
+    )
     if not webhook_secret or not timestamp or not signature:
         return False
     if tolerance_seconds > 0:
@@ -166,11 +172,14 @@ def verify_zoom_webhook_signature(
         now = int(datetime.now(timezone.utc).timestamp())
         if abs(now - sent_at) > tolerance_seconds:
             return False
-    expected = "v0=" + hmac.new(
-        webhook_secret.encode("utf-8"),
-        b"v0:" + timestamp.encode("utf-8") + b":" + body,
-        hashlib.sha256,
-    ).hexdigest()
+    expected = (
+        "v0="
+        + hmac.new(
+            webhook_secret.encode("utf-8"),
+            b"v0:" + timestamp.encode("utf-8") + b":" + body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
     return hmac.compare_digest(expected, signature)
 
 
@@ -185,7 +194,12 @@ def extract_zoom_phone_webhook_call_logs(event: dict[str, Any]) -> list[dict[str
     obj = payload.get("object") or {}
     if not isinstance(obj, dict):
         return []
-    logs = obj.get("call_logs") or obj.get("call_history") or []
+    logs = (
+        obj.get("call_elements")
+        or obj.get("call_logs")
+        or obj.get("call_history")
+        or []
+    )
     if not isinstance(logs, list):
         return []
     return [
@@ -447,14 +461,18 @@ def normalize_zoom_phone_record(record: dict[str, Any]) -> dict[str, Any] | None
         _first(record, "start_time", "date_time", "dateTime", "created_at", "end_time")
     )
     duration = _first(record, "duration", "duration_seconds", "call_duration")
-    result = _stringify(_first(record, "result", "call_result", "disposition", "status"))
+    result = _stringify(
+        _first(record, "result", "call_result", "disposition", "status")
+    )
     recording_url = _stringify(
         _first(record, "recording_download_url", "recording_url", "download_url")
     )
     transcript_url = _stringify(
         _first(record, "transcript_download_url", "transcript_url")
     )
-    summary = _stringify(_first(record, "summary", "call_summary", "ai_summary", "topic"))
+    summary = _stringify(
+        _first(record, "summary", "call_summary", "ai_summary", "topic")
+    )
     transcript = _stringify(_first(record, "transcript", "transcript_text", "body"))
 
     body_parts = [
@@ -576,7 +594,12 @@ async def fetch_zoom_phone_call_history(
             if resp.status_code != 200:
                 raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
             data = resp.json()
-            page_records = data.get("call_history") or data.get("call_logs") or data.get("calls") or []
+            page_records = (
+                data.get("call_history")
+                or data.get("call_logs")
+                or data.get("calls")
+                or []
+            )
             records.extend(page_records)
             next_page_token = data.get("next_page_token") or ""
             if not next_page_token:
@@ -588,23 +611,32 @@ async def fetch_zoom_phone_call_history_detail(
     db: AsyncSession,
     *,
     tenant_id: str,
-    call_history_id: str,
+    call_history_id: str | None = None,
+    call_element_id: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch authoritative Zoom Phone detail for a webhook call-history id."""
+    """Fetch authoritative Zoom Phone detail for a v2 history or v3 element id."""
     token = await get_zoom_phone_token(db, tenant_id)
     if not token:
         raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
+    if not call_history_id and not call_element_id:
+        raise ZoomPhoneIntegrationError("Zoom Phone call identifier was missing.")
 
     async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(
-            f"{ZOOM_BASE}/phone/call_history_detail/{call_history_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        if resp.status_code == 404:
+        if call_element_id:
             resp = await client.get(
-                f"{ZOOM_BASE}/phone/call_history/{call_history_id}",
+                f"{ZOOM_BASE}/phone/call_element/{call_element_id}",
                 headers={"Authorization": f"Bearer {token}"},
             )
+        else:
+            resp = await client.get(
+                f"{ZOOM_BASE}/phone/call_history_detail/{call_history_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 404:
+                resp = await client.get(
+                    f"{ZOOM_BASE}/phone/call_history/{call_history_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
     if resp.status_code != 200:
         raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
     data = resp.json()
@@ -622,6 +654,7 @@ async def import_zoom_phone_webhook_event(
     """Import completed inbound call-history records from a Zoom webhook event."""
     records: list[dict[str, Any]] = []
     for call_log in extract_zoom_phone_webhook_call_logs(event):
+        element_id = _stringify(_first(call_log, "call_element_id"))
         history_id = _stringify(
             _first(
                 call_log,
@@ -631,16 +664,20 @@ async def import_zoom_phone_webhook_event(
                 "callLogId",
             )
         )
-        if not history_id:
+        if not history_id and not element_id:
             continue
         detail = await fetch_zoom_phone_call_history_detail(
-            db, tenant_id=tenant_id, call_history_id=history_id
+            db,
+            tenant_id=tenant_id,
+            call_history_id=history_id,
+            call_element_id=element_id,
         )
         records.append(
             {
                 **call_log,
                 **detail,
                 "webhook_call_history_id": history_id,
+                "webhook_call_element_id": element_id,
                 "webhook_event": event.get("event"),
             }
         )

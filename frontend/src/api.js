@@ -2,7 +2,6 @@ import axios from 'axios'
 
 const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 export const API_BASE_URL = BASE_URL
-const USE_LEGACY_TOKEN_FALLBACK = import.meta.env.DEV && import.meta.env.VITE_LEGACY_TOKEN_AUTH === 'true'
 
 const getHeaderValue = (headers, name) => {
   if (!headers) return undefined
@@ -17,13 +16,7 @@ const getHeaderValue = (headers, name) => {
   return undefined
 }
 
-const getLegacyToken = () => (typeof window !== 'undefined' ? window.localStorage.getItem('token') : null)
-
-const buildLegacyAuthHeaders = (headers = {}) => {
-  if (!USE_LEGACY_TOKEN_FALLBACK) return headers
-  const token = getLegacyToken()
-  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
-}
+const buildLegacyAuthHeaders = (headers = {}) => headers
 
 const readValidationDetails = (detail) => {
   if (!Array.isArray(detail)) return []
@@ -117,34 +110,10 @@ const api = axios.create({
 // USE_LEGACY_TOKEN_FALLBACK is a dev-only opt-in escape hatch (off by default,
 // and always off in production) for local setups where cookies don't work
 // across ports.
-if (typeof window !== 'undefined' && !USE_LEGACY_TOKEN_FALLBACK) {
+if (typeof window !== 'undefined') {
   window.localStorage.removeItem('token')
   window.localStorage.removeItem('user')
 }
-
-// Request interceptor: browsers send httpOnly cookies automatically. Add a localStorage
-// bearer fallback only when explicitly enabled for local development.
-api.interceptors.request.use(
-  (config) => {
-    if (!USE_LEGACY_TOKEN_FALLBACK) {
-      return config
-    }
-
-    const token = getLegacyToken()
-    if (token) {
-      if (typeof config.headers?.set === 'function') {
-        config.headers.set('Authorization', `Bearer ${token}`)
-      } else {
-        config.headers = {
-          ...(config.headers || {}),
-          Authorization: `Bearer ${token}`,
-        }
-      }
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
 
 // Response interceptor: on 401, attempt a single rotating-refresh, then retry the
 // original request once. Concurrent 401s share one in-flight refresh (single-flight)
@@ -169,13 +138,7 @@ const redirectToLogin = () => {
 
 const refreshAuthSession = async () => {
   if (!refreshPromise) {
-    refreshPromise = api.post('/auth/refresh').then((refreshResponse) => {
-      if (USE_LEGACY_TOKEN_FALLBACK) {
-        const freshToken = refreshResponse?.data?.access_token
-        if (freshToken) window.localStorage.setItem('token', freshToken)
-      }
-      return refreshResponse
-    }).finally(() => {
+    refreshPromise = api.post('/auth/refresh').finally(() => {
       refreshPromise = null
     })
   }
@@ -220,28 +183,10 @@ api.interceptors.response.use(
 
     // Refresh succeeded (new cookies set) — retry the original request once.
     config._retried = true
-    if (typeof config.headers?.set === 'function') {
-      if (USE_LEGACY_TOKEN_FALLBACK) {
-        const freshToken = getLegacyToken()
-        if (freshToken) {
-          config.headers.set('Authorization', `Bearer ${freshToken}`)
-        } else {
-          config.headers.delete('Authorization')
-        }
-      } else {
-        config.headers.delete('Authorization')
-      }
+    if (typeof config.headers?.delete === 'function') {
+      config.headers.delete('Authorization')
     } else if (config.headers) {
-      if (USE_LEGACY_TOKEN_FALLBACK) {
-        const freshToken = getLegacyToken()
-        if (freshToken) {
-          config.headers.Authorization = `Bearer ${freshToken}`
-        } else {
-          delete config.headers.Authorization
-        }
-      } else {
-        delete config.headers.Authorization
-      }
+      delete config.headers.Authorization
     }
     return api(config)
   }
@@ -252,6 +197,9 @@ export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.
 
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
+
+export const signupWithPlan = (data) =>
+  api.post('/auth/signup/plan', data).then((r) => r.data)
 
 export const login = (data) =>
   api.post('/auth/login', data).then((r) => r.data)

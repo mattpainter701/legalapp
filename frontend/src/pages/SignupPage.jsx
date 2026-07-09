@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { register } from '../api'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
+import { register, signupWithPlan } from '../api'
 import { useAuth } from '../App'
 
 function MicrosoftIcon() {
@@ -27,7 +27,15 @@ function GoogleIcon() {
 
 export default function SignupPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { login: authLogin } = useAuth()
+  const plan = searchParams.get('plan')
+  const isPlanSignup = ['intake-only', 'mcp-only'].includes(plan)
+  const planLabel = plan === 'intake-only'
+    ? 'Call Intake + Tasks'
+    : plan === 'mcp-only'
+      ? 'MCP Access'
+      : null
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -52,12 +60,32 @@ export default function SignupPage() {
     setError('')
     setLoading(true)
     try {
-      const data = { ...form, staff_size: form.staff_size ? parseInt(form.staff_size, 10) : null }
-      await register(data)
-      await authLogin()
-      navigate('/matters', { replace: true })
+      const staffSize = form.staff_size ? parseInt(form.staff_size, 10) : null
+      if (isPlanSignup) {
+        await signupWithPlan({
+          plan,
+          firm_name: form.company_name,
+          email: form.email,
+          password: form.password,
+          full_name: form.full_name || null,
+          staff_size: staffSize,
+          address: form.address || null,
+          phone: form.phone || null,
+        })
+      } else {
+        await register({ ...form, staff_size: staffSize })
+      }
+      const me = await authLogin()
+      navigate(me?.default_route || (isPlanSignup ? '/intake/dashboard' : '/matters'), { replace: true })
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed')
+      const detail = err.response?.data?.detail
+      setError(
+        Array.isArray(detail)
+          ? detail.map((item) => item?.msg).filter(Boolean).join(' ')
+          : typeof detail === 'string'
+            ? detail
+            : 'Registration failed'
+      )
     } finally {
       setLoading(false)
     }
@@ -80,10 +108,17 @@ export default function SignupPage() {
 
       <div className="relative z-10 w-full max-w-md bg-brand-surface border border-brand-line rounded-2xl shadow-xl p-8">
         <h1 className="font-serif text-2xl text-brand-ink mb-1">Create your account</h1>
-        <p className="font-sans text-brand-muted text-sm mb-6">Set up your firm's workspace in under a minute.</p>
+        <p className="font-sans text-brand-muted text-sm mb-3">Set up your firm's workspace in under a minute.</p>
+        {planLabel && (
+          <div className="mb-6 rounded-xl border border-brand-accent/30 bg-brand-accent/5 px-4 py-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-brand-accent">Selected product</p>
+            <p className="mt-1 font-serif text-lg font-bold text-brand-ink">{planLabel}</p>
+            <p className="mt-1 text-xs text-brand-ink-2">14-day trial. You can invite your team after setup.</p>
+          </div>
+        )}
 
         {/* OAuth signup buttons */}
-        <div className="space-y-3 mb-5">
+        {!isPlanSignup && <div className="space-y-3 mb-5">
           <a
             href={buildOAuthSignupUrl('microsoft')}
             className="w-full flex items-center justify-center gap-3 px-4 py-2.5 rounded-lg bg-brand-surface text-brand-ink font-sans text-sm font-medium border border-brand-line hover:border-brand-ink hover:bg-brand-bg-soft transition-all"
@@ -98,57 +133,57 @@ export default function SignupPage() {
             <GoogleIcon />
             Sign up with Google
           </a>
-        </div>
+        </div>}
 
         {/* Divider */}
-        <div className="flex items-center gap-3 mb-5">
+        {!isPlanSignup && <div className="flex items-center gap-3 mb-5">
           <div className="h-px flex-1 bg-brand-line"></div>
           <span className="text-xs text-brand-muted font-sans">or use email</span>
           <div className="h-px flex-1 bg-brand-line"></div>
-        </div>
+        </div>}
 
         {/* Company info — shared by all methods */}
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelClasses}>Firm / Company Name</label>
-              <input type="text" name="company_name" value={form.company_name} onChange={handleChange} className={inputClasses} placeholder="Smith & Associates LLP" />
+              <label htmlFor="signup-company" className={labelClasses}>Firm / Company Name</label>
+              <input id="signup-company" type="text" name="company_name" value={form.company_name} onChange={handleChange} className={inputClasses} placeholder="Smith & Associates LLP" required={isPlanSignup} />
             </div>
             <div>
-              <label className={labelClasses}>Staff Size</label>
-              <input type="number" name="staff_size" min={1} value={form.staff_size} onChange={handleChange} className={inputClasses} placeholder="Attorneys / staff" />
+              <label htmlFor="signup-staff-size" className={labelClasses}>Staff Size</label>
+              <input id="signup-staff-size" type="number" name="staff_size" min={1} value={form.staff_size} onChange={handleChange} className={inputClasses} placeholder="Attorneys / staff" />
             </div>
           </div>
 
           <div>
-            <label className={labelClasses}>Address</label>
-            <input type="text" name="address" value={form.address} onChange={handleChange} className={inputClasses} placeholder="123 Main St, City, State" />
+            <label htmlFor="signup-address" className={labelClasses}>Address</label>
+            <input id="signup-address" type="text" name="address" value={form.address} onChange={handleChange} className={inputClasses} placeholder="123 Main St, City, State" />
           </div>
 
           <div>
-            <label className={labelClasses}>Phone</label>
-            <input type="tel" name="phone" value={form.phone} onChange={handleChange} className={inputClasses} placeholder="+1 (555) 123-4567" />
+            <label htmlFor="signup-phone" className={labelClasses}>Phone</label>
+            <input id="signup-phone" type="tel" name="phone" value={form.phone} onChange={handleChange} className={inputClasses} placeholder="+1 (555) 123-4567" />
           </div>
 
           <div className="border-t border-brand-line pt-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className={labelClasses}>Email *</label>
-                <input type="email" name="email" required value={form.email} onChange={handleChange} className={inputClasses} placeholder="you@lawfirm.com" />
+                <label htmlFor="signup-email" className={labelClasses}>Email *</label>
+                <input id="signup-email" type="email" name="email" required value={form.email} onChange={handleChange} className={inputClasses} placeholder="you@lawfirm.com" autoComplete="email" />
               </div>
               <div>
-                <label className={labelClasses}>Password *</label>
-                <input type="password" name="password" required minLength={8} value={form.password} onChange={handleChange} className={inputClasses} placeholder="Min 8 characters" />
+                <label htmlFor="signup-password" className={labelClasses}>Password *</label>
+                <input id="signup-password" type="password" name="password" required minLength={12} value={form.password} onChange={handleChange} className={inputClasses} placeholder="Minimum 12 characters" autoComplete="new-password" />
               </div>
             </div>
           </div>
 
           <div>
-            <label className={labelClasses}>Your Name</label>
-            <input type="text" name="full_name" value={form.full_name} onChange={handleChange} className={inputClasses} placeholder="John Doe" />
+            <label htmlFor="signup-name" className={labelClasses}>Your Name</label>
+            <input id="signup-name" type="text" name="full_name" value={form.full_name} onChange={handleChange} className={inputClasses} placeholder="John Doe" autoComplete="name" />
           </div>
 
-          {error && <p className="font-sans text-brand-rose text-sm">{error}</p>}
+          {error && <p role="alert" className="font-sans text-brand-rose text-sm">{error}</p>}
 
           <button type="submit" disabled={loading} className="w-full py-3 rounded-lg text-white font-sans text-sm font-medium bg-brand-accent hover:bg-brand-accent-2 active:opacity-90 transition-all duration-150 disabled:opacity-50">
             {loading ? 'Creating account...' : 'Create Account with Email'}

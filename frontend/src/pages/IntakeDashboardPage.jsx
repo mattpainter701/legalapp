@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   Bell,
@@ -36,6 +37,7 @@ import NewCallToasts from '../components/intake/NewCallToasts'
 import RecordsTabs from '../components/intake/RecordsTabs'
 import ReceiptTrail from '../components/intake/ReceiptTrail'
 import { useToast } from '../components/toast/useToast'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useCallFeedPolling } from '../hooks/useCallFeedPolling'
 import { useCallAlerts } from '../hooks/useCallAlerts'
 import useCallDrafts from '../hooks/useCallDrafts'
@@ -447,13 +449,16 @@ function PartnerLogPanel() {
 }
 
 export default function IntakeDashboardPage() {
+  const confirmAction = useConfirm()
   const { user } = useAuth()
+  const navigate = useNavigate()
   const toast = useToast()
   const [q, setQ] = useState('')
   const [phone, setPhone] = useState('')
   const [selectedRecentCaller, setSelectedRecentCaller] = useState(null)
   const [zoomPhoneSyncing, setZoomPhoneSyncing] = useState(false)
   const [zoomConnected, setZoomConnected] = useState(false)
+  const [zoomStatus, setZoomStatus] = useState(null)
   const [exportStart, setExportStart] = useState('')
   const [exportEnd, setExportEnd] = useState('')
   const [exporting, setExporting] = useState(false)
@@ -472,7 +477,6 @@ export default function IntakeDashboardPage() {
     activeDraft,
     activeDraftId,
     loading: draftsLoading,
-    storageHealthy,
     setActiveDraft,
     createDraft,
     updateDraftField,
@@ -489,13 +493,13 @@ export default function IntakeDashboardPage() {
 
   const closeDraft = useCallback(async (draftId) => {
     const draft = drafts.find((entry) => entry.draft_id === draftId)
-    if (hasDraftWork(draft) && typeof window !== 'undefined') {
+    if (hasDraftWork(draft)) {
       const label = draft?.caller_name || draft?.phone || 'this call'
-      const confirmed = window.confirm(`Discard the draft for ${label}? This cannot be undone.`)
+      const confirmed = await confirmAction({ title: 'Discard call draft?', message: `Discard the draft for ${label}? This cannot be undone.`, confirmLabel: 'Discard draft', destructive: true })
       if (!confirmed) return
     }
     await removeDraft(draftId)
-  }, [drafts, removeDraft])
+  }, [confirmAction, drafts, removeDraft])
 
   const setForm = useCallback((updater) => {
     if (!activeDraftId) return
@@ -555,8 +559,16 @@ export default function IntakeDashboardPage() {
   useEffect(() => {
     let cancelled = false
     getZoomPhoneStatus()
-      .then((s) => { if (!cancelled) setZoomConnected(Boolean(s?.connected)) })
-      .catch(() => { if (!cancelled) setZoomConnected(false) })
+      .then((status) => {
+        if (cancelled) return
+        setZoomStatus(status)
+        setZoomConnected(Boolean(status?.connected))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setZoomStatus(null)
+        setZoomConnected(false)
+      })
     return () => { cancelled = true }
   }, [])
 
@@ -969,6 +981,29 @@ export default function IntakeDashboardPage() {
           </div>
         )}
 
+        {user?.role === 'admin' && zoomStatus && !zoomConnected && (
+          <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-brand-accent/30 bg-brand-accent/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <PhoneCall size={20} className="mt-0.5 shrink-0 text-brand-accent" />
+              <div>
+                <h2 className="text-sm font-bold text-brand-ink">Connect Zoom Phone to populate the live call feed</h2>
+                <p className="mt-1 text-xs text-brand-ink-2">
+                  {zoomStatus.configured
+                    ? 'The Zoom app is ready. Authorize this firm, test the connection, and calls will flow into intake automatically.'
+                    : 'Finish the Zoom Phone app and webhook setup before the first live call.'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/admin?tab=zoom')}
+              className="shrink-0 rounded-xl bg-brand-ink px-4 py-2 text-xs font-bold text-white hover:bg-brand-ink/90"
+            >
+              Set up Zoom Phone
+            </button>
+          </section>
+        )}
+
         <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
           <CallFeed
             callers={feedCallers}
@@ -1059,12 +1094,6 @@ export default function IntakeDashboardPage() {
                   disabled={draftsLoading}
                 />
               </div>
-
-              {!storageHealthy && (
-                <div className="mt-3 rounded-xl border border-brand-amber/30 bg-brand-amber/10 px-3 py-2 text-xs leading-5 text-brand-ink">
-                  Drafts are staying in memory for this browser session because local storage is unavailable.
-                </div>
-              )}
 
               <form
                 onSubmit={submitCall}

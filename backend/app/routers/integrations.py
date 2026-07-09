@@ -21,7 +21,7 @@ from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
-from app.services.teams import TEAMS_CONNECT_SCOPES, TEAMS_REQUIRED_SCOPES
+from app.services.teams import TEAMS_CONNECT_SCOPES
 from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
 from app.services.integration_observability import apply_scope_audit, missing_scopes
@@ -310,7 +310,9 @@ async def microsoft_callback(
     teams_flag = bool(meta.get("teams")) if meta else False
     code_verifier = meta.get("pkce_verifier") if meta else None
 
-    expected_scopes = _admin_scopes(teams_flag) if intent == "admin" else MICROSOFT_USER_SCOPES
+    expected_scopes = (
+        _admin_scopes(teams_flag) if intent == "admin" else MICROSOFT_USER_SCOPES
+    )
     token_payload = {
         "client_id": settings.MICROSOFT_CLIENT_ID,
         "client_secret": settings.MICROSOFT_CLIENT_SECRET,
@@ -432,7 +434,9 @@ async def microsoft_callback(
                     scopes=scope_str,
                 )
                 db.add(row)
-            apply_scope_audit(row, "microsoft", MICROSOFT_USER_SCOPES, _scope_is_granted)
+            apply_scope_audit(
+                row, "microsoft", MICROSOFT_USER_SCOPES, _scope_is_granted
+            )
 
         await db.commit()
 
@@ -943,7 +947,9 @@ async def _handle_zoom_phone_webhook(
     try:
         event = _json.loads(body.decode("utf-8") if body else "{}")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid Zoom webhook payload") from exc
+        raise HTTPException(
+            status_code=400, detail="Invalid Zoom webhook payload"
+        ) from exc
     if not isinstance(event, dict):
         raise HTTPException(status_code=400, detail="Invalid Zoom webhook payload")
 
@@ -1055,7 +1061,9 @@ async def save_zoom_phone_app_credentials(
                 status_code=422,
                 detail="Enter a webhook secret token or both OAuth fields to update Zoom Phone setup.",
             )
-        existing_app.encrypted_webhook_secret_token = encrypt_token(webhook_secret_token)
+        existing_app.encrypted_webhook_secret_token = encrypt_token(
+            webhook_secret_token
+        )
         existing_app.configured_by_user_id = user.id
         app = existing_app
         await db.flush()
@@ -1076,7 +1084,9 @@ async def save_zoom_phone_app_credentials(
         "app_credentials": _app_credentials_payload(
             app,
             source="tenant",
-            platform_ready=bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
+            platform_ready=bool(
+                settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
+            ),
         ),
     }
 
@@ -1106,7 +1116,9 @@ async def clear_zoom_phone_app_credentials(
             source="platform"
             if settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
             else None,
-            platform_ready=bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET),
+            platform_ready=bool(
+                settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
+            ),
         ),
     }
 
@@ -1540,8 +1552,10 @@ async def zoom_phone_status(
     tenant_app_ready = bool(app)
     configured = tenant_app_ready or platform_ready
     connected = bool(row)
-    app_source = "tenant" if tenant_app_ready else "platform" if platform_ready else None
-    return {
+    app_source = (
+        "tenant" if tenant_app_ready else "platform" if platform_ready else None
+    )
+    status_payload = {
         "configured": configured,
         "connected": connected,
         "provider": ZOOM_PHONE_PROVIDER,
@@ -1575,6 +1589,17 @@ async def zoom_phone_status(
             else "connected"
         ),
     }
+    if user.role != "admin":
+        # Reception staff only need connection health for the intake feed.
+        # Keep OAuth app metadata, callback URLs, scopes, and credential hints
+        # confined to tenant administrators.
+        return {
+            "configured": status_payload["configured"],
+            "connected": status_payload["connected"],
+            "provider": status_payload["provider"],
+            "status": status_payload["status"],
+        }
+    return status_payload
 
 
 @router.post("/zoom-phone/test")

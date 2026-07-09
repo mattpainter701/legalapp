@@ -29,9 +29,6 @@ import {
 const PHONE_SCOPE_LABELS = {
   'phone:read:list_call_logs:admin': 'Read account call history',
   'phone:read:call_log:admin': 'Read call details',
-  'phone:read:list_call_recordings:admin': 'List call recordings',
-  'phone:read:call_recording:admin': 'Read recording metadata',
-  'phone:read:recording_transcript:admin': 'Read recording transcripts',
 }
 
 export default function ZoomPanel() {

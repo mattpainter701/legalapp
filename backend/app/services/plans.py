@@ -1,10 +1,43 @@
-"""Sellable plan registry — single source of truth for module bundles/tiers."""
+"""Authoritative catalog for product modules, routes, API scopes and plans."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.services.module_visibility import FULL_PLATFORM_MODULES, GENERAL_MODULES
+
+@dataclass(frozen=True)
+class Module:
+    id: str
+    route: str
+    api_prefixes: tuple[str, ...] = ()
+
+
+MODULES: dict[str, Module] = {
+    "matters": Module("matters", "/matters", ("/api/matters",)),
+    "chat": Module("chat", "/chat", ("/api/chat", "/documents", "/api/sync/documents")),
+    "calendar": Module("calendar", "/calendar", ("/api/calendar",)),
+    "tasks": Module("tasks", "/tasks", ("/api/tasks",)),
+    "communications": Module(
+        "communications", "/communications", ("/api/communications",)
+    ),
+    "contacts": Module("contacts", "/contacts", ("/api/contacts",)),
+    "intake": Module("intake", "/intake", ("/api/intake",)),
+    "intake-dashboard": Module("intake-dashboard", "/intake/dashboard"),
+    "templates": Module("templates", "/templates", ("/api/templates",)),
+    "time-tracking": Module("time-tracking", "/time-tracking", ("/api/time-tracking",)),
+    "invoices": Module("invoices", "/invoices", ("/api/invoices",)),
+    "billing": Module("billing", "/billing", ("/api/billing",)),
+    "trust": Module("trust", "/trust", ("/api/trust",)),
+    "reports": Module("reports", "/reports", ("/api/reports",)),
+    "plugins": Module("plugins", "/plugins"),
+    "admin": Module("admin", "/admin"),
+    "mcp": Module("mcp", "/mcp", ("/api/mcp",)),
+    "onboarding": Module("onboarding", "/onboarding"),
+}
+
+FULL_PLATFORM_MODULES = tuple(MODULES)
+INTAKE_MODULES = ("tasks", "intake-dashboard")
+INTAKE_API_DEPENDENCIES = ("intake", "contacts", "communications", "tasks")
 
 
 @dataclass(frozen=True)
@@ -16,17 +49,19 @@ class Plan:
     billing_tier: str
     public_signup: bool
     upsell_target: str | None
+    api_dependencies: tuple[str, ...] = ()
 
 
 PLANS: dict[str, Plan] = {
     "intake-only": Plan(
         id="intake-only",
         label="Call Intake",
-        modules=list(GENERAL_MODULES),
+        modules=list(INTAKE_MODULES),
         default_module="intake-dashboard",
         billing_tier="intake_trial",
         public_signup=True,
         upsell_target="full-platform",
+        api_dependencies=INTAKE_API_DEPENDENCIES,
     ),
     "mcp-only": Plan(
         id="mcp-only",

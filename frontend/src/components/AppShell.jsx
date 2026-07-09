@@ -4,11 +4,12 @@ import { useAuth } from '../App'
 import Sidebar from './Sidebar'
 import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
-import { Briefcase, CalendarDays, CheckSquare, Menu, MessageSquare, Shield } from 'lucide-react'
+import { Briefcase, CalendarDays, CheckSquare, Menu, MessageSquare, PhoneCall, Shield } from 'lucide-react'
 
 const AppShellContext = createContext(null)
 
 const MOBILE_NAV_ITEMS = [
+  { path: '/intake/dashboard', label: 'Call Intake', icon: PhoneCall, module: 'intake-dashboard' },
   { path: '/matters', label: 'Matters', icon: Briefcase },
   { path: '/chat', label: 'Assistant', icon: MessageSquare },
   { path: '/calendar', label: 'Calendar', icon: CalendarDays },
@@ -45,6 +46,11 @@ export default function AppShell({ children, title }) {
   }, [navigate])
 
   const loadSidebarData = useCallback(async () => {
+    if (!canSeeModule('chat')) {
+      setConversations([])
+      setDocuments([])
+      return
+    }
     try {
       const [convs, docs] = await Promise.all([getConversations(), getDocuments()])
       setConversations(convs || [])
@@ -52,7 +58,7 @@ export default function AppShell({ children, title }) {
     } catch {
       // silent — sidebar data is non-critical
     }
-  }, [])
+  }, [canSeeModule])
 
   useEffect(() => {
     loadSidebarData()
@@ -65,6 +71,7 @@ export default function AppShell({ children, title }) {
   }, [navigate])
 
   const handleNewConversation = useCallback(async () => {
+    if (!canSeeModule('chat')) return
     try {
       const conv = await createConversation()
       setConversations((prev) => [conv, ...prev])
@@ -74,7 +81,7 @@ export default function AppShell({ children, title }) {
     } catch (err) {
       console.error('Failed to create conversation', err)
     }
-  }, [navigate])
+  }, [canSeeModule, navigate])
 
   const handleConversationDeleted = useCallback(async (id) => {
     try {
@@ -112,6 +119,7 @@ export default function AppShell({ children, title }) {
   }
 
   useEffect(() => {
+    if (!canSeeModule('chat')) return undefined
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault()
@@ -120,7 +128,16 @@ export default function AppShell({ children, title }) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleNewConversation])
+  }, [canSeeModule, handleNewConversation])
+
+  const visibleMobileNavItems = MOBILE_NAV_ITEMS.filter(({ path, module }) => {
+    if (module) return canSeeModule(module)
+    if (path === '/matters') return canSeeModule('matters')
+    if (path === '/tasks') return canSeeModule('tasks')
+    if (path === '/chat') return canSeeModule('chat')
+    if (path === '/calendar') return canSeeModule('calendar')
+    return true
+  })
 
   const ctxValue = {
     conversations,
@@ -201,14 +218,11 @@ export default function AppShell({ children, title }) {
             {children}
           </main>
 
-          <nav className="md:hidden min-h-[4rem] pb-[env(safe-area-inset-bottom)] bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
-            {MOBILE_NAV_ITEMS.filter(({ path }) => {
-              if (path === '/matters') return canSeeModule('matters')
-              if (path === '/tasks') return canSeeModule('tasks')
-              if (path === '/chat') return canSeeModule('chat')
-              if (path === '/calendar') return canSeeModule('calendar')
-              return true
-            }).map(({ path, label, icon: Icon }) => {
+          <nav
+            className="md:hidden min-h-[4rem] pb-[env(safe-area-inset-bottom)] bg-brand-surface border-t border-brand-line grid flex-shrink-0"
+            style={{ gridTemplateColumns: `repeat(${Math.max(visibleMobileNavItems.length, 1)}, minmax(0, 1fr))` }}
+          >
+            {visibleMobileNavItems.map(({ path, label, icon: Icon }) => {
               const active = isActiveRoute(path)
               return (
                 <button

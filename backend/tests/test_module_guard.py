@@ -8,6 +8,7 @@ from jose import jwt as jose_jwt
 from app.config import get_settings
 from app.database import get_db
 from app.main import app
+from app.models.tenant import TenantSettings
 
 settings = get_settings()
 
@@ -42,9 +43,9 @@ async def intake_client(db_session, test_tenant, test_user):
 
 
 @pytest.mark.asyncio
-async def test_general_plan_allowed_on_matters(intake_client):
+async def test_intake_plan_blocked_from_matters(intake_client):
     resp = await intake_client.get("/api/matters")
-    assert resp.status_code != 403
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -67,6 +68,24 @@ async def test_intake_only_allowed_on_tasks(intake_client):
     # Standalone call-intake customers manage lead follow-up through tasks.
     resp = await intake_client.get("/api/tasks")
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_me_exposes_call_tracker_and_tasks_navigation(
+    intake_client, db_session, test_tenant
+):
+    db_session.add(
+        TenantSettings(tenant_id=test_tenant.id, custom_config={"plan": "intake-only"})
+    )
+    await db_session.commit()
+    resp = await intake_client.get("/api/auth/me")
+    assert resp.status_code == 200
+    assert set(resp.json()["enabled_modules"]) == {
+        "tasks",
+        "intake-dashboard",
+        "admin",
+    }
+    assert resp.json()["default_route"] == "/intake/dashboard"
 
 
 @pytest.mark.asyncio

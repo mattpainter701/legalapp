@@ -32,6 +32,9 @@ async def test_public_signup_provisions_intake_tenant(public_client, db_session)
             "email": "owner@reception.co",
             "password": "longenoughpw123",
             "full_name": "Owner One",
+            "staff_size": 4,
+            "address": "100 First Customer Way",
+            "phone": "+1 701-555-0101",
         },
     )
     assert resp.status_code == 201
@@ -49,6 +52,9 @@ async def test_public_signup_provisions_intake_tenant(public_client, db_session)
         await db_session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
     ).scalar_one()
     assert tenant.billing_tier == "intake_trial"
+    assert tenant.staff_size == 4
+    assert tenant.address == "100 First Customer Way"
+    assert tenant.phone == "+1 701-555-0101"
 
 
 @pytest.mark.asyncio
@@ -65,7 +71,9 @@ async def test_public_signup_provisions_mcp_tenant(public_client, db_session):
     )
     assert resp.status_code == 201
     user = (
-        await db_session.execute(select(User).where(User.email == "owner@research-api.co"))
+        await db_session.execute(
+            select(User).where(User.email == "owner@research-api.co")
+        )
     ).scalar_one()
     assert user.role == "admin"
     ts = (

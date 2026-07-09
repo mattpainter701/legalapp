@@ -22,7 +22,7 @@ For a customer buying only the intake dashboard, set module visibility on the te
 
 ```json
 {
-  "enabled_modules": ["intake-dashboard"],
+  "enabled_modules": ["tasks", "intake-dashboard"],
   "default_module": "intake-dashboard"
 }
 ```
@@ -31,7 +31,7 @@ After login, `/api/auth/me` returns:
 
 ```json
 {
-  "enabled_modules": ["intake-dashboard"],
+  "enabled_modules": ["tasks", "intake-dashboard"],
   "default_route": "/intake/dashboard"
 }
 ```
@@ -39,6 +39,7 @@ After login, `/api/auth/me` returns:
 The React shell uses those fields to:
 
 - land the user directly on `/intake/dashboard`;
+- expose the Tasks workspace for assigned caller follow-ups;
 - hide unrelated sidebar modules;
 - redirect direct navigation to hidden routes back to the tenant default route.
 

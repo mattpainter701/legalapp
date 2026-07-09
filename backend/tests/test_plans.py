@@ -1,10 +1,23 @@
-from app.services.plans import get_plan, public_plans, plan_for_config
+from app.services.plans import (
+    INTAKE_MODULES,
+    MODULES,
+    get_plan,
+    public_plans,
+    plan_for_config,
+)
 from app.services.module_visibility import GENERAL_MODULES
 
 
 def test_intake_only_plan_shape():
     plan = get_plan("intake-only")
-    assert plan.modules == GENERAL_MODULES
+    assert plan.modules == list(INTAKE_MODULES)
+    assert plan.modules == ["tasks", "intake-dashboard"]
+    assert set(plan.api_dependencies) == {
+        "intake",
+        "contacts",
+        "communications",
+        "tasks",
+    }
     assert plan.default_module == "intake-dashboard"
     assert plan.public_signup is True
     assert plan.upsell_target == "full-platform"
@@ -43,6 +56,13 @@ def test_get_plan_unknown_returns_none():
     assert get_plan("nope") is None
 
 
+def test_every_plan_module_has_a_catalog_entry_and_valid_default():
+    for plan_id in ("intake-only", "mcp-only", "full-platform"):
+        plan = get_plan(plan_id)
+        assert plan.default_module in plan.modules
+        assert all(module_id in MODULES for module_id in plan.modules)
+
+
 import pytest  # noqa: E402
 
 from app.models.tenant import TenantSettings  # noqa: E402
@@ -62,7 +82,7 @@ async def test_resolve_intake_only_from_plan(db_session, test_tenant, test_user)
         db_session, test_tenant.id, user=test_user
     )
     # admin user also gets the admin module via _with_finance_admin.
-    for module in GENERAL_MODULES:
+    for module in INTAKE_MODULES:
         assert module in modules
     assert "plugins" not in modules
     assert route == "/intake/dashboard"

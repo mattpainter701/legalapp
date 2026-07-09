@@ -942,7 +942,6 @@ async def exchange_oauth_callback(
     _set_auth_cookies(response, token, refresh_token)
 
     return TokenResponse(
-        access_token=token,
         user_id=str(user.id),
         tenant_id=str(user.tenant_id),
         role=user.role,
@@ -1025,7 +1024,6 @@ async def register(
     refresh_token = await _create_refresh_token(request, user)
     _set_auth_cookies(response, jwt_token, refresh_token)
     return TokenResponse(
-        access_token=jwt_token,
         user_id=str(user.id),
         tenant_id=str(tenant.id),
         role=user.role,
@@ -1072,6 +1070,9 @@ async def signup_with_plan(
         name=body.firm_name,
         domain=domain,
         company_name=body.firm_name,
+        staff_size=body.staff_size,
+        address=body.address,
+        phone=body.phone,
         billing_tier=plan.billing_tier,
         is_active=True,
     )
@@ -1115,7 +1116,6 @@ async def signup_with_plan(
     refresh_token = await _create_refresh_token(request, user)
     _set_auth_cookies(response, jwt_token, refresh_token)
     return TokenResponse(
-        access_token=jwt_token,
         user_id=str(user.id),
         tenant_id=str(tenant.id),
         role=user.role,
@@ -1156,9 +1156,7 @@ async def login(
     # Set hardened httpOnly access + refresh cookies.
     _set_auth_cookies(response, jwt_token, refresh_token)
 
-    # For backward compatibility, still return token in body (but frontend will prefer cookie)
     return TokenResponse(
-        access_token=jwt_token,
         user_id=str(user.id),
         tenant_id=str(tenant.id),
         role=user.role,
@@ -1415,7 +1413,6 @@ async def refresh(
     _set_auth_cookies(response, access_token, new_refresh)
 
     return TokenResponse(
-        access_token=access_token,
         user_id=str(user.id),
         tenant_id=str(user.tenant_id),
         role=user.role,
