@@ -570,6 +570,48 @@ async def test_dashboard_call_can_assign_general_staff_task_without_lead(
 
 
 @pytest.mark.asyncio
+async def test_recent_callers_marks_internal_zoom_calls(client, db_session, test_tenant):
+    log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        channel="call",
+        direction="inbound",
+        subject="Zoom Phone inbound call: Reception to Attorney",
+        summary="answered",
+        body="Internal transfer",
+        status="received",
+        occurred_at=datetime.now(timezone.utc),
+        external_ref=f"zoom_phone:call:{uuid.uuid4()}",
+        participants={
+            "provider": "zoom_phone",
+            "direction": "inbound",
+            "caller_name": "Reception",
+            "callee_name": "Attorney",
+            "caller_number": "101",
+            "callee_number": "202",
+            "caller_extension_number": "101",
+            "callee_extension_number": "202",
+            "result": "answered",
+        },
+    )
+    db_session.add(log)
+    await db_session.commit()
+
+    recent = await client.get(
+        "/api/intake/dashboard/recent-callers", params={"limit": 10}
+    )
+
+    assert recent.status_code == 200
+    caller = recent.json()["callers"][0]
+    assert caller["id"] == str(log.id)
+    assert caller["direction"] == "inbound"
+    assert caller["caller_number"] == "101"
+    assert caller["callee_number"] == "202"
+    assert caller["is_internal_call"] is True
+    assert caller["internal_call_type"] == "internal_to_internal"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_call_create_lead_specific_staff_keeps_post_commit_context(
     client, db_session, test_tenant, monkeypatch
 ):

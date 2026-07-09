@@ -1,5 +1,5 @@
 import React from 'react'
-import { Clock, ExternalLink, PhoneIncoming, PhoneMissed } from 'lucide-react'
+import { Clock, ExternalLink, PhoneIncoming, PhoneMissed, PhoneOutgoing } from 'lucide-react'
 
 const STATUS = {
   missed: { label: 'missed', cls: 'bg-red-100 text-red-700' },
@@ -39,7 +39,17 @@ function agoLabel(iso) {
 
 export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
   const status = STATUS[(caller.result || '').toLowerCase()]
-  const Icon = (caller.result || '').toLowerCase() === 'missed' ? PhoneMissed : PhoneIncoming
+  const direction = String(caller.direction || '').toLowerCase()
+  const Icon = (caller.result || '').toLowerCase() === 'missed'
+    ? PhoneMissed
+    : direction === 'outbound'
+    ? PhoneOutgoing
+    : PhoneIncoming
+  const internalLabel = caller.internal_call_type === 'internal_to_internal'
+    ? 'internal'
+    : caller.internal_call_type === 'internal_outbound'
+    ? 'internal outbound'
+    : null
   return (
     <button
       type="button"
@@ -66,6 +76,8 @@ export default function CallFeedItem({ caller, selected, isNew, onSelect }) {
         {caller.phone && <span>{caller.phone}</span>}
         {caller.answered_by && <span>by {caller.answered_by}</span>}
         {durationLabel(caller.duration_seconds) && <span>{durationLabel(caller.duration_seconds)}</span>}
+        {direction && <span className="font-bold capitalize">{direction}</span>}
+        {internalLabel && <span className="rounded-full bg-slate-200 px-2 py-0.5 font-bold text-slate-700">{internalLabel}</span>}
         {caller.source === 'zoom_phone' && <span className="font-bold text-brand-ink">Zoom</span>}
         {caller.recording_url && (
           <a

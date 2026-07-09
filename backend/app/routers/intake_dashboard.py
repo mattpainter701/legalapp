@@ -6,7 +6,7 @@ import csv
 import io
 import uuid
 from datetime import date, datetime, time, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -91,8 +91,82 @@ PARTNER_LOG_EXPORT_FIELDS = [
 ]
 
 
+def _raw_participant_value(participants: dict, *paths: str) -> Any:
+    raw = participants.get("raw") if isinstance(participants, dict) else None
+    sources = [participants, raw] if isinstance(raw, dict) else [participants]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for path in paths:
+            current: Any = source
+            for part in path.split("."):
+                if not isinstance(current, dict):
+                    current = None
+                    break
+                current = current.get(part)
+                if current in (None, ""):
+                    break
+            if current not in (None, ""):
+                return current
+    return None
+
+
+def _external_phone(value: Any) -> str | None:
+    normalized = normalize_phone(str(value)) if value not in (None, "") else None
+    return normalized if normalized and len(normalized) >= 10 else None
+
+
+def _party_has_internal_marker(participants: dict, party: str) -> bool:
+    value = _raw_participant_value(
+        participants,
+        f"{party}_extension",
+        f"{party}_extension_number",
+        f"{party}_extension_id",
+        f"{party}_ext_number",
+        f"{party}_user_id",
+        f"{party}.extension",
+        f"{party}.extension_number",
+        f"{party}.extension_id",
+        f"{party}.user_id",
+        f"{party}.user.email",
+    )
+    if value not in (None, ""):
+        return True
+    number = participants.get(f"{party}_number") or _raw_participant_value(
+        participants,
+        f"{party}.phone_number",
+        f"{party}.number",
+    )
+    digits = normalize_phone(str(number)) if number not in (None, "") else None
+    return bool(digits and len(digits) < 10)
+
+
+def _zoom_internal_call_type(participants: dict, direction: str | None) -> str | None:
+    # Backlog: use this classification in a retention job to purge internal-only
+    # Zoom call logs after a short window so they do not inflate DB usage.
+    if not isinstance(participants, dict):
+        return None
+    caller_number = participants.get("caller_number")
+    callee_number = participants.get("callee_number")
+    caller_external = _external_phone(caller_number)
+    callee_external = _external_phone(callee_number)
+    caller_internal = _party_has_internal_marker(participants, "caller") and not caller_external
+    callee_internal = _party_has_internal_marker(participants, "callee") and not callee_external
+    caller_named = bool(participants.get("caller_name"))
+    callee_named = bool(participants.get("callee_name"))
+    no_external_party = not caller_external and not callee_external
+
+    if (caller_internal and callee_internal) or (no_external_party and caller_named and callee_named):
+        return "internal_to_internal"
+    if direction == "outbound" and caller_internal:
+        return "internal_outbound"
+    return None
+
+
 def _zoom_phone_call_item(log: CommunicationLog) -> ZoomPhoneCallItem:
     participants = log.participants or {}
+    direction = participants.get("direction") or log.direction
+    internal_call_type = _zoom_internal_call_type(participants, direction)
     caller_name = (
         participants.get("caller_name")
         or participants.get("phone")
@@ -108,7 +182,11 @@ def _zoom_phone_call_item(log: CommunicationLog) -> ZoomPhoneCallItem:
         or participants.get("caller_number")
         or participants.get("callee_number"),
         normalized_phone=participants.get("normalized_phone"),
-        direction=participants.get("direction") or log.direction,
+        direction=direction,
+        caller_number=participants.get("caller_number"),
+        callee_number=participants.get("callee_number"),
+        is_internal_call=internal_call_type is not None,
+        internal_call_type=internal_call_type,
         result=participants.get("result"),
         duration_seconds=participants.get("duration_seconds"),
         summary=log.summary,
@@ -837,6 +915,9 @@ async def recent_callers(
 
     callers = []
     for log, contact, creator in rows:
+        participants = log.participants or {}
+        direction = participants.get("direction") or log.direction
+        internal_call_type = _zoom_internal_call_type(participants, direction)
         lead = lead_by_contact_id.get(log.contact_id) if log.contact_id else None
         task = task_by_log_id.get(log.id) or (
             task_by_lead_id.get(lead.id) if lead else None
@@ -853,6 +934,11 @@ async def recent_callers(
                 phone=_log_participant(log, "phone")
                 or (contact.phone if contact else None),
                 normalized_phone=_log_participant(log, "normalized_phone"),
+                direction=direction,
+                caller_number=_log_participant(log, "caller_number"),
+                callee_number=_log_participant(log, "callee_number"),
+                is_internal_call=internal_call_type is not None,
+                internal_call_type=internal_call_type,
                 practice_area=_log_field_from_body(log, "Practice area"),
                 purpose=log.summary,
                 notes=_log_field_from_body(log, "Notes"),

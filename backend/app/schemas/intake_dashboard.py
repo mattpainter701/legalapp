@@ -46,6 +46,11 @@ class RecentIntakeCaller(BaseModel):
     caller_name: str
     phone: Optional[str] = None
     normalized_phone: Optional[str] = None
+    direction: Optional[str] = None
+    caller_number: Optional[str] = None
+    callee_number: Optional[str] = None
+    is_internal_call: bool = False
+    internal_call_type: Optional[str] = None
     practice_area: Optional[str] = None
     purpose: Optional[str] = None
     notes: Optional[str] = None
@@ -138,6 +143,10 @@ class ZoomPhoneCallItem(BaseModel):
     phone: Optional[str] = None
     normalized_phone: Optional[str] = None
     direction: str
+    caller_number: Optional[str] = None
+    callee_number: Optional[str] = None
+    is_internal_call: bool = False
+    internal_call_type: Optional[str] = None
     result: Optional[str] = None
     duration_seconds: Optional[Any] = None
     summary: Optional[str] = None
