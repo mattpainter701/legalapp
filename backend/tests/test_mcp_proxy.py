@@ -103,6 +103,22 @@ async def test_proxied_tool_names_uses_live_manifest(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manifest_falls_back_when_upstream_unavailable(monkeypatch):
+    async def proxy_unavailable(path, request):
+        raise RuntimeError("dns unavailable")
+
+    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(mcp.settings, "BACKEND_URL", "https://legalapp.example")
+    monkeypatch.setattr(mcp, "_proxy_get", proxy_unavailable)
+
+    manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}))
+
+    assert manifest["serverInfo"]["name"] == "clarity-legal"
+    assert manifest["transports"]["messages"] == "https://legalapp.example/api/mcp/messages"
+    assert {tool["name"] for tool in manifest["tools"]} == set(mcp.DEFAULT_ALLOWED_TOOLS)
+
+
+@pytest.mark.asyncio
 async def test_api_key_lookup_sets_tenant_context_before_admin_query(monkeypatch):
     tenant_id = uuid.uuid4()
     tenant = SimpleNamespace(id=tenant_id)

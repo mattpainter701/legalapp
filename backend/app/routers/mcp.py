@@ -130,7 +130,7 @@ async def _proxy_post(path: str, request: Request, payload: dict):
 
 async def _proxied_tool_names(request: Request) -> list[str]:
     if not settings.MCP_SERVER_URL:
-        return [t["name"] for t in _TOOLS]
+        return list(DEFAULT_ALLOWED_TOOLS)
     try:
         manifest = await _proxy_get("/api/mcp", request)
     except Exception:
@@ -142,6 +142,46 @@ async def _proxied_tool_names(request: Request) -> list[str]:
 
 
 # ── Auth helper (JWT or API key) ──────────────────────────────────────────────
+
+
+def _local_tool_manifest() -> list[dict]:
+    explicit = {tool["name"]: tool for tool in _TOOLS if "name" in tool}
+    tools = []
+    for name in DEFAULT_ALLOWED_TOOLS:
+        if name in explicit:
+            tools.append(explicit[name])
+            continue
+        tools.append(
+            {
+                "name": name,
+                "description": f"Call the Clarity Legal CourtListener MCP tool `{name}`.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            }
+        )
+    return tools
+
+
+def _local_manifest() -> dict:
+    base_url = settings.BACKEND_URL.rstrip("/")
+    return {
+        "protocolVersion": "2024-11-05",
+        "serverInfo": {
+            "name": "clarity-legal",
+            "version": "1.0.0",
+            "description": "Clarity Legal MCP gateway for legal research and practice tools",
+        },
+        "capabilities": {"tools": {}},
+        "tools": _local_tool_manifest(),
+        "transports": {
+            "messages": f"{base_url}/api/mcp/messages",
+            "sse": f"{base_url}/api/mcp/sse",
+        },
+        "auth": {"header": "X-MCP-API-Key"},
+    }
 
 
 async def _get_user_and_tenant(
@@ -193,7 +233,11 @@ async def _require_mcp_identity(request: Request, db: AsyncSession) -> tuple[Use
 async def mcp_manifest(request: Request):
     """Return the MCP server manifest with available tools."""
     if settings.MCP_SERVER_URL:
-        return await _proxy_get("/api/mcp", request)
+        try:
+            return await _proxy_get("/api/mcp", request)
+        except Exception:
+            return _local_manifest()
+    return _local_manifest()
     return {
         "protocolVersion": "2024-11-05",
         "serverInfo": {
