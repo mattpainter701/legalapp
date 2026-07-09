@@ -109,3 +109,14 @@ class DocumentTemplateSmartFillResponse(BaseModel):
     template_id: str
     matter_id: Optional[str] = None
     variables: list[DocumentTemplateVariableSuggestion]
+
+
+class DocumentTemplateUploadAnalysisResponse(BaseModel):
+    title: str
+    format: str
+    body: str
+    body_preview: str
+    extracted_text: str
+    suggested_variable_schema: dict[str, Any] = Field(default_factory=dict)
+    detected_branding_profile: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)

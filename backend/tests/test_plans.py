@@ -1,9 +1,10 @@
 from app.services.plans import get_plan, public_plans, plan_for_config
+from app.services.module_visibility import GENERAL_MODULES
 
 
 def test_intake_only_plan_shape():
     plan = get_plan("intake-only")
-    assert plan.modules == ["intake-dashboard", "tasks"]
+    assert plan.modules == GENERAL_MODULES
     assert plan.default_module == "intake-dashboard"
     assert plan.public_signup is True
     assert plan.upsell_target == "full-platform"
@@ -49,11 +50,32 @@ async def test_resolve_intake_only_from_plan(db_session, test_tenant, test_user)
     modules, route = await resolve_enabled_modules(
         db_session, test_tenant.id, user=test_user
     )
-    # admin user also gets the admin module via _with_finance_admin
-    assert "intake-dashboard" in modules
-    assert "tasks" in modules
+    # admin user also gets the admin module via _with_finance_admin.
+    for module in GENERAL_MODULES:
+        assert module in modules
     assert "plugins" not in modules
     assert route == "/intake/dashboard"
+
+
+@pytest.mark.asyncio
+async def test_legacy_module_config_keeps_general_workspace(
+    db_session, test_tenant, test_user
+):
+    db_session.add(
+        TenantSettings(
+            tenant_id=test_tenant.id,
+            custom_config={"enabled_modules": ["matters", "chat", "calendar"]},
+        )
+    )
+    await db_session.commit()
+
+    modules, route = await resolve_enabled_modules(
+        db_session, test_tenant.id, user=test_user
+    )
+
+    for module in GENERAL_MODULES:
+        assert module in modules
+    assert route == "/matters"
 
 
 @pytest.mark.asyncio

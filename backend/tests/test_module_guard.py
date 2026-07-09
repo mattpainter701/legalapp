@@ -42,8 +42,14 @@ async def intake_client(db_session, test_tenant, test_user):
 
 
 @pytest.mark.asyncio
-async def test_intake_only_blocked_from_matters(intake_client):
+async def test_general_plan_allowed_on_matters(intake_client):
     resp = await intake_client.get("/api/matters")
+    assert resp.status_code != 403
+
+
+@pytest.mark.asyncio
+async def test_general_plan_blocked_from_specialized_templates(intake_client):
+    resp = await intake_client.get("/api/templates")
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Module not available on your plan"
 

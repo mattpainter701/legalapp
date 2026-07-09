@@ -1380,6 +1380,16 @@ export const getTemplates = (params = {}) =>
 export const createTemplate = (data) =>
   api.post('/templates', data).then(r => r.data)
 
+export const analyzeTemplateUpload = (formData) =>
+  api.post('/templates/intake/analyze', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
+export const createTemplateFromUpload = (formData) =>
+  api.post('/templates/intake/create', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data)
+
 export const getTemplate = (id) =>
   api.get(`/templates/${id}`).then(r => r.data)
 

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
 import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
+import { canAccessModuleList } from '../moduleAccess'
 import { Briefcase, CalendarDays, CheckSquare, Menu, MessageSquare, Shield } from 'lucide-react'
 
 const AppShellContext = createContext(null)
@@ -30,7 +31,7 @@ export default function AppShell({ children, title }) {
   const [activeConvId, setActiveConvId] = useState(null)
   const enabledModules = Array.isArray(user?.enabled_modules) ? user.enabled_modules : []
   const canSeeModule = useCallback((module) => (
-    enabledModules.length === 0 || enabledModules.includes(module)
+    canAccessModuleList(enabledModules, module)
   ), [enabledModules])
   const hasFinanceAccess = user?.role === 'admin' || user?.role === 'accountant'
 
@@ -202,7 +203,8 @@ export default function AppShell({ children, title }) {
 
           <nav className="md:hidden min-h-[4rem] pb-[env(safe-area-inset-bottom)] bg-brand-surface border-t border-brand-line grid grid-cols-4 flex-shrink-0">
             {MOBILE_NAV_ITEMS.filter(({ path }) => {
-              if (path === '/matters' || path === '/tasks') return canSeeModule('matters')
+              if (path === '/matters') return canSeeModule('matters')
+              if (path === '/tasks') return canSeeModule('tasks')
               if (path === '/chat') return canSeeModule('chat')
               if (path === '/calendar') return canSeeModule('calendar')
               return true

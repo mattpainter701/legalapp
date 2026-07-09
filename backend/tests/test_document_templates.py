@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.routers import document_templates
+from app.services.template_intake import analyze_template_upload
 
 
 def test_render_template_preserves_unknown_variables():
@@ -22,6 +23,56 @@ def test_extract_template_variables_preserves_first_seen_order():
     )
 
     assert variables == ["client_name", "case_number", "attorney_email"]
+
+
+def test_upload_analysis_detects_fields_and_letterhead_from_text():
+    sample = b"""Painter Legal PLLC
+123 Main Street
+Fargo, ND 58102
+(701) 555-0100
+
+July 8, 2026
+
+Dear Ada Lovelace,
+
+Re: Estate Administration
+
+Case No. PB-2026-10
+
+Fee: $2,500.00
+"""
+
+    analysis = analyze_template_upload(
+        file_bytes=sample,
+        filename="fee-agreement.txt",
+        content_type="text/plain",
+    )
+
+    field_names = {
+        field["name"] for field in analysis.variable_schema["fields"]
+    }
+    assert "client_name" in field_names
+    assert "matter_name" in field_names
+    assert "case_number" in field_names
+    assert "fee_amount" in field_names
+    assert analysis.branding_profile["letterhead_detected"] is True
+    assert "{{client_name}}" in analysis.body
+
+
+def test_extract_schema_variables_when_body_has_no_placeholders():
+    template = SimpleNamespace(
+        variable_schema={
+            "fields": [
+                {"name": "client_name"},
+                {"name": "case_number"},
+                {"name": "client_name"},
+            ]
+        }
+    )
+
+    variables = document_templates.extract_schema_variables(template)
+
+    assert variables == ["client_name", "case_number"]
 
 
 @pytest.mark.asyncio

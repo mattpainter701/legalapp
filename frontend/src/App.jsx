@@ -46,6 +46,7 @@ import ClientPortalAcceptPage from './pages/ClientPortalAcceptPage'
 import ClientPortalMatterPage from './pages/ClientPortalMatterPage'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { getMe } from './api'
+import { canAccessModuleList } from './moduleAccess'
 
 // ---------------------------------------------------------------------------
 // Auth Context
@@ -105,10 +106,7 @@ export function useAuth() {
 // ---------------------------------------------------------------------------
 
 function canAccessModule(user, module) {
-  if (!module) return true
-  const enabled = user?.enabled_modules
-  if (!Array.isArray(enabled) || enabled.length === 0) return true
-  return enabled.includes(module)
+  return canAccessModuleList(user?.enabled_modules, module)
 }
 
 function hasFinanceAccess(user) {

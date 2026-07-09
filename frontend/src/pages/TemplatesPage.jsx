@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   getTemplates,
+  analyzeTemplateUpload,
   createTemplate,
+  createTemplateFromUpload,
   updateTemplate,
   deleteTemplate,
   renderTemplate,
@@ -27,6 +29,7 @@ import {
   Search,
   Wand2,
   FileCheck2,
+  Upload,
 } from 'lucide-react'
 
 const CATEGORY_COLORS = {
@@ -210,6 +213,197 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
         </button>
       </div>
     </form>
+  )
+}
+
+function UploadTemplateForm({ onCreated, onCancel }) {
+  const [file, setFile] = useState(null)
+  const [title, setTitle] = useState('')
+  const [category, setCategory] = useState('other')
+  const [analysis, setAnalysis] = useState(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const buildFormData = ({ includeCategory = false } = {}) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (title.trim()) form.append('title', title.trim())
+    if (includeCategory) form.append('category', category)
+    return form
+  }
+
+  const handleAnalyze = async () => {
+    if (!file) {
+      setError('Choose a DOCX, PDF, or TXT sample first.')
+      return
+    }
+    setAnalyzing(true)
+    setError(null)
+    try {
+      const form = buildFormData()
+      const result = await analyzeTemplateUpload(form)
+      setAnalysis(result)
+      if (!title.trim()) setTitle(result.title || '')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not analyze that sample.'))
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!file) return
+    setSaving(true)
+    setError(null)
+    try {
+      await createTemplateFromUpload(buildFormData({ includeCategory: true }))
+      onCreated()
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not create template from upload.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fields = analysis?.suggested_variable_schema?.fields || []
+  const branding = analysis?.detected_branding_profile || {}
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
+        <div>
+          <label className="block text-sm font-medium text-brand-ink mb-1">
+            Sample document
+          </label>
+          <input
+            type="file"
+            accept=".docx,.pdf,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] || null)
+              setAnalysis(null)
+            }}
+            className="block w-full text-sm text-brand-ink file:mr-3 file:px-3 file:py-2 file:rounded file:border file:border-brand-line file:bg-brand-bg file:text-brand-ink file:text-xs file:font-semibold"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-brand-ink mb-1">
+            Category
+          </label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
+          >
+            {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-brand-ink mb-1">
+          Template title
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
+          placeholder="Auto-filled from file name if blank"
+        />
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <button
+          type="button"
+          onClick={handleAnalyze}
+          disabled={analyzing || !file}
+          className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-bg disabled:opacity-50"
+        >
+          <Wand2 size={16} />
+          {analyzing ? 'Analyzing...' : 'Analyze sample'}
+        </button>
+        <button
+          type="button"
+          onClick={handleCreate}
+          disabled={saving || !file}
+          className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
+        >
+          <Upload size={16} />
+          {saving ? 'Creating...' : 'Create draft template'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink border border-brand-line rounded"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {analysis && (
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-4 pt-2">
+          <div className="border border-brand-line rounded bg-brand-bg p-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <p className="text-sm font-semibold text-brand-ink">{analysis.title}</p>
+                <p className="text-xs text-brand-muted uppercase">{analysis.format}</p>
+              </div>
+              <span className="text-xs text-brand-muted">{fields.length} field{fields.length === 1 ? '' : 's'}</span>
+            </div>
+            <pre className="whitespace-pre-wrap text-xs text-brand-ink font-mono max-h-72 overflow-y-auto">
+              {analysis.body_preview || analysis.extracted_text || 'No preview text extracted.'}
+            </pre>
+          </div>
+
+          <div className="space-y-3">
+            <div className="border border-brand-line rounded bg-brand-bg p-4">
+              <p className="text-sm font-semibold text-brand-ink mb-2">Detected fields</p>
+              {fields.length > 0 ? (
+                <div className="space-y-2">
+                  {fields.slice(0, 8).map((field) => (
+                    <div key={field.name} className="text-xs">
+                      <p className="font-mono text-brand-ink">{'{{'}{field.name}{'}}'}</p>
+                      <p className="text-brand-muted truncate">{field.example || field.label}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-brand-muted">No fields detected yet.</p>
+              )}
+            </div>
+
+            <div className="border border-brand-line rounded bg-brand-bg p-4">
+              <p className="text-sm font-semibold text-brand-ink mb-2">Letterhead</p>
+              <p className="text-xs text-brand-muted whitespace-pre-wrap">
+                {branding.letterhead_detected
+                  ? branding.header_text || 'Letterhead-like header detected.'
+                  : 'No letterhead detected.'}
+              </p>
+            </div>
+
+            {analysis.warnings?.length > 0 && (
+              <div className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4">
+                <p className="text-sm font-semibold text-brand-ink mb-2">Review notes</p>
+                <ul className="space-y-1">
+                  {analysis.warnings.map((warning) => (
+                    <li key={warning} className="text-xs text-brand-muted">{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -581,6 +775,7 @@ export default function TemplatesPage() {
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('templates')
   const [showCreate, setShowCreate] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
   const [editTemplate, setEditTemplate] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [renderTarget, setRenderTarget] = useState(null)
@@ -621,6 +816,11 @@ export default function TemplatesPage() {
   const handleCreate = async (data) => {
     await createTemplate(data)
     setShowCreate(false)
+    await load()
+  }
+
+  const handleUploadedTemplate = async () => {
+    setShowUpload(false)
     await load()
   }
 
@@ -844,13 +1044,22 @@ export default function TemplatesPage() {
             Build templates, generate matter-ready documents, and prepare them for approvals and e-signature.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded"
-        >
-          <Plus size={18} />
-          New Template
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2"
+          >
+            <Upload size={18} />
+            Upload Sample
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded"
+          >
+            <Plus size={18} />
+            New Template
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
@@ -941,6 +1150,15 @@ export default function TemplatesPage() {
           <TemplateForm
             onSubmit={handleCreate}
             onCancel={() => setShowCreate(false)}
+          />
+        </Modal>
+      )}
+
+      {showUpload && (
+        <Modal title="Create Template From Sample" onClose={() => setShowUpload(false)}>
+          <UploadTemplateForm
+            onCreated={handleUploadedTemplate}
+            onCancel={() => setShowUpload(false)}
           />
         </Modal>
       )}

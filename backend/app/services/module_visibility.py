@@ -37,6 +37,16 @@ FULL_PLATFORM_MODULES = tuple(MODULE_ROUTES.keys())
 KNOWN_MODULES = set(FULL_PLATFORM_MODULES) | {FULL_PLATFORM_MODULE}
 PURCHASED_STATUSES = {"purchased", "included", "trial"}
 BASIC_PORTAL_MODULES = ["plugins"]
+GENERAL_MODULES = [
+    "matters",
+    "chat",
+    "calendar",
+    "tasks",
+    "communications",
+    "intake",
+    "intake-dashboard",
+    "time-tracking",
+]
 
 
 def _with_finance_admin(modules: list[str], user=None) -> list[str]:
@@ -62,10 +72,12 @@ def _expand_modules(modules: list[str]) -> list[str]:
             normalized.append(module)
     if FULL_PLATFORM_MODULE in normalized:
         return list(FULL_PLATFORM_MODULES)
-    if "matters" in normalized and "tasks" not in normalized:
-        # Legacy module lists predate the standalone tasks module; matters
-        # tenants always had the tasks page, so keep it visible.
-        normalized.append("tasks")
+    # These are the core practice workspace modules. Older tenant/module
+    # allowlists predate several of these ids, so keep the general workspace
+    # visible instead of letting stale config amputate daily workflows.
+    for module in GENERAL_MODULES:
+        if module not in normalized:
+            normalized.append(module)
     if "plugins" not in normalized:
         normalized.append("plugins")
     return sorted(

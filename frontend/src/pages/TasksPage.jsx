@@ -20,6 +20,7 @@ import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import { useAuth } from '../App'
 import { AlertBanner, EmptyState, Spinner } from '../components/ui'
+import { canAccessModuleList } from '../moduleAccess'
 
 const PRIORITY_COLORS = {
   urgent: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
@@ -1043,10 +1044,7 @@ export default function TasksPage() {
   const [reassignTask, setReassignTask] = useState(null)
   const [closeTask, setCloseTask] = useState(null)
 
-  const canOpenMatters =
-    !Array.isArray(user?.enabled_modules) ||
-    user.enabled_modules.length === 0 ||
-    user.enabled_modules.includes('matters')
+  const canOpenMatters = canAccessModuleList(user?.enabled_modules, 'matters')
 
   const loadTasks = useCallback(async () => {
     setLoading(true)

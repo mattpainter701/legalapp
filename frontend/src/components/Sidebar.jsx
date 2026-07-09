@@ -6,6 +6,7 @@ import {
   Mail, Shield, Server, Rocket, PhoneCall, Lock,
 } from 'lucide-react'
 import UpgradeModal from './UpgradeModal'
+import { canAccessModuleList } from '../moduleAccess'
 
 const NAV_GROUPS = [
   {
@@ -18,6 +19,7 @@ const NAV_GROUPS = [
     label: 'Workspace',
     items: [
       { path: '/calendar',       label: 'Calendar',       icon: CalendarDays, module: 'calendar' },
+      { path: '/time-tracking',  label: 'Time Tracking',  icon: Clock, module: 'time-tracking' },
       { path: '/tasks',          label: 'Tasks',          icon: CheckSquare, module: 'tasks' },
       { path: '/communications', label: 'Communications', icon: Mail, module: 'communications' },
       { path: '/contacts',       label: 'Contacts',       icon: Users, module: 'contacts' },
@@ -29,7 +31,6 @@ const NAV_GROUPS = [
   {
     label: 'Accounting',
     items: [
-      { path: '/time-tracking', label: 'Time Tracking',    icon: Clock, module: 'time-tracking' },
       { path: '/invoices',      label: 'Invoices',         icon: Receipt, module: 'invoices' },
       { path: '/trust',         label: 'Trust Accounting', icon: Landmark, module: 'trust' },
       { path: '/reports',       label: 'Reports',          icon: BarChart2, module: 'reports' },
@@ -80,11 +81,7 @@ export default function Sidebar({
     const enabled = user?.enabled_modules
     const items = group.items.map((item) => {
       if (item.adminOnly && user?.role !== 'admin') return null
-      const moduleOk =
-        !item.module ||
-        !Array.isArray(enabled) ||
-        enabled.length === 0 ||
-        enabled.includes(item.module)
+      const moduleOk = canAccessModuleList(enabled, item.module)
       if (moduleOk) return item
       // On a limited plan, show disabled modules as locked upsell teasers
       // instead of hiding them. On full plans, hide as before.

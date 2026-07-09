@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.services.module_visibility import FULL_PLATFORM_MODULES
+from app.services.module_visibility import FULL_PLATFORM_MODULES, GENERAL_MODULES
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ PLANS: dict[str, Plan] = {
     "intake-only": Plan(
         id="intake-only",
         label="Call Intake",
-        modules=["intake-dashboard", "tasks"],
+        modules=list(GENERAL_MODULES),
         default_module="intake-dashboard",
         billing_tier="intake_trial",
         public_signup=True,

@@ -11,6 +11,7 @@ from app.database import get_db
 from app.main import app
 from app.models.tenant import TenantSettings
 from app.models.user import User
+from app.services.module_visibility import GENERAL_MODULES
 
 
 settings = get_settings()
@@ -86,10 +87,9 @@ async def test_intake_only_tenant_gets_intake_widget_only(db_session, test_tenan
     app.dependency_overrides.clear()
     assert response.status_code == 200
     body = response.json()
-    # Standalone Call Intake plan: no plugins/marketplace for a non-admin user;
-    # upsell is handled by locked-nav teasers instead. Tasks ship with intake so
-    # receptionists and assignees can track lead follow-up.
-    assert body["enabled_modules"] == ["tasks", "intake-dashboard"]
+    # General workspace modules are always available; specialized add-ons and
+    # admin surfaces remain gated.
+    assert body["enabled_modules"] == GENERAL_MODULES
     assert body["default_route"] == "/intake/dashboard"
     assert body["plan"] == "intake-only"
     assert body["upsell_target"] == "full-platform"

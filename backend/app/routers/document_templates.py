@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -37,13 +37,56 @@ from app.schemas.document_template import (
     DocumentTemplateResponse,
     DocumentTemplateSmartFillRequest,
     DocumentTemplateSmartFillResponse,
+    DocumentTemplateUploadAnalysisResponse,
     DocumentTemplateUpdate,
     DocumentTemplateVariableSuggestion,
 )
+from app.services.template_intake import analyze_template_upload
 
 router = APIRouter(prefix="/api/templates", tags=["document-templates"])
 settings = get_settings()
 VARIABLE_PATTERN = re.compile(r"\{\{(.+?)\}\}")
+_ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS = (".docx", ".pdf", ".txt")
+_ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+}
+
+
+def _clean_optional_form_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _safe_upload_filename(filename: str | None) -> str:
+    return os.path.basename(filename or "uploaded-template")
+
+
+def _is_allowed_template_sample(filename: str | None, content_type: str | None) -> bool:
+    fn_lower = (filename or "").lower()
+    if fn_lower.endswith(_ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS):
+        return True
+    return bool(content_type) and content_type.lower() in _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES
+
+
+async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:
+    filename = _safe_upload_filename(file.filename)
+    if not _is_allowed_template_sample(filename, file.content_type):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: DOCX, PDF, TXT.",
+        )
+    file_bytes = await file.read()
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
+        )
+    return file_bytes, filename
 
 
 def render_template(template_body: str, variables: dict[str, str]) -> str:
@@ -61,6 +104,26 @@ def extract_template_variables(template_body: str) -> list[str]:
     seen: set[str] = set()
     for match in VARIABLE_PATTERN.finditer(template_body):
         variable = match.group(1).strip()
+        if variable and variable not in seen:
+            variables.append(variable)
+            seen.add(variable)
+    return variables
+
+
+def extract_schema_variables(template: DocumentTemplate) -> list[str]:
+    schema = template.variable_schema or {}
+    fields = schema.get("fields") if isinstance(schema, dict) else None
+    variables: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(fields, list):
+        return variables
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        variable = field.get("name") or field.get("variable") or field.get("key")
+        if not variable:
+            continue
+        variable = str(variable).strip()
         if variable and variable not in seen:
             variables.append(variable)
             seen.add(variable)
@@ -289,7 +352,11 @@ async def build_variable_suggestions(
     db: AsyncSession,
 ) -> tuple[str | None, list[DocumentTemplateVariableSuggestion]]:
     matter = await _load_matter_context(db=db, tenant_id=tenant_id, matter_id=matter_id)
-    variables = requested_variables or extract_template_variables(template.body)
+    variables = (
+        requested_variables
+        or extract_template_variables(template.body)
+        or extract_schema_variables(template)
+    )
     candidates = _collect_smart_fill_candidates(
         matter=matter, current_user=current_user
     )
@@ -360,6 +427,81 @@ async def create_template(
     template = DocumentTemplate(
         tenant_id=uuid.UUID(tenant_id),
         **payload.model_dump(exclude_none=True),
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return DocumentTemplateResponse.model_validate(template)
+
+
+@router.post(
+    "/intake/analyze",
+    response_model=DocumentTemplateUploadAnalysisResponse,
+)
+async def analyze_template_sample(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await set_tenant_context(db, str(current_user.tenant_id))
+    file_bytes, filename = await _read_template_sample(file)
+    analysis = analyze_template_upload(
+        file_bytes=file_bytes,
+        filename=filename,
+        content_type=file.content_type,
+        title=_clean_optional_form_value(title),
+    )
+    return DocumentTemplateUploadAnalysisResponse(**analysis.as_dict())
+
+
+@router.post(
+    "/intake/create",
+    response_model=DocumentTemplateResponse,
+    status_code=201,
+)
+async def create_template_from_sample(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    category: str = Form("other"),
+    module: str | None = Form(None),
+    stage: str | None = Form(None),
+    jurisdiction: str | None = Form(None),
+    kind: str | None = Form(None),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    if category not in CATEGORIES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
+        )
+
+    file_bytes, filename = await _read_template_sample(file)
+    analysis = analyze_template_upload(
+        file_bytes=file_bytes,
+        filename=filename,
+        content_type=file.content_type,
+        title=_clean_optional_form_value(title),
+    )
+    template = DocumentTemplate(
+        tenant_id=uuid.UUID(tenant_id),
+        title=analysis.title,
+        body=analysis.body,
+        category=category,
+        description=f"Draft created from uploaded sample: {filename}",
+        status="draft",
+        format=analysis.format,
+        module=_clean_optional_form_value(module),
+        stage=_clean_optional_form_value(stage),
+        jurisdiction=_clean_optional_form_value(jurisdiction),
+        kind=_clean_optional_form_value(kind),
+        variable_schema=analysis.variable_schema,
+        branding_profile=analysis.branding_profile,
+        is_active=False,
     )
     db.add(template)
     await db.commit()
