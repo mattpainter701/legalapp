@@ -81,46 +81,26 @@ export default function DraftTabStrip({
   }), [drafts])
 
   const activeDraft = sorted.find((draft) => draft.draft_id === activeDraftId) || sorted[0] || null
-  const inactiveDrafts = sorted.filter((draft) => draft.draft_id !== activeDraft?.draft_id)
   const activeAge = ageParts(activeDraft?.updated_at || activeDraft?.created_at)
   const activeStatus = statusMeta(activeDraft)
   const ActiveStatusIcon = activeStatus.icon
+  const showOpenCalls = sorted.length > 1
 
   return (
-    <div className="rounded-2xl border border-brand-line bg-brand-bg-soft/40 p-3">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-muted">
-              Active call
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 rounded-xl border border-brand-line bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {activeDraft && (
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${activeStatus.className}`}>
+              <ActiveStatusIcon size={11} className={activeStatus.iconClass} />
+              {activeStatus.label}
             </span>
-            {activeDraft && (
-              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${activeStatus.className}`}>
-                <ActiveStatusIcon size={11} className={activeStatus.iconClass} />
-                {activeStatus.label}
-              </span>
-            )}
-          </div>
-
-          <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-            <button
-              type="button"
-              onClick={() => activeDraft?.draft_id && onSwitch(activeDraft.draft_id)}
-              disabled={disabled || !activeDraft}
-              className="max-w-full truncate text-left font-serif text-lg font-bold text-brand-ink disabled:cursor-default"
-            >
-              {activeDraft ? formatLabel(activeDraft) : 'No call started'}
-            </button>
-            {activeDraft?.phone && (
-              <span className="font-mono text-xs text-brand-muted">{activeDraft.phone}</span>
-            )}
-          </div>
-
-          <p className={`mt-1 text-xs ${activeAge.stale ? 'text-brand-amber' : 'text-brand-muted'}`}>
+          )}
+          <span className={`truncate text-xs ${activeAge.stale ? 'text-brand-amber' : 'text-brand-muted'}`}>
             {activeDraft
-              ? `${activeAge.stale ? 'Recovered draft last edited' : 'Last edited'} ${activeAge.label}`
+              ? `${activeAge.stale ? 'Recovered call edited' : 'Saved'} ${activeAge.label}`
               : 'Start a new call to capture intake notes.'}
-          </p>
+          </span>
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -129,7 +109,7 @@ export default function DraftTabStrip({
               type="button"
               onClick={() => onClose?.(activeDraft.draft_id)}
               disabled={disabled}
-              className="inline-flex items-center gap-1 rounded-lg border border-brand-line bg-white px-3 py-2 text-xs font-bold text-brand-muted hover:border-brand-rose/40 hover:text-brand-rose disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg border border-brand-line bg-white px-3 py-1.5 text-xs font-bold text-brand-muted hover:border-brand-rose/40 hover:text-brand-rose disabled:opacity-50"
             >
               <X size={13} />
               Discard
@@ -140,7 +120,7 @@ export default function DraftTabStrip({
             onClick={onNew}
             disabled={disabled}
             title="Alt+Shift+N"
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3 py-2 text-xs font-bold text-white hover:bg-brand-ink-2 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-ink px-3 py-1.5 text-xs font-bold text-white hover:bg-brand-ink-2 disabled:opacity-50"
           >
             <Plus size={14} />
             New call
@@ -148,60 +128,57 @@ export default function DraftTabStrip({
         </div>
       </div>
 
-      {inactiveDrafts.length > 0 && (
-        <div className="mt-3 border-t border-brand-line pt-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-muted">
-              Recent open calls
-            </span>
-            <span className="text-[10px] text-brand-muted">{inactiveDrafts.length} waiting</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {inactiveDrafts.slice(0, 6).map((draft, index) => {
-              const meta = statusMeta(draft)
-              const age = ageParts(draft.updated_at || draft.created_at)
-              const StatusIcon = meta.icon
-              return (
-                <div
-                  key={draft.draft_id || index}
-                  className="group inline-flex max-w-full items-center gap-2 rounded-lg border border-brand-line bg-white px-2.5 py-2 text-xs shadow-sm"
+      {showOpenCalls && (
+        <div className="flex flex-wrap gap-1.5">
+          {sorted.slice(0, 8).map((draft, index) => {
+            const meta = statusMeta(draft)
+            const age = ageParts(draft.updated_at || draft.created_at)
+            const StatusIcon = meta.icon
+            const selected = draft.draft_id === activeDraft?.draft_id
+            return (
+              <div
+                key={draft.draft_id || index}
+                className={`group inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs ${
+                  selected ? 'border-brand-ink bg-brand-ink text-white' : 'border-brand-line bg-white text-brand-ink'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSwitch(draft.draft_id)}
+                  disabled={disabled}
+                  className="min-w-0 text-left"
                 >
-                  <button
-                    type="button"
-                    onClick={() => onSwitch(draft.draft_id)}
-                    disabled={disabled}
-                    className="min-w-0 text-left"
-                  >
-                    <span className="block max-w-[160px] truncate font-bold text-brand-ink">
-                      {formatLabel(draft)}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-1 text-[10px] text-brand-muted">
-                      <StatusIcon size={10} className={meta.iconClass} />
-                      {meta.label} / {age.label}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onClose?.(draft.draft_id)
-                    }}
-                    disabled={disabled}
-                    title="Close draft"
-                    aria-label={`Close ${formatLabel(draft)} draft`}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-brand-muted opacity-70 hover:bg-brand-rose/10 hover:text-brand-rose group-hover:opacity-100 disabled:opacity-40"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )
-            })}
-            {inactiveDrafts.length > 6 && (
-              <span className="inline-flex items-center rounded-lg border border-brand-line bg-white px-3 py-2 text-xs font-bold text-brand-muted">
-                +{inactiveDrafts.length - 6} more
-              </span>
-            )}
-          </div>
+                  <span className={`block max-w-[150px] truncate font-bold ${selected ? 'text-white' : 'text-brand-ink'}`}>
+                    {formatLabel(draft)}
+                  </span>
+                  <span className={`mt-0.5 flex items-center gap-1 text-[10px] ${selected ? 'text-white/70' : 'text-brand-muted'}`}>
+                    <StatusIcon size={10} className={selected ? 'text-white/70' : meta.iconClass} />
+                    {meta.label} / {age.label}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onClose?.(draft.draft_id)
+                  }}
+                  disabled={disabled}
+                  title="Close draft"
+                  aria-label={`Close ${formatLabel(draft)} draft`}
+                  className={`inline-flex h-6 w-6 items-center justify-center rounded-md opacity-70 hover:bg-brand-rose/10 hover:text-brand-rose group-hover:opacity-100 disabled:opacity-40 ${
+                    selected ? 'text-white/70' : 'text-brand-muted'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          })}
+          {sorted.length > 8 && (
+            <span className="inline-flex items-center rounded-lg border border-brand-line bg-white px-2.5 py-1.5 text-xs font-bold text-brand-muted">
+              +{sorted.length - 8} more
+            </span>
+          )}
         </div>
       )}
     </div>
