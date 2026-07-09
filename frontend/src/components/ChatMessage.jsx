@@ -54,11 +54,13 @@ function SourcesLedger({ sources }) {
   if (!sources || sources.length === 0) return null
 
   const cols = 'grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
+  const publicAuthorityCount = sources.filter((src) => src?.source_type === 'public_authority').length
+  const heading = publicAuthorityCount > 0 ? 'Authorities Referenced' : 'Sources & References'
 
   return (
     <div className="mt-10 pt-6 border-t-[3px] border-brand-ink">
       <h4 className="font-mono text-xs font-bold uppercase tracking-widest text-brand-ink mb-4 flex items-center gap-2">
-        <Book className="w-4 h-4" /> Sources & References
+        <Book className="w-4 h-4" /> {heading}
       </h4>
 
       <div className="w-full overflow-x-auto text-left text-sm border border-brand-line bg-brand-bg">

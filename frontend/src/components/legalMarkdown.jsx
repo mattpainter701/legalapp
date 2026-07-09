@@ -1,5 +1,26 @@
 import React from 'react'
 
+export const REVIEW_TAGS = [
+  {
+    label: 'settled',
+    text: 'Well-established',
+    classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+    swatch: 'bg-brand-green',
+  },
+  {
+    label: 'verify',
+    text: 'Confirm before relying',
+    classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20',
+    swatch: 'bg-brand-amber',
+  },
+  {
+    label: 'model',
+    text: 'General reasoning',
+    classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20',
+    swatch: 'bg-brand-gold',
+  },
+]
+
 // Citation tag definitions: pattern → { label, classes }
 const CITATION_PATTERNS = [
   {
@@ -64,6 +85,36 @@ const CITATION_PATTERNS = [
     prefix: 'VERIFY: ',
   },
 ]
+
+export function ReviewTagLegend({ compact = false }) {
+  if (compact) {
+    return (
+      <div className="mx-auto mb-3 flex w-fit max-w-full flex-wrap items-center justify-center gap-x-4 gap-y-2 border border-brand-line bg-brand-surface/95 px-3 py-2 text-[11px] shadow-sm">
+        <span className="font-mono uppercase tracking-widest text-brand-muted">Tag legend:</span>
+        {REVIEW_TAGS.map(({ label, text, swatch }) => (
+          <span key={label} className="inline-flex items-center gap-1.5 whitespace-nowrap font-sans text-brand-ink">
+            <span className={`h-2 w-2 ${swatch}`} aria-hidden="true" />
+            <span className="font-bold uppercase tracking-wide">{label}</span>
+            <span className="text-brand-muted">({text})</span>
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-2">
+      {REVIEW_TAGS.map(({ label, text, classes }) => (
+        <div key={label} className="flex items-center gap-2 px-3 py-1.5 bg-brand-surface border border-brand-line">
+          <span className={`text-[9px] font-bold uppercase tracking-widest font-mono px-1.5 py-0.5 border ${classes}`}>
+            {label}
+          </span>
+          <span className="text-[12px] font-sans text-brand-ink-2">{text}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export function transformCitations(text) {
   if (!text) return []

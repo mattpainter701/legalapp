@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { Scale } from 'lucide-react'
 import ChatMessage from './ChatMessage'
 import { MessageSkeleton } from './LoadingSkeleton'
+import { ReviewTagLegend } from './legalMarkdown'
 
 function EmptyState() {
   return (
@@ -44,20 +45,7 @@ function EmptyState() {
         <p className="text-[11px] font-bold text-brand-muted uppercase tracking-widest mb-3 font-mono">
           How answers are tagged
         </p>
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {[
-            { label: 'settled', text: 'Black-letter or well-established legal rule', classes: 'bg-brand-green/10 text-brand-green border-brand-green/20' },
-            { label: 'verify', text: 'Confirm before relying or filing', classes: 'bg-brand-amber/10 text-brand-amber border-brand-amber/20' },
-            { label: 'model knowledge', text: 'General reasoning, not drawn from retrieved source materials', classes: 'bg-brand-gold/10 text-brand-gold border-brand-gold/20' },
-          ].map(({ label, text, classes }) => (
-            <div key={label} className="flex items-center gap-2 px-3 py-1.5 bg-brand-surface border border-brand-line">
-              <span className={`text-[9px] font-bold uppercase tracking-widest font-mono px-1.5 py-0.5 border ${classes}`}>
-                {label}
-              </span>
-              <span className="text-[12px] font-sans text-brand-ink-2">{text}</span>
-            </div>
-          ))}
-        </div>
+        <ReviewTagLegend />
       </div>
     </div>
   )
@@ -87,6 +75,7 @@ export default function Messages({ messages, isLoading, isSending, onMessageScro
             </div>
           ) : (
             <div className="max-w-4xl mx-auto">
+              <ReviewTagLegend compact />
               {messages.map((msg, idx) => (
                 <div
                   key={msg.id}
