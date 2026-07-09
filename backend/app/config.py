@@ -130,6 +130,7 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRICE_ID: str = ""  # Stripe Price ID for flat subscription
+    STRIPE_MCP_METER_EVENT_NAME: str = ""  # Stripe Billing Meter event name for MCP product-key calls
     STRIPE_SUCCESS_URL: str = ""  # e.g. https://yourdomain.com/billing?success=1
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 

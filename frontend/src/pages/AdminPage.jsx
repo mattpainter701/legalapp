@@ -20,6 +20,7 @@ import {
 import { format } from 'date-fns'
 import PromptAdminPage from './PromptAdminPage'
 import CloudSearchAdmin from './CloudSearchAdmin'
+import MCPPage from './MCPPage'
 import RolesTab from './admin/RolesTab'
 import SmbAdminPage from './SmbAdminPage'
 import LicensingPanel from '../components/LicensingPanel'
@@ -58,6 +59,7 @@ const ADMIN_TABS = [
   { id: 'licensing', label: 'Licensing' },
   { id: 'billing', label: 'Subscription' },
   { id: 'usage', label: 'Usage' },
+  { id: 'mcp', label: 'MCP Servers' },
   { id: 'tenant', label: 'Tenant' },
   { id: 'prompts', label: 'Prompts' },
   { id: 'cloud-search', label: 'Cloud Search' },
@@ -1300,6 +1302,7 @@ export default function AdminPage() {
           {activeTab === 'licensing' && <LicensingPanel />}
           {activeTab === 'billing' && <BillingPage embedded />}
           {activeTab === 'usage' && <UsageTab />}
+          {activeTab === 'mcp' && <MCPPage embedded />}
           {activeTab === 'tenant' && <TenantTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'prompts' && <PromptAdminPage />}

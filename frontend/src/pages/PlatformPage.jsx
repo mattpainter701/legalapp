@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 
 function StatCard({ label, value, sub, icon: Icon }) {
@@ -185,6 +185,195 @@ function PlatformIntegrationsTab({ platformKey, onAuthError }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+function PlatformMcpTab({ platformKey, onAuthError }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const loadMcp = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setData(await getPlatformMcpOverview(platformKey))
+    } catch (e) {
+      if (e?.response?.status === 403) {
+        onAuthError?.()
+      } else {
+        setError(e?.response?.data?.detail || 'Failed to load MCP usage.')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [platformKey, onAuthError])
+
+  useEffect(() => { loadMcp() }, [loadMcp])
+
+  const overview = data?.overview || {}
+  const connection = data?.connection || {}
+  const keys = data?.keys || []
+  const tenants = data?.tenants || []
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">MCP product access</p>
+            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Server keys, usage, and billing</h2>
+            <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
+              Track tenant-created MCP keys and MCP-only customers. Calls are metered as separate PAYG MCP usage.
+            </p>
+          </div>
+          <button
+            onClick={loadMcp}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-line text-xs font-bold text-brand-ink hover:bg-brand-bg-soft disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-brand-rose/20 bg-brand-rose/10 text-brand-rose px-4 py-3 text-sm font-sans">
+          {error}
+        </div>
+      )}
+
+      {loading && !data ? (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-4 border-brand-ink border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Active Keys" value={overview.active_keys || 0} sub={`${overview.total_keys || 0} total`} icon={Key} />
+            <StatCard label="Tenants" value={overview.tenants_with_keys || 0} sub="with MCP keys" icon={Users} />
+            <StatCard label="Calls (30d)" value={(overview.calls_30d || 0).toLocaleString()} sub={`${overview.results_30d || 0} results`} icon={Activity} />
+            <StatCard label="Errors (30d)" value={(overview.errors_30d || 0).toLocaleString()} sub="status >= 400" icon={AlertTriangle} />
+          </div>
+
+          <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
+            <h3 className="font-serif font-bold text-brand-ink mb-4">Client connection</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {[
+                ['Server URL', connection.server_url],
+                ['JSON-RPC messages', connection.messages],
+                ['SSE discovery', connection.sse],
+                ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: clmcp_...`],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-brand-muted">{label}</p>
+                  <p className="mt-1 break-all font-mono text-xs text-brand-ink">{value || '-'}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-brand-muted font-sans">
+              Clients should register the SSE URL for discovery or call the messages endpoint directly with the MCP product key header.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+            <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-brand-line">
+                <h3 className="font-serif font-bold text-brand-ink">Active key ledger</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-brand-bg-soft border-b border-brand-line">
+                    <tr className="text-xs text-brand-muted uppercase tracking-wider font-sans">
+                      <th className="text-left px-5 py-3">Tenant</th>
+                      <th className="text-left px-5 py-3">Key</th>
+                      <th className="text-center px-5 py-3">Calls</th>
+                      <th className="text-center px-5 py-3">Limit</th>
+                      <th className="text-left px-5 py-3">Billing</th>
+                      <th className="text-left px-5 py-3">Last used</th>
+                      <th className="text-center px-5 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-brand-line">
+                    {keys.map((key) => (
+                      <tr key={key.id} className="hover:bg-brand-bg transition-colors">
+                        <td className="px-5 py-3">
+                          <p className="text-sm font-medium text-brand-ink font-sans">{key.tenant_name}</p>
+                          <p className="text-xs text-brand-muted">{key.domain || key.tenant_id}</p>
+                        </td>
+                        <td className="px-5 py-3">
+                          <p className="text-sm font-medium text-brand-ink font-sans">{key.name}</p>
+                          <p className="text-xs text-brand-muted font-mono">{key.api_key_masked}</p>
+                        </td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{(key.calls_30d || 0).toLocaleString()}</td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans">{key.monthly_call_limit || 'Unlimited'}</td>
+                        <td className="px-5 py-3">
+                          <TierBadge tier={key.billing?.mode} />
+                          <p className="mt-1 text-[11px] text-brand-muted font-mono">{key.billing?.line_item || 'MCP usage'}</p>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-brand-muted font-sans">
+                          {key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'Never'}
+                        </td>
+                        <td className="px-5 py-3 text-center">
+                          <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${key.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
+                            <span className={`w-2 h-2 rounded-full ${key.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+                            {key.is_active ? 'Active' : 'Revoked'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {keys.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-8 text-center text-sm text-brand-muted font-sans">No MCP product keys yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-brand-line">
+                <h3 className="font-serif font-bold text-brand-ink">Tenant rollup</h3>
+              </div>
+              <div className="divide-y divide-brand-line">
+                {tenants.map((tenant) => (
+                  <div key={tenant.tenant_id} className="px-5 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-brand-ink font-sans truncate">{tenant.tenant_name}</p>
+                        <p className="text-xs text-brand-muted truncate">{tenant.domain || tenant.tenant_id}</p>
+                      </div>
+                      <TierBadge tier={tenant.billing_tier} />
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded bg-brand-bg px-2 py-2">
+                        <p className="text-xs font-bold text-brand-ink">{tenant.active_keys}</p>
+                        <p className="text-[10px] text-brand-muted uppercase">Keys</p>
+                      </div>
+                      <div className="rounded bg-brand-bg px-2 py-2">
+                        <p className="text-xs font-bold text-brand-ink">{tenant.calls_30d}</p>
+                        <p className="text-[10px] text-brand-muted uppercase">Calls</p>
+                      </div>
+                      <div className="rounded bg-brand-bg px-2 py-2">
+                        <p className="text-xs font-bold text-brand-ink">{tenant.errors_30d}</p>
+                        <p className="text-[10px] text-brand-muted uppercase">Errors</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {tenants.length === 0 && <p className="px-5 py-8 text-sm text-brand-muted text-center font-sans">No tenants with MCP keys.</p>}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3 text-xs text-brand-muted font-sans">
+            Backlog: automatically revoke MCP product keys after 180 days without successful use.
+          </div>
+        </>
       )}
     </div>
   )
@@ -2103,6 +2292,7 @@ export default function PlatformPage() {
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { id: 'tenants', label: 'Tenants', icon: Users },
     { id: 'integrations', label: 'Integrations', icon: Zap },
+    { id: 'mcp', label: 'MCP', icon: Key },
     { id: 'ai-routing', label: 'AI Routing', icon: Cpu },
     { id: 'logs', label: 'Logs', icon: FileText },
     { id: 'health', label: 'System', icon: Database },
@@ -2377,6 +2567,16 @@ export default function PlatformPage() {
         )}
 
         {/* ── Logs Tab ── */}
+        {tab === 'mcp' && (
+          <PlatformMcpTab
+            platformKey={platformKey}
+            onAuthError={() => {
+              sessionStorage.removeItem('platform_key')
+              setPlatformKey(null)
+            }}
+          />
+        )}
+
         {tab === 'logs' && <LogsTab platformKey={platformKey} tenants={tenants} />}
 
         {/* ── AI Routing Tab ── */}

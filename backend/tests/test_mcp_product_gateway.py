@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
+from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.routers import mcp
 from app.routers.mcp import ToolCallRequest
 from app.services import mcp_product
@@ -23,6 +25,11 @@ def test_product_key_scope_rejects_unknown_tools():
         mcp_product.normalize_allowed_tools(["search_caselaw", "not_a_tool"])
 
     assert exc.value.status_code == 400
+
+
+def test_product_key_scope_defaults_to_all_tools():
+    assert mcp_product.normalize_allowed_tools(None) == mcp_product.DEFAULT_ALLOWED_TOOLS
+    assert mcp_product.normalize_allowed_tools([]) == mcp_product.DEFAULT_ALLOWED_TOOLS
 
 
 def test_product_key_scope_accepts_expanded_courtlistener_tools():
@@ -143,6 +150,62 @@ async def test_internal_chat_usage_logging_has_internal_auth_type(monkeypatch):
     assert calls[0]["product_key_id"] is None
 
 
+@pytest.mark.asyncio
+async def test_product_key_usage_can_emit_stripe_meter_event(
+    monkeypatch, db_session, test_tenant
+):
+    tenant_id = test_tenant.id
+    test_tenant.stripe_customer_id = "cus_test123"
+    await db_session.commit()
+    calls = []
+
+    class FakeMeterEvent:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(mcp_product.settings, "STRIPE_SECRET_KEY", "sk_test")
+    monkeypatch.setattr(
+        mcp_product.settings,
+        "STRIPE_MCP_METER_EVENT_NAME",
+        "mcp_product_key_calls",
+    )
+    monkeypatch.setattr(
+        mcp_product.stripe,
+        "billing",
+        SimpleNamespace(MeterEvent=FakeMeterEvent),
+        raising=False,
+    )
+    key = MCPProductKey(
+        tenant_id=tenant_id,
+        name="Stripe meter key",
+        key_hash=mcp_product.hash_key("clmcp_stripe_meter"),
+        key_prefix="clmcp_strip",
+        allowed_tools=None,
+    )
+    db_session.add(key)
+    await db_session.flush()
+
+    event = await mcp_product.record_mcp_usage(
+        db=db_session,
+        tenant_id=tenant_id,
+        product_key_id=key.id,
+        auth_type="product_key",
+        transport="messages",
+        tool_name="search_caselaw",
+        status_code=200,
+        result_count=2,
+    )
+
+    saved = (
+        await db_session.execute(select(MCPUsageEvent).where(MCPUsageEvent.id == event.id))
+    ).scalar_one()
+    assert saved.tool_name == "search_caselaw"
+    assert calls[0]["event_name"] == "mcp_product_key_calls"
+    assert calls[0]["payload"] == {"stripe_customer_id": "cus_test123", "value": "1"}
+    assert calls[0]["identifier"] == f"mcp_usage_{event.id}"
+
+
 def test_mcp_messages_accepts_jsonrpc_tools_call_shape():
     body = {
         "jsonrpc": "2.0",
@@ -176,6 +239,7 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
         assert kwargs["tenant_id"] == tenant_id
         assert kwargs["user_id"] == user.id
         assert kwargs["name"] == "Partner API"
+        assert kwargs["allowed_tools"] is None
         return created_key, "clmcp_rawsecret"
 
     monkeypatch.setattr(mcp, "get_current_user", current_user)
@@ -185,7 +249,7 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
         mcp.ProductKeyCreateRequest(
             name="Partner API",
             monthly_call_limit=250,
-            allowed_tools=["search_caselaw"],
+            allowed_tools=[],
         ),
         SimpleNamespace(headers={}),
         object(),

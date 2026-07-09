@@ -996,6 +996,9 @@ export const getPlatformPlans = (key) =>
 export const getPlatformUsage = (key) =>
   platformApi(key).get('/platform/usage').then((r) => r.data)
 
+export const getPlatformMcpOverview = (key) =>
+  platformApi(key).get('/platform/mcp').then((r) => r.data)
+
 export const getPlatformHealth = (key) =>
   platformApi(key).get('/platform/health').then((r) => r.data)
 

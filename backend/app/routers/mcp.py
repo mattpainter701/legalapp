@@ -502,11 +502,23 @@ async def get_api_key_info(
     has_key = bool(tenant and tenant.api_key_hash)
     masked = (tenant.api_key_prefix + "..." + tenant.api_key_hash[-4:]) if has_key else None
 
+    base_url = settings.BACKEND_URL.rstrip("/")
     return {
         "has_api_key": has_key,
         "api_key_masked": masked,
-        "mcp_server_url": f"{settings.BACKEND_URL}/api/mcp",
+        "mcp_server_url": f"{base_url}/api/mcp",
         "tools": await _proxied_tool_names(request),
+        "transports": {
+            "rest": f"{base_url}/api/mcp/tools/call",
+            "messages": f"{base_url}/api/mcp/messages",
+            "sse": f"{base_url}/api/mcp/sse",
+        },
+        "auth_header": "X-MCP-API-Key",
+        "billing": {
+            "mode": "payg",
+            "meter": "mcp_product_key_calls",
+            "line_item": "MCP usage",
+        },
     }
 
 
@@ -525,6 +537,7 @@ async def list_mcp_product_keys(
         for row in summary.get("by_key", [])
         if row.get("product_key_id")
     }
+    base_url = settings.BACKEND_URL.rstrip("/")
     return {
         "keys": [
             {
@@ -543,11 +556,17 @@ async def list_mcp_product_keys(
         ],
         "usage": summary,
         "tools": await _proxied_tool_names(request),
-        "mcp_server_url": f"{settings.BACKEND_URL}/api/mcp",
+        "mcp_server_url": f"{base_url}/api/mcp",
         "transports": {
-            "rest": f"{settings.BACKEND_URL}/api/mcp/tools/call",
-            "messages": f"{settings.BACKEND_URL}/api/mcp/messages",
-            "sse": f"{settings.BACKEND_URL}/api/mcp/sse",
+            "rest": f"{base_url}/api/mcp/tools/call",
+            "messages": f"{base_url}/api/mcp/messages",
+            "sse": f"{base_url}/api/mcp/sse",
+        },
+        "auth_header": "X-MCP-API-Key",
+        "billing": {
+            "mode": "payg",
+            "meter": "mcp_product_key_calls",
+            "line_item": "MCP usage",
         },
     }
 
@@ -569,7 +588,7 @@ async def create_mcp_product_key(
         user_id=user.id,
         name=body.name,
         monthly_call_limit=body.monthly_call_limit,
-        allowed_tools=body.allowed_tools,
+        allowed_tools=body.allowed_tools or None,
     )
     return {
         "id": str(key.id),

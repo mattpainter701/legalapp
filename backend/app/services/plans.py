@@ -28,6 +28,15 @@ PLANS: dict[str, Plan] = {
         public_signup=True,
         upsell_target="full-platform",
     ),
+    "mcp-only": Plan(
+        id="mcp-only",
+        label="MCP Access",
+        modules=["mcp"],
+        default_module="mcp",
+        billing_tier="payg",
+        public_signup=True,
+        upsell_target="full-platform",
+    ),
     "full-platform": Plan(
         id="full-platform",
         label="Full Platform",

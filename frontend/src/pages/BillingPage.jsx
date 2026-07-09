@@ -148,6 +148,41 @@ export default function BillingPage({ embedded = false }) {
           )}
         </div>
 
+        {status?.mcp_usage && (
+          <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-brand-ink font-sans mb-1">
+                  MCP usage
+                </p>
+                <p className="text-sm text-brand-muted font-sans">
+                  Product-key calls are metered separately from subscription seats and model usage.
+                </p>
+              </div>
+              <span className="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                PAYG line
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">30-day calls</p>
+                <p className="mt-1 text-xl font-bold text-brand-ink font-serif">
+                  {(status.mcp_usage.calls_30d || 0).toLocaleString()}
+                </p>
+              </div>
+              <div className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
+                <p className="text-xs uppercase tracking-wider text-brand-muted font-sans">Returned results</p>
+                <p className="mt-1 text-xl font-bold text-brand-ink font-serif">
+                  {(status.mcp_usage.results_30d || 0).toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-brand-muted font-mono">
+              {status.mcp_usage.line_item || 'MCP usage'} / {status.mcp_usage.meter || 'mcp_product_key_calls'}
+            </p>
+          </div>
+        )}
+
         {/* Manage subscription */}
         {status?.stripe_customer_id && (
           <div className="bg-brand-surface rounded-xl border border-brand-line shadow-sm p-6 mb-6">

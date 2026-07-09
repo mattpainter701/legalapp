@@ -20,7 +20,6 @@ import DomesticPortfolioPage from './pages/DomesticPortfolioPage'
 import DomesticDetailPage from './pages/DomesticDetailPage'
 import MediationPortfolioPage from './pages/MediationPortfolioPage'
 import MediationDetailPage from './pages/MediationDetailPage'
-import MCPPage from './pages/MCPPage'
 import PlatformPage from './pages/PlatformPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
@@ -333,7 +332,7 @@ export default function App() {
         />
         <Route
           path="/mcp"
-          element={<ShellRoute title="MCP" adminOnly module="mcp"><MCPPage /></ShellRoute>}
+          element={<ProtectedRoute adminOnly module="mcp"><Navigate to="/admin?tab=mcp" replace /></ProtectedRoute>}
         />
         <Route
           path="/onboarding"

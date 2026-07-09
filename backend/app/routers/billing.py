@@ -1,14 +1,16 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
 from app.services.access_control import require_finance_admin
+from app.models.mcp_product import MCPUsageEvent
 from app.models.tenant import Tenant
 
 settings = get_settings()
@@ -56,11 +58,32 @@ async def billing_status(
             return None
         return val[:8] + "..." + val[-4:]
 
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    mcp_usage = (
+        await db.execute(
+            select(
+                func.count(MCPUsageEvent.id).label("calls"),
+                func.coalesce(func.sum(MCPUsageEvent.result_count), 0).label("results"),
+            ).where(
+                MCPUsageEvent.tenant_id == tenant.id,
+                MCPUsageEvent.product_key_id.is_not(None),
+                MCPUsageEvent.created_at >= since,
+            )
+        )
+    ).one()
+
     return {
         "billing_tier": tenant.billing_tier,
         "stripe_customer_id": _mask(tenant.stripe_customer_id),
         "stripe_subscription_id": _mask(tenant.stripe_subscription_id),
         "flat_seat_count": tenant.flat_seat_count,
+        "mcp_usage": {
+            "mode": "payg",
+            "line_item": "MCP usage",
+            "meter": "mcp_product_key_calls",
+            "calls_30d": int(mcp_usage.calls or 0),
+            "results_30d": int(mcp_usage.results or 0),
+        },
     }
 
 

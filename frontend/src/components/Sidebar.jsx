@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
-  Mail, Shield, Server, Rocket, PhoneCall, Lock,
+  Mail, Shield, Rocket, PhoneCall, Lock,
 } from 'lucide-react'
 import UpgradeModal from './UpgradeModal'
 import { canAccessModuleList } from '../moduleAccess'
@@ -47,7 +47,6 @@ const NAV_GROUPS = [
     financeOnly: true,
     items: [
       { path: '/admin',      label: 'Administration', icon: Shield, module: 'admin' },
-      { path: '/mcp',        label: 'MCP Servers',    icon: Server, module: 'mcp', adminOnly: true },
       { path: '/onboarding', label: 'Onboarding',     icon: Rocket, module: 'onboarding', adminOnly: true },
     ],
   },

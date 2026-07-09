@@ -15,9 +15,19 @@ def test_full_platform_is_not_public():
     assert get_plan("full-platform").public_signup is False
 
 
+def test_mcp_only_plan_shape():
+    plan = get_plan("mcp-only")
+    assert plan.modules == ["mcp"]
+    assert plan.default_module == "mcp"
+    assert plan.public_signup is True
+    assert plan.upsell_target == "full-platform"
+    assert plan.billing_tier == "payg"
+
+
 def test_public_plans_only_returns_signup_enabled():
     ids = {p.id for p in public_plans()}
     assert "intake-only" in ids
+    assert "mcp-only" in ids
     assert "full-platform" not in ids
 
 
@@ -25,6 +35,7 @@ def test_plan_for_config_defaults_to_full_platform():
     assert plan_for_config(None).id == "full-platform"
     assert plan_for_config({}).id == "full-platform"
     assert plan_for_config({"plan": "intake-only"}).id == "intake-only"
+    assert plan_for_config({"plan": "mcp-only"}).id == "mcp-only"
     assert plan_for_config({"plan": "bogus"}).id == "full-platform"
 
 
@@ -55,6 +66,19 @@ async def test_resolve_intake_only_from_plan(db_session, test_tenant, test_user)
         assert module in modules
     assert "plugins" not in modules
     assert route == "/intake/dashboard"
+
+
+@pytest.mark.asyncio
+async def test_resolve_mcp_only_from_plan(db_session, test_tenant, test_user):
+    db_session.add(
+        TenantSettings(tenant_id=test_tenant.id, custom_config={"plan": "mcp-only"})
+    )
+    await db_session.commit()
+    modules, route = await resolve_enabled_modules(
+        db_session, test_tenant.id, user=test_user
+    )
+    assert modules == ["admin", "mcp"]
+    assert route == "/mcp"
 
 
 @pytest.mark.asyncio

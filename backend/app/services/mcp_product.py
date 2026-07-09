@@ -1,16 +1,23 @@
+import asyncio
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import stripe
 from fastapi import HTTPException
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.tenant import Tenant
 from app.services.gateway_privacy import retained_gateway_query_text
+
+settings = get_settings()
+logger = logging.getLogger(__name__)
 
 DEFAULT_ALLOWED_TOOLS = [
     "search_caselaw",
@@ -76,6 +83,46 @@ def current_month_window(now: datetime | None = None) -> tuple[datetime, datetim
     else:
         end = start.replace(month=start.month + 1)
     return start, end
+
+
+async def _emit_stripe_mcp_meter_event(
+    *,
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    event_id: uuid.UUID,
+    value: int,
+) -> None:
+    if (
+        value <= 0
+        or not settings.STRIPE_SECRET_KEY
+        or not settings.STRIPE_MCP_METER_EVENT_NAME
+    ):
+        return
+
+    tenant = (
+        await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if not tenant or not tenant.stripe_customer_id:
+        return
+
+    meter_event = getattr(getattr(stripe, "billing", None), "MeterEvent", None)
+    if meter_event is None:
+        logger.warning("Stripe SDK does not expose billing.MeterEvent; MCP usage was not sent")
+        return
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    try:
+        await asyncio.to_thread(
+            meter_event.create,
+            event_name=settings.STRIPE_MCP_METER_EVENT_NAME,
+            payload={
+                "stripe_customer_id": tenant.stripe_customer_id,
+                "value": str(value),
+            },
+            identifier=f"mcp_usage_{event_id}",
+        )
+    except stripe.StripeError as exc:
+        logger.warning("Stripe MCP meter event failed for tenant %s: %s", tenant_id, exc)
 
 
 async def create_product_key(
@@ -219,7 +266,16 @@ async def record_mcp_usage(
             .where(MCPProductKey.id == product_key_id)
             .values(last_used_at=datetime.now(timezone.utc))
         )
+    await db.flush()
+    stripe_value = 1 if product_key_id and status_code < 400 else 0
     await db.commit()
+    if stripe_value:
+        await _emit_stripe_mcp_meter_event(
+            db=db,
+            tenant_id=tenant_id,
+            event_id=event.id,
+            value=stripe_value,
+        )
     return event
 
 

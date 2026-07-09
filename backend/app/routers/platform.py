@@ -28,8 +28,10 @@ from app.database import get_db
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
+from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
+from app.services.mcp_product import DEFAULT_ALLOWED_TOOLS, mask_key
 from app.services.llm_routing import (
     VALID_LLM_PROVIDERS,
     default_platform_llm_config,
@@ -169,6 +171,17 @@ class PlatformUsage(BaseModel):
     total_users: int
     requests_30d: int
     cost_usd_30d: float
+    period_start: datetime
+    period_end: datetime
+
+
+class PlatformMCPOverview(BaseModel):
+    tenants_with_keys: int
+    active_keys: int
+    total_keys: int
+    calls_30d: int
+    errors_30d: int
+    results_30d: int
     period_start: datetime
     period_end: datetime
 
@@ -563,6 +576,146 @@ async def platform_usage(
         period_start=period_start,
         period_end=period_end,
     )
+
+
+@router.get("/mcp")
+async def platform_mcp_overview(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_platform_key(request)
+
+    period_end = datetime.now(timezone.utc)
+    period_start = period_end - timedelta(days=30)
+
+    key_rows = await db.execute(
+        select(MCPProductKey, Tenant)
+        .join(Tenant, Tenant.id == MCPProductKey.tenant_id)
+        .order_by(MCPProductKey.created_at.desc())
+    )
+    keys = key_rows.all()
+    key_ids = [key.id for key, _tenant in keys]
+
+    usage_by_key: dict[str, dict] = {}
+    if key_ids:
+        usage_rows = await db.execute(
+            select(
+                MCPUsageEvent.product_key_id,
+                func.count(MCPUsageEvent.id).label("calls"),
+                func.coalesce(func.sum(MCPUsageEvent.result_count), 0).label("results"),
+                func.count(MCPUsageEvent.id)
+                .filter(MCPUsageEvent.status_code >= 400)
+                .label("errors"),
+                func.max(MCPUsageEvent.created_at).label("last_call_at"),
+            )
+            .where(
+                MCPUsageEvent.product_key_id.in_(key_ids),
+                MCPUsageEvent.created_at >= period_start,
+            )
+            .group_by(MCPUsageEvent.product_key_id)
+        )
+        usage_by_key = {
+            str(row.product_key_id): {
+                "calls_30d": int(row.calls or 0),
+                "results_30d": int(row.results or 0),
+                "errors_30d": int(row.errors or 0),
+                "last_call_at": row.last_call_at.isoformat()
+                if row.last_call_at
+                else None,
+            }
+            for row in usage_rows.all()
+        }
+
+    tenant_summary: dict[str, dict] = {}
+    key_payload = []
+    for key, tenant in keys:
+        tenant_id = str(tenant.id)
+        usage = usage_by_key.get(str(key.id), {})
+        calls = int(usage.get("calls_30d") or 0)
+        errors = int(usage.get("errors_30d") or 0)
+        results = int(usage.get("results_30d") or 0)
+        tenant_row = tenant_summary.setdefault(
+            tenant_id,
+            {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant.name,
+                "domain": tenant.domain,
+                "billing_tier": tenant.billing_tier,
+                "stripe_customer_id": _mask(tenant.stripe_customer_id),
+                "active_keys": 0,
+                "total_keys": 0,
+                "calls_30d": 0,
+                "errors_30d": 0,
+                "results_30d": 0,
+                "last_used_at": None,
+            },
+        )
+        tenant_row["total_keys"] += 1
+        tenant_row["calls_30d"] += calls
+        tenant_row["errors_30d"] += errors
+        tenant_row["results_30d"] += results
+        if key.is_active and key.revoked_at is None:
+            tenant_row["active_keys"] += 1
+        last_used = key.last_used_at.isoformat() if key.last_used_at else None
+        if last_used and (
+            tenant_row["last_used_at"] is None or last_used > tenant_row["last_used_at"]
+        ):
+            tenant_row["last_used_at"] = last_used
+
+        key_payload.append(
+            {
+                "id": str(key.id),
+                "tenant_id": tenant_id,
+                "tenant_name": tenant.name,
+                "domain": tenant.domain,
+                "name": key.name,
+                "api_key_masked": mask_key(key.key_prefix, key.key_hash[-4:]),
+                "allowed_tools": key.allowed_tools or DEFAULT_ALLOWED_TOOLS,
+                "monthly_call_limit": key.monthly_call_limit,
+                "is_active": key.is_active and key.revoked_at is None,
+                "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
+                "last_used_at": last_used,
+                "created_at": key.created_at.isoformat() if key.created_at else None,
+                "billing": {
+                    "mode": "payg",
+                    "meter": "mcp_product_key_calls",
+                    "line_item": "MCP usage",
+                    "stripe_customer_id": _mask(tenant.stripe_customer_id),
+                },
+                **usage,
+            }
+        )
+
+    overview = PlatformMCPOverview(
+        tenants_with_keys=len(tenant_summary),
+        active_keys=sum(1 for key, _tenant in keys if key.is_active and key.revoked_at is None),
+        total_keys=len(keys),
+        calls_30d=sum(row.get("calls_30d", 0) for row in usage_by_key.values()),
+        errors_30d=sum(row.get("errors_30d", 0) for row in usage_by_key.values()),
+        results_30d=sum(row.get("results_30d", 0) for row in usage_by_key.values()),
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    return {
+        "overview": overview,
+        "tenants": sorted(
+            tenant_summary.values(),
+            key=lambda row: (row["calls_30d"], row["active_keys"]),
+            reverse=True,
+        ),
+        "keys": key_payload,
+        "connection": {
+            "server_url": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp",
+            "messages": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/messages",
+            "sse": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/sse",
+            "auth_header": "X-MCP-API-Key",
+        },
+        "backlog": {
+            "revoke_after_days_unused": 180,
+            "status": "planned",
+        },
+    }
 
 
 @router.get("/llm-config")

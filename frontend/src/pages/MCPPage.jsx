@@ -60,7 +60,7 @@ const TOOL_DOCS = [
   ['corpus_status', 'Show global local corpus counts and coverage'],
 ]
 
-export default function MCPPage() {
+export default function MCPPage({ embedded = false }) {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
@@ -71,10 +71,11 @@ export default function MCPPage() {
   const [form, setForm] = useState({
     name: 'CourtListener API',
     monthly_call_limit: '',
-    allowed_tools: ['search_caselaw'],
+    allowed_tools: [],
   })
 
   const tools = useMemo(() => data?.tools?.length ? data.tools : TOOL_DOCS.map(([name]) => name), [data])
+  const allToolsSelected = form.allowed_tools.length === 0 || form.allowed_tools.length === tools.length
 
   const load = () => {
     setLoading(true)
@@ -88,12 +89,14 @@ export default function MCPPage() {
 
   const toggleTool = (tool) => {
     setForm((prev) => {
-      const exists = prev.allowed_tools.includes(tool)
+      const current = prev.allowed_tools.length === 0 ? tools : prev.allowed_tools
+      const exists = current.includes(tool)
+      const nextTools = exists
+        ? current.filter((item) => item !== tool)
+        : [...current, tool]
       return {
         ...prev,
-        allowed_tools: exists
-          ? prev.allowed_tools.filter((item) => item !== tool)
-          : [...prev.allowed_tools, tool],
+        allowed_tools: nextTools.length === tools.length ? [] : nextTools,
       }
     })
   }
@@ -106,10 +109,10 @@ export default function MCPPage() {
       const result = await createMcpProductKey({
         name: form.name,
         monthly_call_limit: form.monthly_call_limit ? Number(form.monthly_call_limit) : null,
-        allowed_tools: form.allowed_tools.length ? form.allowed_tools : tools,
+        allowed_tools: allToolsSelected ? null : form.allowed_tools,
       })
       setNewKey(result.api_key)
-      setForm({ name: 'CourtListener API', monthly_call_limit: '', allowed_tools: ['search_caselaw'] })
+      setForm({ name: 'CourtListener API', monthly_call_limit: '', allowed_tools: [] })
       await getMcpProductKeys().then(setData)
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to create MCP key')
@@ -131,7 +134,7 @@ export default function MCPPage() {
 
   if (user?.role !== 'admin') {
     return (
-      <div className="flex h-screen items-center justify-center bg-brand-bg">
+      <div className="flex min-h-[320px] items-center justify-center bg-brand-bg">
         <p className="font-sans text-brand-muted">Admin access required.</p>
       </div>
     )
@@ -139,7 +142,7 @@ export default function MCPPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-brand-bg">
+      <div className="flex min-h-[320px] items-center justify-center bg-brand-bg">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-accent border-t-transparent" />
       </div>
     )
@@ -149,18 +152,20 @@ export default function MCPPage() {
   const transports = data?.transports || {}
 
   return (
-    <div className="min-h-screen bg-brand-bg">
-      <div className="mx-auto max-w-5xl px-4 py-10">
+    <div className={embedded ? '' : 'min-h-screen bg-brand-bg'}>
+      <div className={embedded ? 'space-y-6' : 'mx-auto max-w-5xl px-4 py-10'}>
         <div className="mb-8 flex items-center justify-between gap-4">
           <div>
             <h1 className="font-serif text-2xl font-bold text-brand-ink">CourtListener MCP</h1>
             <p className="mt-1 text-sm text-brand-muted">
-              Tenant-managed API keys for external MCP clients and sold access.
+              Tenant-managed product keys for external MCP clients. Usage is metered separately as PAYG MCP usage.
             </p>
           </div>
-          <button onClick={() => navigate(-1)} className="text-sm text-brand-muted hover:text-brand-ink">
-            Back
-          </button>
+          {!embedded && (
+            <button onClick={() => navigate(-1)} className="text-sm text-brand-muted hover:text-brand-ink">
+              Back
+            </button>
+          )}
         </div>
 
         {error && (
@@ -206,6 +211,9 @@ export default function MCPPage() {
             <CodeBlock label="SSE discovery" value={transports.sse || `${data?.mcp_server_url}/sse`} />
             <CodeBlock label="Auth header" value="X-MCP-API-Key: clmcp_..." />
           </div>
+          <p className="mt-3 text-xs text-brand-muted">
+            Register the SSE URL with Claude/OpenAI-compatible MCP clients, or call the messages endpoint directly for streamable HTTP JSON-RPC.
+          </p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
@@ -238,12 +246,24 @@ export default function MCPPage() {
             </label>
 
             <p className="mb-2 text-xs font-semibold uppercase text-brand-muted">Allowed tools</p>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-xs text-brand-muted">
+                New keys allow every published tool unless you remove one.
+              </p>
+              <button
+                type="button"
+                onClick={() => setForm((prev) => ({ ...prev, allowed_tools: [] }))}
+                className="shrink-0 rounded-md border border-brand-line px-2.5 py-1 text-xs font-medium text-brand-muted hover:text-brand-ink"
+              >
+                Allow all
+              </button>
+            </div>
             <div className="mb-5 space-y-2">
               {tools.map((tool) => (
                 <label key={tool} className="flex items-center gap-2 text-sm text-brand-ink">
                   <input
                     type="checkbox"
-                    checked={form.allowed_tools.includes(tool)}
+                    checked={form.allowed_tools.length === 0 || form.allowed_tools.includes(tool)}
                     onChange={() => toggleTool(tool)}
                     className="h-4 w-4 rounded border-brand-line"
                   />

@@ -1101,6 +1101,8 @@ async def signup_with_plan(
     await enable_rls_bypass(db)
     await db.refresh(user)
     await db.refresh(tenant)
+    await ensure_stripe_customer(tenant, db)
+    await db.commit()
 
     # New firm: seed system roles + assign the founding admin the Administrator
     # system role so the minted JWT carries manage_roles/admin_settings caps.
