@@ -16,6 +16,7 @@ const BACKEND_WRITE_DEBOUNCE_MS = 5000
 const MAX_DRAFTS = 30
 const MAX_RECEIPTS = 30
 const RATE_LIMIT_STATUS = 429
+const LOCAL_ORPHAN_KEEP_MS = 12 * 60 * 60 * 1000
 
 const DRAFT_FORM_DEFAULTS = {
   caller_name: '',
@@ -93,6 +94,12 @@ function hasMeaningfulDraftContent(draft) {
   })) return true
   return ['practice_area', 'outcome', 'task_mode', 'task_title', 'qualified']
     .some((key) => draft[key] !== undefined && draft[key] !== DRAFT_FORM_DEFAULTS[key])
+}
+
+function isRecentLocalOrphan(draft) {
+  const timestamp = draft?._localUpdatedAt || draft?.updated_at || draft?.created_at
+  const age = Date.now() - new Date(timestamp || 0).getTime()
+  return Number.isFinite(age) && age >= 0 && age <= LOCAL_ORPHAN_KEEP_MS
 }
 
 // Defends against a proxy/gateway HTML error page (nginx 429/502/504) ever
@@ -500,9 +507,12 @@ export default function useCallDrafts({ onToast } = {}) {
     if (!skipBackendDelete) {
       try {
         await deleteIntakeDraft(draftId)
-      } catch {
-        deleteQueueRef.current = [...new Set([...deleteQueueRef.current, draftId])]
-        persistDeleteQueue()
+      } catch (error) {
+        const normalizedError = normalizeApiError(error)
+        if (normalizedError.status !== 404) {
+          deleteQueueRef.current = [...new Set([...deleteQueueRef.current, draftId])]
+          persistDeleteQueue()
+        }
       }
     }
     if (activeDraftIdRef.current === draftId) {
@@ -551,8 +561,11 @@ export default function useCallDrafts({ onToast } = {}) {
     for (const draftId of queue) {
       try {
         await deleteIntakeDraft(draftId)
-      } catch {
-        nextQueue.push(draftId)
+      } catch (error) {
+        const normalizedError = normalizeApiError(error)
+        if (normalizedError.status !== 404) {
+          nextQueue.push(draftId)
+        }
       }
     }
     deleteQueueRef.current = nextQueue
@@ -619,7 +632,15 @@ export default function useCallDrafts({ onToast } = {}) {
 
     localDrafts.forEach((localDraft) => {
       if (!backendById.has(localDraft.draft_id)) {
-        merged.push(localDraft)
+        if (
+          hasMeaningfulDraftContent(localDraft)
+          && (localDraft._dirty || localDraft._localOnly)
+          && isRecentLocalOrphan(localDraft)
+        ) {
+          merged.push(localDraft)
+          return
+        }
+        safeDelete(`${STORAGE_DRAFT_PREFIX}${localDraft.draft_id}`)
       }
     })
 

@@ -147,7 +147,7 @@ async def delete_intake_draft(
     )
     draft = result.scalar_one_or_none()
     if not draft:
-        raise HTTPException(status_code=404, detail="Draft not found")
+        return
 
     await db.delete(draft)
     await db.commit()

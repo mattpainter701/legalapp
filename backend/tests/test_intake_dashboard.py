@@ -1541,6 +1541,8 @@ async def test_intake_drafts_crud_and_upsert_is_idempotent(
 
     deleted = await client.delete(f"/api/intake/drafts/{draft_id}")
     assert deleted.status_code == 204
+    deleted_again = await client.delete(f"/api/intake/drafts/{draft_id}")
+    assert deleted_again.status_code == 204
 
     list_after_delete = await client.get("/api/intake/drafts")
     assert list_after_delete.status_code == 200
