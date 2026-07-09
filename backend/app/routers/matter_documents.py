@@ -35,6 +35,7 @@ settings = get_settings()
 router = APIRouter(prefix="/api", tags=["matter-documents"])
 matter_file_store = MatterFileStore()
 
+
 async def _get_matter_or_404(
     matter_id: str, tenant_id: uuid.UUID, db: AsyncSession
 ) -> Matter:

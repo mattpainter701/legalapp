@@ -11,6 +11,7 @@ from app.models.user import User, UserMemory
 from app.models.conversation import Message
 from app.services.llm import LLMService
 from app.services.llm_routing import resolve_llm_route
+from app.utils.guardrails import prepare_provider_messages, prepare_provider_text
 
 
 class MemoryService:
@@ -118,6 +119,7 @@ class MemoryService:
         tenant_id: str,
         conversation_id: str,
         tenant_name: str = "Legal",
+        privacy_mode: bool = False,
     ) -> str:
         """
         Generate a summary of a conversation and extract key facts.
@@ -154,8 +156,10 @@ Summary:"""
 
         route = await resolve_llm_route(db, tenant_id, use_premium=False)
         summary_text, _, _ = await self.llm.complete(
-            messages=[{"role": "user", "content": summary_prompt}],
-            tenant_name=tenant_name,
+            messages=prepare_provider_messages(
+                [{"role": "user", "content": summary_prompt}], privacy_mode
+            ),
+            tenant_name=prepare_provider_text(tenant_name, privacy_mode),
             context="",
             use_premium=False,
             provider=route.provider,

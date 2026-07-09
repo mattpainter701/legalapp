@@ -32,7 +32,7 @@ export default function ColdStartInterview({ plugin, onClose, onProfileSaved }) 
 
   useEffect(() => {
     startStep1()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })

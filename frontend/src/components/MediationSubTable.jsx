@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { format, parseISO } from 'date-fns'
 import { Plus, Trash2, Pencil, X, Check, Upload } from 'lucide-react'
+import { useConfirm } from './dialog/ConfirmProvider'
 
 /**
  * Generic CRUD table for mediation sub-resources (parties, assets, proposals).
@@ -53,6 +54,7 @@ export default function MediationSubTable({
   listFn, createFn, updateFn, deleteFn,
   actions, onChanged, headerSlot, uploadFn,
 }) {
+  const confirmAction = useConfirm()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -118,7 +120,7 @@ export default function MediationSubTable({
   }
 
   const handleDelete = async (rowId) => {
-    if (!window.confirm('Delete this entry?')) return
+    if (!await confirmAction({ title: 'Delete entry?', message: 'This entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
     try {
       await deleteFn(rowId)
       load()

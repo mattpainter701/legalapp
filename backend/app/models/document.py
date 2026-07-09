@@ -9,9 +9,10 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
+    Computed,
 )
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from pgvector.sqlalchemy import Vector
 
 from app.database import Base
@@ -69,7 +70,12 @@ class Document(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
-    __table_args__ = (Index("ix_chunks_tenant_id", "tenant_id"),)
+    __table_args__ = (
+        Index("ix_chunks_tenant_id", "tenant_id"),
+        Index("ix_chunks_clause_type", "clause_type"),
+        Index("ix_chunks_document_clause", "document_id", "clause_type"),
+        Index("ix_chunks_fts", "fts", postgresql_using="gin"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -92,6 +98,17 @@ class Chunk(Base):
     opinion_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    clause_type: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default="general", server_default="general"
+    )
+    # Keep the ORM model aligned with migration 060 so test/dev databases
+    # created from metadata support the same hybrid full-text queries as prod.
+    fts = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', coalesce(content, ''))", persisted=True),
+        nullable=True,
+    )
     embedding = mapped_column(Vector(1536), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

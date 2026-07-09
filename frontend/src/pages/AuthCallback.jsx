@@ -43,7 +43,7 @@ export default function AuthCallback() {
       .catch(() => {
         setError('Sign-in failed. Please try again.')
       })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="flex items-center justify-center h-screen bg-brand-bg relative overflow-hidden">

@@ -303,7 +303,9 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "case_name": item.get("case_name") or "Unknown Case",
         "citation": item.get("citation") or "",
         "court": item.get("court_name") or item.get("court_id") or "",
-        "decision_date": str(item.get("date_filed")) if item.get("date_filed") else None,
+        "decision_date": str(item.get("date_filed"))
+        if item.get("date_filed")
+        else None,
         "chunk_index": item.get("chunk_index") or 0,
         "section_path": "CourtListener",
         "clause_type": "public_authority",
@@ -369,7 +371,10 @@ async def build_rag_context(chunks: List[dict]) -> str:
         clause_type = chunk.get("clause_type") or "general"
         source = chunk.get("source", "")
 
+        source_id = str(chunk.get("id") or "").strip()
         header_parts = [f"[{i}] {case_name}"]
+        if source_id:
+            header_parts.append(f"[source: {source_id}]")
         if citation:
             header_parts.append(f"Citation: {citation}")
         if court:
@@ -515,7 +520,8 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
         url = hit_dict.get("url") or ""
         modified = hit_dict.get("modified_time") or ""
 
-        header = f"[C{i}] {source_label}: {title}"
+        source_id = cloud_context_source_id(hit_dict)
+        header = f"[C{i}] {source_label}: {title}\n[source: {source_id}]"
         if url:
             header += f"\n    URL: {url}"
         if modified:
@@ -524,6 +530,14 @@ async def build_cloud_context(cloud_hits_with_content: list[dict]) -> str:
         parts.append(f"{header}\nContent:\n{content[:2000]}\n" + "-" * 60)
 
     return "\n\n".join(parts)
+
+
+def cloud_context_source_id(hit_dict: dict) -> str:
+    """Stable id shared by provider context, validation, and API citations."""
+    return (
+        f"cloud:{hit_dict.get('provider')}:{hit_dict.get('source')}:"
+        f"{hit_dict.get('object_id')}"
+    )
 
 
 async def hybrid_rag_query(
@@ -629,6 +643,19 @@ async def hybrid_rag_query(
                             cloud_context = await build_cloud_context(
                                 hits_with_content,
                             )
+                            # Preserve the exact provider-visible excerpt for
+                            # authoritative quote/source validation downstream.
+                            cloud_hits = [
+                                {
+                                    **(
+                                        item["hit"].to_dict()
+                                        if hasattr(item.get("hit"), "to_dict")
+                                        else dict(item.get("hit") or {})
+                                    ),
+                                    "_validation_content": item.get("content") or "",
+                                }
+                                for item in hits_with_content
+                            ]
 
                 # SMB search (on-prem file shares)
                 if _settings.SMB_ENABLED and "smb" in sources:

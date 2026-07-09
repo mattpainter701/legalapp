@@ -9,7 +9,6 @@ from fastapi import (
     Request,
     UploadFile,
     File,
-    BackgroundTasks,
 )
 import asyncio
 
@@ -22,6 +21,7 @@ from app.middleware.tenant import get_current_user
 from app.models.document import Document, Chunk
 from app.schemas.document import DocumentResponse, DocumentList
 from app.services.embeddings import EmbeddingService
+from app.services.durable_jobs import enqueue_job, get_tenant_job, serialize_job
 from app.utils.text_processing import chunk_text, extract_text
 
 settings = get_settings()
@@ -203,7 +203,6 @@ async def list_documents(
 @router.post("/upload", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -260,14 +259,29 @@ async def upload_document(
     )
     response = await _persist_uploaded_document(db, doc)
 
-    # Launch background processing task
-    background_tasks.add_task(
-        _process_document,
-        document_id=str(document_id),
-        tenant_id=str(user.tenant_id),
+    job = await enqueue_job(
+        db,
+        tenant_id=user.tenant_id,
+        kind="document_ingest",
+        idempotency_key=str(document_id),
+        payload={"document_id": str(document_id)},
     )
+    await db.commit()
+    response.processing_job_id = str(job.id)
 
     return response
+
+
+@router.get("/jobs/{job_id}")
+async def get_document_job(
+    job_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    job = await get_tenant_job(db, user.tenant_id, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return serialize_job(job)
 
 
 @router.delete("/{document_id}", status_code=204)

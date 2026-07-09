@@ -5,7 +5,6 @@ import uuid
 import pytest
 
 from app.models.user import User
-from app.services.portal_token import create_portal_token
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -38,13 +37,16 @@ async def _add_party(client, case_id, role, name, email=None):
     return resp.json()
 
 
-def _portal_headers(*, tenant_id, case_id, party_id, party_role):
-    token = create_portal_token(
-        tenant_id=str(tenant_id),
-        case_id=str(case_id),
-        party_id=str(party_id),
-        party_role=party_role,
+async def _portal_headers(client, *, tenant_id, case_id, party_id, party_role):
+    invite_resp = await client.post(
+        f"/api/plugins/mediation/cases/{case_id}/parties/{party_id}/invite"
     )
+    assert invite_resp.status_code == 200, invite_resp.text
+    raw = invite_resp.json()["invite_url"].split("token=")[1]
+    accepted = await client.post("/api/portal/mediation/accept", json={"token": raw})
+    assert accepted.status_code == 200, accepted.text
+    token = accepted.cookies["mediation_portal_token"]
+    client.cookies.pop("mediation_portal_token", None)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -139,13 +141,15 @@ async def test_full_approval_workflow(client, test_tenant):
     client_party = await _add_party(client, case_id, "our_client", "Jane Doe")
     opposing_party = await _add_party(client, case_id, "opposing_party", "John Doe")
 
-    client_hdrs = _portal_headers(
+    client_hdrs = await _portal_headers(
+        client,
         tenant_id=test_tenant.id,
         case_id=case_id,
         party_id=client_party["id"],
         party_role="our_client",
     )
-    opp_hdrs = _portal_headers(
+    opp_hdrs = await _portal_headers(
+        client,
         tenant_id=test_tenant.id,
         case_id=case_id,
         party_id=opposing_party["id"],
@@ -215,13 +219,19 @@ async def test_opposing_cannot_send_or_edit_others(client, test_tenant):
     client_party = await _add_party(client, case_id, "our_client", "Jane Doe")
     opposing_party = await _add_party(client, case_id, "opposing_party", "John Doe")
 
-    client_hdrs = _portal_headers(
-        tenant_id=test_tenant.id, case_id=case_id,
-        party_id=client_party["id"], party_role="our_client",
+    client_hdrs = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=client_party["id"],
+        party_role="our_client",
     )
-    opp_hdrs = _portal_headers(
-        tenant_id=test_tenant.id, case_id=case_id,
-        party_id=opposing_party["id"], party_role="opposing_party",
+    opp_hdrs = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=opposing_party["id"],
+        party_role="opposing_party",
     )
 
     resp = await client.post(
@@ -261,17 +271,30 @@ async def test_accept_invite_issues_portal_session(client, test_tenant):
         f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}/invite"
     )
     assert resp.status_code == 200
+    invite_id = resp.json()["id"]
     raw_token = resp.json()["invite_url"].split("token=")[1]
     assert resp.json()["kind"] == "portal_magic"
 
-    resp = await client.post(
-        "/api/portal/mediation/accept", json={"token": raw_token}
-    )
+    resp = await client.post("/api/portal/mediation/accept", json={"token": raw_token})
     assert resp.status_code == 200, resp.text
     assert resp.json()["case_id"] == case_id
     assert resp.json()["party_role"] == "opposing_party"
     # The session cookie was set.
-    assert "access_token" in resp.cookies
+    assert "mediation_portal_token" in resp.cookies
+    assert "access_token" not in resp.cookies
+
+    replay = await client.post(
+        "/api/portal/mediation/accept", json={"token": raw_token}
+    )
+    assert replay.status_code == 409
+
+    revoked = await client.delete(
+        f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}"
+        f"/invites/{invite_id}"
+    )
+    assert revoked.status_code == 204, revoked.text
+    portal_after_revoke = await client.get("/api/portal/mediation/case")
+    assert portal_after_revoke.status_code == 401
 
     # A bogus token is rejected.
     resp = await client.post(
@@ -288,13 +311,19 @@ async def test_proposal_counter_chain(client, test_tenant):
     case_id = case["id"]
     a = await _add_party(client, case_id, "our_client", "Jane Doe")
     b = await _add_party(client, case_id, "opposing_party", "John Doe")
-    a_hdrs = _portal_headers(
-        tenant_id=test_tenant.id, case_id=case_id,
-        party_id=a["id"], party_role="our_client",
+    a_hdrs = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=a["id"],
+        party_role="our_client",
     )
-    b_hdrs = _portal_headers(
-        tenant_id=test_tenant.id, case_id=case_id,
-        party_id=b["id"], party_role="opposing_party",
+    b_hdrs = await _portal_headers(
+        client,
+        tenant_id=test_tenant.id,
+        case_id=case_id,
+        party_id=b["id"],
+        party_role="opposing_party",
     )
 
     resp = await client.post(
@@ -336,12 +365,19 @@ async def test_tenant_isolation(client, db_session, test_tenant):
     # A second tenant + user must not see the first tenant's case.
     settings = get_settings()
     other_tenant = Tenant(
-        id=uuid.uuid4(), name="Other Firm", domain="other.com",
-        billing_tier="payg", is_active=True,
+        id=uuid.uuid4(),
+        name="Other Firm",
+        domain="other.com",
+        billing_tier="payg",
+        is_active=True,
     )
     other_user = User(
-        id=uuid.uuid4(), tenant_id=other_tenant.id, email="other@other.com",
-        full_name="Other", role="admin", is_active=True,
+        id=uuid.uuid4(),
+        tenant_id=other_tenant.id,
+        email="other@other.com",
+        full_name="Other",
+        role="admin",
+        is_active=True,
     )
     db_session.add_all([other_tenant, other_user])
     await db_session.commit()

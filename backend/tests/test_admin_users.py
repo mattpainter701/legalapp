@@ -137,7 +137,9 @@ async def test_patch_accepts_accountant_role(client, db_session, test_tenant):
     db_session.add(user)
     await db_session.commit()
 
-    resp = await client.patch(f"/api/admin/users/{user.id}", json={"role": "accountant"})
+    resp = await client.patch(
+        f"/api/admin/users/{user.id}", json={"role": "accountant"}
+    )
 
     assert resp.status_code == 200
     assert resp.json()["role"] == "accountant"

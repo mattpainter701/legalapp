@@ -51,9 +51,11 @@ TEST_DB_URL = os.getenv(
 # Non-superuser role the assertions run as, so RLS is actually enforced.
 _RLS_ROLE = "rls_probe_role"
 _RLS_PW = "rls_probe_pw"
-RLS_ROLE_URL = make_url(TEST_DB_URL).set(
-    username=_RLS_ROLE, password=_RLS_PW
-).render_as_string(hide_password=False)
+RLS_ROLE_URL = (
+    make_url(TEST_DB_URL)
+    .set(username=_RLS_ROLE, password=_RLS_PW)
+    .render_as_string(hide_password=False)
+)
 
 # A dedicated throwaway table so we never depend on the real schema / FKs.
 _TABLE = "rls_seed_probe"
@@ -147,12 +149,8 @@ async def rls_session():
                     """
                 )
             )
-            await conn.execute(
-                text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}")
-            )
-            await conn.execute(
-                text(f"GRANT SELECT, INSERT ON {_TABLE} TO {_RLS_ROLE}")
-            )
+            await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {_RLS_ROLE}"))
+            await conn.execute(text(f"GRANT SELECT, INSERT ON {_TABLE} TO {_RLS_ROLE}"))
             # Seed rows as superuser (RLS does not block the superuser).
             for tenant, label in (
                 (TENANT_A, "a1"),
@@ -160,9 +158,7 @@ async def rls_session():
                 (TENANT_B, "b1"),
             ):
                 await conn.execute(
-                    text(
-                        f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, :l)"
-                    ),
+                    text(f"INSERT INTO {_TABLE} (tenant_id, label) VALUES (:t, :l)"),
                     {"t": tenant, "l": label},
                 )
     except (OperationalError, InterfaceError, ConnectionError, OSError) as exc:
@@ -177,9 +173,7 @@ async def rls_session():
             # Sanity: confirm we are NOT a superuser, else the test is meaningless.
             is_super = (
                 await session.execute(
-                    text(
-                        "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
-                    )
+                    text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
                 )
             ).scalar_one()
             assert is_super is False, "RLS assertions must run as a non-superuser"

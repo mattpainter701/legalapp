@@ -150,7 +150,9 @@ class DomesticParty(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     case_id: Mapped[uuid.UUID] = _case_fk()
     contact_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
     )
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     role: Mapped[str] = mapped_column(
@@ -447,6 +449,4 @@ class DomesticEvent(Base):
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = _created_at()
 
-    case: Mapped["DomesticCase"] = relationship(
-        "DomesticCase", back_populates="events"
-    )
+    case: Mapped["DomesticCase"] = relationship("DomesticCase", back_populates="events")

@@ -14,7 +14,9 @@ from jose import jwk, jwt
 logger = logging.getLogger(__name__)
 
 _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
-_MICROSOFT_JWKS_URL_TMPL = "https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+_MICROSOFT_JWKS_URL_TMPL = (
+    "https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+)
 _HTTP_TIMEOUT = 15.0
 
 
@@ -50,7 +52,9 @@ async def _fetch_jwks(url: str) -> dict:
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         response = await client.get(url)
         if response.status_code != 200:
-            raise HTTPException(status_code=502, detail="Failed to fetch OAuth provider JWKS")
+            raise HTTPException(
+                status_code=502, detail="Failed to fetch OAuth provider JWKS"
+            )
         return response.json()
 
 
@@ -73,7 +77,9 @@ async def verify_google_id_token(
     header = _decode_jwt_segment(id_token.split(".")[0])
     matching_key = _find_jwk(jwks, header.get("kid"))
     if matching_key is None:
-        raise HTTPException(status_code=400, detail="No matching Google public key for token kid")
+        raise HTTPException(
+            status_code=400, detail="No matching Google public key for token kid"
+        )
 
     try:
         public_key = jwk.construct(matching_key)
@@ -86,7 +92,9 @@ async def verify_google_id_token(
             access_token=access_token,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Google id_token verification failed: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"Google id_token verification failed: {exc}"
+        )
 
     _check_nonce(claims, expected_nonce, provider="Google")
     return claims
@@ -99,13 +107,19 @@ async def verify_microsoft_id_token(
     expected_nonce: Optional[str] = None,
 ) -> dict:
     """Verify a Microsoft id_token's RS256 signature, audience, issuer, and nonce; return claims."""
-    jwks_tenant = tenant if tenant and tenant not in ("common", "organizations", "consumers") else "common"
+    jwks_tenant = (
+        tenant
+        if tenant and tenant not in ("common", "organizations", "consumers")
+        else "common"
+    )
     jwks = await _fetch_jwks(_MICROSOFT_JWKS_URL_TMPL.format(tenant=jwks_tenant))
 
     header = _decode_jwt_segment(id_token.split(".")[0])
     matching_key = _find_jwk(jwks, header.get("kid"))
     if matching_key is None:
-        raise HTTPException(status_code=400, detail="No matching Microsoft public key for token kid")
+        raise HTTPException(
+            status_code=400, detail="No matching Microsoft public key for token kid"
+        )
 
     try:
         public_key = jwk.construct(matching_key, algorithm="RS256")
@@ -117,7 +131,9 @@ async def verify_microsoft_id_token(
             options={"verify_iss": False},
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Microsoft id_token verification failed: {exc}")
+        raise HTTPException(
+            status_code=400, detail=f"Microsoft id_token verification failed: {exc}"
+        )
 
     # Microsoft's issuer is tenant-specific (https://login.microsoftonline.com/{tid}/v2.0)
     # even for "common"/multi-tenant apps, so we can't check it against a fixed string.
@@ -125,8 +141,12 @@ async def verify_microsoft_id_token(
     # tampered to swap directories after signature verification.
     iss = claims.get("iss", "")
     tid = claims.get("tid", "")
-    if not iss.startswith("https://login.microsoftonline.com/") or (tid and tid not in iss):
-        raise HTTPException(status_code=400, detail="Microsoft id_token issuer/tenant mismatch")
+    if not iss.startswith("https://login.microsoftonline.com/") or (
+        tid and tid not in iss
+    ):
+        raise HTTPException(
+            status_code=400, detail="Microsoft id_token issuer/tenant mismatch"
+        )
 
     _check_nonce(claims, expected_nonce, provider="Microsoft")
     return claims
@@ -137,4 +157,6 @@ def _check_nonce(claims: dict, expected_nonce: Optional[str], provider: str) -> 
         return
     if claims.get("nonce") != expected_nonce:
         logger.warning("%s id_token nonce mismatch", provider)
-        raise HTTPException(status_code=400, detail=f"{provider} id_token nonce mismatch")
+        raise HTTPException(
+            status_code=400, detail=f"{provider} id_token nonce mismatch"
+        )

@@ -20,6 +20,7 @@ from app.services.cloud_sync import CloudSyncService
 from app.services.llm import LLMService
 from app.services.retrieval_planner import RetrievalPlanner
 from app.services.error_tracker import capture_error
+from app.utils.guardrails import prepare_provider_text
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,9 @@ async def _get_ms_token(db: AsyncSession, tenant_id: str) -> str:
 
     token = await get_fresh_token(db, tenant_id, "microsoft")
     if not token:
-        raise HTTPException(status_code=424, detail="Microsoft integration not connected")
+        raise HTTPException(
+            status_code=424, detail="Microsoft integration not connected"
+        )
     return token
 
 
@@ -399,7 +402,9 @@ async def cloud_search_test(
         provider_set.add("microsoft")
 
     plan = await planner.plan(
-        user_question=body.query,
+        user_question=prepare_provider_text(
+            body.query, getattr(admin, "privacy_mode", False)
+        ),
         db=db,
         tenant_id=tenant_id,
         active_providers=list(provider_set) if provider_set else None,

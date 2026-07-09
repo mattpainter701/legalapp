@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { resetPassword } from '../api'
+import FormField from '../components/form/FormField'
 
 export default function ResetPasswordPage() {
   const navigate = useNavigate()
@@ -49,7 +50,8 @@ export default function ResetPasswordPage() {
         <p className="font-sans text-brand-muted text-sm mb-6">Enter your new password</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
+          <FormField label="New password" hint="Use at least 8 characters." required>
+            <input
             type="password"
             placeholder="New password (min 8 characters)"
             value={password}
@@ -57,7 +59,9 @@ export default function ResetPasswordPage() {
             required
             minLength={8}
             className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent focus:border-brand-accent"
-          />
+              autoComplete="new-password"
+            />
+          </FormField>
 
           <button
             type="submit"
@@ -68,8 +72,8 @@ export default function ResetPasswordPage() {
           </button>
         </form>
 
-        {error && <p className="mt-4 font-sans text-brand-rose text-sm text-center">{error}</p>}
-        {message && <p className="mt-4 font-sans text-green-600 text-sm text-center">{message}</p>}
+        {error && <p role="alert" className="mt-4 font-sans text-brand-rose text-sm text-center">{error}</p>}
+        {message && <p role="status" aria-live="polite" className="mt-4 font-sans text-green-600 text-sm text-center">{message}</p>}
       </div>
     </div>
   )

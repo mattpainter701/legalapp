@@ -1,7 +1,7 @@
-import asyncio
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from openai import APIConnectionError
 
 from app.config import get_settings
@@ -19,7 +19,10 @@ def test_disclaimer_footer_is_conditional_for_legal_work_only():
         user_name="Matt",
     )
 
-    assert "Prepared for Bismarcklaw. Attorney review recommended before reliance." in prompt
+    assert (
+        "Prepared for Bismarcklaw. Attorney review recommended before reliance."
+        in prompt
+    )
     assert "only when the response contains legal analysis" in prompt
     assert "Do not append that footer to ordinary non-legal answers" in prompt
     assert "End every response with" not in prompt
@@ -38,7 +41,8 @@ def test_system_prompt_does_not_expose_firm_context_label():
     assert "Never write the phrase" in prompt
 
 
-def test_standard_stream_retries_gateway_fallback_before_first_token():
+@pytest.mark.asyncio
+async def test_standard_stream_retries_gateway_fallback_before_first_token():
     class FakeStream:
         def __init__(self, chunks):
             self._chunks = iter(chunks)
@@ -70,9 +74,7 @@ def test_standard_stream_retries_gateway_fallback_before_first_token():
     async def run():
         service = LLMService()
         completions = FakeCompletions()
-        service.client = SimpleNamespace(
-            chat=SimpleNamespace(completions=completions)
-        )
+        service.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         chunks = [
             chunk
             async for chunk in service.stream_complete(
@@ -84,7 +86,7 @@ def test_standard_stream_retries_gateway_fallback_before_first_token():
         ]
         return completions.models, chunks
 
-    models, chunks = asyncio.run(run())
+    models, chunks = await run()
 
     assert models == [
         settings.LITELLM_STANDARD_MODEL,
@@ -93,7 +95,8 @@ def test_standard_stream_retries_gateway_fallback_before_first_token():
     assert "".join(chunks) == "fallback answer"
 
 
-def test_complete_sends_metadata_without_prompt_content():
+@pytest.mark.asyncio
+async def test_complete_sends_metadata_without_prompt_content():
     class FakeCompletions:
         def __init__(self):
             self.kwargs = None
@@ -101,18 +104,14 @@ def test_complete_sends_metadata_without_prompt_content():
         async def create(self, **kwargs):
             self.kwargs = kwargs
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(message=SimpleNamespace(content="answer"))
-                ],
+                choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))],
                 usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2),
             )
 
     async def run():
         service = LLMService()
         completions = FakeCompletions()
-        service.client = SimpleNamespace(
-            chat=SimpleNamespace(completions=completions)
-        )
+        service.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         await service.complete(
             [{"role": "user", "content": "privileged prompt"}],
             tenant_name="Tenant",
@@ -126,14 +125,15 @@ def test_complete_sends_metadata_without_prompt_content():
         )
         return completions.kwargs
 
-    kwargs = asyncio.run(run())
+    kwargs = await run()
 
     assert kwargs["extra_body"] == {
         "metadata": {"tenant_id": "tenant-1", "operation_type": "chat"}
     }
 
 
-def test_customer_byok_complete_does_not_send_gateway_metadata():
+@pytest.mark.asyncio
+async def test_customer_byok_complete_does_not_send_gateway_metadata():
     class FakeCompletions:
         def __init__(self):
             self.kwargs = None
@@ -141,9 +141,7 @@ def test_customer_byok_complete_does_not_send_gateway_metadata():
         async def create(self, **kwargs):
             self.kwargs = kwargs
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(message=SimpleNamespace(content="answer"))
-                ],
+                choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))],
                 usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2),
             )
 
@@ -167,6 +165,6 @@ def test_customer_byok_complete_does_not_send_gateway_metadata():
         )
         return completions.kwargs
 
-    kwargs = asyncio.run(run())
+    kwargs = await run()
 
     assert "extra_body" not in kwargs

@@ -18,8 +18,19 @@ from jose import jwt
 
 from app.config import get_settings
 from app.routers import auth as auth_mod
+from app.schemas.auth import TokenResponse
 
 settings = get_settings()
+
+
+def test_cookie_auth_response_never_serializes_access_token():
+    response = TokenResponse(
+        user_id=str(uuid.uuid4()),
+        tenant_id=str(uuid.uuid4()),
+        role="attorney",
+        email="a@firm.com",
+    )
+    assert "access_token" not in response.model_dump()
 
 
 # ── Fakes ───────────────────────────────────────────────────────────────────
@@ -58,7 +69,9 @@ class FakeRedis:
 
 
 def _fake_request(redis):
-    return types.SimpleNamespace(app=types.SimpleNamespace(state=types.SimpleNamespace(redis=redis)))
+    return types.SimpleNamespace(
+        app=types.SimpleNamespace(state=types.SimpleNamespace(redis=redis))
+    )
 
 
 def _fake_user():
@@ -90,7 +103,9 @@ def test_access_token_has_jti_and_expected_lifetime():
 
 def test_cookie_flags_derive_secure_from_backend_url(monkeypatch):
     monkeypatch.setattr(settings, "COOKIE_SECURE", None, raising=False)
-    monkeypatch.setattr(settings, "BACKEND_URL", "https://app.example.com", raising=False)
+    monkeypatch.setattr(
+        settings, "BACKEND_URL", "https://app.example.com", raising=False
+    )
     monkeypatch.setattr(settings, "COOKIE_SAMESITE", "lax", raising=False)
     flags = auth_mod._cookie_flags()
     assert flags["secure"] is True

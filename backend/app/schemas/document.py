@@ -11,6 +11,7 @@ class DocumentResponse(BaseModel):
     status: str
     chunk_count: int
     created_at: datetime
+    processing_job_id: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -31,40 +31,51 @@ def make_token(
         "billing_tier": billing_tier,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=minutes),
     }
-    return jwt.encode(payload, secret or settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return jwt.encode(
+        payload, secret or settings.SECRET_KEY, algorithm=settings.ALGORITHM
+    )
 
 
 # ---------------------------------------------------------------------------
 # Token generation / decode
 # ---------------------------------------------------------------------------
 
+
 class TestJWTHelpers:
     def test_token_roundtrip(self):
         uid = str(uuid.uuid4())
         tid = str(uuid.uuid4())
         token = make_token(uid, tid)
-        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        decoded = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert decoded["sub"] == uid
         assert decoded["tenant_id"] == tid
 
     def test_token_contains_role(self):
         token = make_token(str(uuid.uuid4()), str(uuid.uuid4()), role="admin")
-        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        decoded = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert decoded["role"] == "admin"
 
     def test_token_contains_billing_tier(self):
         token = make_token(str(uuid.uuid4()), str(uuid.uuid4()), billing_tier="flat")
-        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        decoded = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert decoded["billing_tier"] == "flat"
 
     def test_expired_token_raises(self):
         from jose import ExpiredSignatureError
+
         token = make_token(str(uuid.uuid4()), str(uuid.uuid4()), minutes=-1)
         with pytest.raises(ExpiredSignatureError):
             jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
     def test_wrong_secret_raises(self):
         from jose import JWTError
+
         token = make_token(str(uuid.uuid4()), str(uuid.uuid4()), secret="wrong-secret")
         with pytest.raises(JWTError):
             jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -73,6 +84,7 @@ class TestJWTHelpers:
 # ---------------------------------------------------------------------------
 # /auth/me endpoint
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 class TestAuthMe:

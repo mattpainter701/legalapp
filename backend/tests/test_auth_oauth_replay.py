@@ -29,18 +29,14 @@ async def test_duplicate_provider_callback_replays_fresh_frontend_code():
 
     await auth._save_callback_replay(request, "state-123", "provider-code", "jwt-token")
 
-    first = await auth._replay_frontend_callback(
-        request, "state-123", "provider-code"
-    )
+    first = await auth._replay_frontend_callback(request, "state-123", "provider-code")
     assert first is not None
     assert first.status_code == 307
     first_code = _callback_code(first)
     assert await auth._consume_callback_token(request, first_code) == "jwt-token"
     assert await auth._consume_callback_token(request, first_code) is None
 
-    second = await auth._replay_frontend_callback(
-        request, "state-123", "provider-code"
-    )
+    second = await auth._replay_frontend_callback(request, "state-123", "provider-code")
     assert second is not None
     second_code = _callback_code(second)
     assert second_code != first_code
@@ -54,12 +50,16 @@ async def test_provider_callback_replay_is_bound_to_exact_state_and_code():
 
     await auth._save_callback_replay(request, "state-123", "provider-code", "jwt-token")
 
-    assert await auth._replay_frontend_callback(
-        request, "state-123", "other-provider-code"
-    ) is None
-    assert await auth._replay_frontend_callback(
-        request, "other-state", "provider-code"
-    ) is None
+    assert (
+        await auth._replay_frontend_callback(
+            request, "state-123", "other-provider-code"
+        )
+        is None
+    )
+    assert (
+        await auth._replay_frontend_callback(request, "other-state", "provider-code")
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -72,6 +72,7 @@ async def test_provider_callback_replay_expires():
         auth._time.time() - auth._CALLBACK_REPLAY_TTL - 1,
     )
 
-    assert await auth._replay_frontend_callback(
-        request, "state-123", "provider-code"
-    ) is None
+    assert (
+        await auth._replay_frontend_callback(request, "state-123", "provider-code")
+        is None
+    )

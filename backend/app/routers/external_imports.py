@@ -12,7 +12,7 @@ import io
 import json
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cryptography.hazmat.primitives import hashes
@@ -70,12 +70,18 @@ def _decrypt_bundle(raw: bytes, passphrase: str | None) -> bytes:
     try:
         envelope = json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Bundle is neither ZIP nor encrypted JSON") from exc
+        raise HTTPException(
+            status_code=400, detail="Bundle is neither ZIP nor encrypted JSON"
+        ) from exc
 
     if envelope.get("format") != "clarity-tabs3-bundle":
-        raise HTTPException(status_code=400, detail="Unsupported encrypted bundle format")
+        raise HTTPException(
+            status_code=400, detail="Unsupported encrypted bundle format"
+        )
     if not passphrase:
-        raise HTTPException(status_code=400, detail="Encrypted bundle requires passphrase")
+        raise HTTPException(
+            status_code=400, detail="Encrypted bundle requires passphrase"
+        )
 
     try:
         salt = base64.b64decode(envelope["salt"])
@@ -113,7 +119,9 @@ def _load_manifest(zf: zipfile.ZipFile) -> dict:
 
 def _validate_manifest(manifest: dict) -> None:
     if manifest.get("provider") != "tabs3":
-        raise HTTPException(status_code=400, detail="Only Tabs3 bundles are supported at this endpoint")
+        raise HTTPException(
+            status_code=400, detail="Only Tabs3 bundles are supported at this endpoint"
+        )
     if manifest.get("export_version") != SUPPORTED_TABS3_EXPORT_VERSION:
         raise HTTPException(
             status_code=400,
@@ -131,7 +139,9 @@ def _validate_manifest(manifest: dict) -> None:
             raise HTTPException(status_code=400, detail=f"Unsafe table path: {path}")
 
 
-def _source_row_key(source_table: str, row: dict, line_no: int, key_counts: dict[str, int]) -> str:
+def _source_row_key(
+    source_table: str, row: dict, line_no: int, key_counts: dict[str, int]
+) -> str:
     candidates = KEY_FIELD_CANDIDATES.get(source_table.upper(), [])
     candidates += [["_SEQUENCE_NO"], ["SEQNO"], ["SEQ_NO"]]
     for fields in candidates:
@@ -213,11 +223,14 @@ async def _stage_table(
             status="metadata-only",
         )
     if path not in zf.namelist():
-        raise HTTPException(status_code=400, detail=f"Bundle missing table file: {path}")
+        raise HTTPException(
+            status_code=400, detail=f"Bundle missing table file: {path}"
+        )
 
     digest = hashlib.sha256()
     row_count = 0
     key_counts: dict[str, int] = {}
+    staged_at = datetime.now(timezone.utc)
     with zf.open(path, "r") as handle:
         for line_no, raw_line in enumerate(handle, start=1):
             digest.update(raw_line)
@@ -246,6 +259,9 @@ async def _stage_table(
                     source_row_key=source_key,
                     row_checksum=_row_checksum(row),
                     row_data=row,
+                    # Preserve the source file's row order for deterministic
+                    # previews even when UUID insertion order is random.
+                    created_at=staged_at + timedelta(microseconds=line_no),
                 )
             )
             row_count += 1
@@ -268,7 +284,9 @@ async def _stage_table(
         )
     duplicate_count = sum(count - 1 for count in key_counts.values() if count > 1)
     if duplicate_count:
-        warnings.append(f"{source_table}: {duplicate_count} duplicate source keys were suffixed")
+        warnings.append(
+            f"{source_table}: {duplicate_count} duplicate source keys were suffixed"
+        )
     return ExternalImportTableSummary(
         source_table=source_table,
         row_count=row_count,
@@ -340,7 +358,9 @@ async def upload_tabs3_bundle(
                     warnings=warnings,
                 )
             )
-        row_counts = {summary.source_table: summary.row_count for summary in table_summaries}
+        row_counts = {
+            summary.source_table: summary.row_count for summary in table_summaries
+        }
         checksums = {
             summary.source_table: summary.checksum
             for summary in table_summaries
@@ -388,7 +408,8 @@ async def list_import_tables(
         raise HTTPException(status_code=404, detail="Import run not found")
 
     manifest_tables = {
-        table.get("name", "").upper(): table for table in (run.manifest or {}).get("tables", [])
+        table.get("name", "").upper(): table
+        for table in (run.manifest or {}).get("tables", [])
     }
     rows = (
         await db.execute(
@@ -405,7 +426,11 @@ async def list_import_tables(
     all_tables = sorted(set(observed_counts) | set((run.row_counts or {}).keys()))
     summaries = []
     for source_table in all_tables:
-        count = int(observed_counts.get(source_table, (run.row_counts or {}).get(source_table, 0)))
+        count = int(
+            observed_counts.get(
+                source_table, (run.row_counts or {}).get(source_table, 0)
+            )
+        )
         manifest_table = manifest_tables.get(source_table, {})
         summaries.append(
             ExternalImportTableSummary(
@@ -418,7 +443,9 @@ async def list_import_tables(
     return ExternalImportTablesResponse(import_run_id=run_id, tables=summaries)
 
 
-@router.get("/{run_id}/tables/{source_table}/rows", response_model=ExternalImportRowsResponse)
+@router.get(
+    "/{run_id}/tables/{source_table}/rows", response_model=ExternalImportRowsResponse
+)
 async def preview_import_rows(
     run_id: uuid.UUID,
     source_table: str,
@@ -441,17 +468,21 @@ async def preview_import_rows(
         )
     )
     rows = (
-        await db.execute(
-            select(ExternalRawRow)
-            .where(
-                ExternalRawRow.tenant_id == admin.tenant_id,
-                ExternalRawRow.import_run_id == run_id,
-                ExternalRawRow.source_table == table,
+        (
+            await db.execute(
+                select(ExternalRawRow)
+                .where(
+                    ExternalRawRow.tenant_id == admin.tenant_id,
+                    ExternalRawRow.import_run_id == run_id,
+                    ExternalRawRow.source_table == table,
+                )
+                .order_by(ExternalRawRow.created_at.asc(), ExternalRawRow.id.asc())
+                .limit(limit)
             )
-            .order_by(ExternalRawRow.created_at.asc(), ExternalRawRow.id.asc())
-            .limit(limit)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return ExternalImportRowsResponse(
         import_run_id=run_id,
         source_table=table,

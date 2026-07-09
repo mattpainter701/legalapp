@@ -88,6 +88,7 @@ from app.models.external_import import (
 from app.models.rbac import Role, UserRole
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.operator_audit import OperatorAuditLog
+from app.models.durable_job import DurableJob
 
 __all__ = [
     "Tenant",
@@ -176,4 +177,5 @@ __all__ = [
     "MCPProductKey",
     "MCPUsageEvent",
     "OperatorAuditLog",
+    "DurableJob",
 ]

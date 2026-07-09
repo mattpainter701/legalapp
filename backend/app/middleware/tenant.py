@@ -1,4 +1,5 @@
 import time as _time
+from datetime import datetime, timezone
 
 from fastapi import Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -190,12 +191,14 @@ class PortalContext:
         party_id: str,
         party_role: str,
         case_id: str | None = None,
+        invite_id: str | None = None,
         user=None,
     ):
         self.tenant_id = tenant_id
         self.party_id = party_id
         self.party_role = party_role
         self.case_id = case_id
+        self.invite_id = invite_id
         self.user = user
 
     @property
@@ -204,6 +207,9 @@ class PortalContext:
 
 
 def _read_token(request: Request) -> str | None:
+    token = request.cookies.get("mediation_portal_token")
+    if token:
+        return token
     token = request.cookies.get("access_token")
     if token:
         return token
@@ -226,7 +232,7 @@ async def get_portal_context(
     the RLS tenant context before returning.
     """
     from app.database import set_tenant_context
-    from app.models.mediation import MediationParty
+    from app.models.mediation import MediationInvite, MediationParty
     from app.models.user import User
 
     token = _read_token(request)
@@ -261,14 +267,34 @@ async def get_portal_context(
                     )
 
         tenant_id = payload.get("tenant_id")
+        invite_id = payload.get("invite_id")
+        case_claim = payload.get("case_id")
+        party_claim = payload.get("party_id")
+        if not all((tenant_id, invite_id, case_claim, party_claim)):
+            raise HTTPException(status_code=401, detail="Invalid portal session")
+        await set_tenant_context(db, str(tenant_id))
+        invite_result = await db.execute(
+            select(MediationInvite).where(
+                MediationInvite.id == invite_id,
+                MediationInvite.tenant_id == tenant_id,
+                MediationInvite.case_id == case_claim,
+                MediationInvite.party_id == party_claim,
+            )
+        )
+        invite = invite_result.scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        if invite is None or invite.revoked or invite.expires_at < now:
+            raise HTTPException(
+                status_code=401, detail="Portal session has been revoked"
+            )
         ctx = PortalContext(
             tenant_id=tenant_id,
-            party_id=payload.get("party_id"),
+            party_id=party_claim,
             party_role=payload.get("party_role"),
-            case_id=payload.get("case_id"),
+            case_id=case_claim,
+            invite_id=invite_id,
             user=None,
         )
-        await set_tenant_context(db, str(tenant_id))
         return ctx
 
     # 2. Firm client login.

@@ -16,7 +16,6 @@ import hashlib
 import secrets
 import time
 import uuid
-from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -138,7 +137,11 @@ async def _proxied_tool_names(request: Request) -> list[str]:
     tools = manifest.get("tools") if isinstance(manifest, dict) else None
     if not isinstance(tools, list):
         return list(DEFAULT_ALLOWED_TOOLS)
-    return [tool.get("name") for tool in tools if isinstance(tool, dict) and tool.get("name")]
+    return [
+        tool.get("name")
+        for tool in tools
+        if isinstance(tool, dict) and tool.get("name")
+    ]
 
 
 # ── Auth helper (JWT or API key) ──────────────────────────────────────────────
@@ -192,9 +195,7 @@ async def _get_user_and_tenant(
     api_key = request.headers.get("X-API-Key")
     if api_key:
         key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-        result = await db.execute(
-            select(Tenant).where(Tenant.api_key_hash == key_hash)
-        )
+        result = await db.execute(select(Tenant).where(Tenant.api_key_hash == key_hash))
         tenant = result.scalar_one_or_none()
         if not tenant:
             raise HTTPException(status_code=401, detail="Invalid API key")
@@ -220,7 +221,9 @@ async def _get_user_and_tenant(
     return user, tenant
 
 
-async def _require_mcp_identity(request: Request, db: AsyncSession) -> tuple[User, Tenant]:
+async def _require_mcp_identity(
+    request: Request, db: AsyncSession
+) -> tuple[User, Tenant]:
     user, tenant = await _get_user_and_tenant(request, db)
     await set_tenant_context(db, str(tenant.id))
     return user, tenant
@@ -379,7 +382,9 @@ async def call_tool(
             tenant_id=tenant.id,
             user_id=user.id,
             product_key_id=None,
-            auth_type="legacy_tenant_key" if request.headers.get("X-API-Key") else "jwt",
+            auth_type="legacy_tenant_key"
+            if request.headers.get("X-API-Key")
+            else "jwt",
             transport="rest",
             tool_name=body.name,
             status_code=200,
@@ -544,7 +549,9 @@ async def get_api_key_info(
     tenant = result.scalar_one_or_none()
 
     has_key = bool(tenant and tenant.api_key_hash)
-    masked = (tenant.api_key_prefix + "..." + tenant.api_key_hash[-4:]) if has_key else None
+    masked = (
+        (tenant.api_key_prefix + "..." + tenant.api_key_hash[-4:]) if has_key else None
+    )
 
     base_url = settings.BACKEND_URL.rstrip("/")
     return {
@@ -592,7 +599,9 @@ async def list_mcp_product_keys(
                 "monthly_call_limit": key.monthly_call_limit,
                 "is_active": key.is_active,
                 "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
-                "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+                "last_used_at": key.last_used_at.isoformat()
+                if key.last_used_at
+                else None,
                 "created_at": key.created_at.isoformat() if key.created_at else None,
                 "usage": usage_by_key.get(str(key.id), {"calls": 0, "results": 0}),
             }
@@ -625,7 +634,9 @@ async def create_mcp_product_key(
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     if body.monthly_call_limit is not None and body.monthly_call_limit < 1:
-        raise HTTPException(status_code=400, detail="monthly_call_limit must be positive")
+        raise HTTPException(
+            status_code=400, detail="monthly_call_limit must be positive"
+        )
     key, raw_key = await create_product_key(
         db,
         tenant_id=user.tenant_id,

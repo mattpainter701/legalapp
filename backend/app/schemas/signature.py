@@ -1,6 +1,7 @@
 """Pydantic schemas for native e-signature endpoints."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -66,6 +67,11 @@ class SignatureRequestResponse(BaseModel):
     created_at: datetime
     signers: list[SignerResponse] = []
     signed_document_id: str | None = None
+    completion_artifact_id: str | None = None
+    artifact_type: str = "signature_acknowledgment_certificate"
+    source_document_sha256: str | None = None
+    completion_artifact_sha256: str | None = None
+    evidence_sha256: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -76,6 +82,10 @@ class SignatureRequestResponse(BaseModel):
 class PortalSignRequest(BaseModel):
     typed_signature: str
     signer_id: str | None = None  # optional; defaults to next pending signer
+    consent_to_electronic_signature: bool = False
+    consent_text_version: Literal["clarity-esign-consent-v1"] = (
+        "clarity-esign-consent-v1"
+    )
 
 
 class PortalDeclineRequest(BaseModel):

@@ -72,7 +72,9 @@ def normalize_allowed_tools(tools: list[str] | None) -> list[str]:
 def ensure_tool_allowed(product_key: MCPProductKey | Any, tool_name: str) -> None:
     allowed = getattr(product_key, "allowed_tools", None) or DEFAULT_ALLOWED_TOOLS
     if tool_name not in allowed:
-        raise HTTPException(status_code=403, detail="MCP key is not allowed to call this tool")
+        raise HTTPException(
+            status_code=403, detail="MCP key is not allowed to call this tool"
+        )
 
 
 def current_month_window(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -107,7 +109,9 @@ async def _emit_stripe_mcp_meter_event(
 
     meter_event = getattr(getattr(stripe, "billing", None), "MeterEvent", None)
     if meter_event is None:
-        logger.warning("Stripe SDK does not expose billing.MeterEvent; MCP usage was not sent")
+        logger.warning(
+            "Stripe SDK does not expose billing.MeterEvent; MCP usage was not sent"
+        )
         return
 
     stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -122,7 +126,9 @@ async def _emit_stripe_mcp_meter_event(
             identifier=f"mcp_usage_{event_id}",
         )
     except stripe.StripeError as exc:
-        logger.warning("Stripe MCP meter event failed for tenant %s: %s", tenant_id, exc)
+        logger.warning(
+            "Stripe MCP meter event failed for tenant %s: %s", tenant_id, exc
+        )
 
 
 async def create_product_key(
@@ -150,7 +156,9 @@ async def create_product_key(
     return product_key, raw_key
 
 
-async def list_product_keys(db: AsyncSession, tenant_id: uuid.UUID) -> list[MCPProductKey]:
+async def list_product_keys(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> list[MCPProductKey]:
     result = await db.execute(
         select(MCPProductKey)
         .where(MCPProductKey.tenant_id == tenant_id)
@@ -220,7 +228,9 @@ async def enforce_product_key_quota(
     )
     used = int(result.scalar_one())
     if used >= int(limit):
-        raise HTTPException(status_code=429, detail="MCP API key monthly quota exceeded")
+        raise HTTPException(
+            status_code=429, detail="MCP API key monthly quota exceeded"
+        )
 
 
 async def record_mcp_usage(

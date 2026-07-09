@@ -52,6 +52,7 @@ async def scan_emails(
         max_emails=body.max_emails,
         standard_model=standard_route.model,
         premium_model=premium_route.model,
+        privacy_mode=getattr(user, "privacy_mode", False),
     )
 
     processed = [
@@ -97,6 +98,7 @@ async def draft_email_response(
         tenant_name=tenant_name,
         practice_context=body.get("practice_context", "General legal practice"),
         model=premium_route.model,
+        privacy_mode=getattr(user, "privacy_mode", False),
     )
 
     return {"draft_response": draft}

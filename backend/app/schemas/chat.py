@@ -37,6 +37,7 @@ class MessageCreate(BaseModel):
 
 
 class SourceCitation(BaseModel):
+    source_id: Optional[str] = None
     case_name: str
     citation: str
     court: Optional[str] = None

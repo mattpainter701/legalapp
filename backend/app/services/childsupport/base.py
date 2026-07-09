@@ -56,7 +56,10 @@ class GuidelineProvider(ABC):
             )
         if not inp.parents:
             warnings.append("No parent financial records were provided.")
-        if inp.deviation_amount is not None and not (inp.deviation_reason or "").strip():
+        if (
+            inp.deviation_amount is not None
+            and not (inp.deviation_reason or "").strip()
+        ):
             warnings.append(
                 "A deviation amount was entered without a written reason; a "
                 "documented reason is required to depart from the guideline."

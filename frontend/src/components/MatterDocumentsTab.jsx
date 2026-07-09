@@ -12,6 +12,8 @@ import {
   getMatterCloudFiles,
 } from '../api'
 import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff } from 'lucide-react'
+import { useConfirm } from './dialog/ConfirmProvider'
+import { useToast } from './toast/useToast'
 
 const CATEGORIES = ['pleading', 'contract', 'evidence', 'correspondence', 'other']
 
@@ -193,6 +195,8 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
 }
 
 export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const [docs, setDocs] = useState([])
   const [cloudFiles, setCloudFiles] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -270,12 +274,12 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
   }
 
   const handleDelete = async (docId) => {
-    if (!window.confirm('Delete this document? This cannot be undone.')) return
+    if (!await confirmAction({ title: 'Delete document?', message: 'This document will be permanently deleted.', confirmLabel: 'Delete document', destructive: true })) return
     try {
       await deleteMatterDocument(matterId, docId)
       setDocs((prev) => prev.filter((d) => d.id !== docId))
-    } catch {
-      alert('Failed to delete document.')
+    } catch (error) {
+      toast.error('Document was not deleted', { message: error?.response?.data?.detail || 'Please try again.' })
     }
   }
 
@@ -298,8 +302,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
       })
       setDocs((prev) => prev.map((d) => (d.id === docId ? updated : d)))
       setEditingId(null)
-    } catch {
-      alert('Failed to save changes.')
+    } catch (error) {
+      toast.error('Document changes were not saved', { message: error?.response?.data?.detail || 'Please try again.' })
     } finally {
       setSaving(false)
     }

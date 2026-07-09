@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@microsoft/teams-js": "^2.53.0",
-    "axios": "^1.7.9",
+    "axios": "^1.18.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
@@ -15,15 +15,32 @@
     "react-router-dom": "^6.28.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "jest-axe": "^10.0.0",
+    "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^4.1.10"
   },
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "check": "npm run lint && npm run test && npm run build"
+  },
+  "overrides": {
+    "form-data": "4.0.6"
   }
 }

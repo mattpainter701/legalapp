@@ -151,7 +151,9 @@ async def test_recurring_billing_loops_and_rebinds_per_tenant(monkeypatch):
         async def commit(self):
             events.append(("commit", None))
 
-    monkeypatch.setattr(recurring_billing, "set_tenant_context", fake_set_tenant_context)
+    monkeypatch.setattr(
+        recurring_billing, "set_tenant_context", fake_set_tenant_context
+    )
     monkeypatch.setattr(
         recurring_billing,
         "_generate_recurring_invoices_for_tenant",

@@ -74,4 +74,3 @@ class TestMessageRequest(BaseModel):
     team_id: str
     channel_id: str
     matter_name: Optional[str] = "Test Matter"
-

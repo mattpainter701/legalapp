@@ -52,7 +52,9 @@ async def test_lifespan_continues_in_dev_mode_when_db_connectivity_fails(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_lifespan_fails_closed_when_db_connectivity_fails_in_production(monkeypatch):
+async def test_lifespan_fails_closed_when_db_connectivity_fails_in_production(
+    monkeypatch,
+):
     """Production startup raises on DB connectivity failure."""
     app = _stub_app()
     redis = _fake_redis()

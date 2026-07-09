@@ -69,7 +69,10 @@ def _is_allowed_template_sample(filename: str | None, content_type: str | None) 
     fn_lower = (filename or "").lower()
     if fn_lower.endswith(_ALLOWED_TEMPLATE_UPLOAD_EXTENSIONS):
         return True
-    return bool(content_type) and content_type.lower() in _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES
+    return (
+        bool(content_type)
+        and content_type.lower() in _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES
+    )
 
 
 async def _read_template_sample(file: UploadFile) -> tuple[bytes, str]:

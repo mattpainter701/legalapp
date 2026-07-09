@@ -24,13 +24,21 @@ class MCPProductKey(Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    key_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     allowed_tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
     monthly_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -89,6 +97,13 @@ class MCPUsageEvent(Base):
     )
 
 
-Index("ix_mcp_usage_events_tenant_created", MCPUsageEvent.tenant_id, MCPUsageEvent.created_at)
-Index("ix_mcp_usage_events_key_created", MCPUsageEvent.product_key_id, MCPUsageEvent.created_at)
-
+Index(
+    "ix_mcp_usage_events_tenant_created",
+    MCPUsageEvent.tenant_id,
+    MCPUsageEvent.created_at,
+)
+Index(
+    "ix_mcp_usage_events_key_created",
+    MCPUsageEvent.product_key_id,
+    MCPUsageEvent.created_at,
+)

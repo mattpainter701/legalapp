@@ -8,7 +8,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 
 | Capability | Description |
 |-|-|
-| **Legal Research Chat** | Grounded in uploaded documents + CourtListener public case law via pgvector RAG; confidence-tagged citations |
+| **Legal Research Chat** | Grounded in uploaded documents + CourtListener public case law via pgvector RAG; stable source IDs and excerpt-verified claim tags |
 | **Practice Area Plugins** | 11 workspaces with cold-start profiles, structured skill prompts, dual LLM tiers, and compliance gates |
 | **Matter Management** | Firm-wide matter CRUD with assignments (lead/associate/paralegal roles), internal & client-facing notes, key dates, budgets, and append-only event timelines |
 | **Contract Renewal Tracker** | Urgency-rated dashboard with automated weekly email alerts |
@@ -19,7 +19,7 @@ AI-powered legal platform for in-house and boutique legal teams. Multi-tenant Sa
 | **Audit & Usage Logging** | App-side usage/error records capture route metadata, tokens, cost where available, bounded query text, RAG sources, IP, and user agent; LiteLLM raw message logging is disabled by default |
 | **User Expertise Tracking** | Per-user practice areas, expertise level, memory summary, privacy preferences |
 | **Context Usage Transparency** | Explicit source attribution in chat responses; relevance scores for each context source |
-| **PII Protection** | Automatic detection and scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
+| **PII Protection** | Automatic detection and provider-boundary scrubbing of 8 PII types (SSN, credit card, phone, email, IP, passport, driver's license, bank account) |
 | **Skill-Based Chat Routing** | Route messages to specific legal plugins; inject matter context with privacy controls |
 | **Expertise-Aware Caching** | Cache TTLs based on user expertise level (junior paralegal ≠ senior partner); skill-based multipliers |
 | **Auto-Memory Generation** | Per-user conversation summaries; learned preferences and interaction patterns stored as UserMemory |
@@ -112,7 +112,7 @@ flowchart TB
 | Icons | Lucide React |
 | Routing | React Router v6 |
 | HTTP | Axios/fetch with credentials; auth flows through httpOnly cookies and rotating refresh |
-| Markdown | react-markdown with citation colour-coding and confidence tags |
+| Markdown | react-markdown with citation colour-coding and verified/needs-review claim tags |
 
 ### Infrastructure
 | Component | Technology |

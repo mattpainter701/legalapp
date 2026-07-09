@@ -149,5 +149,9 @@ async def test_already_captured_is_per_matter(db_session, test_tenant, test_user
     await db_session.commit()
 
     # Already captured for matter A, but not for matter B (same message id).
-    assert await _already_captured(db_session, test_tenant.id, matter_a.id, [ref]) is True
-    assert await _already_captured(db_session, test_tenant.id, matter_b.id, [ref]) is False
+    assert (
+        await _already_captured(db_session, test_tenant.id, matter_a.id, [ref]) is True
+    )
+    assert (
+        await _already_captured(db_session, test_tenant.id, matter_b.id, [ref]) is False
+    )

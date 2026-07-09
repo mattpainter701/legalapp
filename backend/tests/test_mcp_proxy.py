@@ -114,8 +114,13 @@ async def test_manifest_falls_back_when_upstream_unavailable(monkeypatch):
     manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}))
 
     assert manifest["serverInfo"]["name"] == "clarity-legal"
-    assert manifest["transports"]["messages"] == "https://legalapp.example/api/mcp/messages"
-    assert {tool["name"] for tool in manifest["tools"]} == set(mcp.DEFAULT_ALLOWED_TOOLS)
+    assert (
+        manifest["transports"]["messages"]
+        == "https://legalapp.example/api/mcp/messages"
+    )
+    assert {tool["name"] for tool in manifest["tools"]} == set(
+        mcp.DEFAULT_ALLOWED_TOOLS
+    )
 
 
 @pytest.mark.asyncio

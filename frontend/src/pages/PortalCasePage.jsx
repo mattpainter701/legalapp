@@ -8,6 +8,8 @@ import {
   createPortalProposal,
 } from '../api'
 import { Handshake, Plus, Upload, Download, Send, Check, X, AlertTriangle } from 'lucide-react'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 
 function Pill({ children, color }) {
   const cls = color || 'bg-brand-ink/5 text-brand-ink-2 border-brand-ink/10'
@@ -35,6 +37,8 @@ const ASSET_CATEGORIES = ['real_property', 'bank_account', 'retirement', 'invest
 const OWNERSHIP = ['party_a', 'party_b', 'joint']
 
 export default function PortalCasePage() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -102,8 +106,8 @@ export default function PortalCasePage() {
   }
 
   const handleSubmitAsset = async (asset) => {
-    if (!window.confirm('Submit this asset for attorney review? You will not be able to edit it.')) return
-    try { await submitPortalAsset(asset.id, caseId); loadCase() } catch { alert('Failed to submit.') }
+    if (!await confirmAction({ title: 'Submit asset for review?', message: 'You will not be able to edit it after submission.', confirmLabel: 'Submit asset' })) return
+    try { await submitPortalAsset(asset.id, caseId); loadCase() } catch (error) { toast.error('Asset was not submitted', { message: error?.response?.data?.detail || 'Please try again.' }) }
   }
 
   const handleDecide = async (asset, decision) => {
@@ -111,7 +115,7 @@ export default function PortalCasePage() {
     try {
       await decidePortalAsset(asset.id, { decision, dispute_reason: decision === 'disputed' ? disputeReason : null }, caseId)
       setDisputeReason(''); loadCase()
-    } catch { alert('Failed to submit decision.') } finally { setDeciding(null) }
+    } catch (error) { toast.error('Decision was not submitted', { message: error?.response?.data?.detail || 'Please try again.' }) } finally { setDeciding(null) }
   }
 
   const handleUpload = async () => {

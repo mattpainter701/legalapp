@@ -9,9 +9,6 @@ import {
 } from '../api'
 
 const STORAGE_DRAFT_PREFIX = 'intake.drafts.'
-const STORAGE_DRAFT_INDEX = 'intake.drafts.index'
-const STORAGE_DELETE_QUEUE = 'intake.drafts.delete_queue'
-const LOCAL_WRITE_DEBOUNCE_MS = 300
 const BACKEND_WRITE_DEBOUNCE_MS = 5000
 const MAX_DRAFTS = 30
 const MAX_RECEIPTS = 30
@@ -42,7 +39,6 @@ const DRAFT_FORM_DEFAULTS = {
   linked_history_phone: '',
 }
 
-const isBrowser = typeof window !== 'undefined'
 const nowISO = () => new Date().toISOString()
 
 const newDraftId = () => {
@@ -199,15 +195,13 @@ export default function useCallDrafts({ onToast } = {}) {
   const [drafts, setDraftsState] = useState([])
   const [activeDraftId, setActiveDraftId] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [storageHealthy, setStorageHealthy] = useState(true)
+  const storageHealthy = true
 
   const draftsRef = useRef([])
   const mountedRef = useRef(true)
   const activeDraftIdRef = useRef(null)
-  const localTimersRef = useRef(new Map())
   const backendTimersRef = useRef(new Map())
   const deleteQueueRef = useRef([])
-  const storageHealthyRef = useRef(true)
   const syncingDraftIdsRef = useRef(new Set())
   const onToastRef = useRef(onToast)
 
@@ -229,68 +223,19 @@ export default function useCallDrafts({ onToast } = {}) {
     })
   }, [])
 
-  const safeRead = useCallback((key, fallback) => {
-    if (!isBrowser) return fallback
-    return parseJson(localStorage.getItem(key), fallback)
+  // Draft contents can contain client PII. They intentionally live only in
+  // React memory between backend writes; browser storage is never a fallback.
+  // Remove records created by older releases as soon as this hook mounts.
+  const purgeLegacyDraftStorage = useCallback(() => {
+    if (typeof window === 'undefined') return
+    try {
+      Object.keys(window.localStorage)
+        .filter((key) => key.startsWith(STORAGE_DRAFT_PREFIX))
+        .forEach((key) => window.localStorage.removeItem(key))
+    } catch {}
   }, [])
 
-  const safeWrite = useCallback((key, value) => {
-    if (!isBrowser) return true
-    try {
-      localStorage.setItem(key, JSON.stringify(value))
-      return true
-    } catch {
-      if (storageHealthyRef.current) {
-        storageHealthyRef.current = false
-        setStorageHealthy(false)
-        emitToast('error', 'Draft storage unavailable', 'Using in-memory drafts for this session.')
-      }
-      return false
-    }
-  }, [emitToast])
-
-  const safeDelete = useCallback((key) => {
-    if (!isBrowser) return true
-    try {
-      localStorage.removeItem(key)
-      return true
-    } catch {
-      if (storageHealthyRef.current) {
-        storageHealthyRef.current = false
-        setStorageHealthy(false)
-        emitToast('error', 'Draft storage unavailable', 'Using in-memory drafts for this session.')
-      }
-      return false
-    }
-  }, [emitToast])
-
-  const persistDraftIndex = useCallback((list = draftsRef.current) => {
-    if (!storageHealthyRef.current) return
-    safeWrite(STORAGE_DRAFT_INDEX, list.map((draft) => draft.draft_id).filter(Boolean))
-  }, [safeWrite])
-
-  const persistDraft = useCallback((draft) => {
-    if (!draft?.draft_id || !storageHealthyRef.current) return
-    safeWrite(`${STORAGE_DRAFT_PREFIX}${draft.draft_id}`, draft)
-  }, [safeWrite])
-
-  const persistDeleteQueue = useCallback(() => {
-    if (!storageHealthyRef.current) return
-    safeWrite(STORAGE_DELETE_QUEUE, deleteQueueRef.current)
-  }, [safeWrite])
-
-  const scheduleLocalPersist = useCallback((draftId) => {
-    if (localTimersRef.current.has(draftId)) {
-      clearTimeout(localTimersRef.current.get(draftId))
-    }
-    localTimersRef.current.set(draftId, setTimeout(() => {
-      localTimersRef.current.delete(draftId)
-      const draft = draftsRef.current.find((entry) => entry.draft_id === draftId)
-      if (!draft) return
-      persistDraftIndex()
-      persistDraft(draft)
-    }, LOCAL_WRITE_DEBOUNCE_MS))
-  }, [persistDraft, persistDraftIndex])
+  const scheduleLocalPersist = useCallback(() => {}, [])
 
   const addReceipt = useCallback((draftId, receipt) => {
     const payload = {
@@ -429,12 +374,6 @@ export default function useCallDrafts({ onToast } = {}) {
           _syncRetryCount: retryCount + 1,
         }
       }))
-      persistDraft({
-        ...(draftsRef.current.find((entry) => entry.draft_id === draftId) || draft),
-        _syncing: false,
-        _syncError: normalizedError.message || 'Failed to save draft',
-        _syncRetryCount: retryCount + 1,
-      })
       if (
         isTransientError(normalizedError)
         && normalizedError.status !== RATE_LIMIT_STATUS
@@ -450,7 +389,7 @@ export default function useCallDrafts({ onToast } = {}) {
     } finally {
       syncingDraftIdsRef.current.delete(draftId)
     }
-  }, [emitToast, persistDraft])
+  }, [emitToast])
 
   const updateDraftField = useCallback((draftId, patch) => {
     markDraftDirty(draftId, patch)
@@ -479,14 +418,12 @@ export default function useCallDrafts({ onToast } = {}) {
     }
     setDrafts((current) => {
       const next = [draft, ...current].slice(0, MAX_DRAFTS)
-      persistDraftIndex(next)
-      persistDraft(draft)
       return next
     })
     setActiveDraftId(draft.draft_id)
     activeDraftIdRef.current = draft.draft_id
     return draft
-  }, [persistDraft, persistDraftIndex, setDrafts])
+  }, [setDrafts])
 
   const setActiveDraft = useCallback((draftId) => {
     if (!draftId || draftId === activeDraftIdRef.current) return
@@ -500,10 +437,8 @@ export default function useCallDrafts({ onToast } = {}) {
     if (!draftId) return
     setDrafts((current) => {
       const next = current.filter((entry) => entry.draft_id !== draftId)
-      persistDraftIndex(next)
       return next
     })
-    safeDelete(`${STORAGE_DRAFT_PREFIX}${draftId}`)
     if (!skipBackendDelete) {
       try {
         await deleteIntakeDraft(draftId)
@@ -511,7 +446,6 @@ export default function useCallDrafts({ onToast } = {}) {
         const normalizedError = normalizeApiError(error)
         if (normalizedError.status !== 404) {
           deleteQueueRef.current = [...new Set([...deleteQueueRef.current, draftId])]
-          persistDeleteQueue()
         }
       }
     }
@@ -521,7 +455,7 @@ export default function useCallDrafts({ onToast } = {}) {
       setActiveDraftId(fallback)
       if (!fallback) createDraft()
     }
-  }, [createDraft, persistDeleteQueue, safeDelete, setDrafts])
+  }, [createDraft, setDrafts])
 
   const retryReceipt = useCallback(async (draftId, receiptId) => {
     const draft = draftsRef.current.find((entry) => entry.draft_id === draftId)
@@ -569,20 +503,13 @@ export default function useCallDrafts({ onToast } = {}) {
       }
     }
     deleteQueueRef.current = nextQueue
-    persistDeleteQueue()
-  }, [persistDeleteQueue])
+  }, [])
 
   const executeOnBlur = useCallback((draftId) => {
     flushBackendDraft(draftId, { force: true })
   }, [flushBackendDraft])
 
   const hydrate = useCallback(async () => {
-    const rawIndex = safeRead(STORAGE_DRAFT_INDEX, [])
-    const localIds = Array.isArray(rawIndex) ? rawIndex : []
-    const localDrafts = localIds
-      .map((id) => normalizeDraftFromStorage(safeRead(`${STORAGE_DRAFT_PREFIX}${id}`, null)))
-      .filter(Boolean)
-
     let backendDrafts = []
     try {
       const rows = await getIntakeDrafts()
@@ -591,60 +518,7 @@ export default function useCallDrafts({ onToast } = {}) {
       backendDrafts = []
     }
 
-    const merged = []
-    const seen = new Set()
-
-    const backendById = new Map(backendDrafts.map((draft) => [draft.draft_id, draft]))
-    const localById = new Map(localDrafts.map((draft) => [draft.draft_id, draft]))
-
-    backendById.forEach((backendDraft, draftId) => {
-      const localDraft = localById.get(draftId)
-      if (!localDraft) {
-        merged.push(backendDraft)
-        return
-      }
-      seen.add(draftId)
-      if (localDraft._dirty || localDraft._localOnly) {
-        merged.push({
-          ...backendDraft,
-          ...localDraft,
-          _backendUpdatedAt: backendDraft.updated_at || localDraft._backendUpdatedAt,
-          _dirty: true,
-          _localOnly: true,
-          _syncRetryCount: Number(localDraft._syncRetryCount || 0),
-        })
-        return
-      }
-      if (isBackendFresher(localDraft, backendDraft)) {
-        merged.push({
-          ...localDraft,
-          ...backendDraft,
-          _dirty: false,
-          _localOnly: false,
-          _syncError: null,
-          _syncRetryCount: 0,
-          _backendUpdatedAt: backendDraft.updated_at,
-        })
-      } else {
-        merged.push(localDraft)
-      }
-    })
-
-    localDrafts.forEach((localDraft) => {
-      if (!backendById.has(localDraft.draft_id)) {
-        if (
-          hasMeaningfulDraftContent(localDraft)
-          && (localDraft._dirty || localDraft._localOnly)
-          && isRecentLocalOrphan(localDraft)
-        ) {
-          merged.push(localDraft)
-          return
-        }
-        safeDelete(`${STORAGE_DRAFT_PREFIX}${localDraft.draft_id}`)
-      }
-    })
-
-    const next = sortDrafts(merged)
+    const next = sortDrafts(backendDrafts)
     if (next.length === 0) {
       createDraft()
       setLoading(false)
@@ -655,40 +529,25 @@ export default function useCallDrafts({ onToast } = {}) {
     setDrafts(next)
     setActiveDraftId(activeId)
     activeDraftIdRef.current = activeId
-    persistDraftIndex(next)
-    next.forEach((draft) => {
-      if (draft._localOnly || !draft._backendUpdatedAt) {
-        persistDraft(draft)
-      }
-    })
-    const rawDeleteQueue = safeRead(STORAGE_DELETE_QUEUE, [])
-    if (Array.isArray(rawDeleteQueue) && rawDeleteQueue.length) {
-      deleteQueueRef.current = rawDeleteQueue
-      flushDeleteQueue()
-    }
     setLoading(false)
   }, [
     createDraft,
     flushBackendDraft,
     flushDeleteQueue,
-    persistDraft,
-    persistDraftIndex,
-    safeRead,
     setDrafts,
   ])
 
   useEffect(() => {
     mountedRef.current = true
+    purgeLegacyDraftStorage()
     hydrate()
     return () => {
       mountedRef.current = false
-      localTimersRef.current.forEach((timer) => clearTimeout(timer))
       backendTimersRef.current.forEach((timer) => clearTimeout(timer))
-      localTimersRef.current.clear()
       backendTimersRef.current.clear()
       syncingDraftIdsRef.current.clear()
     }
-  }, [hydrate])
+  }, [hydrate, purgeLegacyDraftStorage])
 
   const activeDraft = useMemo(() => (
     drafts.find((draft) => draft.draft_id === activeDraftId) || null

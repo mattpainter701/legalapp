@@ -181,7 +181,9 @@ async def test_full_rag_query_records_mcp_usage_in_isolated_session(monkeypatch)
 
     assert ("context", "usage-session", "00000000-0000-0000-0000-000000000001") in calls
     assert ("usage", "usage-session", 1) in calls
-    assert not any(call[1] is request_db for call in calls if call[0] in {"context", "usage"})
+    assert not any(
+        call[1] is request_db for call in calls if call[0] in {"context", "usage"}
+    )
 
 
 @pytest.mark.asyncio

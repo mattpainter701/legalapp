@@ -14,7 +14,7 @@ export function isGeneralModule(module) {
 }
 
 export function canAccessModuleList(enabledModules, module) {
-  if (!module || isGeneralModule(module)) return true
-  if (!Array.isArray(enabledModules) || enabledModules.length === 0) return true
+  if (!module) return true
+  if (!Array.isArray(enabledModules)) return false
   return enabledModules.includes(module)
 }

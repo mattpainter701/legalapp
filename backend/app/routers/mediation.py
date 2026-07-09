@@ -22,6 +22,7 @@ from fastapi import (
     Form,
     HTTPException,
     Request,
+    Response,
     UploadFile,
 )
 from fastapi.responses import FileResponse
@@ -412,6 +413,19 @@ async def invite_party(
     is_client = party.role == "our_client"
     kind = "client_account" if is_client else "portal_magic"
 
+    # Resending rotates access: only the newest invitation/session remains
+    # valid for this party.
+    existing_invites = await db.execute(
+        select(MediationInvite).where(
+            MediationInvite.tenant_id == user.tenant_id,
+            MediationInvite.case_id == case.id,
+            MediationInvite.party_id == party.id,
+            MediationInvite.revoked.is_(False),
+        )
+    )
+    for existing_invite in existing_invites.scalars().all():
+        existing_invite.revoked = True
+
     # For firm clients, ensure a User(role="client") exists and link it.
     if is_client and party.email and party.user_id is None:
         existing = await db.execute(
@@ -476,6 +490,35 @@ async def invite_party(
         invite_url=invite_url,
         expires_at=invite.expires_at,
     )
+
+
+@router.delete(
+    "/cases/{case_id}/parties/{party_id}/invites/{invite_id}", status_code=204
+)
+async def revoke_portal_invite(
+    case_id: str,
+    party_id: str,
+    invite_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke an invitation and every session linked to it immediately."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    result = await db.execute(
+        select(MediationInvite).where(
+            MediationInvite.id == invite_id,
+            MediationInvite.case_id == case_id,
+            MediationInvite.party_id == party_id,
+            MediationInvite.tenant_id == user.tenant_id,
+        )
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    invite.revoked = True
+    await db.commit()
+    return Response(status_code=204)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

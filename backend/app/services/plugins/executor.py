@@ -14,7 +14,11 @@ from app.services.plugins.prompts import (
     PLUGIN_SPECIFIC_QUESTIONS,
 )
 from app.services.plugins.prompt_resolver import PromptResolver
-from app.utils.guardrails import apply_guardrails
+from app.utils.guardrails import (
+    apply_guardrails,
+    prepare_provider_text,
+    validate_citation_confidence,
+)
 
 # Full mapping of (plugin, skill) -> prompt template
 # Used for resolver-based lookup; kept for backwards compatibility and introspection.
@@ -147,6 +151,7 @@ class PluginExecutor:
         user_id: str,
         context: dict,
         use_premium: bool = False,
+        privacy_mode: bool = False,
     ) -> dict:
         """Execute a plugin skill and return structured response."""
         profile = await self.get_practice_profile(db, tenant_id, user_id, plugin)
@@ -187,15 +192,28 @@ class PluginExecutor:
         )
 
         response_text, tokens_in, tokens_out = await self.llm.complete(
-            messages=[{"role": "user", "content": input_text}],
-            tenant_name=context.get("tenant_name", "Legal"),
-            context=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prepare_provider_text(input_text, privacy_mode),
+                }
+            ],
+            tenant_name=prepare_provider_text(
+                context.get("tenant_name", "Legal"), privacy_mode
+            ),
+            context=prepare_provider_text(system_prompt, privacy_mode),
             use_premium=use_premium,
             provider=route.provider,
             model=route.model,
         )
 
         cleaned_response, needs_retry, _ = apply_guardrails(response_text)
+        cleaned_response, _ = validate_citation_confidence(
+            cleaned_response,
+            context.get("verified_sources")
+            if isinstance(context.get("verified_sources"), list)
+            else None,
+        )
 
         return {
             "skill": skill,

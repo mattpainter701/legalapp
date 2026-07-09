@@ -1,6 +1,5 @@
 """Middleware that logs every API request to api_access_logs — metadata only, no payloads."""
 
-import asyncio
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,17 +37,18 @@ class ApiAccessLogMiddleware(BaseHTTPMiddleware):
         if tenant_id is None:
             return response
 
-        asyncio.create_task(
-            _write_log(
-                tenant_id=str(tenant_id),
-                user_id=str(user_id) if user_id else None,
-                endpoint=request.url.path,
-                method=request.method,
-                status_code=response.status_code,
-                latency_ms=round(elapsed_ms, 2),
-                ip_address=request.client.host if request.client else None,
-                user_agent_short=_truncate(request.headers.get("user-agent", ""), 300),
-            )
+        # Audit writes must finish inside the request lifetime. An untracked
+        # create_task can be lost on worker shutdown and can retain database
+        # locks after the response/test session has otherwise completed.
+        await _write_log(
+            tenant_id=str(tenant_id),
+            user_id=str(user_id) if user_id else None,
+            endpoint=request.url.path,
+            method=request.method,
+            status_code=response.status_code,
+            latency_ms=round(elapsed_ms, 2),
+            ip_address=request.client.host if request.client else None,
+            user_agent_short=_truncate(request.headers.get("user-agent", ""), 300),
         )
 
         return response

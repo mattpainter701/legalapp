@@ -2,8 +2,8 @@
 
 Opposing parties never get a ``User`` row; instead the invite-accept endpoint
 issues a short-lived JWT carrying ``portal: true`` plus the case/party scope.
-These reuse the same ``SECRET_KEY``/``ALGORITHM`` and cookie as firm logins, so
-``TenantMiddleware`` picks up the tenant_id automatically.
+These reuse the same ``SECRET_KEY``/``ALGORITHM`` but use a dedicated mediation
+cookie so opening a portal never replaces a staff session.
 """
 
 import uuid
@@ -20,7 +20,12 @@ PORTAL_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 
 def create_portal_token(
-    *, tenant_id: str, case_id: str, party_id: str, party_role: str
+    *,
+    tenant_id: str,
+    case_id: str,
+    party_id: str,
+    party_role: str,
+    invite_id: str,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -29,6 +34,7 @@ def create_portal_token(
         "case_id": str(case_id),
         "party_id": str(party_id),
         "party_role": party_role,
+        "invite_id": str(invite_id),
         "iat": now,
         "jti": str(uuid.uuid4()),
         "exp": now + timedelta(minutes=PORTAL_TOKEN_EXPIRE_MINUTES),

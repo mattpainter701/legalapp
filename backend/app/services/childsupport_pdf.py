@@ -59,26 +59,62 @@ def generate_worksheet_pdf(calc) -> bytes:
         author="Clarity Legal",
     )
     styles = getSampleStyleSheet()
-    title = ParagraphStyle("t", parent=styles["Normal"], fontName="Helvetica-Bold",
-                           fontSize=16, leading=20, spaceAfter=2)
-    sub = ParagraphStyle("s", parent=styles["Normal"], fontName="Helvetica",
-                         fontSize=9, leading=12, textColor=colors.HexColor("#555555"))
-    heading = ParagraphStyle("h", parent=styles["Normal"], fontName="Helvetica-Bold",
-                             fontSize=11, leading=14, spaceBefore=10, spaceAfter=4)
-    body = ParagraphStyle("b", parent=styles["Normal"], fontName="Helvetica",
-                          fontSize=8.5, leading=11)
-    small = ParagraphStyle("sm", parent=styles["Normal"], fontName="Helvetica",
-                           fontSize=7.5, leading=10, textColor=colors.HexColor("#666666"))
-    result = ParagraphStyle("r", parent=styles["Normal"], fontName="Helvetica-Bold",
-                            fontSize=14, leading=18, alignment=TA_CENTER)
+    title = ParagraphStyle(
+        "t",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=16,
+        leading=20,
+        spaceAfter=2,
+    )
+    sub = ParagraphStyle(
+        "s",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#555555"),
+    )
+    heading = ParagraphStyle(
+        "h",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        spaceBefore=10,
+        spaceAfter=4,
+    )
+    body = ParagraphStyle(
+        "b", parent=styles["Normal"], fontName="Helvetica", fontSize=8.5, leading=11
+    )
+    small = ParagraphStyle(
+        "sm",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=10,
+        textColor=colors.HexColor("#666666"),
+    )
+    result = ParagraphStyle(
+        "r",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        leading=18,
+        alignment=TA_CENTER,
+    )
 
     story = []
     story.append(Paragraph("Child Support Guideline Worksheet", title))
     state = ws.get("state_name", ws.get("jurisdiction", ""))
     model = (ws.get("model_type") or "").replace("_", " ")
-    story.append(Paragraph(
-        f"{state} &nbsp;·&nbsp; {model} model &nbsp;·&nbsp; schedule {ws.get('schedule_version', '')} "
-        f"&nbsp;·&nbsp; effective {ws.get('effective_date', '')}", sub))
+    story.append(
+        Paragraph(
+            f"{state} &nbsp;·&nbsp; {model} model &nbsp;·&nbsp; schedule {ws.get('schedule_version', '')} "
+            f"&nbsp;·&nbsp; effective {ws.get('effective_date', '')}",
+            sub,
+        )
+    )
     if calc.label:
         story.append(Paragraph(f"Run: {calc.label}", sub))
     story.append(Paragraph(f"Generated {date.today().isoformat()}", sub))
@@ -99,40 +135,62 @@ def generate_worksheet_pdf(calc) -> bytes:
         rows.append([ln.get("code", ""), label, _fmt(ln.get("amount"))])
 
     table = Table(rows, colWidths=[70, 330, 92])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14253B")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f6f7f9")]),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14253B")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [colors.white, colors.HexColor("#f6f7f9")],
+                ),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
     story.append(table)
     story.append(Spacer(1, 10))
 
     # Result
     final = ws.get("final_amount")
     presumptive = ws.get("presumptive_amount")
-    box = [[Paragraph("Presumptive Monthly Child Support", heading), Paragraph(_fmt(final), result)]]
+    box = [
+        [
+            Paragraph("Presumptive Monthly Child Support", heading),
+            Paragraph(_fmt(final), result),
+        ]
+    ]
     rt = Table(box, colWidths=[330, 162])
-    rt.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef1f5")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#14253B")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-    ]))
+    rt.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef1f5")),
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#14253B")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        )
+    )
     story.append(rt)
     if ws.get("deviation_amount") not in (None, ""):
         story.append(Spacer(1, 4))
-        story.append(Paragraph(
-            f"Guideline (presumptive): {_fmt(presumptive)} — deviated to {_fmt(final)}. "
-            f"Reason: {ws.get('deviation_reason') or '—'}", body))
+        story.append(
+            Paragraph(
+                f"Guideline (presumptive): {_fmt(presumptive)} — deviated to {_fmt(final)}. "
+                f"Reason: {ws.get('deviation_reason') or '—'}",
+                body,
+            )
+        )
     story.append(Paragraph(f"Obligor: {ws.get('obligor_role') or '—'}", body))
 
     warnings = ws.get("warnings") or []

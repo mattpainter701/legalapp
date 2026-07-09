@@ -150,13 +150,19 @@ def _zoom_internal_call_type(participants: dict, direction: str | None) -> str |
     callee_number = participants.get("callee_number")
     caller_external = _external_phone(caller_number)
     callee_external = _external_phone(callee_number)
-    caller_internal = _party_has_internal_marker(participants, "caller") and not caller_external
-    callee_internal = _party_has_internal_marker(participants, "callee") and not callee_external
+    caller_internal = (
+        _party_has_internal_marker(participants, "caller") and not caller_external
+    )
+    callee_internal = (
+        _party_has_internal_marker(participants, "callee") and not callee_external
+    )
     caller_named = bool(participants.get("caller_name"))
     callee_named = bool(participants.get("callee_name"))
     no_external_party = not caller_external and not callee_external
 
-    if (caller_internal and callee_internal) or (no_external_party and caller_named and callee_named):
+    if (caller_internal and callee_internal) or (
+        no_external_party and caller_named and callee_named
+    ):
         return "internal_to_internal"
     if direction == "outbound" and caller_internal:
         return "internal_outbound"
@@ -955,9 +961,7 @@ async def recent_callers(
                 task_due_date=task.due_date if task else None,
                 task_completed_at=task.completed_at if task else None,
                 task_viewed_at=task.viewed_at if task else None,
-                task_customer_contacted_at=task.customer_contacted_at
-                if task
-                else None,
+                task_customer_contacted_at=task.customer_contacted_at if task else None,
                 task_customer_contact_method=task.customer_contact_method
                 if task
                 else None,

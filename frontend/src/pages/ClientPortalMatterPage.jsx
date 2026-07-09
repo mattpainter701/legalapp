@@ -379,10 +379,14 @@ function SignaturesTab() {
     if (!acceptedByRequest[req.id]) { setErr('Review and accept the electronic signature consent before signing.'); return }
     setSigning(req.id)
     try {
-      await signClientPortalSignature(req.id, { typed_signature: typed })
+      await signClientPortalSignature(req.id, {
+        typed_signature: typed,
+        consent_to_electronic_signature: true,
+        consent_text_version: 'clarity-esign-consent-v1',
+      })
       setTypedByRequest((prev) => ({ ...prev, [req.id]: '' }))
       setAcceptedByRequest((prev) => ({ ...prev, [req.id]: false }))
-      setSuccess('Signature captured. Your legal team will see the executed copy in the matter documents.')
+      setSuccess('Signature acknowledgment captured. Your legal team will receive an evidence certificate linked to the source document.')
       load()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Failed to sign. Please try again.')
@@ -426,7 +430,7 @@ function SignaturesTab() {
           <CheckCircle2 size={22} className="text-brand-green mt-0.5" />
           <div>
             <p className="text-sm font-medium text-brand-ink">You're all caught up.</p>
-            <p className="text-sm text-brand-ink-2 mt-1">No documents are awaiting your signature. Completed signature certificates will appear in Documents when available.</p>
+            <p className="text-sm text-brand-ink-2 mt-1">No signature acknowledgments are awaiting your action. Evidence certificates will appear in Documents when available.</p>
           </div>
         </div>
         {success && <p className="text-sm text-brand-green mt-3">{success}</p>}
@@ -441,8 +445,8 @@ function SignaturesTab() {
         <div className="flex items-start gap-3">
           <LockKeyhole size={22} className="text-brand-accent mt-0.5" />
           <div>
-            <p className="text-sm font-semibold text-brand-ink">Secure e-signature</p>
-            <p className="text-sm text-brand-ink-2 mt-1">Review each document name, type your legal name, and consent to sign electronically. We record the time, portal identity, and IP address for the completion certificate.</p>
+            <p className="text-sm font-semibold text-brand-ink">Signature acknowledgment</p>
+            <p className="text-sm text-brand-ink-2 mt-1">Review each source document, type your legal name, and consent to sign electronically. We record the time, portal identity, IP address, and document hashes in an evidence certificate; this does not alter the source document.</p>
           </div>
         </div>
       </Card>
@@ -488,8 +492,9 @@ function SignaturesTab() {
 
             {canAct ? (
               <>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
+                <label htmlFor={`signature-${req.id}`} className="block text-xs font-semibold uppercase tracking-wide text-brand-ink-2 mb-1">Typed signature</label>
                 <input
+                  id={`signature-${req.id}`}
                   value={typed}
                   onChange={(e) => setTypedByRequest((prev) => ({ ...prev, [req.id]: e.target.value }))}
                   placeholder="Type your full legal name"
@@ -501,8 +506,9 @@ function SignaturesTab() {
                     checked={accepted}
                     onChange={(e) => setAcceptedByRequest((prev) => ({ ...prev, [req.id]: e.target.checked }))}
                     className="mt-0.5"
+                    required
                   />
-                  <span>I consent to use an electronic signature and understand this typed name will be attached to this document's completion certificate.</span>
+                  <span>I consent to use an electronic signature for this acknowledgment. I understand my typed name and audit evidence will be attached to an evidence certificate linked by hash to the source document, and the source document itself is not modified.</span>
                 </label>
                 <div className="mt-4 flex flex-col sm:flex-row gap-2">
                   <button

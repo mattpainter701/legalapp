@@ -51,9 +51,7 @@ class TeamsChannelLink(Base):
     team_id: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_id: Mapped[str] = mapped_column(String(100), nullable=False)
     team_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    channel_display_name: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    channel_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tab_deep_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

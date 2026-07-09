@@ -13,6 +13,8 @@ import {
 } from '../api'
 import { format } from 'date-fns'
 import { Spinner } from '../components/ui'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 
 function Badge({ label, variant = 'neutral' }) {
   const colors = {
@@ -105,6 +107,8 @@ function StatusPanel() {
 // ── Agents Panel ──────────────────────────────────────────────────────────────
 
 function AgentsPanel() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -134,7 +138,7 @@ function AgentsPanel() {
       const res = await generateSmbPairingCode()
       setPairingCode(res.code || res.pairing_code || res)
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Pairing code was not generated', { message: e?.response?.data?.detail || 'Unknown error' })
     } finally {
       setGenerating(false)
     }
@@ -146,19 +150,19 @@ function AgentsPanel() {
       await updateSmbAgent(agentId, { status: newStatus })
       load()
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Agent was not updated', { message: e?.response?.data?.detail || 'Unknown error' })
     } finally {
       setUpdating(null)
     }
   }
 
   const handleDeleteAgent = async (agentId) => {
-    if (!window.confirm('Revoke this agent permanently?')) return
+    if (!await confirmAction({ title: 'Revoke agent?', message: 'This agent will permanently lose access.', confirmLabel: 'Revoke agent', destructive: true })) return
     try {
       await deleteSmbAgent(agentId)
       load()
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Agent was not revoked', { message: e?.response?.data?.detail || 'Unknown error' })
     }
   }
 
@@ -258,6 +262,8 @@ function AgentsPanel() {
 // ── Shares Panel ──────────────────────────────────────────────────────────────
 
 function SharesPanel() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const [shares, setShares] = useState([])
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -291,19 +297,19 @@ function SharesPanel() {
       setAddForm({ share_path: '', display_name: '', agent_id: '' })
       load()
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Share was not created', { message: e?.response?.data?.detail || 'Unknown error' })
     } finally {
       setAdding(false)
     }
   }
 
   const handleDelete = async (shareId) => {
-    if (!window.confirm('Delete this share?')) return
+    if (!await confirmAction({ title: 'Delete share?', message: 'This share mapping will be removed.', confirmLabel: 'Delete share', destructive: true })) return
     try {
       await deleteSmbShare(shareId)
       load()
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Share was not deleted', { message: e?.response?.data?.detail || 'Unknown error' })
     }
   }
 

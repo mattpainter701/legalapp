@@ -48,9 +48,7 @@ class TeamsNotificationSetting(Base):
     team_id: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_id: Mapped[str] = mapped_column(String(100), nullable=False)
     team_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    channel_display_name: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    channel_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     matter_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("matters.id", ondelete="CASCADE"),

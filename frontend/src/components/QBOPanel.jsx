@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useConfirm } from './dialog/ConfirmProvider'
 import {
   getQBOStatus,
   connectQBO,
@@ -34,6 +35,7 @@ function relTime(iso) {
 }
 
 export default function QBOPanel() {
+  const confirmAction = useConfirm()
   const [status, setStatus] = useState(null)
   const [items, setItems] = useState([])
   const [mappings, setMappings] = useState({})      // key: "source_type:expense_category" → { qbo_item_id, qbo_item_name }
@@ -106,7 +108,7 @@ export default function QBOPanel() {
   }
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Disconnect QuickBooks Online? Existing synced data in QBO will remain.')) return
+    if (!await confirmAction({ title: 'Disconnect QuickBooks Online?', message: 'Existing synced data in QuickBooks will remain.', confirmLabel: 'Disconnect', destructive: true })) return
     try {
       await disconnectQBO()
       await loadStatus()

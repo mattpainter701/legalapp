@@ -188,9 +188,7 @@ class ChildResponse(BaseModel):
     created_at: datetime
     model_config = {"from_attributes": True}
 
-    @field_validator(
-        "id", "case_id", "primary_residence_party_id", mode="before"
-    )
+    @field_validator("id", "case_id", "primary_residence_party_id", mode="before")
     @classmethod
     def _coerce(cls, v: str | _uuid.UUID | None) -> Optional[str]:
         return _uuid_to_str(v)
@@ -269,9 +267,7 @@ class SupportOrderUpdate(BaseModel):
     obligee_party_id: Optional[str] = None
     calculation_id: Optional[str] = None
     monthly_amount: Optional[Decimal] = None
-    frequency: Optional[
-        Literal["monthly", "semimonthly", "biweekly", "weekly"]
-    ] = None
+    frequency: Optional[Literal["monthly", "semimonthly", "biweekly", "weekly"]] = None
     effective_date: Optional[date] = None
     end_date: Optional[date] = None
     arrears_balance: Optional[Decimal] = None
@@ -367,9 +363,9 @@ class DeadlineUpdate(BaseModel):
         ]
     ] = None
     due_date: Optional[date] = None
-    status: Optional[
-        Literal["pending", "in_progress", "complete", "overdue", "na"]
-    ] = None
+    status: Optional[Literal["pending", "in_progress", "complete", "overdue", "na"]] = (
+        None
+    )
     assigned_to: Optional[str] = None
     notes: Optional[str] = None
 

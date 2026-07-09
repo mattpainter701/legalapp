@@ -6,6 +6,8 @@ audit certificate, stores it as a portal-visible MatterDocument, writes a matter
 timeline event, and marks the request completed.
 """
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -69,6 +71,8 @@ async def record_portal_signature(
     *,
     typed_signature: str,
     ip: str | None,
+    consent_text_version: str,
+    user_agent: str | None = None,
 ) -> None:
     """Mark a single signer as signed (does not commit)."""
     now = datetime.now(timezone.utc)
@@ -81,6 +85,9 @@ async def record_portal_signature(
         "ip": ip,
         "typed_signature": typed_signature,
         "method": "portal_typed",
+        "consent_to_electronic_signature": True,
+        "consent_text_version": consent_text_version,
+        "user_agent": user_agent,
     }
 
 
@@ -127,11 +134,24 @@ async def complete_request_if_done(
         if src is not None:
             document_name = src.filename
 
+    evidence_payload = {
+        "request_id": str(request.id),
+        "source_document_sha256": request.source_document_sha256,
+        "signers": [s.audit for s in sorted(signers, key=lambda row: row.sign_order)],
+    }
+    evidence_sha256 = hashlib.sha256(
+        json.dumps(evidence_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    request.evidence_sha256 = evidence_sha256
     content, filename, content_type = build_certificate(
         matter_name=matter.matter_name,
         document_name=document_name or "document",
         signers=signers,
+        request_id=str(request.id),
+        source_sha256=request.source_document_sha256,
+        evidence_sha256=evidence_sha256,
     )
+    request.completion_artifact_sha256 = hashlib.sha256(content).hexdigest()
     storage_path = await _file_store.store_matter_file(
         db=db,
         tenant_id=str(matter.tenant_id),
@@ -150,7 +170,10 @@ async def complete_request_if_done(
         content_type=content_type,
         file_size=len(content),
         storage_path=storage_path,
-        description="Executed copy / certificate of completion",
+        description=(
+            "Signature acknowledgment certificate; cryptographically bound to the "
+            "source document, not a signed or modified source document"
+        ),
         document_category="signed",
         portal_visible=True,
     )
@@ -161,10 +184,11 @@ async def complete_request_if_done(
             tenant_id=matter.tenant_id,
             matter_id=matter.id,
             event_type="signature",
-            title=f"Document signed: {document_name or filename}",
+            title=f"Signature acknowledgments completed: {document_name or filename}",
             content=(
-                "All parties completed e-signature. Executed copy stored: "
-                f"{filename}."
+                "All parties completed typed signature acknowledgments. "
+                f"Evidence certificate stored: {filename}; source SHA-256 "
+                f"{request.source_document_sha256}."
             ),
             note_type="system",
             created_by=None,
@@ -174,6 +198,7 @@ async def complete_request_if_done(
     now = datetime.now(timezone.utc)
     request.status = "completed"
     request.completed_at = now
-    # For the internal provider, the "envelope id" is the executed document id.
+    # For the internal provider this points to the evidence certificate, not an
+    # externally executed or cryptographically signed source document.
     request.provider_envelope_id = str(signed_doc.id)
     return signed_doc

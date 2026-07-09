@@ -166,8 +166,6 @@ async def test_contacted_rejects_unrelated_non_admin(
         base_url="http://test",
         headers={"Authorization": f"Bearer {token}"},
     ) as ac:
-        resp = await ac.post(
-            f"/api/tasks/{task.id}/contacted", json={"method": "call"}
-        )
+        resp = await ac.post(f"/api/tasks/{task.id}/contacted", json={"method": "call"})
     app.dependency_overrides.clear()
     assert resp.status_code == 403

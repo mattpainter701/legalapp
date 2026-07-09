@@ -100,7 +100,9 @@ class TexasProvider(GuidelineProvider):
         self, ws: Worksheet, p: ParentFinancials, inp: ChildSupportInput, tag: str
     ) -> Decimal:
         gross = p.gross_monthly_income
-        ws.add(f"{tag}.GROSS", "Gross monthly resources", gross, detail=p.name or p.role)
+        ws.add(
+            f"{tag}.GROSS", "Gross monthly resources", gross, detail=p.name or p.role
+        )
 
         fica = p.fica_tax
         fica_est = fica is None
@@ -111,7 +113,11 @@ class TexasProvider(GuidelineProvider):
         fed = p.federal_income_tax
         fed_est = fed is None
         if fed is None:
-            fed = deductions.estimate_federal_tax(gross) if inp.allow_estimates else money(0)
+            fed = (
+                deductions.estimate_federal_tax(gross)
+                if inp.allow_estimates
+                else money(0)
+            )
         ws.add(
             f"{tag}.FED",
             "Less: federal income tax (single, std deduction)",

@@ -149,7 +149,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="fixed right-3 top-3 z-[100] flex w-[min(95vw,380px)] flex-col gap-2 sm:right-5">
+      <div role="region" aria-label="Notifications" aria-live="polite" className="fixed right-3 top-3 z-[100] flex w-[min(95vw,380px)] flex-col gap-2 sm:right-5">
         {toasts.map((toast) => (
           <ToastItem key={toast.id} toast={toast} onDismiss={dismiss} />
         ))}

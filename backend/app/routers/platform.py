@@ -69,14 +69,15 @@ async def platform_integration_readiness(request: Request):
 
     backend_url = settings.BACKEND_URL.rstrip("/")
     zoom_callback = (
-        settings.ZOOM_REDIRECT_URI
-        or f"{backend_url}/api/integrations/zoom/callback"
+        settings.ZOOM_REDIRECT_URI or f"{backend_url}/api/integrations/zoom/callback"
     )
     zoom_phone_callback = (
         settings.ZOOM_PHONE_REDIRECT_URI
         or f"{backend_url}/api/integrations/zoom-phone/callback"
     )
-    client_ready = _setting_configured("ZOOM_CLIENT_ID") and _setting_configured("ZOOM_CLIENT_SECRET")
+    client_ready = _setting_configured("ZOOM_CLIENT_ID") and _setting_configured(
+        "ZOOM_CLIENT_SECRET"
+    )
 
     return {
         "zoom": {
@@ -749,7 +750,9 @@ async def platform_mcp_overview(
 
     overview = PlatformMCPOverview(
         tenants_with_keys=len(tenant_summary),
-        active_keys=sum(1 for key, _tenant in keys if key.is_active and key.revoked_at is None),
+        active_keys=sum(
+            1 for key, _tenant in keys if key.is_active and key.revoked_at is None
+        ),
         total_keys=len(keys),
         calls_30d=sum(row.get("calls_30d", 0) for row in usage_by_key.values()),
         errors_30d=sum(row.get("errors_30d", 0) for row in usage_by_key.values()),

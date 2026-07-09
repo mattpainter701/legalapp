@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -1387,6 +1388,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
 }
 
 function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
+  const confirmAction = useConfirm()
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState('')
   const [newProvider, setNewProvider] = useState('')
@@ -1414,7 +1416,7 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this API key from the vault?')) return
+    if (!await confirmAction({ title: 'Delete API key?', message: 'This key will be permanently removed from the vault.', confirmLabel: 'Delete key', destructive: true })) return
     try {
       await deleteLLMProviderKey(platformKey, id)
       onKeysChange(keys.filter((k) => k.id !== id))

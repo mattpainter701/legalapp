@@ -147,7 +147,9 @@ def test_subfolder_lookup_accepts_historical_uploads_key():
         }
     }
 
-    assert _extract_subfolder_id(cloud_folder, "onedrive", "documents") == "folder-uploads"
+    assert (
+        _extract_subfolder_id(cloud_folder, "onedrive", "documents") == "folder-uploads"
+    )
 
 
 def test_storage_result_document_fields_persist_provider_metadata():
@@ -187,7 +189,9 @@ async def test_onedrive_upload_result_captures_graph_item_metadata(monkeypatch):
     }
 
     monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
-    monkeypatch.setattr(matter_file_store_module, "_ensure_onedrive_path", fake_ensure_path)
+    monkeypatch.setattr(
+        matter_file_store_module, "_ensure_onedrive_path", fake_ensure_path
+    )
     monkeypatch.setattr(
         matter_file_store_module.httpx,
         "AsyncClient",
@@ -217,7 +221,9 @@ async def test_onedrive_upload_result_captures_graph_item_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sharepoint_upload_result_preserves_configured_drive_and_parent(monkeypatch):
+async def test_sharepoint_upload_result_preserves_configured_drive_and_parent(
+    monkeypatch,
+):
     async def fake_token(db, tenant_id, provider):
         return "token"
 
@@ -272,7 +278,9 @@ async def test_google_drive_upload_result_captures_file_id_and_parent(monkeypatc
     }
 
     monkeypatch.setattr(matter_file_store_module, "get_fresh_token", fake_token)
-    monkeypatch.setattr(matter_file_store_module, "_ensure_gdrive_path", fake_ensure_path)
+    monkeypatch.setattr(
+        matter_file_store_module, "_ensure_gdrive_path", fake_ensure_path
+    )
     monkeypatch.setattr(MatterFileStore, "_find_gdrive_file", fake_find_file)
     monkeypatch.setattr(
         matter_file_store_module.httpx,
@@ -327,6 +335,8 @@ async def test_delete_cloud_backing_tolerates_provider_not_found(monkeypatch):
     async def provider_delete(**kwargs):
         raise ProviderNotFound("already gone")
 
-    monkeypatch.setattr(matter_documents, "_delete_cloud_provider_object", provider_delete)
+    monkeypatch.setattr(
+        matter_documents, "_delete_cloud_provider_object", provider_delete
+    )
 
     await matter_documents._delete_cloud_backing_if_needed(doc, object())

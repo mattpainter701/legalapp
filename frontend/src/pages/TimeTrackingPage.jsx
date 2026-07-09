@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Clock, Plus, Trash2, Play, Square, X } from 'lucide-react'
 import { useAuth } from '../App'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 import {
   getTimeEntries,
   createTimeEntry,
@@ -22,6 +24,8 @@ function formatElapsed(startedAt) {
 }
 
 export default function TimeTrackingPage() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const preselectedMatterId = searchParams.get('matter_id') || ''
@@ -116,14 +120,14 @@ export default function TimeTrackingPage() {
   }
 
   const handleDiscardTimer = async () => {
-    if (!confirm('Discard the running timer without logging time?')) return
+    if (!await confirmAction({ title: 'Discard running timer?', message: 'The elapsed time will not be logged.', confirmLabel: 'Discard timer', destructive: true })) return
     setTimerBusy(true)
     try {
       await cancelTimer()
       setActiveTimer(null)
       loadData()
     } catch (err) {
-      console.error('Failed to discard timer', err)
+      toast.error('Timer was not discarded', { message: err?.response?.data?.detail || 'Please try again.' })
     } finally {
       setTimerBusy(false)
     }
@@ -180,12 +184,12 @@ export default function TimeTrackingPage() {
   }
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this time entry?')) return
+    if (!await confirmAction({ title: 'Delete time entry?', message: 'This time entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
     try {
       await deleteTimeEntry(id)
       loadData()
     } catch (err) {
-      console.error('Failed to delete', err)
+      toast.error('Time entry was not deleted', { message: err?.response?.data?.detail || 'Please try again.' })
     }
   }
 

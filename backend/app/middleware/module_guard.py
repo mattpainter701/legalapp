@@ -11,7 +11,7 @@ from jose import JWTError, jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import get_settings
-from app.services.plans import DEFAULT_PLAN_ID, get_plan
+from app.services.plans import DEFAULT_PLAN_ID, MODULES, get_plan
 
 settings = get_settings()
 
@@ -19,18 +19,7 @@ settings = get_settings()
 # notifications, intake, admin, plugins listing, health, portal) is shared
 # infrastructure and passes. New module routers MUST be added here.
 API_MODULE_MAP = {
-    "/api/matters": "matters",
-    "/api/chat": "chat",
-    "/api/calendar": "calendar",
-    "/api/tasks": "tasks",
-    "/api/communications": "communications",
-    "/api/contacts": "contacts",
-    "/api/templates": "templates",
-    "/api/time-tracking": "time-tracking",
-    "/api/invoices": "invoices",
-    "/api/trust": "trust",
-    "/api/reports": "reports",
-    "/api/mcp": "mcp",
+    prefix: module.id for module in MODULES.values() for prefix in module.api_prefixes
 }
 
 
@@ -63,7 +52,7 @@ class ModuleGuardMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         plan = get_plan(payload.get("plan")) or get_plan(DEFAULT_PLAN_ID)
-        allowed = set(plan.modules)
+        allowed = set(plan.modules) | set(plan.api_dependencies)
         if payload.get("role") in {"admin", "accountant"}:
             allowed.add("admin")
         if module not in allowed:

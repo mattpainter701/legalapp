@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Copy, KeyRound, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 import {
   createMcpProductKey,
   getMcpProductKeys,
@@ -61,6 +62,7 @@ const TOOL_DOCS = [
 ]
 
 export default function MCPPage({ embedded = false }) {
+  const confirmAction = useConfirm()
   const { user } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
@@ -122,7 +124,7 @@ export default function MCPPage({ embedded = false }) {
   }
 
   const handleRevoke = async (key) => {
-    if (!window.confirm(`Revoke ${key.name}? Existing clients using this key will stop working.`)) return
+    if (!await confirmAction({ title: `Revoke ${key.name}?`, message: 'Existing clients using this key will stop working.', confirmLabel: 'Revoke key', destructive: true })) return
     setError(null)
     try {
       await revokeMcpProductKey(key.id)

@@ -6,8 +6,10 @@ import {
   Gavel, FileText, FileSearch, CalendarClock, Plug, FolderInput, Mic, MonitorSmartphone,
   Sparkles,
 } from 'lucide-react'
-import bothSidesImg from '../assets/home/both-sides.png'
-import libraryImg from '../assets/home/library.jpg'
+import bothSidesImg from '../assets/home/both-sides-1280.webp'
+import bothSidesSmallImg from '../assets/home/both-sides-720.webp'
+import libraryImg from '../assets/home/library-1280.webp'
+import librarySmallImg from '../assets/home/library-720.webp'
 
 const SKILLS = [
   { icon: Scale, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
@@ -93,13 +95,13 @@ const FEATURES = [
   },
   {
     icon: MonitorSmartphone,
-    title: 'Mobile, desktop & cloud portal',
-    body: 'Native mobile and desktop apps plus a secure web portal \u2014 your workspace stays in sync wherever you are.',
+    title: 'Responsive secure web workspace',
+    body: 'A responsive web workspace keeps your matters available across modern desktop and mobile browsers.',
   },
   {
     icon: Lock,
-    title: 'Encrypted, secure storage',
-    body: 'Documents are stored encrypted and isolated to your firm. Your data is never shared or used to train public models.',
+    title: 'Tenant-isolated document storage',
+    body: 'Firm workspaces are isolated by tenant. Storage encryption and model-provider data handling depend on your configured infrastructure, provider, and tenant policy.',
   },
 ]
 
@@ -170,7 +172,7 @@ export default function HomePage() {
             </h1>
             <p className="text-brand-ink-2 font-sans text-[18px] leading-relaxed mt-6 max-w-xl">
               Clarity answers from public case law and court records, drafts from your own templates,
-              and reviews documents for gaps — every claim cited and framed for attorney review. It
+              and reviews documents for gaps — legal-research claims are source-tagged and framed for attorney review. It
               connects to Microsoft 365, Google Docs, and your file shares, and follows you across
               mobile, desktop, and the web.
             </p>
@@ -184,7 +186,7 @@ export default function HomePage() {
             </div>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-9 text-[13px] font-sans text-brand-muted">
               <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> 14-day trial, no card required</span>
-              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> Cited &amp; attorney-reviewed</span>
+              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> Source-tagged for attorney review</span>
               <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> SOC 2 Type II in progress</span>
             </div>
           </div>
@@ -411,6 +413,8 @@ export default function HomePage() {
             <div className="absolute -inset-3 bg-brand-gold/10 rounded-[28px] -rotate-1" aria-hidden />
             <img
               src={bothSidesImg}
+              srcSet={`${bothSidesSmallImg} 720w, ${bothSidesImg} 1280w`}
+              sizes="(max-width: 768px) 100vw, 50vw"
               alt="Two leather chairs facing each other across a table in a warm, light-filled law office"
               loading="lazy"
               className="relative w-full aspect-[4/3] object-cover rounded-2xl shadow-xl border border-brand-line"
@@ -563,7 +567,7 @@ export default function HomePage() {
       {/* ── Security strip ────────────────────────────────────────── */}
       <section id="security" className="max-w-6xl mx-auto px-6 py-20 md:py-24 scroll-mt-20">
         <div className="bg-brand-ink rounded-3xl px-8 py-14 md:px-16 text-center relative overflow-hidden">
-          <img src={libraryImg} alt="" aria-hidden loading="lazy" className="absolute inset-0 w-full h-full object-cover opacity-20" />
+          <img src={libraryImg} srcSet={`${librarySmallImg} 720w, ${libraryImg} 1280w`} sizes="(max-width: 768px) 100vw, 1152px" alt="" aria-hidden loading="lazy" className="absolute inset-0 w-full h-full object-cover opacity-20" />
           <div className="absolute inset-0 bg-brand-ink/80" aria-hidden />
           <div className="relative">
             <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[12px] font-sans font-semibold bg-white/10 text-white border border-white/15">

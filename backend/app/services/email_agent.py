@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.utils.guardrails import prepare_provider_messages, prepare_provider_text
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -237,17 +238,20 @@ Draft a professional response email. The attorney will review before sending. Do
         llm_service: Any,
         tenant_name: str,
         model: str | None = None,
+        privacy_mode: bool = False,
     ) -> dict:
         prompt = self.LLM_CLASSIFICATION_PROMPT.format(
             subject=email.get("subject", ""),
             sender=email.get("from", ""),
             body=email.get("body_preview", "")[:3000],
         )
-        messages = [{"role": "user", "content": prompt}]
+        messages = prepare_provider_messages(
+            [{"role": "user", "content": prompt}], privacy_mode
+        )
         try:
             response_text, _, _ = await llm_service.complete(
                 messages,
-                tenant_name,
+                prepare_provider_text(tenant_name, privacy_mode),
                 context="",
                 use_premium=False,
                 provider="litellm",
@@ -275,6 +279,7 @@ Draft a professional response email. The attorney will review before sending. Do
         tenant_name: str,
         practice_context: str = "General legal practice",
         model: str | None = None,
+        privacy_mode: bool = False,
     ) -> str:
         prompt = self.LLM_DRAFT_PROMPT.format(
             subject=email.get("subject", ""),
@@ -283,11 +288,13 @@ Draft a professional response email. The attorney will review before sending. Do
             classification=json.dumps(classification, indent=2),
             practice_context=practice_context,
         )
-        messages = [{"role": "user", "content": prompt}]
+        messages = prepare_provider_messages(
+            [{"role": "user", "content": prompt}], privacy_mode
+        )
         try:
             response_text, _, _ = await llm_service.complete(
                 messages,
-                tenant_name,
+                prepare_provider_text(tenant_name, privacy_mode),
                 context="",
                 use_premium=True,
                 provider="litellm",
@@ -309,6 +316,7 @@ Draft a professional response email. The attorney will review before sending. Do
         max_emails: int = 20,
         standard_model: str | None = None,
         premium_model: str | None = None,
+        privacy_mode: bool = False,
     ) -> list[dict]:
         results = []
 
@@ -339,6 +347,7 @@ Draft a professional response email. The attorney will review before sending. Do
                 llm_service,
                 tenant_name,
                 model=standard_model,
+                privacy_mode=privacy_mode,
             )
 
             draft_response = None
@@ -349,6 +358,7 @@ Draft a professional response email. The attorney will review before sending. Do
                     llm_service,
                     tenant_name,
                     model=premium_model,
+                    privacy_mode=privacy_mode,
                 )
 
             await _auto_log_and_task(db, tenant_id, user_id, email, classification)

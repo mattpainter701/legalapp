@@ -24,9 +24,7 @@ async def _get_token(tenant_id: str, user_id: str | None = None) -> str | None:
     try:
         async with async_session_maker() as db:
             if user_id:
-                token = await get_fresh_user_token(
-                    db, tenant_id, user_id, "microsoft"
-                )
+                token = await get_fresh_user_token(db, tenant_id, user_id, "microsoft")
                 if token:
                     return token
             return await get_fresh_token(db, tenant_id, "microsoft")

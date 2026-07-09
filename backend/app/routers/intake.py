@@ -77,14 +77,18 @@ async def upsert_intake_draft(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = str(current_user.tenant_id)
+    # Keep plain scalar identifiers across commits/rollbacks. SQLAlchemy expires
+    # ORM instances on transaction boundaries, and touching current_user after
+    # an IntegrityError rollback can otherwise trigger an async lazy load.
+    tenant_uuid = current_user.tenant_id
+    tenant_id = str(tenant_uuid)
     user_id = current_user.id
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
         select(IntakeCallDraft).where(
             IntakeCallDraft.id == draft_id,
-            IntakeCallDraft.tenant_id == current_user.tenant_id,
+            IntakeCallDraft.tenant_id == tenant_uuid,
             IntakeCallDraft.created_by_user_id == user_id,
         )
     )
@@ -99,7 +103,7 @@ async def upsert_intake_draft(
     else:
         draft = IntakeCallDraft(
             id=draft_id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_uuid,
             created_by_user_id=user_id,
             payload=body.payload,
             created_at=now,
@@ -114,15 +118,13 @@ async def upsert_intake_draft(
             existing = await db.execute(
                 select(IntakeCallDraft).where(
                     IntakeCallDraft.id == draft_id,
-                    IntakeCallDraft.tenant_id == current_user.tenant_id,
+                    IntakeCallDraft.tenant_id == tenant_uuid,
                     IntakeCallDraft.created_by_user_id == user_id,
                 )
             )
             draft = existing.scalar_one_or_none()
             if not draft:
-                raise HTTPException(
-                    status_code=404, detail="Draft not found"
-                ) from None
+                raise HTTPException(status_code=404, detail="Draft not found") from None
             draft.payload = body.payload
             draft.updated_at = now
             await db.commit()
@@ -135,19 +137,24 @@ async def delete_intake_draft(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = str(current_user.tenant_id)
+    tenant_uuid = current_user.tenant_id
+    tenant_id = str(tenant_uuid)
+    user_id = current_user.id
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
         select(IntakeCallDraft).where(
             IntakeCallDraft.id == draft_id,
-            IntakeCallDraft.tenant_id == current_user.tenant_id,
-            IntakeCallDraft.created_by_user_id == current_user.id,
+            IntakeCallDraft.tenant_id == tenant_uuid,
+            IntakeCallDraft.created_by_user_id == user_id,
         )
     )
     draft = result.scalar_one_or_none()
     if not draft:
-        return
+        # A uniform 404 neither reveals whether the identifier belongs to a
+        # peer/another tenant nor lets callers mistake an unauthorized delete
+        # for a successful one.
+        raise HTTPException(status_code=404, detail="Draft not found")
 
     await db.delete(draft)
     await db.commit()

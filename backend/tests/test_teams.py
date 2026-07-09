@@ -68,7 +68,9 @@ class TestGating:
     async def test_missing_teams_scopes_returns_403(
         self, client, db_session, test_tenant
     ):
-        await _add_ms_credential(db_session, test_tenant.id, "offline_access User.Read.All")
+        await _add_ms_credential(
+            db_session, test_tenant.id, "offline_access User.Read.All"
+        )
         resp = await client.get("/api/integrations/teams/teams")
         assert resp.status_code == 403
         detail = resp.json()["detail"]
@@ -104,7 +106,9 @@ class TestReauthScopePreservation:
     async def test_reauth_without_teams_history_stays_base(
         self, client, db_session, test_tenant
     ):
-        await _add_ms_credential(db_session, test_tenant.id, "offline_access User.Read.All")
+        await _add_ms_credential(
+            db_session, test_tenant.id, "offline_access User.Read.All"
+        )
 
         resp = await client.get(
             "/api/integrations/microsoft/connect?intent=admin",
@@ -127,10 +131,10 @@ class TestStatus:
         assert ms["teams_connected"] is True
         assert ms["teams_missing_scopes"] == []
 
-    async def test_teams_missing_scopes_reported(
-        self, client, db_session, test_tenant
-    ):
-        await _add_ms_credential(db_session, test_tenant.id, "offline_access User.Read.All")
+    async def test_teams_missing_scopes_reported(self, client, db_session, test_tenant):
+        await _add_ms_credential(
+            db_session, test_tenant.id, "offline_access User.Read.All"
+        )
         resp = await client.get("/api/integrations/status")
         ms = resp.json()["microsoft"]
         assert ms["teams_connected"] is False
@@ -234,14 +238,14 @@ class TestLinkCRUD:
 
 @pytest.mark.asyncio
 class TestChannels:
-    async def test_create_channel(
-        self, client, ms_connected, monkeypatch
-    ):
+    async def test_create_channel(self, client, ms_connected, monkeypatch):
         from app.services import teams as teams_service
 
         captured = {}
 
-        async def fake_create(tenant_id, team_id, display_name, *, description=None, user_id=None):
+        async def fake_create(
+            tenant_id, team_id, display_name, *, description=None, user_id=None
+        ):
             captured["team_id"] = team_id
             captured["display_name"] = display_name
             captured["description"] = description
@@ -335,7 +339,9 @@ class TestDispatch:
 
         captured = {}
 
-        async def fake_send(tenant_id, team_id, channel_id, *, adaptive_card=None, **kw):
+        async def fake_send(
+            tenant_id, team_id, channel_id, *, adaptive_card=None, **kw
+        ):
             captured["card"] = adaptive_card
             captured["channel"] = channel_id
             return True

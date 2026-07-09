@@ -68,39 +68,64 @@ class NorthDakotaProvider(GuidelineProvider):
         self, ws: Worksheet, parent: ParentFinancials, inp: ChildSupportInput, tag: str
     ) -> Decimal:
         gross = parent.gross_monthly_income
-        ws.add(f"{tag}.GROSS", "Gross monthly income", gross,
-                detail=parent.name or parent.role)
+        ws.add(
+            f"{tag}.GROSS",
+            "Gross monthly income",
+            gross,
+            detail=parent.name or parent.role,
+        )
 
         fed = parent.federal_income_tax
         fed_est = fed is None
         if fed is None:
-            fed = deductions.estimate_federal_tax(gross) if inp.allow_estimates else money(0)
+            fed = (
+                deductions.estimate_federal_tax(gross)
+                if inp.allow_estimates
+                else money(0)
+            )
         ws.add(f"{tag}.FED", "Less: federal income tax", -fed, estimated=fed_est)
 
         st = parent.state_income_tax
         st_est = st is None
         if st is None:
-            st = deductions.estimate_nd_state_tax(gross) if inp.allow_estimates else money(0)
+            st = (
+                deductions.estimate_nd_state_tax(gross)
+                if inp.allow_estimates
+                else money(0)
+            )
         ws.add(f"{tag}.STATE", "Less: ND state income tax", -st, estimated=st_est)
 
         fica = parent.fica_tax
         fica_est = fica is None
         if fica is None:
             fica = deductions.estimate_fica(gross) if inp.allow_estimates else money(0)
-        ws.add(f"{tag}.FICA", "Less: FICA (Social Security + Medicare)", -fica,
-                estimated=fica_est)
+        ws.add(
+            f"{tag}.FICA",
+            "Less: FICA (Social Security + Medicare)",
+            -fica,
+            estimated=fica_est,
+        )
 
         if parent.required_retirement:
-            ws.add(f"{tag}.RET", "Less: required retirement contributions",
-                    -parent.required_retirement)
+            ws.add(
+                f"{tag}.RET",
+                "Less: required retirement contributions",
+                -parent.required_retirement,
+            )
         if parent.union_dues:
             ws.add(f"{tag}.UNION", "Less: union dues", -parent.union_dues)
         if parent.existing_support_paid:
-            ws.add(f"{tag}.PRIOR", "Less: existing court-ordered support paid",
-                    -parent.existing_support_paid)
+            ws.add(
+                f"{tag}.PRIOR",
+                "Less: existing court-ordered support paid",
+                -parent.existing_support_paid,
+            )
 
         subtotal = (
-            gross - fed - st - fica
+            gross
+            - fed
+            - st
+            - fica
             - parent.required_retirement
             - parent.union_dues
             - parent.existing_support_paid
@@ -133,8 +158,11 @@ class NorthDakotaProvider(GuidelineProvider):
             f"Guideline schedule amount ({n} child(ren))",
             amt,
             detail=f"75-02-04.1-10 @ net ${net:,.2f}"
-            + (f" (capped at ${schedule.INCOME_CEILING:,.0f} net)"
-               if net >= schedule.INCOME_CEILING else ""),
+            + (
+                f" (capped at ${schedule.INCOME_CEILING:,.0f} net)"
+                if net >= schedule.INCOME_CEILING
+                else ""
+            ),
             estimated=self.schedule_unverified,
         )
         return amt

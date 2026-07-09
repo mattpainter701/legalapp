@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, CreditCard, Download, Printer } from 'lucide-react'
 import { getInvoice, updateInvoice, recordPayment, exportInvoice, syncInvoiceToQBO } from '../api'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 
 const QBO_GREEN = '#2CA01C'
 
@@ -15,6 +17,8 @@ const STATUS_COLORS = {
 }
 
 export default function InvoiceDetailPage() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const { id } = useParams()
   const navigate = useNavigate()
   const [invoice, setInvoice] = useState(null)
@@ -45,13 +49,13 @@ export default function InvoiceDetailPage() {
   useEffect(() => { loadInvoice() }, [loadInvoice])
 
   const handleStatusChange = async (newStatus) => {
-    if (newStatus === 'void' && !confirm('Void this invoice? Its time entries and expenses will return to the unbilled pool.')) return
+    if (newStatus === 'void' && !await confirmAction({ title: 'Void invoice?', message: 'Its time entries and expenses will return to the unbilled pool.', confirmLabel: 'Void invoice', destructive: true })) return
     try {
       await updateInvoice(id, { status: newStatus })
       loadInvoice()
     } catch (err) {
       const detail = err?.response?.data?.detail
-      alert(typeof detail === 'string' ? detail : 'Failed to update status')
+      toast.error('Invoice status was not updated', { message: typeof detail === 'string' ? detail : 'Please try again.' })
       console.error('Failed to update status', err)
     }
   }
@@ -60,7 +64,7 @@ export default function InvoiceDetailPage() {
     e.preventDefault()
     const amt = parseFloat(paymentForm.amount)
     if (!amt || amt <= 0) {
-      alert('Please enter a valid payment amount.')
+      toast.error('Invalid payment amount', { message: 'Enter an amount greater than zero.' })
       return
     }
     try {
@@ -99,7 +103,7 @@ export default function InvoiceDetailPage() {
       loadInvoice()
     } catch (err) {
       console.error('QBO sync failed', err)
-      alert('QBO sync failed. Make sure QuickBooks is connected in Admin → QuickBooks.')
+      toast.error('QuickBooks sync failed', { message: 'Make sure QuickBooks is connected in Admin.' })
     } finally {
       setSyncing(false)
     }

@@ -12,6 +12,9 @@ def build_certificate(
     matter_name: str,
     document_name: str,
     signers: list,
+    request_id: str = "",
+    source_sha256: str | None = None,
+    evidence_sha256: str | None = None,
 ) -> tuple[bytes, str, str]:
     """Return (content_bytes, filename, content_type) for the signed certificate.
 
@@ -32,7 +35,7 @@ def build_certificate(
         y = height - inch
 
         c.setFont("Helvetica-Bold", 16)
-        c.drawString(inch, y, "Certificate of Completion")
+        c.drawString(inch, y, "Signature Acknowledgment Certificate")
         y -= 0.4 * inch
         c.setFont("Helvetica", 10)
         c.drawString(inch, y, "Clarity Legal — Electronic Signature")
@@ -50,6 +53,19 @@ def build_certificate(
         y -= 0.3 * inch
         c.setFont("Helvetica", 9)
         c.drawString(inch, y, f"Generated: {generated}")
+        y -= 0.25 * inch
+        c.drawString(inch, y, f"Request ID: {request_id}")
+        y -= 0.25 * inch
+        c.drawString(inch, y, f"Source SHA-256: {source_sha256 or 'unavailable'}")
+        y -= 0.25 * inch
+        c.drawString(inch, y, f"Evidence SHA-256: {evidence_sha256 or 'unavailable'}")
+        y -= 0.35 * inch
+        c.setFont("Helvetica-Oblique", 8)
+        c.drawString(
+            inch,
+            y,
+            "This artifact records acknowledgments; it is not a signed copy of the source document.",
+        )
         y -= 0.5 * inch
 
         c.setFont("Helvetica-Bold", 12)
@@ -74,7 +90,7 @@ def build_certificate(
 
         c.showPage()
         c.save()
-        return buf.getvalue(), f"{base}-signed.pdf", "application/pdf"
+        return buf.getvalue(), f"{base}-signature-evidence.pdf", "application/pdf"
     except Exception:
         rows = "".join(
             f"<tr><td>{s.name} &lt;{s.email}&gt;</td>"
@@ -85,11 +101,14 @@ def build_certificate(
         )
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>
-<h1>Certificate of Completion</h1>
+<h1>Signature Acknowledgment Certificate</h1>
 <p>Clarity Legal — Electronic Signature</p>
 <p><b>Matter:</b> {matter_name}<br/><b>Document:</b> {document_name or '—'}<br/>
-<b>Generated:</b> {generated}</p>
+<b>Generated:</b> {generated}<br/><b>Request ID:</b> {request_id}<br/>
+<b>Source SHA-256:</b> {source_sha256 or 'unavailable'}<br/>
+<b>Evidence SHA-256:</b> {evidence_sha256 or 'unavailable'}</p>
+<p><i>This artifact records acknowledgments; it is not a signed copy of the source document.</i></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <thead><tr><th>Signer</th><th>Signature</th><th>Signed at</th><th>IP</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
-        return html.encode("utf-8"), f"{base}-signed.html", "text/html"
+        return html.encode("utf-8"), f"{base}-signature-evidence.html", "text/html"

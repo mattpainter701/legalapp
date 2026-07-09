@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays, isPast } from 'date-fns'
 import { getRenewals, createRenewal, updateRenewal, deleteRenewal } from '../api'
 import { FileText, Plus, X, Check, Search, Filter } from 'lucide-react'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
 
 const URGENCY_CONFIG = {
   urgent: { label: 'Urgent', classes: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20', days: [0, 13] },
@@ -225,6 +226,7 @@ function RenewalModal({ onClose, onSave, initial = null }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function RenewalTrackerPage() {
+  const confirmAction = useConfirm()
   const navigate = useNavigate()
   const [renewals, setRenewals] = useState([])
   const [loading, setLoading] = useState(true)
@@ -285,7 +287,7 @@ export default function RenewalTrackerPage() {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this renewal?')) return
+    if (!await confirmAction({ title: 'Delete renewal?', message: 'This renewal record will be permanently removed.', confirmLabel: 'Delete renewal', destructive: true })) return
     setDeletingId(id)
     try {
       await deleteRenewal(id)

@@ -12,6 +12,8 @@ import {
   deleteMediationCase,
 } from '../api'
 import MediationSubTable from '../components/MediationSubTable'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 import {
   Handshake, ArrowLeft, CalendarPlus, Check, X, FileEdit, Clock,
   Send, FileCheck, Trash2, Download, AlertTriangle,
@@ -92,6 +94,8 @@ function AssetStatusBadge({ status }) {
 }
 
 export default function MediationDetailPage() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const { id } = useParams()
   const navigate = useNavigate()
   const [mediation, setMediation] = useState(null)
@@ -139,7 +143,7 @@ export default function MediationDetailPage() {
   }
 
   const handleDelete = async () => {
-    if (!window.confirm('Permanently delete this mediation case? This cannot be undone.')) return
+    if (!await confirmAction({ title: 'Delete mediation case?', message: 'This case will be permanently deleted and cannot be restored.', confirmLabel: 'Delete case', destructive: true })) return
     setDeleting(true)
     try { await deleteMediationCase(id); navigate('/plugins/mediation/cases') } catch { setDeleting(false) }
   }
@@ -185,8 +189,8 @@ export default function MediationDetailPage() {
     actions: [{
       label: 'Invite', icon: Send,
       onClick: async (row) => {
-        if (!window.confirm(`Send portal invitation to ${row.name}?`)) return
-        try { await inviteMediationParty(id, row.id); alert('Invitation sent!'); loadCase() } catch { alert('Failed to send invitation.') }
+        if (!await confirmAction({ title: 'Send portal invitation?', message: `Send an invitation to ${row.name}?`, confirmLabel: 'Send invitation' })) return
+        try { await inviteMediationParty(id, row.id); toast.success('Portal invitation sent'); loadCase() } catch (error) { toast.error('Invitation was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) }
       },
       condition: (row) => row.email && !row.invited,
     }],
@@ -216,8 +220,8 @@ export default function MediationDetailPage() {
       { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
     actions: [
-      { label: 'Approve', icon: FileCheck, onClick: async (row) => { try { await approveMediationAsset(id, row.id); loadCase() } catch { alert('Failed to approve.') } }, condition: (row) => row.status === 'submitted' },
-      { label: 'Send', icon: Send, onClick: async (row) => { try { await sendMediationAsset(id, row.id); loadCase() } catch { alert('Failed to send.') } }, condition: (row) => row.status === 'attorney_approved' },
+      { label: 'Approve', icon: FileCheck, onClick: async (row) => { try { await approveMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not approved', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => row.status === 'submitted' },
+      { label: 'Send', icon: Send, onClick: async (row) => { try { await sendMediationAsset(id, row.id); loadCase() } catch (error) { toast.error('Asset was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) } }, condition: (row) => row.status === 'attorney_approved' },
     ],
   }
 

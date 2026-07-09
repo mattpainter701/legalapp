@@ -42,13 +42,17 @@ async def _make_assignee(db_session, test_tenant):
 
 async def _history_rows(db_session, tenant_id, external_ref):
     rows = (
-        await db_session.execute(
-            select(CommunicationLog).where(
-                CommunicationLog.tenant_id == tenant_id,
-                CommunicationLog.external_ref == external_ref,
+        (
+            await db_session.execute(
+                select(CommunicationLog).where(
+                    CommunicationLog.tenant_id == tenant_id,
+                    CommunicationLog.external_ref == external_ref,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return rows
 
 
@@ -122,9 +126,7 @@ async def test_cancel_requires_reason_and_documents_history(
     assert body["closed_reason"] == "Caller retained other counsel"
     assert body["closed_by_user_id"] == str(test_user.id)
 
-    rows = await _history_rows(
-        db_session, test_tenant.id, f"task:{task.id}:cancelled"
-    )
+    rows = await _history_rows(db_session, test_tenant.id, f"task:{task.id}:cancelled")
     assert len(rows) == 1
     assert "Caller retained other counsel" in (rows[0].body or "")
 
@@ -194,9 +196,7 @@ async def test_reassign_with_note_resets_receipt_and_documents_history(
     assert body["viewed_at"] is None
     assert "Taking over while I'm in trial" in body["description"]
 
-    rows = await _history_rows(
-        db_session, test_tenant.id, f"task:{task.id}:reassigned"
-    )
+    rows = await _history_rows(db_session, test_tenant.id, f"task:{task.id}:reassigned")
     assert len(rows) == 1
     assert rows[0].subject.startswith("Task reassigned:")
     assert "Pat Paralegal" in (rows[0].body or "")
@@ -226,9 +226,7 @@ async def test_log_contact_writes_customer_history(
     )
     assert resp.status_code == 200
 
-    rows = await _history_rows(
-        db_session, test_tenant.id, f"task:{task.id}:contacted"
-    )
+    rows = await _history_rows(db_session, test_tenant.id, f"task:{task.id}:contacted")
     assert len(rows) == 1
     log = rows[0]
     assert log.channel == "call"

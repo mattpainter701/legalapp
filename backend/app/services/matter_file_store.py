@@ -248,7 +248,9 @@ class MatterFileStore:
                     logger.info("Stored %s in OneDrive: %s", filename, result.web_url)
                     return result
                 else:
-                    error = f"OneDrive upload failed: {resp.status_code} {resp.text[:200]}"
+                    error = (
+                        f"OneDrive upload failed: {resp.status_code} {resp.text[:200]}"
+                    )
                     logger.warning(
                         "OneDrive upload failed for %s: %s %s",
                         filename,
@@ -657,7 +659,7 @@ class MatterFileStore:
                         "Authorization": f"Bearer {token}",
                         "Content-Type": content_type,
                     },
-            )
+                )
             if resp.status_code in (200, 201):
                 data = resp.json()
                 result = _storage_result_from_graph_item(

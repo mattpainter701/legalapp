@@ -7,7 +7,10 @@ Client side (``portal_router``, ``/api/portal/client/signatures``): the client
 signs in the portal via the matter-scoped portal token.
 """
 
+import hashlib
+import asyncio
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import List
 
@@ -77,6 +80,10 @@ async def _to_response(
         void_reason=req.void_reason,
         created_at=req.created_at,
         signed_document_id=signed_document_id,
+        completion_artifact_id=signed_document_id,
+        source_document_sha256=req.source_document_sha256,
+        completion_artifact_sha256=req.completion_artifact_sha256,
+        evidence_sha256=req.evidence_sha256,
         signers=[
             SignerResponse(
                 id=str(s.id),
@@ -110,6 +117,19 @@ async def _load_request(
     if req is None:
         raise HTTPException(status_code=404, detail="Signature request not found")
     return req
+
+
+async def _source_document_is_unchanged(
+    db: AsyncSession, req: SignatureRequest
+) -> bool:
+    if not req.document_id or not req.source_document_sha256:
+        return False
+    doc = await db.get(MatterDocument, req.document_id)
+    path = Path(doc.storage_path or "") if doc else None
+    if path is None or not path.is_file():
+        return False
+    content = await asyncio.to_thread(path.read_bytes)
+    return hashlib.sha256(content).hexdigest() == req.source_document_sha256
 
 
 def _portal_signer_matches_context(
@@ -221,13 +241,33 @@ async def create_signature_request(
     ):
         raise HTTPException(status_code=404, detail="Document not found on this matter")
 
+    provider_name = (body.provider or "internal").strip().lower()
+    if provider_name != "internal":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"E-signature provider '{provider_name}' is not configured. "
+                "Only signature acknowledgments through the internal provider are available."
+            ),
+        )
+    source_path = Path(doc.storage_path or "")
+    if not doc.storage_path or not source_path.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail="The source document must be locally available to bind its SHA-256 before signing",
+        )
+    source_bytes = await asyncio.to_thread(source_path.read_bytes)
+
     req = SignatureRequest(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
         matter_id=uuid.UUID(matter_id),
         document_id=doc.id,
         status="draft",
-        provider=body.provider or "internal",
+        provider=provider_name,
+        source_document_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        source_document_size=len(source_bytes),
+        source_document_filename=doc.filename,
         created_by_user_id=user.id,
         expires_at=body.expires_at,
         reminders=_build_reminders(body),
@@ -311,6 +351,11 @@ async def send_signature_request(
     if req.status != "draft":
         raise HTTPException(
             status_code=409, detail=f"Cannot send from status '{req.status}'"
+        )
+    if not await _source_document_is_unchanged(db, req):
+        raise HTTPException(
+            status_code=409,
+            detail="The source document is unavailable or changed after this request was created",
         )
     if _expires_in_past(req.expires_at):
         req.status = "expired"
@@ -409,7 +454,11 @@ async def portal_sign(
     ctx = await get_client_portal_context(request, db)
     if not body.typed_signature or not body.typed_signature.strip():
         raise HTTPException(status_code=400, detail="A typed signature is required")
-
+    if body.consent_to_electronic_signature is not True:
+        raise HTTPException(
+            status_code=422,
+            detail="Explicit consent to use an electronic signature is required",
+        )
     result = await db.execute(
         select(SignatureRequest)
         .options(selectinload(SignatureRequest.signers))
@@ -426,6 +475,11 @@ async def portal_sign(
     if req.status not in ("sent", "partially_signed"):
         raise HTTPException(
             status_code=409, detail="This request is not open for signing"
+        )
+    if not await _source_document_is_unchanged(db, req):
+        raise HTTPException(
+            status_code=409,
+            detail="The source document no longer matches the version sent for acknowledgment",
         )
 
     # Resolve the signer: explicit signer_id, else the next pending in order.
@@ -444,7 +498,11 @@ async def portal_sign(
 
     ip = request.client.host if request.client else None
     await record_portal_signature(
-        signer, typed_signature=body.typed_signature.strip(), ip=ip
+        signer,
+        typed_signature=body.typed_signature.strip(),
+        ip=ip,
+        consent_text_version=body.consent_text_version,
+        user_agent=request.headers.get("user-agent"),
     )
 
     matter = await db.get(Matter, req.matter_id)

@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -28,7 +27,9 @@ def test_product_key_scope_rejects_unknown_tools():
 
 
 def test_product_key_scope_defaults_to_all_tools():
-    assert mcp_product.normalize_allowed_tools(None) == mcp_product.DEFAULT_ALLOWED_TOOLS
+    assert (
+        mcp_product.normalize_allowed_tools(None) == mcp_product.DEFAULT_ALLOWED_TOOLS
+    )
     assert mcp_product.normalize_allowed_tools([]) == mcp_product.DEFAULT_ALLOWED_TOOLS
 
 
@@ -37,7 +38,12 @@ def test_product_key_scope_accepts_expanded_courtlistener_tools():
         ["get_full_opinion", "find_similar_cases", "sync_status", "corpus_status"]
     )
 
-    assert tools == ["get_full_opinion", "find_similar_cases", "sync_status", "corpus_status"]
+    assert tools == [
+        "get_full_opinion",
+        "find_similar_cases",
+        "sync_status",
+        "corpus_status",
+    ]
 
 
 @pytest.mark.asyncio
@@ -89,7 +95,9 @@ async def test_external_product_key_records_usage_after_proxy(monkeypatch):
         headers={"X-MCP-API-Key": "clmcp_test"},
         client=SimpleNamespace(host="127.0.0.1"),
     )
-    body = ToolCallRequest(name="search_caselaw", arguments={"query": "oil", "top_k": 2})
+    body = ToolCallRequest(
+        name="search_caselaw", arguments={"query": "oil", "top_k": 2}
+    )
     calls = []
 
     async def resolve_key(*args, **kwargs):
@@ -99,7 +107,10 @@ async def test_external_product_key_records_usage_after_proxy(monkeypatch):
         calls.append(("quota", args, kwargs))
 
     async def proxy(path, req, payload):
-        return {"content": [{"type": "json", "json": {"results": [{}, {}]}}], "isError": False}
+        return {
+            "content": [{"type": "json", "json": {"results": [{}, {}]}}],
+            "isError": False,
+        }
 
     async def record_usage(**kwargs):
         calls.append(("usage", kwargs))
@@ -198,7 +209,9 @@ async def test_product_key_usage_can_emit_stripe_meter_event(
     )
 
     saved = (
-        await db_session.execute(select(MCPUsageEvent).where(MCPUsageEvent.id == event.id))
+        await db_session.execute(
+            select(MCPUsageEvent).where(MCPUsageEvent.id == event.id)
+        )
     ).scalar_one()
     assert saved.tool_name == "search_caselaw"
     assert calls[0]["event_name"] == "mcp_product_key_calls"
@@ -277,7 +290,9 @@ async def test_tenant_admin_can_revoke_product_key(monkeypatch):
     monkeypatch.setattr(mcp, "get_current_user", current_user)
     monkeypatch.setattr(mcp, "revoke_product_key", revoke_key)
 
-    result = await mcp.revoke_mcp_product_key(key_id, SimpleNamespace(headers={}), object())
+    result = await mcp.revoke_mcp_product_key(
+        key_id, SimpleNamespace(headers={}), object()
+    )
 
     assert result == {"revoked": True}
     assert calls[0] == {"tenant_id": tenant_id, "key_id": key_id}

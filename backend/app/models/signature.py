@@ -55,6 +55,17 @@ class SignatureRequest(Base):
         String(50), default="internal", server_default="internal"
     )
     provider_envelope_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_document_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    source_document_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_document_filename: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    completion_artifact_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    evidence_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

@@ -182,9 +182,9 @@ async def _graph_request(
                 return resp
             retry_after = resp.headers.get("Retry-After")
             try:
-                delay = float(retry_after) if retry_after else 2 ** attempt
+                delay = float(retry_after) if retry_after else 2**attempt
             except ValueError:
-                delay = 2 ** attempt
+                delay = 2**attempt
             logger.info(
                 "Graph %s %s throttled (429), retry %d/%d after %.1fs",
                 method,
@@ -348,6 +348,7 @@ async def send_channel_message(
             )
         return False
     return True
+
 
 def build_matter_card(
     title: str,

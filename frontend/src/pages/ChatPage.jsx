@@ -305,7 +305,7 @@ export default function ChatPage() {
       setInputValue(pending)
       sessionStorage.removeItem('pending_chat_message')
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // If conversations loaded after mount and no active conv, pick first
   useEffect(() => {

@@ -76,18 +76,14 @@ async def test_onboarding_complete_fails_without_integration(
     await db_session.commit()
 
     # Verify no credentials exist
-    creds = await db_session.execute(
-        text("SELECT 1 FROM tenant_credentials LIMIT 1")
-    )
+    creds = await db_session.execute(text("SELECT 1 FROM tenant_credentials LIMIT 1"))
     assert creds is not None  # Just verifying table access works
 
 
 @pytest.mark.anyio
 async def test_license_toggle(db_session, tenant_id, regular_user_id):
     """Toggle User.license_active on and off."""
-    tenant = Tenant(
-        id=tenant_id, name="Test Firm", domain="testfirm-lic.com"
-    )
+    tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-lic.com")
     db_session.add(tenant)
 
     user = User(
@@ -113,9 +109,7 @@ async def test_license_toggle(db_session, tenant_id, regular_user_id):
 @pytest.mark.anyio
 async def test_service_account_deactivation_guard(db_session, tenant_id, admin_user_id):
     """User with TenantCredential.granted_by_user_id should not be deactivated without force."""
-    tenant = Tenant(
-        id=tenant_id, name="Test Firm", domain="testfirm-svc.com"
-    )
+    tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-svc.com")
     db_session.add(tenant)
 
     admin = User(
@@ -147,9 +141,7 @@ async def test_service_account_deactivation_guard(db_session, tenant_id, admin_u
 @pytest.mark.anyio
 async def test_permission_audit_scopes(db_session, tenant_id):
     """Permission audit returns correct scope comparison."""
-    tenant = Tenant(
-        id=tenant_id, name="Test Firm", domain="testfirm-perm.com"
-    )
+    tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-perm.com")
     db_session.add(tenant)
 
     cred = TenantCredential(
@@ -196,9 +188,7 @@ async def test_cloud_root_folder_storage(db_session, tenant_id):
 @pytest.mark.anyio
 async def test_customer_llm_config(db_session, tenant_id):
     """Customer LLM settings stored in TenantSettings."""
-    tenant = Tenant(
-        id=tenant_id, name="Test Firm", domain="testfirm-llm.com"
-    )
+    tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-llm.com")
     db_session.add(tenant)
 
     ts = TenantSettings(

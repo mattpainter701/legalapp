@@ -36,10 +36,7 @@ from app.database import get_db
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
 from app.services.llm_routing import LITELLM_PROVIDER, upsert_platform_llm_config
-from app.services.operator_audit import (
-    operator_debug_mode_audit_payload,
-    record_operator_audit,
-)
+from app.services.operator_audit import record_operator_audit
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
@@ -264,6 +261,30 @@ def _model_test_audit_payload(
         "completion_tokens": result.get("completion_tokens"),
         "total_tokens": result.get("total_tokens"),
         "error": result.get("error"),
+    }
+
+
+def operator_debug_mode_audit_payload(
+    *,
+    tenant_id: str,
+    conversation_id: str,
+    enabled: bool,
+    retention_days: int,
+    reason: str,
+    prompt: str | None = None,
+) -> dict[str, Any]:
+    """Build the operator-debug audit record from an explicit safe allowlist.
+
+    ``prompt`` is accepted so callers cannot accidentally pass it through via
+    an unfiltered dictionary, but its contents are deliberately never logged.
+    """
+    del prompt
+    return {
+        "tenant_id": tenant_id,
+        "conversation_id": conversation_id,
+        "enabled": enabled,
+        "retention_days": retention_days,
+        "reason": reason,
     }
 
 

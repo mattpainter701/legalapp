@@ -83,7 +83,9 @@ def test_provider_route_builder_litellm_model_prefixes():
         "qwen/qwen3-235b-a22b:free",
         "sk-test",
     )
-    assert openrouter["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
+    assert (
+        openrouter["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
+    )
     assert "api_base" not in openrouter["litellm_params"]
 
     anthropic = platform_llm_router._build_litellm_model_entry(
@@ -108,7 +110,14 @@ def test_model_catalog_capabilities_from_provider_metadata():
 
     assert model["is_free"] is True
     assert set(model["capabilities"]).issuperset(
-        {"vision", "instruction", "tool_use", "structured_output", "large_context", "rag"}
+        {
+            "vision",
+            "instruction",
+            "tool_use",
+            "structured_output",
+            "large_context",
+            "rag",
+        }
     )
     assert model["legal_eligible"] is True
     assert model["legal_tier"] == "recommended"
@@ -225,11 +234,15 @@ def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeyp
         "clarity-standard",
         "clarity-standard",
     ]
-    assert models[0]["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
+    assert (
+        models[0]["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
+    )
     assert models[0]["litellm_params"]["weight"] == 80
     assert models[1]["litellm_params"]["model"] == "openai/deepseek-v4-flash-free"
     assert fallbacks == []
-    assert errors == ["standard fallback 1: selected key belongs to openrouter, not deepseek"]
+    assert errors == [
+        "standard fallback 1: selected key belongs to openrouter, not deepseek"
+    ]
 
 
 def test_litellm_reload_payload_builds_fast_standard_route(monkeypatch):
@@ -285,7 +298,9 @@ def test_litellm_reload_payload_builds_fast_standard_route(monkeypatch):
         "clarity-standard-fb-0",
         "clarity-standard-fb-1",
     ]
-    assert models[0]["litellm_params"]["model"] == "openrouter/google/gemma-4-31b-it:free"
+    assert (
+        models[0]["litellm_params"]["model"] == "openrouter/google/gemma-4-31b-it:free"
+    )
     assert models[1]["litellm_params"]["model"] == "openai/nemotron-3-ultra-free"
     assert models[1]["litellm_params"]["api_base"] == "https://opencode.ai/zen/v1"
     assert models[2]["litellm_params"]["model"] == "openai/deepseek-v4-flash-free"
@@ -337,7 +352,9 @@ async def test_litellm_reload_uses_model_management_api(monkeypatch):
             _FakeLiteLLMResponse(200, {"message": "Config updated successfully"}),
         ]
     )
-    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm")
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
     monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "sk-master")
     monkeypatch.setattr(
         platform_llm_router.httpx,
@@ -409,7 +426,9 @@ async def test_litellm_reload_rejects_different_file_backed_alias(monkeypatch):
             )
         ]
     )
-    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm")
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
     monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "sk-master")
     monkeypatch.setattr(
         platform_llm_router.httpx,

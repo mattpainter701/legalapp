@@ -183,9 +183,7 @@ async def delete_link(
 # ── Notification routing settings ────────────────────────────────────────
 
 
-@router.get(
-    "/notification-settings", response_model=list[NotificationSettingResponse]
-)
+@router.get("/notification-settings", response_model=list[NotificationSettingResponse])
 async def get_notification_settings(
     request: Request, db: AsyncSession = Depends(get_db)
 ):
@@ -201,9 +199,7 @@ async def get_notification_settings(
     ]
 
 
-@router.put(
-    "/notification-settings", response_model=list[NotificationSettingResponse]
-)
+@router.put("/notification-settings", response_model=list[NotificationSettingResponse])
 async def replace_notification_settings(
     payload: NotificationSettingsUpdate,
     request: Request,

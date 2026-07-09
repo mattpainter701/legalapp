@@ -279,18 +279,24 @@ async def sync_calendar(
     return await run_calendar_sync(body, current_user, db)
 
 
-async def _require_matter(db: AsyncSession, tenant_id: str, matter_id: uuid.UUID | None):
+async def _require_matter(
+    db: AsyncSession, tenant_id: str, matter_id: uuid.UUID | None
+):
     if not matter_id:
         return None
     result = await db.execute(
-        select(Matter.id).where(Matter.tenant_id == uuid.UUID(tenant_id), Matter.id == matter_id)
+        select(Matter.id).where(
+            Matter.tenant_id == uuid.UUID(tenant_id), Matter.id == matter_id
+        )
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Matter not found")
     return matter_id
 
 
-def _validate_scheduled_payload(calendar_provider: str | None, meeting_provider: str) -> None:
+def _validate_scheduled_payload(
+    calendar_provider: str | None, meeting_provider: str
+) -> None:
     if meeting_provider == "teams" and calendar_provider != "microsoft":
         raise HTTPException(
             status_code=422,
@@ -320,10 +326,14 @@ async def list_scheduled_events(
         )
         .order_by(ScheduledEvent.start_at.asc())
     )
-    return [ScheduledEventResponse.model_validate(row) for row in result.scalars().all()]
+    return [
+        ScheduledEventResponse.model_validate(row) for row in result.scalars().all()
+    ]
 
 
-@router.post("/scheduled-events", response_model=ScheduledEventResponse, status_code=201)
+@router.post(
+    "/scheduled-events", response_model=ScheduledEventResponse, status_code=201
+)
 async def create_scheduled_event(
     body: ScheduledEventCreate,
     current_user=Depends(get_current_user),
@@ -352,7 +362,9 @@ async def create_scheduled_event(
     )
     db.add(row)
     await db.flush()
-    row = await create_external_event(db, row, tenant_id=tenant_id, user_id=str(current_user.id))
+    row = await create_external_event(
+        db, row, tenant_id=tenant_id, user_id=str(current_user.id)
+    )
     await db.commit()
     await db.refresh(row)
     return ScheduledEventResponse.model_validate(row)
@@ -369,7 +381,8 @@ async def update_scheduled_event(
     await set_tenant_context(db, tenant_id)
     result = await db.execute(
         select(ScheduledEvent).where(
-            ScheduledEvent.tenant_id == uuid.UUID(tenant_id), ScheduledEvent.id == event_id
+            ScheduledEvent.tenant_id == uuid.UUID(tenant_id),
+            ScheduledEvent.id == event_id,
         )
     )
     row = result.scalar_one_or_none()
@@ -392,7 +405,9 @@ async def update_scheduled_event(
     if "matter_id" in updates:
         await _require_matter(db, tenant_id, updates["matter_id"])
 
-    await delete_external_event(db, row, tenant_id=tenant_id, user_id=str(current_user.id))
+    await delete_external_event(
+        db, row, tenant_id=tenant_id, user_id=str(current_user.id)
+    )
     for field, value in updates.items():
         setattr(row, field, value)
     row.external_calendar_event_id = None
@@ -401,7 +416,9 @@ async def update_scheduled_event(
     row.join_url = None
     row.sync_status = "pending"
     row.sync_error = None
-    row = await create_external_event(db, row, tenant_id=tenant_id, user_id=str(current_user.id))
+    row = await create_external_event(
+        db, row, tenant_id=tenant_id, user_id=str(current_user.id)
+    )
     await db.commit()
     await db.refresh(row)
     return ScheduledEventResponse.model_validate(row)
@@ -417,13 +434,16 @@ async def delete_scheduled_event(
     await set_tenant_context(db, tenant_id)
     result = await db.execute(
         select(ScheduledEvent).where(
-            ScheduledEvent.tenant_id == uuid.UUID(tenant_id), ScheduledEvent.id == event_id
+            ScheduledEvent.tenant_id == uuid.UUID(tenant_id),
+            ScheduledEvent.id == event_id,
         )
     )
     row = result.scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Scheduled event not found")
-    await delete_external_event(db, row, tenant_id=tenant_id, user_id=str(current_user.id))
+    await delete_external_event(
+        db, row, tenant_id=tenant_id, user_id=str(current_user.id)
+    )
     await db.delete(row)
     await db.commit()
     return None

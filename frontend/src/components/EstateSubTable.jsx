@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { format, parseISO } from 'date-fns'
 import { Plus, Trash2, Pencil, X, Check } from 'lucide-react'
 import { listEstateChildren, createEstateChild, updateEstateChild, deleteEstateChild } from '../api'
+import { useConfirm } from './dialog/ConfirmProvider'
 
 /**
  * Generic CRUD table for an estate sub-resource (fiduciaries, beneficiaries,
@@ -46,6 +47,7 @@ export function fmtDate(v) {
 }
 
 export default function EstateSubTable({ estateId, resource, title, columns, fields, emptyText, onChanged, headerSlot }) {
+  const confirmAction = useConfirm()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -109,7 +111,7 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this entry?')) return
+    if (!await confirmAction({ title: 'Delete entry?', message: 'This entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
     try {
       await deleteEstateChild(estateId, resource, id)
       setRows((prev) => prev.filter((r) => r.id !== id))

@@ -108,8 +108,10 @@ async def test_notify_task_created_pushes_calendar_and_assignment_email(
     assert email_calls[0]["task_url"].endswith(f"/tasks/{task.id}")
     assert len(calendar_calls) == 2
     assert {call["user_id"] for call in calendar_calls} == {str(assignee.id)}
-    assert all("Created by: Reception User" in call["description"] for call in calendar_calls)
-    assert all(f"Task link: " in call["description"] for call in calendar_calls)
+    assert all(
+        "Created by: Reception User" in call["description"] for call in calendar_calls
+    )
+    assert all("Task link: " in call["description"] for call in calendar_calls)
 
 
 @pytest.mark.asyncio

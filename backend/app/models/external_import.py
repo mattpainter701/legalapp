@@ -96,8 +96,12 @@ class ExternalImportRun(Base):
     checksum_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     warnings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     errors: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -171,8 +175,15 @@ class ExternalRecordLink(Base):
             name="uq_external_record_links_source_target",
         ),
         Index("idx_external_record_links_tenant", "tenant_id"),
-        Index("idx_external_record_links_source", "tenant_id", "provider", "source_table"),
-        Index("idx_external_record_links_target", "tenant_id", "target_table", "target_record_id"),
+        Index(
+            "idx_external_record_links_source", "tenant_id", "provider", "source_table"
+        ),
+        Index(
+            "idx_external_record_links_target",
+            "tenant_id",
+            "target_table",
+            "target_record_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -191,7 +202,9 @@ class ExternalRecordLink(Base):
         nullable=True,
     )
     target_table: Mapped[str] = mapped_column(String(100), nullable=False)
-    target_record_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    target_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
     status: Mapped[str] = mapped_column(
         String(50), default="linked", server_default="linked", nullable=False
     )

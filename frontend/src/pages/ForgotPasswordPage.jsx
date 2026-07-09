@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { forgotPassword } from '../api'
+import FormField from '../components/form/FormField'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -34,14 +35,17 @@ export default function ForgotPasswordPage() {
         <p className="font-sans text-brand-muted text-sm mb-6">Enter your email to receive a reset link</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
+          <FormField label="Email address" required>
+            <input
             type="email"
             placeholder="Your email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
             className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent focus:border-brand-accent"
-          />
+              autoComplete="email"
+            />
+          </FormField>
 
           <button
             type="submit"
@@ -53,7 +57,7 @@ export default function ForgotPasswordPage() {
         </form>
 
         {message && (
-          <div className="mt-4 text-sm font-sans text-brand-muted">
+          <div role="status" aria-live="polite" className="mt-4 text-sm font-sans text-brand-muted">
             <p>{message}</p>
             {resetToken && (
               <div className="mt-3 p-3 bg-brand-bg rounded border border-brand-line text-xs break-all">

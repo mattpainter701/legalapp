@@ -10,7 +10,9 @@ def test_gateway_raw_text_retention_is_disabled_by_default():
     settings = get_settings()
 
     assert settings.GATEWAY_RAW_TEXT_RETENTION_ENABLED is False
-    assert retained_gateway_query_text("client asks about a confidential merger") is None
+    assert (
+        retained_gateway_query_text("client asks about a confidential merger") is None
+    )
     assert retained_debug_text("full prompt with privileged facts") is None
 
 

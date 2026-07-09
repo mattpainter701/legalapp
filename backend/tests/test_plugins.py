@@ -23,9 +23,15 @@ async def test_list_plugins(client: AsyncClient):
     assert "plugins" in data
     names = [p["name"] for p in data["plugins"]]
     for expected in [
-        "commercial-legal", "litigation-legal", "privacy-legal",
-        "corporate-legal", "employment-legal", "product-legal",
-        "ip-legal", "ai-governance-legal", "regulatory-legal",
+        "commercial-legal",
+        "litigation-legal",
+        "privacy-legal",
+        "corporate-legal",
+        "employment-legal",
+        "product-legal",
+        "ip-legal",
+        "ai-governance-legal",
+        "regulatory-legal",
     ]:
         assert expected in names
 

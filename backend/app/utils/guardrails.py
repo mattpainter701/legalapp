@@ -1,5 +1,5 @@
 import re
-from typing import Tuple, List
+from typing import Any, List, Tuple
 
 from app.services.pii_detection import detect_pii, scrub_pii
 
@@ -65,14 +65,13 @@ def check_prohibited_phrases(text: str) -> bool:
 
 
 def sanitize_response(text: str) -> str:
-    """Replace prohibited phrases with safe alternatives (case-insensitive)."""
-    result = text
-    for phrase, replacement in PHRASE_REPLACEMENTS.items():
-        # Case-insensitive replacement preserving sentence structure
-        pattern = re.compile(re.escape(phrase), re.IGNORECASE)
-        result = pattern.sub(replacement, result)
-    result = sanitize_internal_context_tags(result)
-    return result
+    """Remove internal prompt tags without rewriting substantive content.
+
+    Provider and AI terminology can be legally material (for example in an AI
+    governance memo or vendor contract).  Rewriting those words corrupts the
+    answer, so response sanitation is intentionally limited to internal tags.
+    """
+    return sanitize_internal_context_tags(text)
 
 
 def sanitize_internal_context_tags(text: str) -> str:
@@ -97,6 +96,91 @@ def check_pii_in_input(text: str) -> List[dict]:
     return detect_pii(text)
 
 
+def prepare_provider_text(text: str | None, privacy_mode: bool) -> str:
+    """Return text safe to cross an external model-provider boundary."""
+    value = text or ""
+    return scrub_pii(value) if privacy_mode else value
+
+
+def prepare_provider_messages(
+    messages: list[dict[str, Any]], privacy_mode: bool
+) -> list[dict[str, Any]]:
+    """Copy and scrub every textual message sent to an external provider."""
+    if not privacy_mode:
+        return [dict(message) for message in messages]
+    prepared: list[dict[str, Any]] = []
+    for message in messages:
+        item = dict(message)
+        if isinstance(item.get("content"), str):
+            item["content"] = scrub_pii(item["content"])
+        prepared.append(item)
+    return prepared
+
+
+_SETTLED_TAG_RE = re.compile(r"\[settled\]", re.IGNORECASE)
+_SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
+_QUOTED_SPAN_RE = re.compile(r'["“]([^"”]{20,})["”]')
+
+
+def validate_citation_confidence(
+    text: str, sources: list[dict[str, Any]] | None
+) -> tuple[str, int]:
+    """Downgrade unsupported ``[settled]`` labels to ``[verify]``.
+
+    Retrieval alone is not treated as proof.  A settled label survives only
+    when it explicitly references a retrieved source id with ``[source: <id>]``
+    and includes a material quoted span found in that source's excerpt. Merely
+    retrieving a source or repeating its citation is never treated as proof.
+    """
+    source_rows = sources or []
+    sources_by_id = {
+        str(row.get("id") or row.get("source_id")).strip().casefold(): row
+        for row in source_rows
+        if row.get("id") or row.get("source_id")
+    }
+
+    downgraded = 0
+
+    def replace(match: re.Match) -> str:
+        nonlocal downgraded
+        # Legal citations themselves contain periods, so sentence splitting is
+        # unsafe.  Inspect a bounded claim window before the confidence tag.
+        claim = text[max(0, match.start() - 500) : match.start()]
+        previous_tag = max(
+            claim.lower().rfind("[verify]"),
+            claim.lower().rfind("[model knowledge]"),
+            claim.lower().rfind("[settled]"),
+        )
+        if previous_tag >= 0:
+            claim = claim[previous_tag:]
+        explicit_ids = {
+            value.strip().casefold() for value in _SOURCE_REF_RE.findall(claim)
+        }
+        quoted_spans = [
+            re.sub(r"\s+", " ", value).strip().casefold()
+            for value in _QUOTED_SPAN_RE.findall(claim)
+        ]
+        span_supported = False
+        for source_id in explicit_ids:
+            row = sources_by_id.get(source_id)
+            if not row:
+                continue
+            source_text = re.sub(
+                r"\s+",
+                " ",
+                str(row.get("excerpt") or row.get("content") or ""),
+            ).casefold()
+            if any(span in source_text for span in quoted_spans):
+                span_supported = True
+                break
+        if span_supported:
+            return match.group(0)
+        downgraded += 1
+        return "[verify]"
+
+    return _SETTLED_TAG_RE.sub(replace, text), downgraded
+
+
 def apply_guardrails(
     text: str, privacy_mode: bool = False
 ) -> Tuple[str, bool, List[dict]]:
@@ -107,15 +191,10 @@ def apply_guardrails(
     - needs_retry: True if contaminated with AI self-disclosure
     - pii_findings: list of PII detected in text
     """
-    # Check for prohibited phrases
-    has_prohibited = check_prohibited_phrases(text)
     cleaned = sanitize_internal_context_tags(text)
-
-    if has_prohibited:
-        cleaned = sanitize_response(cleaned)
-        needs_retry = True
-    else:
-        needs_retry = False
+    # Substantive provider/AI terminology must remain intact.  Internal tag
+    # cleanup is deterministic and no longer needs a model retry.
+    needs_retry = False
 
     # Check for PII in output (especially in privacy mode)
     pii_findings = detect_pii(cleaned) if privacy_mode else []

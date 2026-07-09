@@ -437,13 +437,17 @@ class SmbService:
 
         if matter_id:
             bindings = (
-                await db.execute(
-                    select(MatterSmbShare).where(
-                        MatterSmbShare.matter_id == _uuid(matter_id),
-                        MatterSmbShare.tenant_id == tenant_uuid,
+                (
+                    await db.execute(
+                        select(MatterSmbShare).where(
+                            MatterSmbShare.matter_id == _uuid(matter_id),
+                            MatterSmbShare.tenant_id == tenant_uuid,
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not bindings:
                 return []
 
@@ -651,8 +655,7 @@ class SmbService:
             "path": folder_path,
             "subfolder_names": MATTER_SUBFOLDERS.copy(),
             "subfolder_paths": {
-                sub: f"{folder_path.rstrip('/')}/{sub}"
-                for sub in MATTER_SUBFOLDERS
+                sub: f"{folder_path.rstrip('/')}/{sub}" for sub in MATTER_SUBFOLDERS
             },
             "auto_scan": data.auto_scan,
         }

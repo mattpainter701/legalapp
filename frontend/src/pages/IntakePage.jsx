@@ -66,33 +66,33 @@ function ConvertModal({ lead, onClose, onConverted }) {
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Name *</label>
-            <input value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
+            <label htmlFor="intake-matter-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Name *</label>
+            <input id="intake-matter-name" value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
-              <input value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
+              <label htmlFor="intake-matter-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
+              <input id="intake-matter-type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
-              <input value={form.role} onChange={e => set('role', e.target.value)}
+              <label htmlFor="intake-role" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
+              <input id="intake-role" value={form.role} onChange={e => set('role', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
-            <input value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
+            <label htmlFor="intake-jurisdiction" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
+            <input id="intake-jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
-            <input value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
+            <label htmlFor="intake-counterparty" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
+            <input id="intake-counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm" placeholder="Opposing party name" />
           </div>
-          {error && <p className="text-sm text-brand-rose">{error}</p>}
+          {error && <p role="alert" className="text-sm text-brand-rose">{error}</p>}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>
             <button type="submit" disabled={loading}

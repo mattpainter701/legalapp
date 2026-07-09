@@ -86,6 +86,7 @@ from app.services.plugins.prompts import PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
 from app.services.rag import build_cloud_context
 from app.services.retrieval_planner import RetrievalPlanner
+from app.utils.guardrails import prepare_provider_text
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -365,6 +366,7 @@ async def _build_plugin_cloud_context(
     tenant_name: str,
     question: str,
     matter_context: str | None,
+    privacy_mode: bool = False,
 ) -> str:
     """Build additive cloud context for plugin execution.
 
@@ -385,11 +387,11 @@ async def _build_plugin_cloud_context(
             return ""
 
         plan = await retrieval_planner.plan(
-            user_question=question,
+            user_question=prepare_provider_text(question, privacy_mode),
             db=db,
             tenant_id=tenant_id,
-            tenant_name=tenant_name,
-            matter_context=matter_context,
+            tenant_name=prepare_provider_text(tenant_name, privacy_mode),
+            matter_context=prepare_provider_text(matter_context, privacy_mode),
             active_providers=active_providers,
         )
         if not plan or not plan.get("should_search"):
@@ -1245,6 +1247,7 @@ async def cold_start_interview(
         user_id=str(user.id),
         context=context,
         use_premium=use_premium,
+        privacy_mode=getattr(user, "privacy_mode", False),
     )
 
     # Advance the setup step and persist partial profile
@@ -1371,6 +1374,7 @@ async def execute_skill(
         tenant_name=tenant_name,
         question=body.input_text,
         matter_context=matter_context,
+        privacy_mode=getattr(user, "privacy_mode", False),
     )
     if cloud_context:
         existing_matter_context = context.get("matter_context", "")
@@ -1390,6 +1394,7 @@ async def execute_skill(
         user_id=str(user.id),
         context=context,
         use_premium=use_premium,
+        privacy_mode=getattr(user, "privacy_mode", False),
     )
 
     # Record usage

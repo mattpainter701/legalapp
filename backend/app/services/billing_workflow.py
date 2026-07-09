@@ -67,7 +67,7 @@ def next_invoice_number(existing_numbers: list[str], year: int) -> str:
     for number in existing_numbers:
         if not number or not number.startswith(prefix):
             continue
-        suffix = number[len(prefix):]
+        suffix = number[len(prefix) :]
         if suffix.isdigit():
             max_seq = max(max_seq, int(suffix))
     return f"{prefix}{max_seq + 1:04d}"

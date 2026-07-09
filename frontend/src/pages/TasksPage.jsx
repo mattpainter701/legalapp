@@ -1101,7 +1101,7 @@ export default function TasksPage() {
     )
     setTasks(markSeen)
     setOverdue(markSeen)
-  }, [loading, user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loading, user?.id])
 
   const handleComplete = async (task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'

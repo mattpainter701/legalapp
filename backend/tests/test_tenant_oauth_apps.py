@@ -32,7 +32,9 @@ async def test_zoom_phone_oauth_client_prefers_tenant_app(monkeypatch):
         "encrypted-client-id": "tenant-client",
         "encrypted-client-secret": "tenant-secret",
     }
-    monkeypatch.setattr(tenant_oauth_apps, "decrypt_token", lambda value: secrets[value])
+    monkeypatch.setattr(
+        tenant_oauth_apps, "decrypt_token", lambda value: secrets[value]
+    )
     monkeypatch.setattr(tenant_oauth_apps.settings, "ZOOM_CLIENT_ID", "platform-client")
     monkeypatch.setattr(
         tenant_oauth_apps.settings, "ZOOM_CLIENT_SECRET", "platform-secret"

@@ -46,14 +46,18 @@ class ScheduledEvent(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    timezone: Mapped[str] = mapped_column(String(100), default="UTC", server_default="UTC")
+    timezone: Mapped[str] = mapped_column(
+        String(100), default="UTC", server_default="UTC"
+    )
     attendees: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     calendar_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     meeting_provider: Mapped[str] = mapped_column(
         String(50), default="none", server_default="none"
     )
-    external_calendar_event_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    external_calendar_event_id: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
     external_calendar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     meeting_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     join_url: Mapped[str | None] = mapped_column(Text, nullable=True)

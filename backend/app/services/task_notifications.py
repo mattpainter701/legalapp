@@ -170,7 +170,9 @@ def remove_task_from_calendars(
 ) -> None:
     """Fire-and-forget removal of a task's event from Google and Microsoft."""
     _fire_and_log(
-        google_calendar.delete_task_event(tenant_id=tenant_id, task_id=task_id, user_id=user_id),
+        google_calendar.delete_task_event(
+            tenant_id=tenant_id, task_id=task_id, user_id=user_id
+        ),
         task_id=task_id,
         action="google-calendar-delete",
     )
@@ -282,9 +284,13 @@ async def notify_task_updated(
     """Notify external systems after a task update."""
     if calendar_changed:
         if assignment_changed and previous_calendar_user_id:
-            remove_task_from_calendars(str(task.id), tenant_id, previous_calendar_user_id)
+            remove_task_from_calendars(
+                str(task.id), tenant_id, previous_calendar_user_id
+            )
         if task.status == "cancelled" or not task.due_date:
-            remove_task_from_calendars(str(task.id), tenant_id, task_calendar_user_id(task))
+            remove_task_from_calendars(
+                str(task.id), tenant_id, task_calendar_user_id(task)
+            )
         else:
             push_task_to_calendars(task, tenant_id)
     if assignment_changed and task.assigned_to_user_id:

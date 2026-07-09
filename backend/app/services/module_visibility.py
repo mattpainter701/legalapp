@@ -10,30 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.plugin import TenantPluginEntitlement
 from app.models.tenant import TenantSettings
 
+from app.services.plans import FULL_PLATFORM_MODULES, MODULES
+
 FULL_PLATFORM_MODULE = "full-platform"
-
-MODULE_ROUTES = {
-    "matters": "/matters",
-    "chat": "/chat",
-    "calendar": "/calendar",
-    "tasks": "/tasks",
-    "communications": "/communications",
-    "contacts": "/contacts",
-    "intake": "/intake",
-    "intake-dashboard": "/intake/dashboard",
-    "templates": "/templates",
-    "time-tracking": "/time-tracking",
-    "invoices": "/invoices",
-    "billing": "/billing",
-    "trust": "/trust",
-    "reports": "/reports",
-    "plugins": "/plugins",
-    "admin": "/admin",
-    "mcp": "/mcp",
-    "onboarding": "/onboarding",
-}
-
-FULL_PLATFORM_MODULES = tuple(MODULE_ROUTES.keys())
+MODULE_ROUTES = {module_id: module.route for module_id, module in MODULES.items()}
 KNOWN_MODULES = set(FULL_PLATFORM_MODULES) | {FULL_PLATFORM_MODULE}
 PURCHASED_STATUSES = {"purchased", "included", "trial"}
 BASIC_PORTAL_MODULES = ["plugins"]
@@ -103,7 +83,7 @@ async def resolve_enabled_modules(
     custom_config = tenant_settings.custom_config if tenant_settings else None
     custom_config = custom_config or {}
 
-    from app.services.plans import get_plan  # lazy import avoids cycle
+    from app.services.plans import get_plan
 
     plan = get_plan(custom_config.get("plan"))
     if plan is not None:

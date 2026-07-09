@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { loginMicrosoft, loginGoogle, login } from '../api'
 import { useAuth } from '../App'
+import FormField from '../components/form/FormField'
 
 function MicrosoftIcon() {
   return (
@@ -147,14 +148,11 @@ export default function LoginPage() {
         ) : (
           <form onSubmit={handleEmailLogin} className="space-y-4">
             {error && (
-              <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
+              <div role="alert" aria-live="polite" className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-sm text-brand-rose font-sans">
                 {error}
               </div>
             )}
-            <div>
-              <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
-                Email
-              </label>
+            <FormField label="Email" required labelClassName="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
               <input
                 type="email"
                 value={email}
@@ -162,18 +160,20 @@ export default function LoginPage() {
                 placeholder="you@firm.com"
                 className={inputClasses}
                 autoFocus
+                autoComplete="email"
               />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
-                Password
-              </label>
+            </FormField>
+            <FormField label="Password" required labelClassName="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5 font-sans">
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={inputClasses}
+                autoComplete="current-password"
               />
+            </FormField>
+            <div className="text-right">
+              <Link to="/forgot-password" className="text-sm font-medium text-brand-accent hover:text-brand-accent-2">Forgot password?</Link>
             </div>
             <button
               type="submit"
@@ -198,8 +198,8 @@ export default function LoginPage() {
 
         {/* Info text */}
         <p className="mt-8 text-xs text-brand-muted text-center leading-relaxed">
-          By signing in, you agree to our Terms of Service and Privacy Policy.
-          <br />Your firm's data is isolated and never shared.
+          Review the <Link to="/terms" className="underline hover:text-brand-ink">service summary</Link> and <Link to="/privacy" className="underline hover:text-brand-ink">privacy summary</Link>.
+          <br />Your organization provides the subscription terms and data-processing agreement that control your workspace.
         </p>
       </div>
 
@@ -207,9 +207,9 @@ export default function LoginPage() {
       <div className="relative z-10 mt-10 text-center">
         <p className="text-brand-muted text-sm font-sans">
           Don't have an account?{' '}
-          <a href="/signup" className="text-brand-accent hover:text-brand-accent-2 font-medium">
+          <Link to="/signup" className="text-brand-accent hover:text-brand-accent-2 font-medium">
             Create one
-          </a>
+          </Link>
         </p>
       </div>
     </div>

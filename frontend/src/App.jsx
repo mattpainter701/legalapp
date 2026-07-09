@@ -1,51 +1,55 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import React, { Suspense, createContext, lazy, useContext, useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import AppShell from './components/AppShell'
-import LoginPage from './pages/LoginPage'
-import HomePage from './pages/HomePage'
-import SignupPage from './pages/SignupPage'
-import ForgotPasswordPage from './pages/ForgotPasswordPage'
-import ResetPasswordPage from './pages/ResetPasswordPage'
-import ChatPage from './pages/ChatPage'
-import AdminPage from './pages/AdminPage'
-import AuthCallback from './pages/AuthCallback'
-import PluginsPage from './pages/PluginsPage'
-import PluginPage from './pages/PluginPage'
-import MatterPortfolioPage from './pages/MatterPortfolioPage'
-import MatterDetailPage from './pages/MatterDetailPage'
-import RenewalTrackerPage from './pages/RenewalTrackerPage'
-import EstatePortfolioPage from './pages/EstatePortfolioPage'
-import EstateDetailPage from './pages/EstateDetailPage'
-import DomesticPortfolioPage from './pages/DomesticPortfolioPage'
-import DomesticDetailPage from './pages/DomesticDetailPage'
-import MediationPortfolioPage from './pages/MediationPortfolioPage'
-import MediationDetailPage from './pages/MediationDetailPage'
-import PlatformPage from './pages/PlatformPage'
-import ContactsPage from './pages/ContactsPage'
-import ContactDetailPage from './pages/ContactDetailPage'
-import TasksPage from './pages/TasksPage'
-import IntakePage from './pages/IntakePage'
-import IntakeDashboardPage from './pages/IntakeDashboardPage'
-import ReportsPage from './pages/ReportsPage'
-import TrustAccountingPage from './pages/TrustAccountingPage'
-import TrustAccountDetail from './components/TrustAccountDetail'
-import CalendarPage from './pages/CalendarPage'
-import TeamsTabPage from './pages/TeamsTabPage'
-import TeamsTabConfigPage from './pages/TeamsTabConfigPage'
-import CommunicationsPage from './pages/CommunicationsPage'
-import TemplatesPage from './pages/TemplatesPage'
-import TimeTrackingPage from './pages/TimeTrackingPage'
-import InvoicesPage from './pages/InvoicesPage'
-import InvoiceDetailPage from './pages/InvoiceDetailPage'
-import ProfilePage from './pages/ProfilePage'
-import OnboardingWizard from './pages/OnboardingWizard'
-import PortalAcceptPage from './pages/PortalAcceptPage'
-import PortalCasePage from './pages/PortalCasePage'
-import ClientPortalAcceptPage from './pages/ClientPortalAcceptPage'
-import ClientPortalMatterPage from './pages/ClientPortalMatterPage'
 import { ToastProvider } from './components/toast/ToastProvider'
+import { ConfirmProvider } from './components/dialog/ConfirmProvider'
+import FormLabelAssociator from './components/accessibility/FormLabelAssociator'
 import { getMe } from './api'
 import { canAccessModuleList } from './moduleAccess'
+
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const HomePage = lazy(() => import('./pages/HomePage'))
+const SignupPage = lazy(() => import('./pages/SignupPage'))
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'))
+const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
+const ChatPage = lazy(() => import('./pages/ChatPage'))
+const AdminPage = lazy(() => import('./pages/AdminPage'))
+const AuthCallback = lazy(() => import('./pages/AuthCallback'))
+const PluginsPage = lazy(() => import('./pages/PluginsPage'))
+const PluginPage = lazy(() => import('./pages/PluginPage'))
+const MatterPortfolioPage = lazy(() => import('./pages/MatterPortfolioPage'))
+const MatterDetailPage = lazy(() => import('./pages/MatterDetailPage'))
+const RenewalTrackerPage = lazy(() => import('./pages/RenewalTrackerPage'))
+const EstatePortfolioPage = lazy(() => import('./pages/EstatePortfolioPage'))
+const EstateDetailPage = lazy(() => import('./pages/EstateDetailPage'))
+const DomesticPortfolioPage = lazy(() => import('./pages/DomesticPortfolioPage'))
+const DomesticDetailPage = lazy(() => import('./pages/DomesticDetailPage'))
+const MediationPortfolioPage = lazy(() => import('./pages/MediationPortfolioPage'))
+const MediationDetailPage = lazy(() => import('./pages/MediationDetailPage'))
+const PlatformPage = lazy(() => import('./pages/PlatformPage'))
+const ContactsPage = lazy(() => import('./pages/ContactsPage'))
+const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage'))
+const TasksPage = lazy(() => import('./pages/TasksPage'))
+const IntakePage = lazy(() => import('./pages/IntakePage'))
+const IntakeDashboardPage = lazy(() => import('./pages/IntakeDashboardPage'))
+const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const TrustAccountingPage = lazy(() => import('./pages/TrustAccountingPage'))
+const TrustAccountDetail = lazy(() => import('./components/TrustAccountDetail'))
+const CalendarPage = lazy(() => import('./pages/CalendarPage'))
+const TeamsTabPage = lazy(() => import('./pages/TeamsTabPage'))
+const TeamsTabConfigPage = lazy(() => import('./pages/TeamsTabConfigPage'))
+const CommunicationsPage = lazy(() => import('./pages/CommunicationsPage'))
+const TemplatesPage = lazy(() => import('./pages/TemplatesPage'))
+const TimeTrackingPage = lazy(() => import('./pages/TimeTrackingPage'))
+const InvoicesPage = lazy(() => import('./pages/InvoicesPage'))
+const InvoiceDetailPage = lazy(() => import('./pages/InvoiceDetailPage'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const OnboardingWizard = lazy(() => import('./pages/OnboardingWizard'))
+const PortalAcceptPage = lazy(() => import('./pages/PortalAcceptPage'))
+const PortalCasePage = lazy(() => import('./pages/PortalCasePage'))
+const ClientPortalAcceptPage = lazy(() => import('./pages/ClientPortalAcceptPage'))
+const ClientPortalMatterPage = lazy(() => import('./pages/ClientPortalMatterPage'))
 
 // ---------------------------------------------------------------------------
 // Auth Context
@@ -185,12 +189,17 @@ export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
+        <ConfirmProvider>
+        <FormLabelAssociator />
+        <Suspense fallback={<div role="status" className="flex min-h-screen items-center justify-center bg-brand-bg text-brand-ink">Loading workspace…</div>}>
         <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/terms" element={<LegalNoticePage type="terms" />} />
+        <Route path="/privacy" element={<LegalNoticePage type="privacy" />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />
@@ -354,6 +363,8 @@ export default function App() {
         <Route path="/platform" element={<PlatformPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
+        </ConfirmProvider>
       </ToastProvider>
     </AuthProvider>
   )

@@ -8,6 +8,7 @@ import {
 } from '../api'
 import { format } from 'date-fns'
 import { Spinner } from '../components/ui'
+import { useToast } from '../components/toast/useToast'
 
 function Badge({ label, variant = 'neutral' }) {
   const colors = {
@@ -260,6 +261,7 @@ function TestPanel() {
 // ── Sync Panel ──────────────────────────────────────────────────────────────
 
 function SyncPanel() {
+  const toast = useToast()
   const [syncing, setSyncing] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
@@ -280,9 +282,9 @@ function SyncPanel() {
   const handleInvalidate = async () => {
     try {
       await invalidateCloudCache()
-      alert('Cache invalidated')
+      toast.success('Cloud search cache invalidated')
     } catch (e) {
-      alert('Failed: ' + (e?.response?.data?.detail || 'Unknown error'))
+      toast.error('Cache was not invalidated', { message: e?.response?.data?.detail || 'Unknown error' })
     }
   }
 

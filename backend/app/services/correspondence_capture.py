@@ -179,8 +179,10 @@ def evaluate_matter_rules(
 
     addrs = _email_addresses(email)["all"]
 
-    if rules.get("match_parties", True) and party_addresses and (
-        addrs & party_addresses
+    if (
+        rules.get("match_parties", True)
+        and party_addresses
+        and (addrs & party_addresses)
     ):
         return True
 
@@ -269,9 +271,7 @@ async def capture_email_for_matter(
         return False
 
     addrs = _email_addresses(email)
-    is_outbound = bool(
-        mailbox_address and addrs["from"] == mailbox_address.lower()
-    )
+    is_outbound = bool(mailbox_address and addrs["from"] == mailbox_address.lower())
     filename = _eml_filename(email, message_id)
 
     # Load tenant cloud preference for storage routing.

@@ -200,7 +200,9 @@ class Worksheet:
             "presumptive_amount": str(self.presumptive_amount),
             "final_amount": str(self.final_amount),
             "deviation_amount": (
-                str(self.deviation_amount) if self.deviation_amount is not None else None
+                str(self.deviation_amount)
+                if self.deviation_amount is not None
+                else None
             ),
             "deviation_reason": self.deviation_reason,
             "lines": [ln.to_dict() for ln in self.lines],

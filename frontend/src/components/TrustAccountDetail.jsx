@@ -6,6 +6,7 @@ import {
   downloadTrustStatementPdf, triggerBlobDownload,
 } from '../api'
 import TrustAccountReconcile from './TrustAccountReconcile'
+import { useConfirm } from './dialog/ConfirmProvider'
 import {
   Landmark, ArrowLeft, Plus, X, Loader2, Pencil, Lock,
   ArrowDownCircle, ArrowUpCircle, Scale, ShieldCheck, FileText,
@@ -32,6 +33,7 @@ function typeLabel(type) {
 }
 
 export default function TrustAccountDetail() {
+  const confirmAction = useConfirm()
   const { id } = useParams()
   const navigate = useNavigate()
 
@@ -142,7 +144,7 @@ export default function TrustAccountDetail() {
   }
 
   const handleClose = async () => {
-    if (!window.confirm('Close this trust account? This cannot be undone.')) return
+    if (!await confirmAction({ title: 'Close trust account?', message: 'This cannot be undone.', confirmLabel: 'Close account', destructive: true })) return
     setClosing(true)
     try {
       const updated = await closeTrustAccount(id)

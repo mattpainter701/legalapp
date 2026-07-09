@@ -267,7 +267,7 @@ export default function PluginPage() {
     if (skills.length) {
       setSelectedSkill(skills[0])
     }
-  }, [catalogPlugin, pluginName]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogPlugin, pluginName])
 
   useEffect(() => {
     setProfileLoading(true)

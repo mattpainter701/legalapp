@@ -39,12 +39,8 @@ def test_standard_chat_route_uses_fast_primary_and_live_fallbacks():
         for entry in config["model_list"]
     }
 
-    assert models["clarity-standard"] == (
-        "openrouter/google/gemma-4-31b-it:free"
-    )
-    assert models["clarity-standard-zen-nemotron"] == (
-        "openai/nemotron-3-ultra-free"
-    )
+    assert models["clarity-standard"] == ("openrouter/google/gemma-4-31b-it:free")
+    assert models["clarity-standard-zen-nemotron"] == ("openai/nemotron-3-ultra-free")
     assert models["clarity-standard-deepseek-flash-free"] == (
         "openai/deepseek-v4-flash-free"
     )

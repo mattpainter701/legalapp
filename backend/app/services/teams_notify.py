@@ -74,9 +74,11 @@ async def notify(
                 ]
             else:
                 matter_specific = []
-            chosen = matter_specific if matter_specific else [
-                r for r in rows if r.matter_id is None
-            ]
+            chosen = (
+                matter_specific
+                if matter_specific
+                else [r for r in rows if r.matter_id is None]
+            )
             for r in chosen:
                 targets[(r.team_id, r.channel_id)] = None
 

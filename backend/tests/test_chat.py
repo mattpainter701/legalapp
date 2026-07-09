@@ -26,11 +26,32 @@ from app.models.user import User
 from app.services.cloud_search import CloudHit
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
+from app.utils.guardrails import validate_citation_confidence
 
 
 @pytest.mark.asyncio
 async def test_build_rag_context_empty_returns_empty_string():
     assert await build_rag_context([]) == ""
+
+
+@pytest.mark.asyncio
+async def test_rag_source_id_and_quote_survive_authoritative_validation():
+    quote = "The moving party must establish irreparable harm"
+    chunk = {
+        "id": "courtlistener:authority-1",
+        "case_name": "Smith v. Jones",
+        "citation": "123 F.3d 456",
+        "content": f"The court held that {quote}. The judgment was affirmed.",
+    }
+    context = await build_rag_context([chunk])
+    source = _source_dict_from_chunk(chunk)
+    assert "[source: courtlistener:authority-1]" in context
+    assert source["source_id"] == "courtlistener:authority-1"
+
+    answer = f'The court held "{quote}." [source: courtlistener:authority-1] [settled]'
+    validated, downgraded = validate_citation_confidence(answer, [source])
+    assert validated.endswith("[settled]")
+    assert downgraded == 0
 
 
 @pytest.mark.asyncio
@@ -98,6 +119,7 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
     )
 
     assert source == {
+        "source_id": "courtlistener:chunk-1",
         "case_name": "State v. Robertson",
         "citation": "386 Mont. 243",
         "court": "Montana Supreme Court",
@@ -164,10 +186,13 @@ def test_conversation_belongs_to_user_does_not_grant_admin_override():
     user_id = uuid.uuid4()
     other_user_id = uuid.uuid4()
 
-    assert _conversation_belongs_to_user(
-        conv=type("Conv", (), {"user_id": other_user_id})(),
-        user=type("User", (), {"id": user_id, "role": "admin"})(),
-    ) is False
+    assert (
+        _conversation_belongs_to_user(
+            conv=type("Conv", (), {"user_id": other_user_id})(),
+            user=type("User", (), {"id": user_id, "role": "admin"})(),
+        )
+        is False
+    )
 
 
 def test_chat_attachment_response_serializes_uuid_id_to_string():
@@ -253,7 +278,9 @@ async def test_update_conversation_links_and_unlinks_matter(
     db_session.add(matter)
     await db_session.commit()
 
-    conv = (await client.post("/api/conversations", json={"title": "General chat"})).json()
+    conv = (
+        await client.post("/api/conversations", json={"title": "General chat"})
+    ).json()
 
     link_resp = await client.patch(
         f"/api/conversations/{conv['id']}",
@@ -287,7 +314,9 @@ async def test_update_conversation_rejects_cross_tenant_matter(
     db_session.add(matter)
     await db_session.commit()
 
-    conv = (await client.post("/api/conversations", json={"title": "General chat"})).json()
+    conv = (
+        await client.post("/api/conversations", json={"title": "General chat"})
+    ).json()
     resp = await client.patch(
         f"/api/conversations/{conv['id']}",
         json={"matter_id": str(matter.id)},
@@ -345,6 +374,36 @@ async def test_send_message_returns_assistant(
         "role": "user",
         "content": "What is the standard for preliminary injunctions?",
     }
+
+
+@pytest.mark.asyncio
+async def test_privacy_mode_scrubs_current_and_history_before_provider(
+    client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
+):
+    test_user.privacy_mode = True
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+
+    first = await client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"content": "Email jane@example.com about SSN 123-45-6789"},
+    )
+    assert first.status_code == 201, first.text
+    first_call = mock_llm.call_args.kwargs
+    assert "jane@example.com" not in str(first_call)
+    assert "123-45-6789" not in str(first_call)
+    assert "jane@example.com" not in str(mock_embeddings[0].call_args_list)
+
+    mock_llm.reset_mock()
+    second = await client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"content": "Call me at 701-555-1212"},
+    )
+    assert second.status_code == 201, second.text
+    provider_payload = str(mock_llm.call_args.kwargs)
+    assert "jane@example.com" not in provider_payload
+    assert "123-45-6789" not in provider_payload
+    assert "701-555-1212" not in provider_payload
 
 
 @pytest.mark.asyncio
@@ -577,7 +636,9 @@ async def test_admin_cannot_open_same_tenant_user_conversation(
         user_id=other_user.id,
         title="Other user's private chat",
     )
-    db_session.add_all([other_user, other_conv])
+    db_session.add(other_user)
+    await db_session.flush()
+    db_session.add(other_conv)
     await db_session.commit()
 
     resp = await client.get(f"/api/conversations/{other_conv.id}")
@@ -605,7 +666,9 @@ async def test_admin_cannot_delete_same_tenant_user_conversation(
         user_id=other_user.id,
         title="Other user's private chat",
     )
-    db_session.add_all([other_user, other_conv])
+    db_session.add(other_user)
+    await db_session.flush()
+    db_session.add(other_conv)
     await db_session.commit()
 
     resp = await client.delete(f"/api/conversations/{other_conv.id}")

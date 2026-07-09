@@ -42,7 +42,7 @@ from app.schemas.chat import (
     SourceCitation,
 )
 from app.services.embeddings import EmbeddingService
-from app.services.rag import hybrid_rag_query
+from app.services.rag import cloud_context_source_id, hybrid_rag_query
 from app.services.llm import LLMService
 from app.services.llm_routing import (
     classify_query_complexity,
@@ -53,7 +53,13 @@ from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.services.gateway_privacy import gateway_metadata, retained_gateway_query_text
-from app.utils.guardrails import apply_guardrails, check_pii_in_input
+from app.utils.guardrails import (
+    apply_guardrails,
+    check_pii_in_input,
+    prepare_provider_messages,
+    prepare_provider_text,
+    validate_citation_confidence,
+)
 from app.services.error_tracker import capture_chat_error
 
 logger = logging.getLogger(__name__)
@@ -132,10 +138,13 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
     if source_type == "courtlistener_mcp":
         source_type = "public_authority"
     return {
+        "source_id": str(chunk.get("id")) if chunk.get("id") is not None else None,
         "case_name": _clean_source_text(chunk.get("case_name"), 180) or "Unknown Case",
         "citation": _clean_source_text(chunk.get("citation"), 120),
         "court": _clean_source_text(chunk.get("court"), 120) or None,
-        "excerpt": _clean_source_text(chunk.get("content") or chunk.get("excerpt"), 300),
+        "excerpt": _clean_source_text(
+            chunk.get("content") or chunk.get("excerpt"), 300
+        ),
         "url": _source_url_from_chunk(chunk),
         "source_type": source_type,
         "source_label": _source_label(source_type),
@@ -146,6 +155,7 @@ def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
     source_type = "cloud"
     cloud_id = _cloud_hit_context_id(hit_dict)
     return {
+        "source_id": cloud_id,
         "case_name": _clean_source_text(hit_dict.get("title"), 180) or "Cloud result",
         "citation": _clean_source_text(hit_dict.get("url") or cloud_id, 140),
         "court": _clean_source_text(
@@ -157,6 +167,32 @@ def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
         "source_type": source_type,
         "source_label": _source_label(source_type),
     }
+
+
+def _citation_validation_sources(
+    source_dicts: list[dict], chunks: list[dict], cloud_hits: list
+) -> list[dict]:
+    """Pair public API citations with the full excerpts shown to the model."""
+    rows = list(source_dicts)
+    rows.extend(
+        {
+            "source_id": str(chunk.get("id")),
+            "content": chunk.get("content") or chunk.get("excerpt") or "",
+        }
+        for chunk in chunks
+        if chunk.get("id")
+    )
+    for hit in cloud_hits:
+        hit_dict = _cloud_hit_dict(hit)
+        rows.append(
+            {
+                "source_id": _cloud_hit_context_id(hit_dict),
+                "content": hit_dict.get("_validation_content")
+                or hit_dict.get("snippet")
+                or "",
+            }
+        )
+    return rows
 
 
 async def _safe_cache_op(db, user, request, conv_id, query_text, op_name, coro):
@@ -343,10 +379,7 @@ def _cloud_hit_dict(hit) -> dict:
 
 
 def _cloud_hit_context_id(hit_dict: dict) -> str:
-    return (
-        f"cloud:{hit_dict.get('provider')}:{hit_dict.get('source')}:"
-        f"{hit_dict.get('object_id')}"
-    )
+    return cloud_context_source_id(hit_dict)
 
 
 async def _build_attachment_context(
@@ -438,6 +471,7 @@ def _message_to_response(msg: Message) -> MessageResponse:
             )
             sources.append(
                 SourceCitation(
+                    source_id=s.get("source_id") or s.get("id"),
                     case_name=_clean_source_text(s.get("case_name"), 180) or "Unknown",
                     citation=_clean_source_text(s.get("citation"), 120),
                     court=_clean_source_text(s.get("court"), 120) or None,
@@ -467,6 +501,7 @@ async def _trigger_auto_memory_generation_bg(
     tenant_id: str,
     conversation_id: str,
     tenant_name: str,
+    privacy_mode: bool = False,
 ) -> None:
     """Background-safe memory generation — creates its own DB session."""
     from app.database import async_session_maker, set_tenant_context
@@ -488,6 +523,7 @@ async def _trigger_auto_memory_generation_bg(
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
                     tenant_name=tenant_name,
+                    privacy_mode=privacy_mode,
                 )
                 await memory_service.update_user_memory_summary(
                     db=db,
@@ -669,10 +705,13 @@ async def update_conversation(
     if body.title is not None:
         title = body.title.strip()
         if not title:
-            raise HTTPException(status_code=400, detail="Conversation title is required")
+            raise HTTPException(
+                status_code=400, detail="Conversation title is required"
+            )
         if len(title) > 500:
             raise HTTPException(
-                status_code=400, detail="Conversation title must be 500 characters or less"
+                status_code=400,
+                detail="Conversation title must be 500 characters or less",
             )
         conv.title = title
 
@@ -920,7 +959,11 @@ async def send_message(
         for m in recent_messages
         if str(m.id) != str(user_msg.id)
     ][-10:]
-    llm_messages = history_messages + [{"role": "user", "content": body.content}]
+    llm_messages = prepare_provider_messages(
+        history_messages + [{"role": "user", "content": body.content}],
+        user.privacy_mode,
+    )
+    provider_question = prepare_provider_text(body.content, user.privacy_mode)
 
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
@@ -995,14 +1038,18 @@ async def send_message(
             context_str, chunks, cloud_hits = await hybrid_rag_query(
                 db=db,
                 embedding_service=embedding_service,
-                question=body.content,
+                question=provider_question,
                 tenant_id=str(user.tenant_id),
                 user_id=str(user.id),
                 include_public=body.include_public,
                 cloud_search_service=_get_cloud_search_service(),
                 retrieval_planner=_get_retrieval_planner(),
-                tenant_name=user.tenant.name if user.tenant else "Legal",
-                matter_context_str=matter_context_str,
+                tenant_name=prepare_provider_text(
+                    user.tenant.name if user.tenant else "Legal", user.privacy_mode
+                ),
+                matter_context_str=prepare_provider_text(
+                    matter_context_str, user.privacy_mode
+                ),
                 matter_id=effective_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
@@ -1039,12 +1086,19 @@ async def send_message(
         matter_context_str,
         context_str,
     )
+    context_str = prepare_provider_text(context_str, user.privacy_mode)
+    memory_context = prepare_provider_text(memory_context, user.privacy_mode)
 
     # 5. Call LLM (with caching)
     import hashlib
 
-    tenant_name = user.tenant.name if user.tenant else "Legal"
-    user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
+    tenant_name = prepare_provider_text(
+        user.tenant.name if user.tenant else "Legal", user.privacy_mode
+    )
+    user_first_name = prepare_provider_text(
+        (user.full_name or "").split()[0] if user.full_name else "",
+        user.privacy_mode,
+    )
 
     context_hash = hashlib.md5(f"{route.cache_key}\n{context_str}".encode()).hexdigest()
 
@@ -1179,6 +1233,11 @@ async def send_message(
         context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
         source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
+    cleaned_response, _ = validate_citation_confidence(
+        cleaned_response,
+        _citation_validation_sources(source_dicts, chunks, cloud_hits),
+    )
+
     # Track matter context usage if provided
     if effective_matter_id:
         context_used.insert(0, f"matter:{effective_matter_id}")
@@ -1251,8 +1310,7 @@ async def send_message(
         operation_type="chat",
         query_text=retained_gateway_query_text(body.content),
         rag_chunks_retrieved=len(chunks),
-        rag_source_ids=[c["id"] for c in chunks if c.get("id")]
-        + cloud_source_ids,
+        rag_source_ids=[c["id"] for c in chunks if c.get("id")] + cloud_source_ids,
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
         cache_hit_rag=cache_hit_rag,
@@ -1271,6 +1329,7 @@ async def send_message(
         tenant_id=str(user.tenant_id),
         conversation_id=str(conv.id),
         tenant_name=user.tenant.name if user.tenant else "Legal",
+        privacy_mode=user.privacy_mode,
     )
 
     return _message_to_response(assistant_msg)
@@ -1375,7 +1434,11 @@ async def stream_message(
         for m in recent_messages
         if str(m.id) != str(user_msg.id)
     ][-10:]
-    llm_messages = history_messages + [{"role": "user", "content": body.content}]
+    llm_messages = prepare_provider_messages(
+        history_messages + [{"role": "user", "content": body.content}],
+        user.privacy_mode,
+    )
+    provider_question = prepare_provider_text(body.content, user.privacy_mode)
 
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
@@ -1450,14 +1513,18 @@ async def stream_message(
             context_str, chunks, cloud_hits = await hybrid_rag_query(
                 db=db,
                 embedding_service=embedding_service,
-                question=body.content,
+                question=provider_question,
                 tenant_id=str(user.tenant_id),
                 user_id=str(user.id),
                 include_public=body.include_public,
                 cloud_search_service=_get_cloud_search_service(),
                 retrieval_planner=_get_retrieval_planner(),
-                tenant_name=user.tenant.name if user.tenant else "Legal",
-                matter_context_str=matter_context_str,
+                tenant_name=prepare_provider_text(
+                    user.tenant.name if user.tenant else "Legal", user.privacy_mode
+                ),
+                matter_context_str=prepare_provider_text(
+                    matter_context_str, user.privacy_mode
+                ),
                 matter_id=effective_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
@@ -1484,6 +1551,8 @@ async def stream_message(
         matter_context_str,
         context_str,
     )
+    context_str = prepare_provider_text(context_str, user.privacy_mode)
+    memory_context = prepare_provider_text(memory_context, user.privacy_mode)
     attachment_count = len(body.attachment_ids or [])
     progress_counts = _stream_source_counts(
         chunks=chunks,
@@ -1493,11 +1562,16 @@ async def stream_message(
     )
 
     # Create the streaming generator
-    stream_user_first_name = (user.full_name or "").split()[0] if user.full_name else ""
+    stream_user_first_name = prepare_provider_text(
+        (user.full_name or "").split()[0] if user.full_name else "",
+        user.privacy_mode,
+    )
 
     async def stream_generator():
         try:
-            tenant_name = user.tenant.name if user.tenant else "Legal"
+            tenant_name = prepare_provider_text(
+                user.tenant.name if user.tenant else "Legal", user.privacy_mode
+            )
             yield _stream_progress_event(
                 "sources_done",
                 {
@@ -1538,7 +1612,6 @@ async def stream_message(
                 ),
             ):
                 accumulated_text += token
-                yield f"data: {token}\n\n"
 
             # Apply guardrails to full response
             cleaned_response, needs_retry, response_pii = apply_guardrails(
@@ -1558,7 +1631,9 @@ async def stream_message(
                     messages=retry_messages,
                     tenant_name=tenant_name,
                     context=context_str,
-                    use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                    use_premium=_premium_for_user(
+                        user, body.content, body.use_premium_llm
+                    ),
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
@@ -1571,12 +1646,15 @@ async def stream_message(
                         conversation_id=conv.id,
                         operation_type="chat_stream_retry",
                         matter_id=effective_matter_id,
-                        skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                        premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                        skill=body.skill
+                        if hasattr(body, "skill")
+                        else user.default_skill,
+                        premium=_premium_for_user(
+                            user, body.content, body.use_premium_llm
+                        ),
                     ),
                 ):
                     accumulated_text += token
-                    yield f"data: {token}\n\n"
 
                 cleaned_response, _, response_pii = apply_guardrails(
                     accumulated_text, privacy_mode=user.privacy_mode
@@ -1607,6 +1685,21 @@ async def stream_message(
                 context_used.append(cloud_id)
                 context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
                 source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
+
+            cleaned_response, _ = validate_citation_confidence(
+                cleaned_response,
+                _citation_validation_sources(source_dicts, chunks, cloud_hits),
+            )
+            # Do not expose unvalidated provider output.  Buffering preserves
+            # the SSE contract while ensuring the client only receives the
+            # privacy- and citation-checked answer.
+            for offset in range(0, len(cleaned_response), 80):
+                safe_chunk = (
+                    cleaned_response[offset : offset + 80]
+                    .replace("\r", " ")
+                    .replace("\n", " ")
+                )
+                yield f"data: {safe_chunk}\n\n"
 
             # Track matter context usage if provided
             if effective_matter_id:
@@ -1705,6 +1798,7 @@ async def stream_message(
                     tenant_id=str(user.tenant_id),
                     conversation_id=str(conv.id),
                     tenant_name=user.tenant.name if user.tenant else "Legal",
+                    privacy_mode=user.privacy_mode,
                 )
             )
 

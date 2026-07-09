@@ -350,7 +350,9 @@ class MatterContextService:
                     else "Google Drive"
                 )
                 label = folder.get("label") or folder.get("folder_name") or "Context"
-                storage_lines.append(f"    Context ({provider}) {label}: {folder['url']}")
+                storage_lines.append(
+                    f"    Context ({provider}) {label}: {folder['url']}"
+                )
             if storage_lines:
                 lines.append("  Cloud File Storage:")
                 lines.extend(storage_lines)

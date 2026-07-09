@@ -1354,6 +1354,15 @@ async def get_permissions_audit(
         select(TenantCredential).where(TenantCredential.tenant_id == tenant_id)
     )
     creds = cred_result.scalars().all()
+    runs_result = await db.execute(
+        select(IntegrationSyncRun)
+        .where(IntegrationSyncRun.tenant_id == tenant_id)
+        .order_by(desc(IntegrationSyncRun.started_at))
+        .limit(50)
+    )
+    latest_runs: dict[tuple[str, str], IntegrationSyncRun] = {}
+    for run in runs_result.scalars().all():
+        latest_runs.setdefault((run.provider, run.job_type), run)
 
     async def _provider_user_count(provider: str) -> int:
         return (
@@ -1376,9 +1385,7 @@ async def get_permissions_audit(
                 "job_type": run.job_type,
                 "status": run.status,
                 "started_at": run.started_at.isoformat() if run.started_at else None,
-                "finished_at": run.finished_at.isoformat()
-                if run.finished_at
-                else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
                 "items_ok": run.items_ok,
                 "items_failed": run.items_failed,
                 "error_summary": run.error_summary,

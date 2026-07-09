@@ -54,17 +54,18 @@ from app.schemas.mediation import (
     ProposalResponse,
 )
 from app.services import mediation_service as ms
-from app.services.portal_token import create_portal_token, create_user_token
+from app.services.portal_token import create_portal_token
 
 settings = get_settings()
 
 router = APIRouter(prefix="/api/portal/mediation", tags=["mediation-portal"])
+MEDIATION_PORTAL_COOKIE_NAME = "mediation_portal_token"
 
 
 def _set_cookie(response: Response, token: str) -> None:
     is_production = settings.BACKEND_URL.startswith("https://")
     response.set_cookie(
-        key="access_token",
+        key=MEDIATION_PORTAL_COOKIE_NAME,
         value=token,
         httponly=True,
         secure=is_production,
@@ -95,6 +96,8 @@ async def accept_invite(
         raise HTTPException(status_code=404, detail="Invite not found or revoked")
     if invite.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=410, detail="Invite has expired")
+    if invite.accepted_at is not None:
+        raise HTTPException(status_code=409, detail="Invite has already been used")
 
     await set_tenant_context(db, str(invite.tenant_id))
     party = await db.get(MediationParty, invite.party_id)
@@ -103,20 +106,13 @@ async def accept_invite(
 
     invite.accepted_at = datetime.now(timezone.utc)
 
-    if invite.kind == "client_account" and party.user_id:
-        token = create_user_token(
-            user_id=str(party.user_id),
-            tenant_id=str(invite.tenant_id),
-            role="client",
-            email=invite.email or "",
-        )
-    else:
-        token = create_portal_token(
-            tenant_id=str(invite.tenant_id),
-            case_id=str(invite.case_id),
-            party_id=str(party.id),
-            party_role=party.role,
-        )
+    token = create_portal_token(
+        tenant_id=str(invite.tenant_id),
+        case_id=str(invite.case_id),
+        party_id=str(party.id),
+        party_role=party.role,
+        invite_id=str(invite.id),
+    )
 
     await db.commit()
     _set_cookie(response, token)

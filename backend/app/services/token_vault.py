@@ -342,7 +342,9 @@ async def revoke_google_token(token: str) -> bool:
     if resp.status_code == 200:
         return True
     logger.warning(
-        "Google token revoke failed: status=%d body=%s", resp.status_code, resp.text[:300]
+        "Google token revoke failed: status=%d body=%s",
+        resp.status_code,
+        resp.text[:300],
     )
     return False
 

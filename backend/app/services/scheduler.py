@@ -408,6 +408,20 @@ class LegalScheduler:
         is the primary defense against duplicate emails/invoices when more than
         one scheduler process is running.
         """
+        # Durable queue poller: short cadence; row-level SKIP LOCKED claims and
+        # leases provide concurrency control and stale-worker recovery.
+        from app.services.durable_job_worker import process_pending_jobs
+
+        self.scheduler.add_job(
+            process_pending_jobs,
+            "interval",
+            seconds=5,
+            id="durable-job-worker",
+            name="Durable Document Job Worker",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # renewal-watcher: Mon 8:00 AM ET
         self.scheduler.add_job(
             self._guarded("renewal-watcher", self.run_renewal_watcher),
@@ -472,7 +486,7 @@ class LegalScheduler:
             replace_existing=True,
         )
 
-        agent_count = 6
+        agent_count = 7
 
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:
@@ -511,9 +525,7 @@ class LegalScheduler:
 
         # chat-attachment-cleanup: daily 3:10 AM ET
         self.scheduler.add_job(
-            self._guarded(
-                "chat-attachment-cleanup", self.run_chat_attachment_cleanup
-            ),
+            self._guarded("chat-attachment-cleanup", self.run_chat_attachment_cleanup),
             CronTrigger(hour=3, minute=10),
             id="chat-attachment-cleanup",
             name="Chat Attachment Cleanup",
@@ -1366,9 +1378,7 @@ class LegalScheduler:
                 for tenant_id in tenant_ids:
                     # Tokens carry the provider per user; scope reads to this tenant.
                     token_rows = await session.execute(
-                        select(
-                            UserOAuthToken.user_id, UserOAuthToken.provider
-                        ).where(
+                        select(UserOAuthToken.user_id, UserOAuthToken.provider).where(
                             UserOAuthToken.tenant_id == tenant_id,
                             UserOAuthToken.provider.in_(["google", "microsoft"]),
                         )

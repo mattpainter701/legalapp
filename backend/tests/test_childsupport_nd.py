@@ -145,10 +145,20 @@ def test_equal_residence_offset_higher_earner_pays():
 
 def test_equal_residence_equal_incomes_nets_to_zero():
     parents = [
-        _parent("petitioner", 5000, federal_income_tax=Decimal("400"),
-                state_income_tax=Decimal("80"), fica_tax=Decimal("382.50")),
-        _parent("respondent", 5000, federal_income_tax=Decimal("400"),
-                state_income_tax=Decimal("80"), fica_tax=Decimal("382.50")),
+        _parent(
+            "petitioner",
+            5000,
+            federal_income_tax=Decimal("400"),
+            state_income_tax=Decimal("80"),
+            fica_tax=Decimal("382.50"),
+        ),
+        _parent(
+            "respondent",
+            5000,
+            federal_income_tax=Decimal("400"),
+            state_income_tax=Decimal("80"),
+            fica_tax=Decimal("382.50"),
+        ),
     ]
     ws = calculate(
         _input(num_children=1, parents=parents, custody_type=CustodyType.EQUAL.value)

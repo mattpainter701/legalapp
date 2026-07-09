@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { useConfirm } from '../components/dialog/ConfirmProvider'
+import { useToast } from '../components/toast/useToast'
 import { useNavigate } from 'react-router-dom'
 import {
   getCommunications,
@@ -396,6 +398,8 @@ function EntryRow({ entry, onEdit, onDelete }) {
 const PAGE_SIZE = 50
 
 export default function CommunicationsPage() {
+  const confirmAction = useConfirm()
+  const toast = useToast()
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -454,13 +458,13 @@ export default function CommunicationsPage() {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this communication log entry?')) return
+    if (!await confirmAction({ title: 'Delete communication entry?', message: 'This log entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
     try {
       await deleteCommunication(id)
       setItems((prev) => prev.filter((e) => e.id !== id))
       setTotal((t) => t - 1)
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to delete.')
+      toast.error('Communication was not deleted', { message: err?.response?.data?.detail || 'Please try again.' })
     }
   }
 

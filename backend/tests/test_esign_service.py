@@ -4,11 +4,14 @@ import uuid
 import pytest
 
 from app.models.signature import SignatureRequest, SignatureSigner
+from app.routers.esignature import _source_document_is_unchanged
+from app.schemas.signature import PortalSignRequest
 from app.services.esign.service import (
     mark_request_expired_if_needed,
     next_pending_signers,
     record_portal_decline,
     signer_can_act_now,
+    record_portal_signature,
 )
 
 
@@ -90,3 +93,45 @@ async def test_record_portal_decline_closes_request_with_reason():
     assert signer.status == "declined"
     assert signer.decline_reason == "Need attorney changes"
     assert signer.audit["method"] == "portal_decline"
+
+
+@pytest.mark.asyncio
+async def test_signature_audit_records_explicit_consent_and_client_evidence():
+    signer = _signer(0)
+    await record_portal_signature(
+        signer,
+        typed_signature="Signer 0",
+        ip="203.0.113.10",
+        consent_text_version="clarity-esign-consent-v1",
+        user_agent="Test Browser",
+    )
+    assert signer.audit["consent_to_electronic_signature"] is True
+    assert signer.audit["consent_text_version"] == "clarity-esign-consent-v1"
+    assert signer.audit["user_agent"] == "Test Browser"
+
+
+@pytest.mark.asyncio
+async def test_bound_source_detects_document_mutation(tmp_path):
+    path = tmp_path / "agreement.txt"
+    path.write_bytes(b"version one")
+
+    class Doc:
+        storage_path = str(path)
+
+    class DB:
+        async def get(self, _model, _id):
+            return Doc()
+
+    import hashlib
+
+    req = _request()
+    req.document_id = uuid.uuid4()
+    req.source_document_sha256 = hashlib.sha256(b"version one").hexdigest()
+    assert await _source_document_is_unchanged(DB(), req) is True
+    path.write_bytes(b"version two")
+    assert await _source_document_is_unchanged(DB(), req) is False
+
+
+def test_portal_signature_consent_is_fail_closed_by_default():
+    body = PortalSignRequest(typed_signature="Signer")
+    assert body.consent_to_electronic_signature is False

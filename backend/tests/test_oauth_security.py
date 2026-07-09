@@ -40,7 +40,9 @@ def rsa_keypair():
 
 
 def _sign(priv_pem: str, claims: dict) -> str:
-    return jose_jwt.encode(claims, priv_pem, algorithm="RS256", headers={"kid": "test-kid"})
+    return jose_jwt.encode(
+        claims, priv_pem, algorithm="RS256", headers={"kid": "test-kid"}
+    )
 
 
 def _at_hash(access_token: str) -> str:
@@ -86,7 +88,9 @@ class TestOAuthClientConfigured:
         ],
     )
     def test_is_oauth_client_configured(self, client_id, client_secret, expected):
-        assert oauth_sec.is_oauth_client_configured(client_id, client_secret) is expected
+        assert (
+            oauth_sec.is_oauth_client_configured(client_id, client_secret) is expected
+        )
 
 
 class TestVerifyGoogleIdToken:
@@ -202,7 +206,9 @@ class TestVerifyGoogleIdToken:
         )
         forged_token = f"{header}.{forged_payload}.{signature}"
         with pytest.raises(HTTPException):
-            await oauth_sec.verify_google_id_token(forged_token, client_id="my-client-id")
+            await oauth_sec.verify_google_id_token(
+                forged_token, client_id="my-client-id"
+            )
 
 
 class TestVerifyMicrosoftIdToken:

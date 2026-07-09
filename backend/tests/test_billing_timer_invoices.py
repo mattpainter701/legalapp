@@ -4,7 +4,6 @@ sequential numbering, status transitions, and void-release behavior."""
 import uuid
 from decimal import Decimal
 
-import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -204,9 +203,7 @@ class TestInvoiceWorkflow:
             )
         ).json()
 
-        billed = (
-            await client.get(f"/api/billing/time-entries/{entry['id']}")
-        ).json()
+        billed = (await client.get(f"/api/billing/time-entries/{entry['id']}")).json()
         assert billed["status"] == "invoiced"
         assert billed["invoice_id"] == inv["id"]
 
@@ -215,9 +212,7 @@ class TestInvoiceWorkflow:
         )
         assert void.status_code == 200, void.text
 
-        released = (
-            await client.get(f"/api/billing/time-entries/{entry['id']}")
-        ).json()
+        released = (await client.get(f"/api/billing/time-entries/{entry['id']}")).json()
         assert released["status"] == "draft"
         assert released["invoice_id"] is None
 
@@ -236,7 +231,9 @@ class TestInvoiceWorkflow:
                 json={"matter_id": str(test_matter.id)},
             )
         ).json()
-        await client.patch(f"/api/billing/invoices/{inv['id']}", json={"status": "sent"})
+        await client.patch(
+            f"/api/billing/invoices/{inv['id']}", json={"status": "sent"}
+        )
         await client.post(
             "/api/billing/payments",
             json={
@@ -273,9 +270,7 @@ class TestTimeEntryFilters:
         assert Decimal(data["total_hours"]) == Decimal("2.0")
 
         # Totals cover the filtered set even when the page is smaller
-        paged = await client.get(
-            "/api/billing/time-entries", params={"limit": 1}
-        )
+        paged = await client.get("/api/billing/time-entries", params={"limit": 1})
         pdata = paged.json()
         assert len(pdata["items"]) == 1
         assert pdata["total"] == 2

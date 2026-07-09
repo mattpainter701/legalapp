@@ -28,6 +28,7 @@ from app.schemas.plugin import (
     PromptUpdate,
 )
 from app.services.plugins.prompts import ALL_DEFAULT_PROMPTS
+from app.utils.guardrails import prepare_provider_messages, prepare_provider_text
 
 router = APIRouter(prefix="/admin/prompts", tags=["admin-prompts"])
 
@@ -255,9 +256,14 @@ async def test_prompt(
     route = await resolve_llm_route(db, admin.tenant_id, use_premium=False)
     try:
         response_text, tokens_in, tokens_out = await llm.complete(
-            messages=[{"role": "user", "content": body.sample_input}],
+            messages=prepare_provider_messages(
+                [{"role": "user", "content": body.sample_input}],
+                getattr(admin, "privacy_mode", False),
+            ),
             tenant_name="Admin Console",
-            context=system_prompt,
+            context=prepare_provider_text(
+                system_prompt, getattr(admin, "privacy_mode", False)
+            ),
             provider=route.provider,
             model=route.model,
         )

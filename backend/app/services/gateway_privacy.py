@@ -20,7 +20,9 @@ def raw_text_retention_enabled() -> bool:
     return bool(get_settings().GATEWAY_RAW_TEXT_RETENTION_ENABLED)
 
 
-def retained_gateway_query_text(text: str | None, *, max_chars: int = 2000) -> str | None:
+def retained_gateway_query_text(
+    text: str | None, *, max_chars: int = 2000
+) -> str | None:
     if not raw_text_retention_enabled() or not text:
         return None
     return text[:max_chars]

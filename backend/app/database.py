@@ -61,6 +61,7 @@ async def get_db(request: Request = None) -> AsyncGenerator[AsyncSession, None]:
                     ),
                     {"tenant_id": tenant_id},
                 )
+
         try:
             yield session
         except Exception:

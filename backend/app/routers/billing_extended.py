@@ -927,9 +927,11 @@ async def list_invoices(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
-    stmt = select(Invoice, Matter.matter_name).join(
-        Matter, Matter.id == Invoice.matter_id
-    ).where(Invoice.tenant_id == user.tenant_id)
+    stmt = (
+        select(Invoice, Matter.matter_name)
+        .join(Matter, Matter.id == Invoice.matter_id)
+        .where(Invoice.tenant_id == user.tenant_id)
+    )
     if matter_id:
         stmt = stmt.where(Invoice.matter_id == matter_id)
     if status:
@@ -1021,9 +1023,7 @@ async def _trigger_qbo_sync_invoice(invoice_id: str, tenant_id: str):
     async with async_session_maker() as session:
         access_token = await _get_fresh_qbo_token(session, tenant_id)
         if not access_token:
-            logger.warning(
-                f"QBO invoice sync skipped for {invoice_id}: no valid token"
-            )
+            logger.warning(f"QBO invoice sync skipped for {invoice_id}: no valid token")
             return
         qbo = await _get_qbo_integration(session, tenant_id)
         sandbox = qbo.sandbox_mode if qbo else True
@@ -1039,9 +1039,7 @@ async def _trigger_qbo_sync_payment(payment_id: str, tenant_id: str):
     async with async_session_maker() as session:
         access_token = await _get_fresh_qbo_token(session, tenant_id)
         if not access_token:
-            logger.warning(
-                f"QBO payment sync skipped for {payment_id}: no valid token"
-            )
+            logger.warning(f"QBO payment sync skipped for {payment_id}: no valid token")
             return
         qbo = await _get_qbo_integration(session, tenant_id)
         sandbox = qbo.sandbox_mode if qbo else True
@@ -1081,9 +1079,7 @@ async def update_invoice(
             )
         if new_status == "void":
             paid_result = await db.execute(
-                select(func.count(Payment.id)).where(
-                    Payment.invoice_id == invoice.id
-                )
+                select(func.count(Payment.id)).where(Payment.invoice_id == invoice.id)
             )
             if (paid_result.scalar() or 0) > 0:
                 raise HTTPException(

@@ -48,9 +48,7 @@ Fee: $2,500.00
         content_type="text/plain",
     )
 
-    field_names = {
-        field["name"] for field in analysis.variable_schema["fields"]
-    }
+    field_names = {field["name"] for field in analysis.variable_schema["fields"]}
     assert "client_name" in field_names
     assert "matter_name" in field_names
     assert "case_number" in field_names

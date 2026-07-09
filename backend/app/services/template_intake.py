@@ -147,13 +147,17 @@ def _suggest_template_body(text: str) -> tuple[str, list[IntakeField], list[str]
         (PHONE_PATTERN, "firm_phone", "Firm Phone", 0.66, "tenant.branding.phone"),
         (MONEY_PATTERN, "fee_amount", "Fee Amount", 0.62, None),
     ]:
-        body = _replace_first(body, pattern, name, label, fields, confidence, source_path)
+        body = _replace_first(
+            body, pattern, name, label, fields, confidence, source_path
+        )
 
     if len(body) > 20000:
         body = body[:20000].rstrip()
         warnings.append("Template body was truncated to the first 20,000 characters.")
     if not fields:
-        warnings.append("No obvious fields were detected. Add placeholders before activating.")
+        warnings.append(
+            "No obvious fields were detected. Add placeholders before activating."
+        )
 
     return body, list(fields.values()), warnings
 

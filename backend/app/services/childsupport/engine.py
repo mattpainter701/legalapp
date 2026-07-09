@@ -20,9 +20,7 @@ def calculate(inp: ChildSupportInput) -> Worksheet:
     return provider.compute(inp)
 
 
-def calculate_for_jurisdiction(
-    state_code: str, inp: ChildSupportInput
-) -> Worksheet:
+def calculate_for_jurisdiction(state_code: str, inp: ChildSupportInput) -> Worksheet:
     """Convenience wrapper that overrides the input's jurisdiction."""
     inp.jurisdiction = state_code
     return calculate(inp)

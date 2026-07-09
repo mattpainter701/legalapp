@@ -7,9 +7,7 @@ from app.models.user_oauth_token import UserOAuthToken
 
 
 @pytest.mark.asyncio
-async def test_calendar_sync_provider_auth_failure_is_not_app_401(
-    client, monkeypatch
-):
+async def test_calendar_sync_provider_auth_failure_is_not_app_401(client, monkeypatch):
     from app.routers import calendar as calendar_router
 
     async def fake_ms_get_events(*args, **kwargs):

@@ -450,9 +450,7 @@ class QBOSyncService:
             "GET", self._api_url(realm_id, "invoice", invoice.qbo_invoice_id)
         )
         customer_ref = (
-            qbo_invoice.get("Invoice", {}).get("CustomerRef")
-            if qbo_invoice
-            else None
+            qbo_invoice.get("Invoice", {}).get("CustomerRef") if qbo_invoice else None
         )
         if not customer_ref:
             return None

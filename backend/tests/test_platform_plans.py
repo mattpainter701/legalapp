@@ -30,7 +30,9 @@ async def test_set_tenant_plan(client: AsyncClient, db_session, test_tenant):
 
 
 @pytest.mark.asyncio
-async def test_clear_tenant_plan_and_audit_update(client: AsyncClient, db_session, test_tenant):
+async def test_clear_tenant_plan_and_audit_update(
+    client: AsyncClient, db_session, test_tenant
+):
     platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
     headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
     ts = TenantSettings(
@@ -87,7 +89,9 @@ async def test_list_plans(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_platform_mcp_overview(client: AsyncClient, db_session, test_tenant, test_user):
+async def test_platform_mcp_overview(
+    client: AsyncClient, db_session, test_tenant, test_user
+):
     platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
     headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
     key = MCPProductKey(

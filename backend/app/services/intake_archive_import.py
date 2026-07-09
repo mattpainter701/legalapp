@@ -127,10 +127,14 @@ def _parse_date(value: str | None, row_num: int, errors: list[str]) -> datetime 
     return None
 
 
-def parse_legacy_call_csv(csv_text: str, sample_size: int = 5) -> LegacyCallImportPreview:
+def parse_legacy_call_csv(
+    csv_text: str, sample_size: int = 5
+) -> LegacyCallImportPreview:
     reader = csv.DictReader(io.StringIO(csv_text))
     if not reader.fieldnames:
-        return LegacyCallImportPreview(total_rows=0, valid_rows=0, errors=["CSV has no header row"])
+        return LegacyCallImportPreview(
+            total_rows=0, valid_rows=0, errors=["CSV has no header row"]
+        )
 
     lookup = _header_lookup(reader.fieldnames)
     if "source_row_id" not in lookup:
@@ -159,12 +163,24 @@ def parse_legacy_call_csv(csv_text: str, sample_size: int = 5) -> LegacyCallImpo
 
         phone = _clean(raw.get(lookup.get("phone", "")))
         caller_name = _clean(raw.get(lookup.get("caller_name", "")))
-        call_date = _parse_date(_clean(raw.get(lookup.get("call_date", ""))), row_num, errors)
+        call_date = _parse_date(
+            _clean(raw.get(lookup.get("call_date", ""))), row_num, errors
+        )
         practice_area = _clean(raw.get(lookup.get("practice_area", "")))
         purpose = _clean(raw.get(lookup.get("purpose", "")))
         prior_attorney_name = _clean(raw.get(lookup.get("prior_attorney_name", "")))
         notes = _clean(raw.get(lookup.get("notes", "")))
-        if not any((phone, caller_name, call_date, practice_area, purpose, prior_attorney_name, notes)):
+        if not any(
+            (
+                phone,
+                caller_name,
+                call_date,
+                practice_area,
+                purpose,
+                prior_attorney_name,
+                notes,
+            )
+        ):
             errors.append(
                 f"row {row_num}: missing caller_name, phone, date, practice_area, purpose, attorney, and notes"
             )

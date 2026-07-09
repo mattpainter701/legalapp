@@ -21,7 +21,9 @@ def _canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def _bundle(rows_by_table: dict[str, list[dict]], *, corrupt_checksum: bool = False) -> bytes:
+def _bundle(
+    rows_by_table: dict[str, list[dict]], *, corrupt_checksum: bool = False
+) -> bytes:
     files: dict[str, bytes] = {}
     tables = []
     for table, rows in rows_by_table.items():
@@ -34,7 +36,11 @@ def _bundle(rows_by_table: dict[str, list[dict]], *, corrupt_checksum: bool = Fa
                 "path": f"tables/{table}.ndjson",
                 "columns": list(rows[0].keys()) if rows else [],
                 "row_count": len(rows),
-                "sha256": ("bad" if corrupt_checksum else __import__("hashlib").sha256(data).hexdigest()),
+                "sha256": (
+                    "bad"
+                    if corrupt_checksum
+                    else __import__("hashlib").sha256(data).hexdigest()
+                ),
             }
         )
     manifest = {
@@ -79,7 +85,9 @@ def _encrypted_bundle(zip_bytes: bytes, passphrase: str) -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_tabs3_upload_stages_raw_rows_and_summaries(client, db_session, test_tenant):
+async def test_tabs3_upload_stages_raw_rows_and_summaries(
+    client, db_session, test_tenant
+):
     bundle = _bundle(
         {
             "CLIENT": [
@@ -109,16 +117,22 @@ async def test_tabs3_upload_stages_raw_rows_and_summaries(client, db_session, te
     assert conn.last_import_run_id == run.id
 
     raw_rows = (
-        await db_session.execute(
-            select(ExternalRawRow).where(ExternalRawRow.import_run_id == run_id)
+        (
+            await db_session.execute(
+                select(ExternalRawRow).where(ExternalRawRow.import_run_id == run_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(raw_rows) == 3
     assert {row.source_table for row in raw_rows} == {"CLIENT", "FEE"}
 
     tables = await client.get(f"/api/imports/{run_id}/tables")
     assert tables.status_code == 200
-    assert {item["source_table"]: item["row_count"] for item in tables.json()["tables"]} == {
+    assert {
+        item["source_table"]: item["row_count"] for item in tables.json()["tables"]
+    } == {
         "CLIENT": 2,
         "FEE": 1,
     }
@@ -149,8 +163,12 @@ async def test_tabs3_upload_accepts_encrypted_bundle(client):
 
 
 @pytest.mark.asyncio
-async def test_tabs3_upload_rejects_bad_checksum_without_canonical_records(client, db_session):
-    bundle = _bundle({"CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme"}]}, corrupt_checksum=True)
+async def test_tabs3_upload_rejects_bad_checksum_without_canonical_records(
+    client, db_session
+):
+    bundle = _bundle(
+        {"CLIENT": [{"CLIENT_ID": "100.00", "NAME": "Acme"}]}, corrupt_checksum=True
+    )
 
     resp = await client.post(
         "/api/imports/tabs3/upload",
@@ -159,9 +177,13 @@ async def test_tabs3_upload_rejects_bad_checksum_without_canonical_records(clien
 
     assert resp.status_code == 400
     failed_runs = (
-        await db_session.execute(
-            select(ExternalImportRun).where(ExternalImportRun.status == "failed")
+        (
+            await db_session.execute(
+                select(ExternalImportRun).where(ExternalImportRun.status == "failed")
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(failed_runs) == 1
     assert "Checksum mismatch" in failed_runs[0].errors[0]

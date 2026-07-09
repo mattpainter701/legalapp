@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["083_matter_doc_storage_meta"]
+    assert heads == ["085_durable_jobs"]
 
 
 def test_revision_ids_fit_alembic_version_column():

@@ -9,7 +9,6 @@ These cover the pure logic and wiring that don't require a live database:
 import pytest
 
 from app.services import cloud_search
-from app.services.cloud_sync import CloudSyncService
 from app.services.cloud_search import (
     _INDEX_SOURCE_MAP,
     _cloud_metadata_scope_folder_ids,
@@ -223,6 +222,7 @@ async def test_build_cloud_context_accepts_cloud_hit_objects():
     context = await build_cloud_context([{"hit": hit, "content": "Email body text"}])
 
     assert "google/gmail: Acme settlement email" in context
+    assert "[source: cloud:google:gmail:msg-1]" in context
     assert "Email body text" in context
     assert "https://mail.google.com/#all/msg-1" in context
 
@@ -417,7 +417,9 @@ async def test_cloud_root_provisions_both_connected_providers(monkeypatch):
     monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
     monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
     monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
-    monkeypatch.setattr(cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata)
+    monkeypatch.setattr(
+        cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata
+    )
     monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
     root = await cloud_init.initialize_cloud_root_folder(None, "tenant-1")
@@ -473,7 +475,9 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
     monkeypatch.setattr(cloud_init, "_ensure_onedrive_folder", fake_onedrive_folder)
     monkeypatch.setattr(cloud_init, "_ensure_gdrive_folder", fake_gdrive_folder)
     monkeypatch.setattr(cloud_init, "_get_onedrive_web_url", fake_web_url)
-    monkeypatch.setattr(cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata)
+    monkeypatch.setattr(
+        cloud_init, "_get_onedrive_folder_metadata", fake_onedrive_metadata
+    )
     monkeypatch.setattr(cloud_init, "_get_gdrive_folder_metadata", fake_gdrive_metadata)
 
     metadata = await cloud_init.initialize_matter_folders(
@@ -495,7 +499,9 @@ async def test_matter_folder_metadata_uses_canonical_layout(monkeypatch):
         "billing": "claritylegal-records/acme-v-smith/billing",
     }
     assert set(metadata["onedrive"]["subfolders"]) == set(metadata["subfolder_paths"])
-    assert set(metadata["google_drive"]["subfolders"]) == set(metadata["subfolder_paths"])
+    assert set(metadata["google_drive"]["subfolders"]) == set(
+        metadata["subfolder_paths"]
+    )
 
 
 def test_cloud_folder_selection_prefers_existing_canonical_before_duplicates():
@@ -503,9 +509,21 @@ def test_cloud_folder_selection_prefers_existing_canonical_before_duplicates():
     from app.services import cloud_init
 
     items = [
-        {"id": "folder-6", "name": "claritylegal-records 6", "createdDateTime": "2026-06-15T10:00:00Z"},
-        {"id": "folder-2", "name": "claritylegal-records 2", "createdDateTime": "2026-06-10T10:00:00Z"},
-        {"id": "folder-root", "name": "claritylegal-records", "createdDateTime": "2026-06-14T10:00:00Z"},
+        {
+            "id": "folder-6",
+            "name": "claritylegal-records 6",
+            "createdDateTime": "2026-06-15T10:00:00Z",
+        },
+        {
+            "id": "folder-2",
+            "name": "claritylegal-records 2",
+            "createdDateTime": "2026-06-10T10:00:00Z",
+        },
+        {
+            "id": "folder-root",
+            "name": "claritylegal-records",
+            "createdDateTime": "2026-06-14T10:00:00Z",
+        },
     ]
 
     chosen = cloud_init._choose_existing_folder(items, "claritylegal-records")
@@ -517,8 +535,16 @@ def test_cloud_folder_selection_falls_back_to_lowest_duplicate_suffix():
     from app.services import cloud_init
 
     items = [
-        {"id": "folder-6", "name": "claritylegal-records 6", "createdDateTime": "2026-06-15T10:00:00Z"},
-        {"id": "folder-2", "name": "claritylegal-records 2", "createdDateTime": "2026-06-10T10:00:00Z"},
+        {
+            "id": "folder-6",
+            "name": "claritylegal-records 6",
+            "createdDateTime": "2026-06-15T10:00:00Z",
+        },
+        {
+            "id": "folder-2",
+            "name": "claritylegal-records 2",
+            "createdDateTime": "2026-06-10T10:00:00Z",
+        },
     ]
 
     chosen = cloud_init._choose_existing_folder(items, "claritylegal-records")
@@ -572,6 +598,7 @@ async def test_gdrive_folder_create_409_recovers_existing_folder(monkeypatch):
 
     monkeypatch.setattr(cloud_init.httpx, "AsyncClient", FakeClient)
 
-    assert await cloud_init._ensure_gdrive_folder(
-        "token", "Matter A", "parent-folder"
-    ) == "folder-existing"
+    assert (
+        await cloud_init._ensure_gdrive_folder("token", "Matter A", "parent-folder")
+        == "folder-existing"
+    )
