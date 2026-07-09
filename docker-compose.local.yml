@@ -14,7 +14,7 @@ services:
   local-nginx:
     build:
       context: ./nginx
-      dockerfile: Dockerfile.local
+      dockerfile: Dockerfile.dev
     depends_on:
       frontend:
         condition: service_healthy
