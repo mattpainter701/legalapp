@@ -476,7 +476,7 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
   )
 }
 
-function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, saving, setSaving }) {
+function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, onError, saving, setSaving }) {
   const config = tenantDetail?.llm_config || {}
   const current = {
     standardModel: config.standard_model || config.model || '',
@@ -514,7 +514,9 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
       onUpdate(tenant.id, { llm_config: payload })
       isDirty.current = false
       setSaved(true)
-    } catch { /* save error silently */ }
+    } catch (e) {
+      onError?.(e?.response?.data?.detail || 'Failed to save tenant AI alias override.')
+    }
     finally { setSaving(false) }
   }
 
@@ -560,7 +562,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
   )
 }
 
-function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate }) {
+function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate, onError }) {
   const currentPlan = tenantDetail?.module_config?.plan || ''
   const [plans, setPlans] = useState([])
   const [value, setValue] = useState(currentPlan)
@@ -578,15 +580,14 @@ function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate }) {
   }, [platformKey])
 
   const save = async () => {
-    if (!value) return
     setSaving(true)
     setSaved(false)
     try {
-      await updatePlatformTenant(platformKey, tenant.id, { plan: value })
-      onUpdate(tenant.id, {})
+      await updatePlatformTenant(platformKey, tenant.id, { plan: value || null })
+      onUpdate(tenant.id, { module_config: { ...(tenantDetail?.module_config || {}), plan: value || null } })
       setSaved(true)
-    } catch {
-      /* save error silently */
+    } catch (e) {
+      onError?.(e?.response?.data?.detail || 'Failed to save tenant plan.')
     } finally {
       setSaving(false)
     }
@@ -609,7 +610,7 @@ function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate }) {
       </div>
       <button
         onClick={save}
-        disabled={saving || !value || value === currentPlan}
+        disabled={saving || value === currentPlan}
         className={`px-4 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${
           saved
             ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent'
@@ -2208,7 +2209,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
 }
 
 export default function PlatformPage() {
-  const [platformKey, setPlatformKey] = useState(() => sessionStorage.getItem('platform_key') || null)
+  const [platformKey, setPlatformKey] = useState(null)
   const [tab, setTab] = useState('dashboard')
   const [tenants, setTenants] = useState([])
   const [usage, setUsage] = useState(null)
@@ -2226,7 +2227,6 @@ export default function PlatformPage() {
   const [savingProvider, setSavingProvider] = useState(false)
 
   const handleLogin = (key) => {
-    sessionStorage.setItem('platform_key', key)
     setPlatformKey(key)
   }
 
@@ -2246,7 +2246,7 @@ export default function PlatformPage() {
       if (results[3]) setHealth(results[3])
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load')
-      if (e?.response?.status === 403) { sessionStorage.removeItem('platform_key'); setPlatformKey(null) }
+      if (e?.response?.status === 403) { setPlatformKey(null) }
     } finally { setLoading(false) }
   }, [platformKey, page, tab])
 
@@ -2269,6 +2269,25 @@ export default function PlatformPage() {
         },
       }) : prev)
     }
+    if (expandedTenant === id && changes.module_config) {
+      setTenantDetail((prev) => prev ? ({
+        ...prev,
+        module_config: {
+          ...(prev.module_config || {}),
+          ...changes.module_config,
+        },
+      }) : prev)
+    }
+  }
+
+  const handleTenantPatch = async (tenant, payload) => {
+    setError(null)
+    try {
+      await updatePlatformTenant(platformKey, tenant.id, payload)
+      handleUpdate(tenant.id, payload)
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Failed to update tenant.')
+    }
   }
 
   const toggleTenant = async (id) => {
@@ -2277,7 +2296,7 @@ export default function PlatformPage() {
     setLoadingDetail(true)
     try {
       const data = await getPlatformTenant(platformKey, id)
-      setTenantDetail(data)
+      setTenantDetail({ ...data, ...(data.tenant || {}) })
     } catch { setTenantDetail(null) }
     finally { setLoadingDetail(false) }
   }
@@ -2310,7 +2329,7 @@ export default function PlatformPage() {
         </div>
         <div className="flex items-center gap-4">
           <span className="text-xs text-brand-muted font-mono">{platformKey.slice(0, 8)}…</span>
-          <button onClick={() => { sessionStorage.removeItem('platform_key'); setPlatformKey(null); setTenants([]); setUsage(null); setHealth(null); setLlmConfig(null) }} className="text-xs text-brand-muted hover:text-brand-rose font-sans transition-colors">Sign out</button>
+          <button onClick={() => { setPlatformKey(null); setTenants([]); setUsage(null); setHealth(null); setLlmConfig(null) }} className="text-xs text-brand-muted hover:text-brand-rose font-sans transition-colors">Sign out</button>
         </div>
       </div>
 
@@ -2490,14 +2509,14 @@ export default function PlatformPage() {
                                     <div>
                                       <h4 className="text-xs font-bold text-brand-ink uppercase tracking-wider mb-3 font-sans">Actions</h4>
                                       <div className="space-y-3">
-                                        <button onClick={() => { const payload = { is_active: !t.is_active }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`w-full px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.is_active ? 'border-brand-rose/30 text-brand-rose hover:bg-brand-rose/5' : 'border-brand-accent/30 text-brand-accent hover:bg-brand-accent/5'}`}>
+                                        <button onClick={() => handleTenantPatch(t, { is_active: !t.is_active })} className={`w-full px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.is_active ? 'border-brand-rose/30 text-brand-rose hover:bg-brand-rose/5' : 'border-brand-accent/30 text-brand-accent hover:bg-brand-accent/5'}`}>
                                           {t.is_active ? 'Deactivate Tenant' : 'Activate Tenant'}
                                         </button>
                                         <div className="flex gap-2">
-                                          <button onClick={() => { const payload = { billing_tier: 'flat' }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'flat' ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                          <button onClick={() => handleTenantPatch(t, { billing_tier: 'flat' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'flat' ? 'bg-brand-accent/10 border-brand-accent/20 text-brand-accent' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
                                             Flat-seat
                                           </button>
-                                          <button onClick={() => { const payload = { billing_tier: 'payg' }; updatePlatformTenant(platformKey, t.id, payload).then(() => handleUpdate(t.id, payload)) }} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'payg' ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
+                                          <button onClick={() => handleTenantPatch(t, { billing_tier: 'payg' })} className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium font-sans border transition-colors ${t.billing_tier === 'payg' ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber' : 'border-brand-line text-brand-muted hover:border-brand-ink'}`}>
                                             PAYG
                                           </button>
                                         </div>
@@ -2516,6 +2535,7 @@ export default function PlatformPage() {
                                         premium: llmConfig?.premium_model || 'clarity-premium',
                                       }}
                                       onUpdate={handleUpdate}
+                                      onError={(message) => setError(message)}
                                       saving={savingProvider}
                                       setSaving={setSavingProvider}
                                     />
@@ -2528,6 +2548,7 @@ export default function PlatformPage() {
                                       tenantDetail={tenantDetail}
                                       platformKey={platformKey}
                                       onUpdate={handleUpdate}
+                                      onError={(message) => setError(message)}
                                     />
                                   </div>
                                   </>
@@ -2560,7 +2581,6 @@ export default function PlatformPage() {
           <PlatformIntegrationsTab
             platformKey={platformKey}
             onAuthError={() => {
-              sessionStorage.removeItem('platform_key')
               setPlatformKey(null)
             }}
           />
@@ -2571,7 +2591,6 @@ export default function PlatformPage() {
           <PlatformMcpTab
             platformKey={platformKey}
             onAuthError={() => {
-              sessionStorage.removeItem('platform_key')
               setPlatformKey(null)
             }}
           />
@@ -2584,7 +2603,6 @@ export default function PlatformPage() {
           <AIRoutingTab
             platformKey={platformKey}
             onAuthError={() => {
-              sessionStorage.removeItem('platform_key')
               setPlatformKey(null)
             }}
           />

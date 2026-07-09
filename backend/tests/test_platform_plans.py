@@ -3,6 +3,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
+from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import TenantSettings
 from app.routers import platform as platform_router
 from app.services.mcp_product import hash_key
@@ -26,6 +27,40 @@ async def test_set_tenant_plan(client: AsyncClient, db_session, test_tenant):
         )
     ).scalar_one()
     assert ts.custom_config["plan"] == "intake-only"
+
+
+@pytest.mark.asyncio
+async def test_clear_tenant_plan_and_audit_update(client: AsyncClient, db_session, test_tenant):
+    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
+    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    ts = TenantSettings(
+        tenant_id=test_tenant.id,
+        custom_config={"plan": "intake-only"},
+    )
+    db_session.add(ts)
+    await db_session.commit()
+
+    resp = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"plan": None, "billing_tier": "payg"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200
+    await db_session.refresh(ts)
+    await db_session.refresh(test_tenant)
+    assert "plan" not in (ts.custom_config or {})
+    assert test_tenant.billing_tier == "payg"
+
+    logs = (await db_session.execute(select(OperatorAuditLog))).scalars().all()
+    assert [log.action for log in logs] == ["tenant.updated"]
+    assert logs[0].resource_type == "tenant"
+    assert logs[0].resource_id == str(test_tenant.id)
+    assert logs[0].metadata_json["changes"]["plan"] == {
+        "from": "intake-only",
+        "to": None,
+    }
+    assert logs[0].metadata_json["changes"]["billing_tier"]["to"] == "payg"
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ from app.services.llm_routing import (
     upsert_platform_llm_config,
 )
 from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
+from app.services.operator_audit import record_operator_audit
 
 settings = get_settings()
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -422,19 +423,33 @@ async def update_tenant(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
+    audit_changes: dict[str, dict] = {}
+
     if body.billing_tier is not None:
         if body.billing_tier not in ("flat", "payg"):
             raise HTTPException(
                 status_code=400, detail="billing_tier must be 'flat' or 'payg'"
             )
+        audit_changes["billing_tier"] = {
+            "from": tenant.billing_tier,
+            "to": body.billing_tier,
+        }
         tenant.billing_tier = body.billing_tier
 
     if body.is_active is not None:
+        audit_changes["is_active"] = {
+            "from": tenant.is_active,
+            "to": body.is_active,
+        }
         tenant.is_active = body.is_active
 
     if body.seat_count is not None:
         if body.seat_count < 0:
             raise HTTPException(status_code=400, detail="seat_count must be >= 0")
+        audit_changes["seat_count"] = {
+            "from": tenant.flat_seat_count,
+            "to": body.seat_count,
+        }
         tenant.flat_seat_count = body.seat_count
 
     module_config_sent = _field_was_sent(body, "enabled_modules") or _field_was_sent(
@@ -468,15 +483,24 @@ async def update_tenant(
             await db.flush()
         custom_config = dict(ts.custom_config or {})
         if enabled_modules is not None:
+            audit_changes["enabled_modules"] = {
+                "from": custom_config.get("enabled_modules"),
+                "to": enabled_modules,
+            }
             custom_config["enabled_modules"] = enabled_modules
         if default_module is not None:
+            audit_changes["default_module"] = {
+                "from": custom_config.get("default_module"),
+                "to": default_module,
+            }
             custom_config["default_module"] = default_module
         ts.custom_config = custom_config
 
     if _field_was_sent(body, "plan"):
         from app.services.plans import get_plan
 
-        if get_plan(body.plan) is None:
+        plan_value = body.plan or None
+        if plan_value is not None and get_plan(plan_value) is None:
             raise HTTPException(status_code=400, detail=f"Unknown plan '{body.plan}'")
         ts_result = await db.execute(
             select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
@@ -487,7 +511,14 @@ async def update_tenant(
             db.add(ts)
             await db.flush()
         custom_config = dict(ts.custom_config or {})
-        custom_config["plan"] = body.plan
+        audit_changes["plan"] = {
+            "from": custom_config.get("plan"),
+            "to": plan_value,
+        }
+        if plan_value is None:
+            custom_config.pop("plan", None)
+        else:
+            custom_config["plan"] = plan_value
         ts.custom_config = custom_config
 
     standard_provider_sent = _field_was_sent(
@@ -527,13 +558,43 @@ async def update_tenant(
             ts = TenantSettings(tenant_id=tenant.id)
             db.add(ts)
         if standard_provider_sent:
+            audit_changes["standard_llm_provider"] = {
+                "from": ts.default_llm_provider,
+                "to": standard_provider,
+            }
             ts.default_llm_provider = standard_provider
         if standard_model_sent:
+            audit_changes["standard_llm_model"] = {
+                "from": ts.default_llm_model,
+                "to": standard_model,
+            }
             ts.default_llm_model = standard_model
         if premium_provider_sent:
+            audit_changes["premium_llm_provider"] = {
+                "from": ts.premium_llm_provider,
+                "to": body.premium_llm_provider,
+            }
             ts.premium_llm_provider = body.premium_llm_provider
         if premium_model_sent:
+            audit_changes["premium_llm_model"] = {
+                "from": ts.premium_llm_model,
+                "to": body.premium_llm_model,
+            }
             ts.premium_llm_model = body.premium_llm_model
+
+    if audit_changes:
+        await record_operator_audit(
+            db,
+            request,
+            action="tenant.updated",
+            resource_type="tenant",
+            resource_id=str(tenant.id),
+            metadata={
+                "tenant_id": str(tenant.id),
+                "tenant_name": tenant.name,
+                "changes": audit_changes,
+            },
+        )
 
     await db.commit()
     return {"status": "updated", "tenant_id": tenant_id}
