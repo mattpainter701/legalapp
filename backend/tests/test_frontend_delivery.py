@@ -108,6 +108,9 @@ def _resolved_compose(files: tuple[str, ...]) -> dict:
         command.append("--no-env-resolution")
     command.extend(("--format", "json"))
     env = os.environ.copy()
+    # Compose service ``env_file`` entries must resolve on a pristine checkout;
+    # production still defaults to the untracked ``.env`` when this is unset.
+    env["APP_ENV_FILE"] = ".env.prod.example"
     env.setdefault("DOMAIN", "compose-test.invalid")
     env.setdefault("POSTGRES_PASSWORD", "compose-owner-password-0123456789")
     env.setdefault("CLARITY_APP_PASSWORD", "compose-runtime-password-0123456789")

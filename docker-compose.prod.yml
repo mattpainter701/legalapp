@@ -10,7 +10,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: ${MIGRATOR_DATABASE_URL:-${DATABASE_URL}}
     command: alembic upgrade head
@@ -61,7 +61,7 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}

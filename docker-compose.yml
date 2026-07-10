@@ -86,7 +86,7 @@ services:
         condition: service_completed_successfully
       litellm:
         condition: service_healthy
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
       APP_VERSION: ${APP_VERSION:-dev}
