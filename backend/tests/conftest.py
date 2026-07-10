@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
+import redis.asyncio as aioredis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -26,6 +27,7 @@ TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://test:test@localhost:5432/legalapp_test",
 )
+TEST_REDIS_URL = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 def pytest_collection_modifyitems(items):
@@ -94,6 +96,25 @@ async def test_engine():
     await engine.dispose()
 
 
+@pytest_asyncio.fixture(scope="session")
+async def test_redis():
+    """Provide the application middleware with an isolated, real Redis DB.
+
+    ``ASGITransport`` does not execute the FastAPI lifespan that normally
+    installs Redis.  Using database 15 keeps rate-limit, revocation, and OAuth
+    state behavior production-like without sharing application data.
+    """
+
+    client = aioredis.from_url(TEST_REDIS_URL, decode_responses=True)
+    await client.ping()
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
+
+
 @pytest_asyncio.fixture
 async def db_session(test_engine):
     from sqlalchemy import text as _text
@@ -113,16 +134,23 @@ async def db_session(test_engine):
             stmt = _text(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
             for attempt in range(10):
                 try:
+                    # Never let one leaked/background test connection wedge the
+                    # hosted suite indefinitely. PostgreSQL otherwise waits
+                    # forever for TRUNCATE's AccessExclusiveLock. SET LOCAL is
+                    # transaction-scoped, so re-apply it after every rollback.
+                    await session.execute(_text("SET LOCAL lock_timeout = '2s'"))
                     await session.execute(stmt)
                     await session.commit()
                     break
                 except DBAPIError as exc:
                     await session.rollback()
-                    is_deadlock = (
-                        getattr(exc.orig, "sqlstate", None) == "40P01"
+                    sqlstate = getattr(exc.orig, "sqlstate", None)
+                    retryable_lock = (
+                        sqlstate in {"40P01", "55P03"}
                         or "deadlock" in str(exc).lower()
+                        or "lock timeout" in str(exc).lower()
                     )
-                    if not is_deadlock or attempt == 9:
+                    if not retryable_lock or attempt == 9:
                         raise
                     await asyncio.sleep(0.2 * (attempt + 1))
         yield session
@@ -178,20 +206,24 @@ async def auth_token(test_user: User, test_tenant: Tenant):
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession, auth_token: str):
+async def client(db_session: AsyncSession, auth_token: str, test_redis):
     async def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    previous_redis = getattr(app.state, "redis", None)
+    app.state.redis = test_redis
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-        headers={"Authorization": f"Bearer {auth_token}"},
-    ) as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {auth_token}"},
+        ) as ac:
+            yield ac
+    finally:
+        app.state.redis = previous_redis
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture

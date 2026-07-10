@@ -25,10 +25,16 @@ def _configure(monkeypatch, *, expires_delta=timedelta(hours=1)):
         "expires_at": expires_at.isoformat(),
     }
     monkeypatch.setattr(
-        platform_auth.settings, "PLATFORM_BOOTSTRAP_CREDENTIALS_JSON", json.dumps([entry])
+        platform_auth.settings,
+        "PLATFORM_BOOTSTRAP_CREDENTIALS_JSON",
+        json.dumps([entry]),
     )
-    monkeypatch.setattr(platform_auth.settings, "PLATFORM_TOKEN_SIGNING_KEY", SIGNING_KEY)
-    monkeypatch.setattr(platform_auth.settings, "PLATFORM_LEGACY_BOOTSTRAP_ENABLED", False)
+    monkeypatch.setattr(
+        platform_auth.settings, "PLATFORM_TOKEN_SIGNING_KEY", SIGNING_KEY
+    )
+    monkeypatch.setattr(
+        platform_auth.settings, "PLATFORM_LEGACY_BOOTSTRAP_ENABLED", False
+    )
     return entry
 
 
@@ -123,12 +129,16 @@ async def test_bootstrap_exchange_binds_audited_identity(
     assert claims["scope"] == ["platform:read"]
 
     logs = (
-        await db_session.execute(
-            select(OperatorAuditLog).where(
-                OperatorAuditLog.action == "platform.session.issued"
+        (
+            await db_session.execute(
+                select(OperatorAuditLog).where(
+                    OperatorAuditLog.action == "platform.session.issued"
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(logs) == 1
     assert logs[0].actor_id == "ops@example.com"
 

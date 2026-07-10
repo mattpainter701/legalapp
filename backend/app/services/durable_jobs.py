@@ -12,7 +12,12 @@ from app.models.durable_job import DurableJob
 
 
 async def enqueue_job(
-    db: AsyncSession, *, tenant_id, kind: str, idempotency_key: str, payload: dict
+    db: AsyncSession,
+    *,
+    tenant_id,
+    kind: str,
+    idempotency_key: str,
+    payload: dict,
 ) -> DurableJob:
     tenant_id = uuid.UUID(str(tenant_id))
     existing = await db.scalar(
@@ -35,13 +40,14 @@ async def enqueue_job(
     except IntegrityError:
         # A concurrent request won the unique key. The savepoint preserves the
         # caller's transaction; return the canonical row.
-        return await db.scalar(
+        existing = await db.scalar(
             select(DurableJob).where(
                 DurableJob.tenant_id == tenant_id,
                 DurableJob.kind == kind,
                 DurableJob.idempotency_key == idempotency_key,
             )
         )
+        return existing
 
 
 async def get_tenant_job(db: AsyncSession, tenant_id, job_id) -> DurableJob | None:
@@ -94,11 +100,20 @@ async def finish_job(
     await db.commit()
 
 
-async def fail_job(db: AsyncSession, row: DurableJob, exc: Exception) -> None:
+async def fail_job(
+    db: AsyncSession,
+    row: DurableJob,
+    exc: Exception,
+    *,
+    retryable: bool = True,
+) -> None:
     row.last_error = str(exc)[:4000]
     row.leased_at = None
     row.lease_owner = None
-    if row.attempts >= row.max_attempts:
+    if not retryable:
+        row.attempts = row.max_attempts
+        row.status = "failed"
+    elif row.attempts >= row.max_attempts:
         row.status = "failed"
     else:
         row.status = "pending"

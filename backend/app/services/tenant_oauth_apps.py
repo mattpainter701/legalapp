@@ -20,6 +20,7 @@ ZOOM_PHONE_APP_PROVIDER = "zoom_phone"
 class OAuthClientConfig:
     client_id: str
     client_secret: str
+    account_id: str
     source: str
 
 
@@ -58,17 +59,12 @@ async def get_zoom_phone_oauth_client(
         tenant_id=tenant_id,
         provider=ZOOM_PHONE_APP_PROVIDER,
     )
-    if app:
+    if app and app.zoom_account_id:
         return OAuthClientConfig(
             client_id=decrypt_token(app.encrypted_client_id),
             client_secret=decrypt_token(app.encrypted_client_secret),
+            account_id=app.zoom_account_id,
             source="tenant",
-        )
-    if settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET:
-        return OAuthClientConfig(
-            client_id=settings.ZOOM_CLIENT_ID,
-            client_secret=settings.ZOOM_CLIENT_SECRET,
-            source="platform",
         )
     return None
 
@@ -84,9 +80,13 @@ async def get_zoom_phone_webhook_secret(
             tenant_id=tenant_id,
             provider=ZOOM_PHONE_APP_PROVIDER,
         )
-        if app and app.encrypted_webhook_secret_token:
-            return decrypt_token(app.encrypted_webhook_secret_token)
-    return settings.ZOOM_WEBHOOK_SECRET_TOKEN or None
+        if app:
+            return (
+                decrypt_token(app.encrypted_webhook_secret_token)
+                if app.encrypted_webhook_secret_token
+                else None
+            )
+    return None
 
 
 async def upsert_zoom_phone_oauth_app(
@@ -96,6 +96,7 @@ async def upsert_zoom_phone_oauth_app(
     user_id: str | uuid.UUID,
     client_id: str,
     client_secret: str,
+    zoom_account_id: str,
     webhook_secret_token: str | None = None,
     redirect_uri: str,
     scopes: str,
@@ -113,6 +114,7 @@ async def upsert_zoom_phone_oauth_app(
     if app:
         app.encrypted_client_id = encrypted_client_id
         app.encrypted_client_secret = encrypted_client_secret
+        app.zoom_account_id = zoom_account_id
         if webhook_secret_token:
             app.encrypted_webhook_secret_token = encrypt_token(webhook_secret_token)
         app.redirect_uri = redirect_uri
@@ -127,6 +129,7 @@ async def upsert_zoom_phone_oauth_app(
         provider=ZOOM_PHONE_APP_PROVIDER,
         encrypted_client_id=encrypted_client_id,
         encrypted_client_secret=encrypted_client_secret,
+        zoom_account_id=zoom_account_id,
         encrypted_webhook_secret_token=(
             encrypt_token(webhook_secret_token) if webhook_secret_token else None
         ),

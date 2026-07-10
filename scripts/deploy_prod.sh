@@ -4,6 +4,12 @@
 # preflight, data guard, build, migration topology, restart, and verification.
 set -euo pipefail
 
+BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-false}"
+case "$BOOTSTRAP_MODE" in
+  true|false) ;;
+  *) echo "ERROR: BOOTSTRAP_MODE must be true or false" >&2; exit 2 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT_DIR"
@@ -101,11 +107,16 @@ PY
 echo "==> Verifying frontend image contents"
 "${compose[@]}" exec -T frontend sh -s < scripts/verify_frontend_runtime.sh
 
-echo "==> Running production readiness, scheduler, Zoom ingress, HTTP, and TLS gates"
-ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/production_check.sh
-
 echo "==> Verifying that no existing table or tenant count decreased"
 COMPOSE_FILES="$compose_guard_files" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "$data_guard_counts"
+
+echo "==> Running production readiness, scheduler, Zoom ingress, HTTP, and TLS gates"
+zoom_required=true
+if [[ "$BOOTSTRAP_MODE" == true ]]; then
+  zoom_required=false
+  echo "WARNING: BOOTSTRAP MODE — deployment is NOT GO-LIVE until tenant Zoom setup and a strict production check pass." >&2
+fi
+ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" ZOOM_REQUIRED="$zoom_required" bash scripts/production_check.sh
 
 docker image prune -f
 echo "Deploy complete: version=$APP_VERSION commit=$APP_COMMIT built=$APP_BUILD_TIME"

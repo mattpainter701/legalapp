@@ -104,9 +104,9 @@ function PlatformIntegrationsTab({ platformKey, onAuthError }) {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">Operator integrations</p>
-            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Zoom app setup</h2>
+            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Zoom integration ownership</h2>
             <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
-              Clarity owns the shared Zoom OAuth app. Tenant admins only grant customer access from Admin &gt; Zoom once this platform setup is ready.
+              Platform Zoom credentials are Meetings-only. Every Zoom Phone customer owns and configures its app from Admin &gt; Zoom.
             </p>
           </div>
           <button
@@ -139,21 +139,21 @@ function PlatformIntegrationsTab({ platformKey, onAuthError }) {
                   <Settings2 size={18} />
                 </div>
                 <div>
-                  <h3 className="text-brand-ink font-sans text-base font-bold">Global Zoom OAuth app</h3>
-                  <p className="text-brand-ink-2 font-sans text-sm mt-1">Redacted server readiness for the Clarity-owned app.</p>
+                  <h3 className="text-brand-ink font-sans text-base font-bold">Zoom Meetings platform app</h3>
+                  <p className="text-brand-ink-2 font-sans text-sm mt-1">Redacted server readiness for optional meeting creation.</p>
                 </div>
               </div>
-              <ReadinessBadge ready={zoom?.phone_oauth_ready} label={zoom?.phone_oauth_ready ? 'Ready' : 'Setup required'} />
+              <ReadinessBadge ready={zoom?.meetings_oauth_ready} label={zoom?.meetings_oauth_ready ? 'Ready' : 'Optional'} />
             </div>
 
             <div className="space-y-2">
-              {['ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_PHONE_REDIRECT_URI', 'ZOOM_REDIRECT_URI'].map((key) => (
+              {['ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_REDIRECT_URI'].map((key) => (
                 <EnvReadinessRow key={key} name={key} item={env[key]} />
               ))}
             </div>
 
             <div className="mt-4 rounded-lg border border-brand-line bg-brand-bg-soft px-3 py-2 text-xs text-brand-ink-2">
-              Client ID and secret are global operator settings. They are never entered by customer tenants.
+              These global settings never authorize Zoom Phone or expose tenant call history.
             </div>
           </div>
 
@@ -163,13 +163,13 @@ function PlatformIntegrationsTab({ platformKey, onAuthError }) {
                 <Shield size={18} />
               </div>
               <div>
-                <h3 className="text-brand-ink font-sans text-base font-bold">Customer OAuth grant flow</h3>
-                <p className="text-brand-ink-2 font-sans text-sm mt-1">Customer Zoom admins approve access from the tenant Admin portal.</p>
+                <h3 className="text-brand-ink font-sans text-base font-bold">Tenant-owned Zoom Phone</h3>
+                <p className="text-brand-ink-2 font-sans text-sm mt-1">Customer Zoom admins enter their app, webhook secret, and grant from the tenant Admin portal.</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-              <GrantFlowCard icon={PhoneCall} title="Phone intake" ready={zoom?.phone_oauth_ready} provider={zoom?.tenant_grant_flow?.phone_provider || 'zoom_phone'} />
+              <GrantFlowCard icon={PhoneCall} title="Phone intake (tenant-owned)" ready={zoom?.phone_tenant_owned} provider={zoom?.tenant_grant_flow?.phone_provider || 'zoom_phone'} />
               <GrantFlowCard icon={Video} title="Meetings" ready={zoom?.meetings_oauth_ready} provider={zoom?.tenant_grant_flow?.meetings_provider || 'zoom'} optional />
             </div>
 

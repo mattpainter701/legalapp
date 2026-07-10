@@ -36,7 +36,16 @@ async def running_protocol_manager():
 
 
 @pytest.fixture
-def protocol_app():
+def protocol_app(monkeypatch):
+    # The protocol tests deliberately use an in-process localhost client. Do
+    # not inherit a developer machine's production BACKEND_URL into the SDK's
+    # DNS-rebinding allow-list.
+    monkeypatch.setattr(mcp_protocol.settings, "BACKEND_URL", "http://localhost:8000")
+    monkeypatch.setattr(
+        mcp_protocol.protocol_session_manager,
+        "security_settings",
+        mcp_protocol._transport_security(),
+    )
     return Starlette(
         routes=[
             Route(

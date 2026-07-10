@@ -227,8 +227,29 @@ async def record_partner_assignment(
     communication_id: uuid.UUID | None = None,
     practice_area: str | None = None,
     rotation_rule_id: uuid.UUID | None = None,
+    dedupe_latest_for_communication: bool = False,
 ) -> None:
     """Append an assignment event to the partner log (commits with the caller)."""
+    if dedupe_latest_for_communication and communication_id:
+        latest = await db.scalar(
+            select(PartnerAssignmentLog)
+            .where(
+                PartnerAssignmentLog.tenant_id == tenant_id,
+                PartnerAssignmentLog.communication_id == communication_id,
+            )
+            .order_by(PartnerAssignmentLog.created_at.desc())
+            .limit(1)
+        )
+        if latest and (
+            latest.assignment_method == assignment_method
+            and latest.assigned_to_user_id == assigned_to_user_id
+            and latest.assigned_by_user_id == assigned_by_user_id
+            and latest.lead_id == lead_id
+            and latest.contact_id == contact_id
+            and latest.practice_area == practice_area
+            and latest.rotation_rule_id == rotation_rule_id
+        ):
+            return
     db.add(
         PartnerAssignmentLog(
             tenant_id=tenant_id,
@@ -628,6 +649,30 @@ def _log_participant(log: CommunicationLog, key: str) -> str | None:
     value = participants.get(key)
     if isinstance(value, str) and value.strip():
         return value.strip()
+    return None
+
+
+def _log_participant_uuid(log: CommunicationLog, key: str) -> uuid.UUID | None:
+    value = _log_participant(log, key)
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _task_linked_lead_id(task: Task | None) -> uuid.UUID | None:
+    """Read the explicit lead link written into legacy intake task details."""
+    if not task or not task.description:
+        return None
+    for line in task.description.splitlines():
+        label, separator, value = line.partition(":")
+        if separator and label.strip().lower() == "linked lead":
+            try:
+                return uuid.UUID(value.strip())
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -1667,20 +1712,92 @@ async def create_dashboard_call(
     created_lead = False
     assignment_task_id = None
     task = None
+    should_notify_task = False
     caller_name = payload.caller_name or "Unknown caller"
     source_log = None
     if payload.existing_communication_id:
         source_log = (
             await db.execute(
-                select(CommunicationLog).where(
+                select(CommunicationLog)
+                .where(
                     CommunicationLog.id == payload.existing_communication_id,
                     CommunicationLog.tenant_id == tenant_id,
                     CommunicationLog.channel == "call",
                 )
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if not source_log:
             raise HTTPException(status_code=404, detail="Source call record not found")
+
+        # The provider call is the idempotency boundary for intake capture.  Its
+        # row lock serializes retries/concurrent submissions, and the durable
+        # links written by the first successful request are then reused by every
+        # waiter rather than creating another contact or lead.
+        contact_id = contact_id or source_log.contact_id
+        captured_lead_id = _log_participant_uuid(source_log, "intake_lead_id")
+        if not captured_lead_id:
+            captured_lead_id = await db.scalar(
+                select(PartnerAssignmentLog.lead_id)
+                .where(
+                    PartnerAssignmentLog.tenant_id == tenant_id,
+                    PartnerAssignmentLog.communication_id == source_log.id,
+                    PartnerAssignmentLog.lead_id.is_not(None),
+                )
+                .order_by(PartnerAssignmentLog.created_at.desc())
+                .limit(1)
+            )
+        if not captured_lead_id:
+            call_task = await db.scalar(
+                select(Task)
+                .where(
+                    Task.tenant_id == tenant_id,
+                    Task.external_ref
+                    == f"intake-dashboard:call:{source_log.id}:general-task",
+                )
+                .order_by(Task.updated_at.desc(), Task.created_at.desc())
+                .limit(1)
+            )
+            captured_lead_id = _task_linked_lead_id(call_task)
+        if (
+            payload.outcome == "create_lead"
+            and not lead_id
+            and not captured_lead_id
+            and source_log.contact_id
+            and source_log.created_by_user_id
+        ):
+            # This is an older, already captured call, but there is no durable
+            # evidence identifying its lead. Never infer from the contact's
+            # current leads or create another one on a possible retry.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This previously captured call has no explicit lead link. "
+                    "Select its existing lead or reconcile the call before retrying."
+                ),
+            )
+        if not lead_id and captured_lead_id:
+            captured_lead = (
+                await db.execute(
+                    select(Lead).where(
+                        Lead.id == captured_lead_id,
+                        Lead.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if captured_lead and (
+                contact_id is None or captured_lead.contact_id == contact_id
+            ):
+                lead_id = captured_lead.id
+                contact_id = captured_lead.contact_id
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This previously captured call has an invalid lead link. "
+                        "Reconcile the call before retrying."
+                    ),
+                )
     lead_assignee = (
         await _resolve_active_user(db, tenant_id, payload.assigned_to_user_id)
         if payload.task_mode == "partner_rotation"
@@ -1719,6 +1836,10 @@ async def create_dashboard_call(
             lead_id = lead.id
             contact_id = lead.contact_id
             if payload.task_mode == "partner_rotation":
+                existing_task = await _assignment_task_for_lead(db, tenant_id, lead)
+                previous_assignee_id = (
+                    existing_task.assigned_to_user_id if existing_task else None
+                )
                 task = await _upsert_lead_assignment_task(
                     db,
                     tenant_id=tenant_id,
@@ -1727,6 +1848,13 @@ async def create_dashboard_call(
                     created_by_user_id=current_user.id,
                 )
                 assignment_task_id = task.id if task else None
+                should_notify_task = bool(
+                    task
+                    and (
+                        existing_task is None
+                        or previous_assignee_id != task.assigned_to_user_id
+                    )
+                )
         else:
             if not contact_id:
                 parts = caller_name.split()
@@ -1765,6 +1893,7 @@ async def create_dashboard_call(
                     created_by_user_id=current_user.id,
                 )
                 assignment_task_id = task.id if task else None
+                should_notify_task = task is not None
 
     occurred_at = payload.occurred_at or datetime.now(timezone.utc)
     body_bits = [
@@ -1784,10 +1913,17 @@ async def create_dashboard_call(
             **existing_participants,
             **{key: value for key, value in participants.items() if value is not None},
         }
-        if source_log.body and body:
-            body = f"{body}\n\n--- Original Zoom Phone details ---\n{source_log.body}"
-        elif source_log.body:
-            body = source_log.body
+        if lead_id:
+            participants["intake_lead_id"] = str(lead_id)
+        original_body = source_log.body
+        original_marker = "\n\n--- Original Zoom Phone details ---\n"
+        if original_body and original_marker in original_body:
+            # A replay must not recursively append the already captured body.
+            original_body = original_body.split(original_marker, 1)[1]
+        if original_body and body:
+            body = f"{body}{original_marker}{original_body}"
+        elif original_body:
+            body = original_body
         log = source_log
         log.direction = source_log.direction or "inbound"
         log.status = "logged"
@@ -1815,6 +1951,15 @@ async def create_dashboard_call(
         db.add(log)
     await db.flush()
     if payload.task_mode == "specific_staff" and general_task_assignee:
+        existing_task = await db.scalar(
+            select(Task).where(
+                Task.tenant_id == tenant_id,
+                Task.external_ref == f"intake-dashboard:call:{log.id}:general-task",
+            )
+        )
+        previous_assignee_id = (
+            existing_task.assigned_to_user_id if existing_task else None
+        )
         task = await _upsert_general_call_task(
             db,
             tenant_id=tenant_id,
@@ -1832,6 +1977,9 @@ async def create_dashboard_call(
             lead_id=lead_id,
         )
         assignment_task_id = task.id
+        should_notify_task = bool(
+            existing_task is None or previous_assignee_id != task.assigned_to_user_id
+        )
         await record_partner_assignment(
             db,
             tenant_id=tenant_id,
@@ -1845,6 +1993,7 @@ async def create_dashboard_call(
             contact_id=contact_id,
             communication_id=log.id,
             practice_area=payload.practice_area,
+            dedupe_latest_for_communication=True,
         )
     elif payload.task_mode == "partner_rotation" and lead_assignee:
         await record_partner_assignment(
@@ -1859,6 +2008,7 @@ async def create_dashboard_call(
             contact_id=contact_id,
             communication_id=log.id,
             practice_area=payload.practice_area,
+            dedupe_latest_for_communication=True,
         )
     communication_id = log.id
     response = IntakeDashboardCallResponse(
@@ -1870,7 +2020,7 @@ async def create_dashboard_call(
         status="logged",
     )
     await db.commit()
-    if assignment_task_id and task:
+    if assignment_task_id and task and should_notify_task:
         await set_tenant_context(db, str(tenant_id))
         await notify_task_created(db, task, str(tenant_id))
 

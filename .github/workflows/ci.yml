@@ -45,6 +45,7 @@ jobs:
   test-backend:
     name: Backend — Tests (pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -78,6 +79,7 @@ jobs:
 
       # Redis
       REDIS_URL: redis://localhost:6379
+      TEST_REDIS_URL: redis://localhost:6379/15
 
       # Auth
       SECRET_KEY: ci-test-secret-key-not-for-production-use
@@ -142,7 +144,7 @@ jobs:
 
       - name: Run tests
         working-directory: backend
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short --maxfail=1
 
   # ─── Frontend: Build validation ─────────────────────────────────────────────
   lint-frontend:
@@ -176,3 +178,6 @@ jobs:
 
       - name: Verify frontend image delivery and stale-volume rejection
         run: sh scripts/test_frontend_image_delivery.sh
+
+      - name: Verify nginx Zoom webhook ingress policy
+        run: sh scripts/test_nginx_webhook_ingress.sh

@@ -24,7 +24,7 @@ Set these non-secret relationships in `.env`:
 - `TOKEN_ENCRYPTION_KEYS` is newest-first (`new_key,old_key`) during staged rotation. Keep the old key until all stored credentials have been re-encrypted and verified. This first-customer preflight deliberately requires both distinct keys; do not collapse the keyring until rotation and provider reconnect tests are recorded.
 - `MCP_PRODUCT_ENABLED=false`. When `MCP_SERVER_URL` is non-empty, `MCP_UPSTREAM_API_KEY` must be a separate 32+ character server credential.
 - `VITE_CONTACT_URL` is the verified sales/contact destination used by the public site.
-- Zoom may use the platform environment app or the tenant-owned Zoom Phone app stored through Admin > Zoom. The production check validates that an active tenant has both an app secret and OAuth grant.
+- Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Copy the firm's exact Zoom Account ID from Zoom Account Management > Account Profile; this explicit binding avoids an extra Zoom user-profile scope. A token account is compared when Zoom supplies one, but every new grant remains `account_verification_required` until a correctly signed v3 call event matches `payload.account_id` and the pending grant successfully fetches that exact call from Zoom. The event proves the app account; the fetch proves grant access. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, exact app-to-grant account match, `healthy` verification state, required read scopes, and public CRC. Remove unused scopes in the Zoom Marketplace app and reauthorize the tenant before go-live; the application cannot revoke provider-side grants.
 
 Validate without printing secret values:
 
@@ -60,6 +60,16 @@ It must prove all of the following:
 
 The same proof can be run manually from the **Fresh-host production rehearsal** GitHub workflow.
 
+Migration evidence recorded 2026-07-10: a clean PostgreSQL 16 database owned by
+a `NOSUPERUSER NOBYPASSRLS` role upgraded from an empty schema through
+`090_zoom_account_binding`. The 089 duplicate-key rehearsal failed closed with
+both rows unchanged, `FORCE ROW LEVEL SECURITY` restored, and the Alembic
+version still at 088; after operator cleanup, partial-index `ON CONFLICT`
+inference passed. A seeded 089 Zoom app/grant then upgraded to 090 with the
+account mapping backfilled, both source tables returned to FORCE RLS, and zero
+rows visible without tenant context. Downgrade to 089 and re-upgrade to 090
+preserved the source rows and reproduced the binding.
+
 ## 3. Back up and rehearse restore
 
 Before and after deployment, create a custom-format dump, checksum it, copy it off-host, verify the remote checksum, and restore it into an isolated pgvector PostgreSQL 16 container. Never restore a rehearsal over production.
@@ -87,6 +97,21 @@ The checked-out production revision is deployed through one hardened path. The s
 bash scripts/deploy_prod.sh --build
 ```
 
+On a genuinely empty host, Admin > Zoom cannot be reached until the first
+deployment finishes. Use the explicit bootstrap exception for that first
+infrastructure deployment only:
+
+```bash
+BOOTSTRAP_MODE=true bash scripts/deploy_prod.sh --build
+```
+
+Bootstrap success is not deployment completion and is **NOT GO-LIVE**. It skips
+only the Zoom launch checks; database, Redis, scheduler, queue, HTTP, TLS,
+migration, and post-deploy data-count checks still run. After signing in,
+configure the tenant-owned Zoom app and grant, then run the strict production
+check below. Never use bootstrap mode for a customer launch or an ordinary
+production update.
+
 The default is the single-file hypervisor topology. A clean Lightsail or other
 VPS can use the equivalent base-plus-production topology without publishing the
 database, Redis, backend, or frontend directly:
@@ -107,6 +132,10 @@ Run the complete operator gate:
 ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml bash scripts/production_check.sh
 ```
 
+`ZOOM_REQUIRED=true` is the validated default. This strict command must pass
+after tenant Zoom setup and before go-live, even when the host was created with
+`BOOTSTRAP_MODE=true`.
+
 It fails on excessive disk use, missing/unhealthy containers, PostgreSQL, authenticated Redis, missing per-tenant scheduler heartbeats, stale/exhausted durable jobs, incomplete Zoom Phone configuration, failed Zoom CRC ingress, public HTTP, or a TLS certificate inside the 14-day floor.
 
 Confirm scheduler ownership and RLS evidence:
@@ -125,13 +154,21 @@ Register these exact HTTPS URLs in the Zoom app:
 
 - OAuth callback: `https://<DOMAIN>/api/integrations/zoom-phone/callback`
 - Event subscription: use the tenant-specific webhook URL shown in Admin > Zoom: `https://<DOMAIN>/api/integrations/zoom-phone/webhook/<tenant-id>`
+- Required events: `phone.callee_call_element_completed` and
+  `phone.caller_call_element_completed`. The older call-history-completed
+  events remain compatibility inputs only and are not valid production proof.
+
+In Admin > Zoom, enter the firm's Zoom Account ID exactly as shown under Zoom
+Account Management > Account Profile. It is an identifier, not a credential,
+and may be displayed after save. Do not add a user-profile scope to discover it.
 
 Then:
 
-1. Connect/reconnect the tenant from Admin > Zoom and run the API connection test.
-2. Run `scripts/production_check.sh`; its CRC request must return an `encryptedToken` through nginx/TLS.
-3. Place a real inbound test call. Confirm it appears once in Call Intake.
-4. Save the intake with a specific staff task. Confirm the task appears in Tasks, is tenant-scoped, and notification/read-receipt behavior works.
+1. Connect/reconnect the tenant from Admin > Zoom. The new grant must show **Account proof pending**. Re-authorize only to recover a wrong or revoked grant.
+2. Place a real inbound test call so a correctly signed v3 call-element event reaches the tenant-specific webhook. Confirm its `payload.account_id` matches the saved app account and the worker uses the pending grant to fetch that exact call history/detail. Only their combined proof may atomically mark the grant healthy and import the call.
+3. Run **Test connection**, then run `scripts/production_check.sh`; listing, synchronization, import, and the strict gate intentionally remain blocked until the signed event and matching provider fetch both succeed. The gate's CRC request must return an `encryptedToken` through nginx/TLS.
+4. Confirm the call appears once in Call Intake.
+5. Save the intake with a specific staff task. Confirm the task appears in Tasks, is tenant-scoped, and notification/read-receipt behavior works.
 
 The automated regression is:
 
@@ -144,6 +181,11 @@ pytest backend/tests/test_intake_dashboard.py -k zoom_ingress_to_intake_to_assig
 The scheduled **Production public health** workflow polls `/health/readiness`, the frontend, and TLS every ten minutes. It creates or updates one deduplicated `[production-alert]` GitHub issue on failure and closes it on recovery. Enable scheduled Actions and issue notifications for the operator repository.
 
 `ALERT_WEBHOOK_URL` is an optional second delivery path for both the GitHub workflow and the on-host operator script. If configured, new-failure and recovery transitions are sent without repeating every interval. The public endpoint contains component states only—no tenant IDs, queue data, credentials, or infrastructure addresses.
+
+By default the on-host monitor stores transition state outside the Git checkout
+at `${XDG_STATE_HOME:-$HOME/.local/state}/clarity-legal/production-check.state`.
+The state directory is mode 700. Set `MONITOR_STATE_FILE` only when the service
+manager provides another persistent, operator-owned path.
 
 ## Go/no-go
 

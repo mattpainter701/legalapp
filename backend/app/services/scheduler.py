@@ -497,7 +497,11 @@ class LegalScheduler:
         """
         # Durable queue poller: short cadence; row-level SKIP LOCKED claims and
         # leases provide concurrency control and stale-worker recovery.
-        from app.services.durable_job_worker import process_pending_jobs
+        from app.services.durable_job_worker import (
+            enqueue_zoom_phone_reconciliation_jobs,
+            process_pending_jobs,
+            process_pending_zoom_phone_jobs,
+        )
 
         self.scheduler.add_job(
             process_pending_jobs,
@@ -505,6 +509,24 @@ class LegalScheduler:
             seconds=5,
             id="durable-job-worker",
             name="Durable Document Job Worker",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            process_pending_zoom_phone_jobs,
+            "interval",
+            seconds=2,
+            id="zoom-phone-job-worker",
+            name="Durable Zoom Phone Job Worker",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            enqueue_zoom_phone_reconciliation_jobs,
+            "interval",
+            hours=1,
+            id="zoom-phone-reconciliation",
+            name="Zoom Phone Reconciliation Enqueuer",
             replace_existing=True,
             max_instances=1,
         )

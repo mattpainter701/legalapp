@@ -74,17 +74,14 @@ async def platform_integration_readiness(request: Request):
     zoom_callback = (
         settings.ZOOM_REDIRECT_URI or f"{backend_url}/api/integrations/zoom/callback"
     )
-    zoom_phone_callback = (
-        settings.ZOOM_PHONE_REDIRECT_URI
-        or f"{backend_url}/api/integrations/zoom-phone/callback"
-    )
     client_ready = _setting_configured("ZOOM_CLIENT_ID") and _setting_configured(
         "ZOOM_CLIENT_SECRET"
     )
 
     return {
         "zoom": {
-            "phone_oauth_ready": client_ready,
+            "phone_oauth_ready": False,
+            "phone_tenant_owned": True,
             "meetings_oauth_ready": client_ready,
             "env": {
                 "ZOOM_CLIENT_ID": {
@@ -97,11 +94,6 @@ async def platform_integration_readiness(request: Request):
                     "configured": _setting_configured("ZOOM_CLIENT_SECRET"),
                     "required": True,
                 },
-                "ZOOM_PHONE_REDIRECT_URI": {
-                    "label": "Phone intake callback override",
-                    "configured": _setting_configured("ZOOM_PHONE_REDIRECT_URI"),
-                    "required": False,
-                },
                 "ZOOM_REDIRECT_URI": {
                     "label": "Meetings callback override",
                     "configured": _setting_configured("ZOOM_REDIRECT_URI"),
@@ -109,21 +101,24 @@ async def platform_integration_readiness(request: Request):
                 },
             },
             "expected_redirect_uris": {
-                "zoom_phone": [zoom_phone_callback],
+                "zoom_phone": [
+                    settings.ZOOM_PHONE_REDIRECT_URI
+                    or f"{backend_url}/api/integrations/zoom-phone/callback"
+                ],
                 "zoom": [zoom_callback],
             },
             "tenant_grant_flow": {
                 "phone_provider": "zoom_phone",
                 "meetings_provider": "zoom",
                 "description": (
-                    "Tenant admins grant customer Zoom access from Admin > Zoom. "
-                    "Clarity stores the returned OAuth tokens per tenant."
+                    "Zoom Phone is configured with a tenant-owned app from "
+                    "Admin > Zoom. The platform app is Meetings-only."
                 ),
             },
             "notes": [
-                "Customer tenants do not enter Zoom client credentials.",
-                "Add the callback URLs to the Clarity-owned Zoom OAuth app before tenant admins connect.",
-                "Zoom Phone scopes must be enabled in the same OAuth app for Phone intake grants.",
+                "Global Zoom client settings apply to Zoom Meetings only.",
+                "Each Phone tenant enters its own app credentials and webhook secret in Admin > Zoom.",
+                "Never add Zoom Phone scopes or callbacks to the platform Meetings app.",
             ],
         }
     }

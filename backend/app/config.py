@@ -58,16 +58,9 @@ class Settings(BaseSettings):
     ZOOM_REDIRECT_URI: str = (
         ""  # e.g. https://yourdomain.com/api/integrations/zoom/callback
     )
-    ZOOM_WEBHOOK_SECRET_TOKEN: str = ""
     ZOOM_PHONE_REDIRECT_URI: str = (
         ""  # e.g. https://yourdomain.com/api/integrations/zoom-phone/callback
     )
-    # Optional Zoom Phone Server-to-Server OAuth app. The account ID is
-    # tenant-specific in multi-tenant installs; this default is for a single
-    # customer deployment until the admin credential UI lands.
-    ZOOM_PHONE_CLIENT_ID: str = ""
-    ZOOM_PHONE_CLIENT_SECRET: str = ""
-    ZOOM_PHONE_ACCOUNT_ID: str = ""
     # Least-privilege scopes required for account call history and call-element
     # detail. Recording content is not fetched by the intake integration.
     ZOOM_PHONE_SCOPES: str = "phone:read:list_call_logs:admin phone:read:call_log:admin"

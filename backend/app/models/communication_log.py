@@ -9,6 +9,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -26,6 +27,13 @@ class CommunicationLog(Base):
         Index("idx_commlogs_contact_id", "contact_id"),
         Index("idx_commlogs_occurred_at", "tenant_id", "occurred_at"),
         Index("idx_commlogs_thread_ref", "tenant_id", "thread_ref"),
+        Index(
+            "uq_commlogs_zoom_phone_external_ref",
+            "tenant_id",
+            "external_ref",
+            unique=True,
+            postgresql_where=text("external_ref LIKE 'zoom_phone:call:%'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

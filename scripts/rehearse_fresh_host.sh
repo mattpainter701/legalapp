@@ -12,7 +12,7 @@ APP_DIR="$WORK_DIR/legalapp"
 cleanup() {
   if [[ -d "$APP_DIR" ]]; then
     docker compose -p "$PROJECT" -f "$APP_DIR/docker-compose.hypervisor.yml" \
-      --env-file "$APP_DIR/.env" down -v --remove-orphans >/dev/null 2>&1 || true
+      --env-file "$APP_DIR/.env" down -v --remove-orphans --rmi local >/dev/null 2>&1 || true
   fi
   rm -rf -- "$WORK_DIR"
 }

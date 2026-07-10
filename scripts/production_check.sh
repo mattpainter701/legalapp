@@ -2,11 +2,24 @@
 # Operator release/monitoring gate. Sends one alert on state transitions.
 set -euo pipefail
 
+ZOOM_REQUIRED="${ZOOM_REQUIRED:-true}"
+case "$ZOOM_REQUIRED" in
+  true|false) ;;
+  *) echo "FAIL: ZOOM_REQUIRED must be true or false" >&2; exit 2 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}}"
-STATE_FILE="${MONITOR_STATE_FILE:-$ROOT_DIR/.monitor-state}"
+if [[ -n "${MONITOR_STATE_FILE:-}" ]]; then
+  STATE_FILE="$MONITOR_STATE_FILE"
+else
+  STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/clarity-legal"
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  STATE_FILE="$STATE_DIR/production-check.state"
+fi
 
 [[ -f "$ENV_FILE" ]] || { echo "FAIL: missing $ENV_FILE" >&2; exit 1; }
 get_env() {
@@ -97,16 +110,27 @@ stale_queue="$(sql "SELECT count(*) FROM durable_jobs WHERE (status='pending' AN
 [[ "$stale_queue" =~ ^[0-9]+$ ]] || fail "durable queue query failed"
 if [[ "$stale_queue" =~ ^[0-9]+$ ]] && (( stale_queue > 0 )); then fail "durable queue has $stale_queue stale/exhausted job(s)"; fi
 
-zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.is_active" || echo error)"
-[[ "$zoom_ready" =~ ^[0-9]+$ ]] || fail "Zoom Phone readiness query failed"
-if [[ "$zoom_ready" == "0" ]]; then fail "no active tenant has both Zoom Phone app credentials and an OAuth grant"; fi
+if [[ "$ZOOM_REQUIRED" == true ]]; then
+  zoom_predicate="t.is_active AND a.encrypted_webhook_secret_token IS NOT NULL AND NULLIF(a.zoom_account_id, '') IS NOT NULL AND c.encrypted_refresh_token IS NOT NULL AND c.service_account_email = a.zoom_account_id AND c.health = 'healthy' AND c.scopes LIKE '%phone:read:list_call_logs:admin%' AND c.scopes LIKE '%phone:read:call_log:admin%'"
+  zoom_configured="$(sql "SELECT count(DISTINCT t.id) FROM tenants t LEFT JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active LEFT JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.is_active AND (a.id IS NOT NULL OR c.id IS NOT NULL)" || echo error)"
+  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE ${zoom_predicate}" || echo error)"
+  [[ "$zoom_configured" =~ ^[0-9]+$ && "$zoom_ready" =~ ^[0-9]+$ ]] || fail "Zoom Phone readiness query failed"
+  if [[ "$zoom_configured" == "0" ]]; then fail "no active tenant has Zoom Phone configured"; fi
+  if [[ "$zoom_configured" =~ ^[0-9]+$ && "$zoom_ready" =~ ^[0-9]+$ ]] && (( zoom_ready != zoom_configured )); then
+    fail "Zoom Phone configuration is incomplete for one or more active configured tenants"
+  fi
 
-zoom_tenant_id="$(sql "SELECT t.id FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.is_active ORDER BY t.id LIMIT 1" || true)"
-if [[ -n "$zoom_tenant_id" ]]; then
-  zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
-    --data '{"event":"endpoint.url_validation","payload":{"plainToken":"clarity-production-probe"}}' \
-    "https://${DOMAIN}/api/integrations/zoom-phone/webhook/${zoom_tenant_id}" || true)"
-  [[ "$zoom_crc" == *'"encryptedToken"'* ]] || fail "Zoom Phone production-ingress CRC handshake failed"
+  zoom_tenant_ids="$(sql "SELECT t.id FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE ${zoom_predicate} ORDER BY t.id" || true)"
+  while IFS= read -r zoom_tenant_id; do
+    [[ -n "$zoom_tenant_id" ]] || continue
+    zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
+      --data '{"event":"endpoint.url_validation","payload":{"plainToken":"clarity-production-probe"}}' \
+      "https://${DOMAIN}/api/integrations/zoom-phone/webhook/${zoom_tenant_id}" || true)"
+    [[ "$zoom_crc" == *'"plainToken":"clarity-production-probe"'* && "$zoom_crc" == *'"encryptedToken"'* ]] || fail "Zoom Phone production-ingress CRC handshake failed for a configured tenant"
+  done <<< "$zoom_tenant_ids"
+  "${compose[@]}" exec -T backend python scripts/check_zoom_phone.py >/dev/null 2>&1 || fail "Zoom Phone live API probe failed"
+else
+  echo "WARNING: NOT GO-LIVE — Zoom Phone launch gates were skipped for fresh-host bootstrap." >&2
 fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
@@ -124,16 +148,22 @@ else
   state="healthy"
 fi
 
-previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
-if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
-  escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-    --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
+if [[ "$ZOOM_REQUIRED" == true ]]; then
+  previous="$(cat "$STATE_FILE" 2>/dev/null || true)"
+  if [[ "$state" != "$previous" && -n "${ALERT_WEBHOOK_URL:-}" ]]; then
+    escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+      --data "{\"text\":\"$escaped\"}" "$ALERT_WEBHOOK_URL" >/dev/null || true
+  fi
+  printf '%s' "$state" > "$STATE_FILE"
 fi
-printf '%s' "$state" > "$STATE_FILE"
 
 if [[ "$state" == "failed" ]]; then
   echo "$message" >&2
   exit 1
 fi
-echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, HTTP, and TLS."
+if [[ "$ZOOM_REQUIRED" == true ]]; then
+  echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, HTTP, and TLS."
+else
+  echo "Bootstrap infrastructure check passed. NOT GO-LIVE until strict Zoom production_check passes." >&2
+fi

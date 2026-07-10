@@ -27,6 +27,7 @@ async def test_zoom_phone_oauth_client_prefers_tenant_app(monkeypatch):
     app = SimpleNamespace(
         encrypted_client_id="encrypted-client-id",
         encrypted_client_secret="encrypted-client-secret",
+        zoom_account_id="zoom-account-1",
     )
     secrets = {
         "encrypted-client-id": "tenant-client",
@@ -48,10 +49,11 @@ async def test_zoom_phone_oauth_client_prefers_tenant_app(monkeypatch):
     assert client.source == "tenant"
     assert client.client_id == "tenant-client"
     assert client.client_secret == "tenant-secret"
+    assert client.account_id == "zoom-account-1"
 
 
 @pytest.mark.asyncio
-async def test_zoom_phone_oauth_client_falls_back_to_platform_app(monkeypatch):
+async def test_zoom_phone_oauth_client_never_uses_platform_app(monkeypatch):
     monkeypatch.setattr(tenant_oauth_apps.settings, "ZOOM_CLIENT_ID", "platform-client")
     monkeypatch.setattr(
         tenant_oauth_apps.settings, "ZOOM_CLIENT_SECRET", "platform-secret"
@@ -62,6 +64,20 @@ async def test_zoom_phone_oauth_client_falls_back_to_platform_app(monkeypatch):
         tenant_id=uuid4(),
     )
 
-    assert client.source == "platform"
-    assert client.client_id == "platform-client"
-    assert client.client_secret == "platform-secret"
+    assert client is None
+
+
+@pytest.mark.asyncio
+async def test_zoom_phone_oauth_client_requires_explicit_account_mapping():
+    app = SimpleNamespace(
+        encrypted_client_id="encrypted-client-id",
+        encrypted_client_secret="encrypted-client-secret",
+        zoom_account_id=None,
+    )
+
+    client = await tenant_oauth_apps.get_zoom_phone_oauth_client(
+        _Db(app),
+        tenant_id=uuid4(),
+    )
+
+    assert client is None

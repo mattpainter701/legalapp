@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact, Lead
@@ -22,10 +23,12 @@ from app.models.intake_dashboard import (
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.tenant_oauth_app import TenantOAuthApp
+from app.models.durable_job import DurableJob
 from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
 from app.routers import intake_dashboard as intake_dashboard_router
+from app.schemas.intake_dashboard import IntakeDashboardCallCreate
 from app.services.intake_archive_import import (
     import_legacy_call_csv,
     normalize_phone,
@@ -39,6 +42,7 @@ from app.services.zoom_phone import (
     zoom_webhook_validation_response,
 )
 from app.services.token_vault import encrypt_token
+from app.services.durable_job_worker import process_job
 
 
 def test_normalize_phone_strips_formatting_and_country_code():
@@ -187,6 +191,7 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
                 encrypted_client_id=encrypt_token("zoom-client"),
                 encrypted_client_secret=encrypt_token("zoom-client-secret"),
                 encrypted_webhook_secret_token=encrypt_token(webhook_secret),
+                zoom_account_id=account_id,
                 configured_by_user_id=test_user.id,
                 is_active=True,
             ),
@@ -194,16 +199,19 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
                 tenant_id=test_tenant.id,
                 provider="zoom_phone",
                 encrypted_access_token=encrypt_token("zoom-access-token"),
+                encrypted_refresh_token=encrypt_token("zoom-refresh-token"),
                 service_account_email=account_id,
                 is_active=True,
             ),
         ]
     )
     await db_session.commit()
+    staff_id = staff.id
 
     async def fake_call_detail(*_args, **_kwargs):
         return {
-            "id": "first-customer-call-1",
+            "call_element_id": "first-customer-element-1",
+            "call_history_uuid": "first-customer-call-1",
             "direction": "inbound",
             "caller_name": "First Customer Caller",
             "caller_number": "+1 701-555-0110",
@@ -218,13 +226,14 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
     )
 
     event = {
-        "event": "phone.callee_call_history_completed",
+        "event": "phone.callee_call_element_completed",
         "payload": {
             "account_id": account_id,
             "object": {
-                "call_logs": [
+                "call_elements": [
                     {
-                        "id": "first-customer-call-1",
+                        "call_element_id": "first-customer-element-1",
+                        "call_history_uuid": "first-customer-call-1",
                         "direction": "inbound",
                         "caller_name": "First Customer Caller",
                         "caller_number": "+1 701-555-0110",
@@ -253,7 +262,16 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
         },
     )
     assert ingress.status_code == 200, ingress.text
-    assert ingress.json()["imported"] == 1
+    assert ingress.json() == {"status": "accepted", "queued": 1}
+    job = await db_session.scalar(
+        select(DurableJob).where(
+            DurableJob.tenant_id == test_tenant.id,
+            DurableJob.kind == "zoom_phone_call_import",
+        )
+    )
+    assert job is not None
+    assert await process_job(job.id, test_tenant.id)
+    await db_session.rollback()
 
     queue = await client.get("/api/intake/dashboard/zoom-phone/calls")
     assert queue.status_code == 200
@@ -274,7 +292,7 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
             "outcome": "create_lead",
             "qualified": True,
             "task_mode": "specific_staff",
-            "task_assigned_to_user_id": str(staff.id),
+            "task_assigned_to_user_id": str(staff_id),
             "task_title": "Return intake call",
         },
     )
@@ -285,7 +303,7 @@ async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
     assert tasks.status_code == 200
     task = next(item for item in tasks.json()["items"] if item["id"] == task_id)
     assert task["source"] == "intake_dashboard"
-    assert task["assigned_to_user_id"] == str(staff.id)
+    assert task["assigned_to_user_id"] == str(staff_id)
     assert task["contact_id"] == captured.json()["contact_id"]
     assert "First Customer Caller" in task["title"]
 
@@ -619,7 +637,7 @@ async def test_zoom_phone_call_history_imports_idempotently_and_reuses_log(
     await db_session.commit()
 
     assert first.imported == 1
-    assert second.updated == 1
+    assert second.skipped == 1
     assert (
         await db_session.scalar(
             select(func.count())
@@ -661,6 +679,408 @@ async def test_zoom_phone_call_history_imports_idempotently_and_reuses_log(
     assert linked_log.contact_id == uuid.UUID(data["contact_id"])
     assert linked_log.external_ref == "zoom_phone:call:zoom-call-1"
     assert "Original Zoom Phone details" in linked_log.body
+
+
+@pytest.mark.asyncio
+async def test_zoom_call_capture_retry_reuses_contact_lead_and_task(
+    client, db_session, test_tenant, monkeypatch
+):
+    notified_task_ids: list[uuid.UUID] = []
+
+    async def capture_notification(_db, notified_task, _tenant_id):
+        notified_task_ids.append(notified_task.id)
+        return True
+
+    monkeypatch.setattr(
+        intake_dashboard_router, "notify_task_created", capture_notification
+    )
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="retry-staff@testfirm.com",
+        full_name="Retry Staff",
+        role="user",
+        is_active=True,
+    )
+    source_log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="received",
+        subject="Zoom Phone inbound call: Retry Caller",
+        body="Provider-owned call detail",
+        summary="answered",
+        external_ref="zoom_phone:call:retry-capture-1",
+        participants={"provider": "zoom_phone", "caller_name": "Retry Caller"},
+    )
+    db_session.add_all([staff, source_log])
+    await db_session.commit()
+
+    payload = {
+        "existing_communication_id": str(source_log.id),
+        "caller_name": "Retry Caller",
+        "phone": "+1 701-555-0131",
+        "practice_area": "family",
+        "purpose": "Needs a custody consultation",
+        "outcome": "create_lead",
+        "qualified": True,
+        "task_mode": "specific_staff",
+        "task_assigned_to_user_id": str(staff.id),
+        "task_title": "Return intake call",
+    }
+
+    first = await client.post("/api/intake/dashboard/calls", json=payload)
+    second = await client.post("/api/intake/dashboard/calls", json=payload)
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_data = first.json()
+    second_data = second.json()
+    assert second_data["communication_id"] == first_data["communication_id"]
+    assert second_data["contact_id"] == first_data["contact_id"]
+    assert second_data["lead_id"] == first_data["lead_id"]
+    assert second_data["task_id"] == first_data["task_id"]
+    assert first_data["created_lead"] is True
+    assert second_data["created_lead"] is False
+
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Lead)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Task)) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(PartnerAssignmentLog))
+        == 1
+    )
+    assert notified_task_ids == [uuid.UUID(first_data["task_id"])]
+    await db_session.refresh(source_log)
+    assert source_log.participants["intake_lead_id"] == first_data["lead_id"]
+    assert source_log.body.count("--- Original Zoom Phone details ---") == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_zoom_capture_retry_recovers_call_task_linked_lead(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    notified_task_ids: list[uuid.UUID] = []
+
+    async def capture_notification(_db, notified_task, _tenant_id):
+        notified_task_ids.append(notified_task.id)
+        return True
+
+    monkeypatch.setattr(
+        intake_dashboard_router, "notify_task_created", capture_notification
+    )
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="legacy-retry-staff@testfirm.com",
+        full_name="Legacy Retry Staff",
+        role="user",
+        is_active=True,
+    )
+    contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_type="prospect",
+        first_name="Legacy",
+        last_name="Caller",
+        phone="+1 701-555-0133",
+        created_by_user_id=test_user.id,
+    )
+    lead = Lead(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="qualified",
+        source="phone",
+        practice_area="family",
+        description="Needs a custody consultation",
+        created_by_user_id=test_user.id,
+    )
+    source_log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="logged",
+        subject="Inbound call: Legacy Caller",
+        body=(
+            "Needs a custody consultation\n\n"
+            "--- Original Zoom Phone details ---\nProvider-owned legacy detail"
+        ),
+        summary="Needs a custody consultation",
+        contact_id=contact.id,
+        created_by_user_id=test_user.id,
+        external_ref="zoom_phone:call:legacy-capture-1",
+        participants={
+            "provider": "zoom_phone",
+            "caller_name": "Legacy Caller",
+            "phone": "+1 701-555-0133",
+        },
+    )
+    task = Task(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        title="Legacy Caller - Return intake call",
+        description=(
+            "General intake task generated by the local intake dashboard.\n"
+            f"Linked lead: {lead.id}"
+        ),
+        task_type="follow_up",
+        status="pending",
+        priority="urgent",
+        due_date=date.today(),
+        contact_id=contact.id,
+        assigned_to_user_id=staff.id,
+        created_by_user_id=test_user.id,
+        source="intake_dashboard",
+        external_ref=f"intake-dashboard:call:{source_log.id}:general-task",
+    )
+    db_session.add_all([staff, contact])
+    await db_session.flush()
+    db_session.add_all([lead, source_log, task])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "existing_communication_id": str(source_log.id),
+            "caller_name": "Legacy Caller",
+            "phone": "+1 701-555-0133",
+            "practice_area": "family",
+            "purpose": "Needs a custody consultation",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Return intake call",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["communication_id"] == str(source_log.id)
+    assert data["contact_id"] == str(contact.id)
+    assert data["lead_id"] == str(lead.id)
+    assert data["task_id"] == str(task.id)
+    assert data["created_lead"] is False
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Lead)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Task)) == 1
+    assert notified_task_ids == []
+    await db_session.refresh(source_log)
+    assert source_log.participants["intake_lead_id"] == data["lead_id"]
+    assert source_log.body.count("--- Original Zoom Phone details ---") == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_zoom_capture_without_explicit_lead_link_fails_closed(
+    client, db_session, test_tenant, test_user
+):
+    contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_type="prospect",
+        first_name="Ambiguous",
+        last_name="Caller",
+        phone="+1 701-555-0134",
+        created_by_user_id=test_user.id,
+    )
+    unrelated_lead = Lead(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_id=contact.id,
+        status="new",
+        source="phone",
+        created_by_user_id=test_user.id,
+    )
+    source_log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="logged",
+        subject="Inbound call: Ambiguous Caller",
+        body="Previously captured without a durable lead marker",
+        contact_id=contact.id,
+        created_by_user_id=test_user.id,
+        external_ref="zoom_phone:call:legacy-ambiguous-1",
+        participants={"provider": "zoom_phone", "caller_name": "Ambiguous Caller"},
+    )
+    db_session.add(contact)
+    await db_session.flush()
+    db_session.add_all([unrelated_lead, source_log])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "existing_communication_id": str(source_log.id),
+            "caller_name": "Ambiguous Caller",
+            "phone": "+1 701-555-0134",
+            "purpose": "Requests a new consultation",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "none",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "no explicit lead link" in response.json()["detail"]
+    assert await db_session.scalar(select(func.count()).select_from(Lead)) == 1
+    await db_session.refresh(source_log)
+    assert "intake_lead_id" not in source_log.participants
+
+
+@pytest.mark.asyncio
+async def test_legacy_zoom_capture_with_mismatched_lead_link_fails_closed(
+    client, db_session, test_tenant, test_user
+):
+    linked_contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_type="prospect",
+        first_name="Linked",
+        last_name="Caller",
+        created_by_user_id=test_user.id,
+    )
+    other_contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_type="prospect",
+        first_name="Other",
+        last_name="Caller",
+        created_by_user_id=test_user.id,
+    )
+    wrong_lead = Lead(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        contact_id=other_contact.id,
+        status="new",
+        source="phone",
+        created_by_user_id=test_user.id,
+    )
+    source_log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="logged",
+        subject="Inbound call: Linked Caller",
+        contact_id=linked_contact.id,
+        created_by_user_id=test_user.id,
+        external_ref="zoom_phone:call:legacy-mismatch-1",
+        participants={"provider": "zoom_phone", "caller_name": "Linked Caller"},
+    )
+    task = Task(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        title="Linked Caller - Return call",
+        description=f"Linked lead: {wrong_lead.id}",
+        source="intake_dashboard",
+        external_ref=f"intake-dashboard:call:{source_log.id}:general-task",
+    )
+    db_session.add_all([linked_contact, other_contact])
+    await db_session.flush()
+    db_session.add_all([wrong_lead, source_log, task])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "existing_communication_id": str(source_log.id),
+            "caller_name": "Linked Caller",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "none",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "invalid lead link" in response.json()["detail"]
+    assert await db_session.scalar(select(func.count()).select_from(Lead)) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_zoom_call_capture_creates_one_contact_lead_and_task(
+    db_session, test_engine, test_tenant, test_user, monkeypatch
+):
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="concurrent-staff@testfirm.com",
+        full_name="Concurrent Staff",
+        role="user",
+        is_active=True,
+    )
+    source_log = CommunicationLog(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        direction="inbound",
+        channel="call",
+        status="received",
+        subject="Zoom Phone inbound call: Concurrent Caller",
+        body="Provider-owned concurrent call detail",
+        summary="answered",
+        external_ref="zoom_phone:call:concurrent-capture-1",
+        participants={
+            "provider": "zoom_phone",
+            "caller_name": "Concurrent Caller",
+        },
+    )
+    db_session.add_all([staff, source_log])
+    await db_session.commit()
+
+    notified_task_ids: list[uuid.UUID] = []
+
+    async def capture_notification(_db, notified_task, _tenant_id):
+        notified_task_ids.append(notified_task.id)
+        return True
+
+    monkeypatch.setattr(
+        intake_dashboard_router, "notify_task_created", capture_notification
+    )
+    payload = IntakeDashboardCallCreate(
+        existing_communication_id=source_log.id,
+        caller_name="Concurrent Caller",
+        phone="+1 701-555-0132",
+        practice_area="family",
+        purpose="Needs an attorney callback",
+        outcome="create_lead",
+        qualified=True,
+        task_mode="specific_staff",
+        task_assigned_to_user_id=staff.id,
+        task_title="Return concurrent intake call",
+    )
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def capture_once():
+        async with session_factory() as session:
+            return await intake_dashboard_router.create_dashboard_call(
+                payload,
+                current_user=test_user,
+                db=session,
+            )
+
+    first, second = await asyncio.gather(capture_once(), capture_once())
+
+    assert second.communication_id == first.communication_id == source_log.id
+    assert second.contact_id == first.contact_id
+    assert second.lead_id == first.lead_id
+    assert second.task_id == first.task_id
+    assert {first.created_lead, second.created_lead} == {True, False}
+    assert await db_session.scalar(select(func.count()).select_from(Contact)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Lead)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(Task)) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(PartnerAssignmentLog))
+        == 1
+    )
+    assert notified_task_ids == [first.task_id]
+
+    await db_session.refresh(source_log)
+    assert source_log.participants["intake_lead_id"] == str(first.lead_id)
+    assert source_log.body.count("--- Original Zoom Phone details ---") == 1
 
 
 @pytest.mark.asyncio

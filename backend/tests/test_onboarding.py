@@ -3,10 +3,8 @@
 import uuid
 
 import pytest
-from httpx import AsyncClient, ASGITransport
 from sqlalchemy import text
 
-from app.main import app
 from app.models.tenant import Tenant, TenantSettings
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
@@ -27,7 +25,7 @@ def regular_user_id():
     return uuid.uuid4()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_onboarding_status_returns_defaults(db_session, tenant_id, admin_user_id):
     """New tenant: onboarding_completed=False, step=0, no integrations."""
     tenant = Tenant(
@@ -49,18 +47,13 @@ async def test_onboarding_status_returns_defaults(db_session, tenant_id, admin_u
     db_session.add(admin)
     await db_session.commit()
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as _:
-        # Mock auth — we're testing the endpoint logic via direct DB inspection
-        pass
-
     # Verify defaults
     assert tenant.onboarding_completed is False
     assert tenant.onboarding_step == 0
     assert tenant.cloud_root_folder is None
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_onboarding_complete_fails_without_integration(
     db_session, tenant_id, admin_user_id
 ):
@@ -80,7 +73,7 @@ async def test_onboarding_complete_fails_without_integration(
     assert creds is not None  # Just verifying table access works
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_license_toggle(db_session, tenant_id, regular_user_id):
     """Toggle User.license_active on and off."""
     tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-lic.com")
@@ -106,7 +99,7 @@ async def test_license_toggle(db_session, tenant_id, regular_user_id):
     assert user.license_active is False
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_service_account_deactivation_guard(db_session, tenant_id, admin_user_id):
     """User with TenantCredential.granted_by_user_id should not be deactivated without force."""
     tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-svc.com")
@@ -138,7 +131,7 @@ async def test_service_account_deactivation_guard(db_session, tenant_id, admin_u
     assert cred.service_account_email == "admin@testfirm.com"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_permission_audit_scopes(db_session, tenant_id):
     """Permission audit returns correct scope comparison."""
     tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-perm.com")
@@ -161,7 +154,7 @@ async def test_permission_audit_scopes(db_session, tenant_id):
     assert "Files.Read.All" in cred.scopes
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_cloud_root_folder_storage(db_session, tenant_id):
     """Tenant.cloud_root_folder stores OneDrive and Google Drive folder info."""
     tenant = Tenant(
@@ -185,7 +178,7 @@ async def test_cloud_root_folder_storage(db_session, tenant_id):
     assert tenant.cloud_root_folder["google_drive"]["id"] == "folder-456"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_customer_llm_config(db_session, tenant_id):
     """Customer LLM settings stored in TenantSettings."""
     tenant = Tenant(id=tenant_id, name="Test Firm", domain="testfirm-llm.com")

@@ -5,17 +5,22 @@ from __future__ import annotations
 import logging
 import hashlib
 import hmac
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.database import async_session_maker, set_tenant_context
 from app.models.communication_log import CommunicationLog
+from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
+from app.models.tenant_oauth_app import TenantOAuthApp
 from app.services.intake_archive_import import normalize_phone
 from app.services.tenant_oauth_apps import get_zoom_phone_oauth_client
 from app.services.token_vault import decrypt_token, encrypt_token
@@ -37,11 +42,27 @@ class ZoomPhoneIntegrationError(RuntimeError):
     """Raised when Zoom Phone credentials or APIs are unavailable."""
 
 
+class ZoomPhoneReauthorizationRequired(ZoomPhoneIntegrationError):
+    """Raised when an OAuth grant can no longer be refreshed safely."""
+
+
+class ZoomPhonePermanentError(ZoomPhoneIntegrationError):
+    """Raised when retrying the same provider request cannot succeed."""
+
+
 @dataclass(slots=True)
 class ZoomPhoneImportResult:
     imported: int = 0
     updated: int = 0
     skipped: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ZoomPhoneWebhookJob:
+    """Minimal, credential-free durable work derived from a signed webhook."""
+
+    idempotency_key: str
+    payload: dict[str, str | None]
 
 
 def _fresh(expires_at: datetime | None) -> bool:
@@ -136,15 +157,10 @@ def _stringify(value: Any) -> str | None:
     return str(value)
 
 
-def zoom_webhook_validation_response(
-    plain_token: str, secret: str | None = None
-) -> dict[str, str]:
+def zoom_webhook_validation_response(plain_token: str, secret: str) -> dict[str, str]:
     """Build Zoom endpoint.url_validation response."""
-    webhook_secret = (
-        secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
-    )
     encrypted = hmac.new(
-        webhook_secret.encode("utf-8"),
+        secret.encode("utf-8"),
         plain_token.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
@@ -159,10 +175,7 @@ def verify_zoom_webhook_signature(
     tolerance_seconds: int = 300,
 ) -> bool:
     """Validate Zoom webhook x-zm-signature."""
-    webhook_secret = (
-        secret if secret is not None else settings.ZOOM_WEBHOOK_SECRET_TOKEN
-    )
-    if not webhook_secret or not timestamp or not signature:
+    if not secret or not timestamp or not signature:
         return False
     if tolerance_seconds > 0:
         try:
@@ -175,7 +188,7 @@ def verify_zoom_webhook_signature(
     expected = (
         "v0="
         + hmac.new(
-            webhook_secret.encode("utf-8"),
+            secret.encode("utf-8"),
             b"v0:" + timestamp.encode("utf-8") + b":" + body,
             hashlib.sha256,
         ).hexdigest()
@@ -205,126 +218,284 @@ def extract_zoom_phone_webhook_call_logs(event: dict[str, Any]) -> list[dict[str
     return [
         log
         for log in logs
-        if isinstance(log, dict) and _normalize_zoom_direction(log) == "inbound"
+        if isinstance(log, dict) and _normalize_zoom_direction(log) in {None, "inbound"}
     ]
 
 
-async def _get_or_create_credential(
-    db: AsyncSession, tenant_id: str
-) -> TenantCredential | None:
+def zoom_phone_webhook_jobs(event: dict[str, Any]) -> list[ZoomPhoneWebhookJob]:
+    """Create one stable, minimal job per provider call element/history item.
+
+    A v3 element ID is the durable work identity so every transfer leg is
+    processed. The history UUID remains the business/canonical communication
+    identity so all legs converge on one intake call. V2 has no element ID and
+    falls back to its history ID. The work ID is hashed before queue storage;
+    the payload retains only IDs needed for the authoritative detail read.
+    """
+    event_name = _stringify(event.get("event"))
+    if event_name not in ZOOM_PHONE_HISTORY_COMPLETED_EVENTS:
+        return []
+
+    jobs: list[ZoomPhoneWebhookJob] = []
+    seen: set[str] = set()
+    for call_log in extract_zoom_phone_webhook_call_logs(event):
+        history_id = _stringify(
+            _first(
+                call_log,
+                "call_history_id",
+                "call_history_uuid",
+                "callHistoryUuid",
+                "id",
+                "callLogId",
+            )
+        )
+        element_id = _stringify(_first(call_log, "call_element_id"))
+        if "call_element_completed" in event_name and (
+            not element_id or not history_id
+        ):
+            # A v3 element without its history UUID cannot safely converge with
+            # later reconciliation. Ignore the malformed item; the hourly
+            # call-history reconciliation remains the recovery source.
+            continue
+        stable_call_id = history_id or element_id
+        if not stable_call_id:
+            continue
+        work_id = element_id or history_id
+        digest = hashlib.sha256(
+            f"zoom_phone_call_element:{work_id}".encode("utf-8")
+        ).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        jobs.append(
+            ZoomPhoneWebhookJob(
+                idempotency_key=digest,
+                payload={
+                    "event_name": event_name,
+                    "call_history_id": history_id,
+                    "call_element_id": element_id,
+                    "stable_call_id": stable_call_id,
+                },
+            )
+        )
+    return jobs
+
+
+async def _get_credential(db: AsyncSession, tenant_id: str) -> TenantCredential | None:
     result = await db.execute(
-        select(TenantCredential).where(
-            TenantCredential.tenant_id == tenant_id,
+        select(TenantCredential)
+        .where(
+            TenantCredential.tenant_id == uuid.UUID(str(tenant_id)),
             TenantCredential.provider == ZOOM_PHONE_PROVIDER,
             TenantCredential.is_active,
         )
+        .with_for_update()
     )
     cred = result.scalar_one_or_none()
-    if cred:
-        return cred
-
-    if not settings.ZOOM_PHONE_ACCOUNT_ID:
-        return None
-
-    cred = TenantCredential(
-        tenant_id=tenant_id,
-        provider=ZOOM_PHONE_PROVIDER,
-        encrypted_access_token=encrypt_token("pending"),
-        encrypted_refresh_token=None,
-        token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),
-        scopes=settings.ZOOM_PHONE_SCOPES,
-        service_account_email=settings.ZOOM_PHONE_ACCOUNT_ID,
-        is_active=True,
-    )
-    db.add(cred)
-    await db.flush()
     return cred
 
 
-async def get_zoom_phone_token(db: AsyncSession, tenant_id: str) -> str | None:
+async def _get_zoom_phone_token(
+    db: AsyncSession,
+    tenant_id: str,
+    *,
+    force_refresh: bool = False,
+    rejected_access_token: str | None = None,
+    allow_pending_verification: bool = False,
+) -> str | None:
     """Return a tenant Zoom Phone token.
 
-    Prefer a customer admin OAuth grant stored as ``zoom_phone``. The S2S/env
-    path remains as an operator fallback while the portal grant rolls out.
+    Refreshes run in a dedicated, tenant-scoped transaction and lock the grant
+    row.  A successful rotating refresh token is committed *before* any caller
+    performs a downstream Zoom read, so a later detail/sync failure cannot roll
+    the credential back to an invalidated token.  ``db`` is retained in the
+    public signature for existing callers; no caller-owned transaction is
+    committed here.
     """
-    cred = await _get_or_create_credential(db, tenant_id)
-    if not cred:
-        return None
-    if _fresh(cred.token_expires_at):
+    del db
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    async with async_session_maker() as token_db:
+        await set_tenant_context(token_db, str(tenant_uuid))
+        # Bound concurrent refreshers. After the first committer releases the
+        # row, the next waiter re-checks freshness and reuses the new token.
+        await token_db.execute(text("SET LOCAL lock_timeout = '10s'"))
+        tenant_active = await token_db.scalar(
+            select(Tenant.is_active).where(Tenant.id == tenant_uuid)
+        )
+        if not tenant_active:
+            raise ZoomPhoneIntegrationError("Zoom Phone tenant is inactive.")
+
+        cred = await _get_credential(token_db, str(tenant_uuid))
+        if not cred:
+            return None
         try:
-            return decrypt_token(cred.encrypted_access_token)
+            oauth_client = await get_zoom_phone_oauth_client(
+                token_db, tenant_id=tenant_uuid
+            )
         except Exception:
-            logger.warning("Zoom Phone token decrypt failed; refreshing")
-
-    if cred.encrypted_refresh_token:
-        oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
-        if not oauth_client:
-            logger.warning("Zoom Phone OAuth refresh skipped; app credentials missing")
-            return None
-        refresh_token = decrypt_token(cred.encrypted_refresh_token)
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                "https://zoom.us/oauth/token",
-                auth=(oauth_client.client_id, oauth_client.client_secret),
-                data={
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
+            oauth_client = None
+        if (
+            not oauth_client
+            or not cred.service_account_email
+            or not hmac.compare_digest(
+                oauth_client.account_id, cred.service_account_email.strip()
             )
-        if resp.status_code != 200:
-            logger.warning(
-                "Zoom Phone OAuth refresh failed: %s %s",
-                resp.status_code,
-                resp.text[:300],
+        ):
+            cred.health = "reauthorization_required"
+            cred.is_active = False
+            cred.last_refresh_error = (
+                "Zoom OAuth app and grant account mappings do not match."
             )
-            return None
+            await token_db.commit()
+            raise ZoomPhoneReauthorizationRequired(
+                "Zoom Phone must be reconnected to the configured Zoom account."
+            )
+        verification_pending = cred.health == "account_verification_required"
+        if verification_pending and not allow_pending_verification:
+            raise ZoomPhoneReauthorizationRequired(
+                "Zoom Phone is awaiting a signed webhook account verification."
+            )
+        current_access_token: str | None = None
+        if cred.encrypted_access_token:
+            try:
+                current_access_token = decrypt_token(cred.encrypted_access_token)
+            except Exception:
+                logger.warning("Zoom Phone token decrypt failed; refreshing")
+        if _fresh(cred.token_expires_at) and current_access_token:
+            if not force_refresh:
+                return current_access_token
+            # Two requests may both receive a 401 for the same cached token.
+            # Once the first waiter rotates it, the second waiter must reuse the
+            # new committed token instead of rotating the fresh grant again.
+            if rejected_access_token and not hmac.compare_digest(
+                current_access_token, rejected_access_token
+            ):
+                return current_access_token
 
-        data = resp.json()
-        access_token = data.get("access_token")
-        if not access_token:
-            return None
-        new_refresh_token = data.get("refresh_token")
-        cred.encrypted_access_token = encrypt_token(access_token)
-        if new_refresh_token:
-            cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
-        cred.token_expires_at = _expires_at(int(data.get("expires_in") or 3600))
-        cred.scopes = data.get("scope") or cred.scopes or settings.ZOOM_PHONE_SCOPES
-        await db.flush()
-        return access_token
+        if cred.encrypted_refresh_token:
+            refresh_token = decrypt_token(cred.encrypted_refresh_token)
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://zoom.us/oauth/token",
+                    auth=(oauth_client.client_id, oauth_client.client_secret),
+                    data={
+                        "refresh_token": refresh_token,
+                        "grant_type": "refresh_token",
+                    },
+                )
+            if resp.status_code != 200:
+                try:
+                    error_body = resp.json()
+                except Exception:
+                    error_body = {}
+                error_code = str(
+                    error_body.get("error") or error_body.get("code") or ""
+                ).lower()
+                error_reason = str(
+                    error_body.get("reason") or error_body.get("message") or ""
+                ).lower()
+                oauth_error = f"{error_code} {error_reason}".replace("_", " ")
+                requires_reauth = error_code in {
+                    "invalid_grant",
+                    "invalid_client",
+                    "unauthorized_client",
+                    "4702",
+                    "4704",
+                    "4706",
+                    "4711",
+                } or any(
+                    marker in oauth_error
+                    for marker in (
+                        "invalid token",
+                        "invalid refresh",
+                        "refresh token",
+                        "revoked",
+                        "invalid client",
+                        "unauthorized client",
+                        "client secret",
+                        "client credential",
+                    )
+                )
+                cred.health = (
+                    "reauthorization_required" if requires_reauth else "degraded"
+                )
+                if requires_reauth:
+                    cred.is_active = False
+                cred.last_refresh_error = (
+                    "Zoom OAuth grant requires reauthorization."
+                    if requires_reauth
+                    else f"Zoom OAuth refresh failed (HTTP {resp.status_code})."
+                )
+                await token_db.commit()
+                if requires_reauth:
+                    raise ZoomPhoneReauthorizationRequired(
+                        "Zoom Phone OAuth authorization expired or was revoked."
+                    )
+                raise ZoomPhoneIntegrationError(
+                    f"Zoom Phone OAuth refresh failed (HTTP {resp.status_code})."
+                )
 
-    client_id = settings.ZOOM_PHONE_CLIENT_ID or settings.ZOOM_CLIENT_ID
-    client_secret = settings.ZOOM_PHONE_CLIENT_SECRET or settings.ZOOM_CLIENT_SECRET
-    account_id = cred.service_account_email or settings.ZOOM_PHONE_ACCOUNT_ID
-    if not client_id or not client_secret or not account_id:
-        return None
+            data = resp.json()
+            access_token = data.get("access_token")
+            if not access_token:
+                cred.health = "degraded"
+                cred.last_refresh_error = "Zoom OAuth response had no access token."
+                await token_db.commit()
+                raise ZoomPhoneIntegrationError(
+                    "Zoom Phone OAuth refresh returned no access token."
+                )
+            returned_account_id = str(data.get("account_id") or "").strip()
+            if returned_account_id and not hmac.compare_digest(
+                returned_account_id, oauth_client.account_id
+            ):
+                cred.health = "reauthorization_required"
+                cred.is_active = False
+                cred.last_refresh_error = (
+                    "Zoom OAuth refresh returned a different account mapping."
+                )
+                await token_db.commit()
+                raise ZoomPhoneReauthorizationRequired(
+                    "Zoom Phone OAuth account mapping changed."
+                )
+            new_refresh_token = data.get("refresh_token")
+            cred.encrypted_access_token = encrypt_token(access_token)
+            if new_refresh_token:
+                cred.encrypted_refresh_token = encrypt_token(new_refresh_token)
+            cred.token_expires_at = _expires_at(int(data.get("expires_in") or 3600))
+            cred.scopes = data.get("scope") or cred.scopes or settings.ZOOM_PHONE_SCOPES
+            cred.health = (
+                "healthy"
+                if returned_account_id or not verification_pending
+                else "account_verification_required"
+            )
+            cred.last_refresh_at = datetime.now(timezone.utc)
+            cred.last_refresh_error = None
+            await token_db.commit()
+            return access_token
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(
-            "https://zoom.us/oauth/token",
-            auth=(client_id, client_secret),
-            params={
-                "grant_type": "account_credentials",
-                "account_id": account_id,
-            },
+        cred.health = "reauthorization_required"
+        cred.is_active = False
+        cred.last_refresh_error = "Zoom OAuth refresh token is unavailable."
+        await token_db.commit()
+        raise ZoomPhoneReauthorizationRequired(
+            "Zoom Phone OAuth is not connected with a refreshable tenant grant."
         )
-    if resp.status_code != 200:
-        logger.warning(
-            "Zoom Phone S2S token request failed: %s %s",
-            resp.status_code,
-            resp.text[:300],
-        )
-        return None
 
-    data = resp.json()
-    access_token = data.get("access_token")
-    if not access_token:
-        return None
-    cred.encrypted_access_token = encrypt_token(access_token)
-    cred.token_expires_at = _expires_at(int(data.get("expires_in") or 3600))
-    cred.scopes = data.get("scope") or settings.ZOOM_PHONE_SCOPES
-    cred.service_account_email = account_id
-    await db.flush()
-    return access_token
+
+async def get_zoom_phone_token(
+    db: AsyncSession,
+    tenant_id: str,
+    *,
+    force_refresh: bool = False,
+    rejected_access_token: str | None = None,
+) -> str | None:
+    """Return a token only for a provider-verified Zoom account grant."""
+    return await _get_zoom_phone_token(
+        db,
+        tenant_id,
+        force_refresh=force_refresh,
+        rejected_access_token=rejected_access_token,
+        allow_pending_verification=False,
+    )
 
 
 def _zoom_phone_error(resp: httpx.Response) -> str:
@@ -341,25 +512,124 @@ def _zoom_phone_error(resp: httpx.Response) -> str:
         return f"Zoom Phone request failed (HTTP {resp.status_code})."
 
 
+def _zoom_phone_response_exception(
+    resp: httpx.Response, *, not_found_retryable: bool = False
+) -> ZoomPhoneIntegrationError:
+    message = _zoom_phone_error(resp)
+    if (
+        resp.status_code == 429
+        or resp.status_code >= 500
+        or (not_found_retryable and resp.status_code == 404)
+    ):
+        return ZoomPhoneIntegrationError(message)
+    return ZoomPhonePermanentError(message)
+
+
+def _zoom_error_code(resp: httpx.Response) -> int | None:
+    try:
+        return int(resp.json().get("code"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+async def _mark_zoom_phone_grant(
+    tenant_id: str, *, health: str, error: str, deactivate: bool
+) -> None:
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    async with async_session_maker() as state_db:
+        await set_tenant_context(state_db, str(tenant_uuid))
+        credential = await state_db.scalar(
+            select(TenantCredential)
+            .where(
+                TenantCredential.tenant_id == tenant_uuid,
+                TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+            )
+            .with_for_update()
+        )
+        if credential:
+            credential.health = health
+            credential.last_refresh_error = error
+            if deactivate:
+                credential.is_active = False
+            await state_db.commit()
+
+
+async def _zoom_phone_get(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    url: str,
+    params: dict[str, Any] | None = None,
+    pending_exact_verification: bool = False,
+) -> httpx.Response:
+    """GET once, forcing one persisted refresh on a revoked cached token."""
+    token = await _get_zoom_phone_token(
+        db,
+        tenant_id,
+        allow_pending_verification=pending_exact_verification,
+    )
+    if not token:
+        raise ZoomPhoneReauthorizationRequired("Zoom Phone OAuth is not connected.")
+
+    async def request(access_token: str) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=20) as client:
+            return await client.get(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params,
+            )
+
+    response = await request(token)
+    if response.status_code == 401 or _zoom_error_code(response) == 124:
+        refreshed = await _get_zoom_phone_token(
+            db,
+            tenant_id,
+            force_refresh=True,
+            rejected_access_token=token,
+            allow_pending_verification=pending_exact_verification,
+        )
+        if not refreshed:
+            raise ZoomPhoneReauthorizationRequired(
+                "Zoom Phone OAuth could not refresh a rejected access token."
+            )
+        response = await request(refreshed)
+        if response.status_code == 401 or _zoom_error_code(response) == 124:
+            await _mark_zoom_phone_grant(
+                tenant_id,
+                health="reauthorization_required",
+                error="Zoom rejected the refreshed access token.",
+                deactivate=True,
+            )
+            raise ZoomPhoneReauthorizationRequired(
+                "Zoom Phone rejected the refreshed OAuth grant."
+            )
+    if not pending_exact_verification and (
+        response.status_code == 403 or _zoom_error_code(response) == 104
+    ):
+        await _mark_zoom_phone_grant(
+            tenant_id,
+            health="missing_scopes",
+            error="Zoom rejected the required Phone API scope.",
+            deactivate=False,
+        )
+    return response
+
+
 async def probe_zoom_phone_connection(
     db: AsyncSession,
     *,
     tenant_id: str,
 ) -> dict[str, Any]:
     """Probe the minimal Call History API used by intake sync."""
-    token = await get_zoom_phone_token(db, tenant_id)
-    if not token:
-        raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
-
     today = datetime.now(timezone.utc).date().isoformat()
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(
-            f"{ZOOM_BASE}/phone/call_history",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"from": today, "to": today, "page_size": 1},
-        )
+    resp = await _zoom_phone_get(
+        db,
+        tenant_id=tenant_id,
+        url=f"{ZOOM_BASE}/phone/call_history",
+        params={"from": today, "to": today, "page_size": 1},
+    )
     if resp.status_code != 200:
-        raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
+        raise _zoom_phone_response_exception(resp)
     data = resp.json()
     return {
         "ok": True,
@@ -373,10 +643,11 @@ def normalize_zoom_phone_record(record: dict[str, Any]) -> dict[str, Any] | None
     call_id = _stringify(
         _first(
             record,
-            "call_element_id",
+            "canonical_call_id",
             "call_history_id",
             "call_history_uuid",
             "callHistoryUuid",
+            "call_element_id",
             "call_id",
             "id",
         )
@@ -524,39 +795,95 @@ async def import_zoom_phone_records(
             result.skipped += 1
             continue
 
-        existing = (
-            await db.execute(
-                select(CommunicationLog).where(
-                    CommunicationLog.tenant_id == tenant_id,
-                    CommunicationLog.external_ref == normalized["external_ref"],
-                )
+        values = {
+            "tenant_id": uuid.UUID(str(tenant_id)),
+            "direction": normalized["direction"],
+            "channel": "call",
+            "status": "logged",
+            "subject": normalized["subject"],
+            "summary": normalized["summary"],
+            "body": normalized["body"],
+            "occurred_at": normalized["occurred_at"],
+            "external_ref": normalized["external_ref"],
+            "participants": normalized["participants"],
+        }
+        inserted_id = await db.scalar(
+            pg_insert(CommunicationLog)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    CommunicationLog.tenant_id,
+                    CommunicationLog.external_ref,
+                ],
+                index_where=text("external_ref LIKE 'zoom_phone:call:%'"),
             )
-        ).scalar_one_or_none()
-        if existing:
+            .returning(CommunicationLog.id)
+        )
+        if inserted_id:
+            result.imported += 1
+            continue
+
+        existing = await db.scalar(
+            select(CommunicationLog)
+            .where(
+                CommunicationLog.tenant_id == uuid.UUID(str(tenant_id)),
+                CommunicationLog.external_ref == normalized["external_ref"],
+            )
+            .with_for_update()
+        )
+        if existing is None:
+            raise ZoomPhoneIntegrationError(
+                "Zoom Phone call upsert lost its canonical row."
+            )
+        captured_by_staff = bool(existing.created_by_user_id or existing.contact_id)
+        if captured_by_staff:
+            # Intake staff own the curated narrative, corrected caller identity,
+            # contact link and task workflow. Reconciliation may refresh only
+            # provider-owned metadata after capture.
+            merged_participants = dict(existing.participants or {})
+            provider_participants = normalized["participants"]
+            for key in {
+                "provider",
+                "call_id",
+                "callee_name",
+                "caller_number",
+                "callee_number",
+                "direction",
+                "result",
+                "duration_seconds",
+                "recording_url",
+                "transcript_url",
+                "raw",
+                "webhook_call_history_id",
+                "webhook_call_element_id",
+                "webhook_event",
+            }:
+                if key in provider_participants:
+                    merged_participants[key] = provider_participants[key]
+            if merged_participants == (existing.participants or {}):
+                result.skipped += 1
+                continue
+            existing.participants = merged_participants
+        else:
+            unchanged = (
+                existing.direction == normalized["direction"]
+                and existing.subject == normalized["subject"]
+                and existing.summary == normalized["summary"]
+                and existing.body == normalized["body"]
+                and existing.occurred_at == normalized["occurred_at"]
+                and (existing.participants or {}) == normalized["participants"]
+            )
+            if unchanged:
+                result.skipped += 1
+                continue
             existing.direction = normalized["direction"]
             existing.subject = normalized["subject"]
             existing.summary = normalized["summary"]
             existing.body = normalized["body"]
             existing.occurred_at = normalized["occurred_at"]
             existing.participants = normalized["participants"]
-            result.updated += 1
-            continue
-
-        db.add(
-            CommunicationLog(
-                tenant_id=tenant_id,
-                direction=normalized["direction"],
-                channel="call",
-                status="logged",
-                subject=normalized["subject"],
-                summary=normalized["summary"],
-                body=normalized["body"],
-                occurred_at=normalized["occurred_at"],
-                external_ref=normalized["external_ref"],
-                participants=normalized["participants"],
-            )
-        )
-        result.imported += 1
+        existing.updated_at = datetime.now(timezone.utc)
+        result.updated += 1
     await db.flush()
     return result
 
@@ -569,41 +896,46 @@ async def fetch_zoom_phone_call_history(
     page_size: int = 100,
 ) -> list[dict[str, Any]]:
     """Fetch recent account call history from Zoom Phone."""
-    token = await get_zoom_phone_token(db, tenant_id)
-    if not token:
-        raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
-
     since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 31)))
     path = "/phone/call_history"
     records: list[dict[str, Any]] = []
     next_page_token = ""
+    seen_page_tokens: set[str] = set()
+    page_count = 0
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        while True:
-            resp = await client.get(
-                f"{ZOOM_BASE}{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={
-                    "from": since.date().isoformat(),
-                    "to": datetime.now(timezone.utc).date().isoformat(),
-                    "directions": "inbound",
-                    "page_size": max(1, min(page_size, 300)),
-                    **({"next_page_token": next_page_token} if next_page_token else {}),
-                },
+    while True:
+        page_count += 1
+        resp = await _zoom_phone_get(
+            db,
+            tenant_id=tenant_id,
+            url=f"{ZOOM_BASE}{path}",
+            params={
+                "from": since.date().isoformat(),
+                "to": datetime.now(timezone.utc).date().isoformat(),
+                "directions": "inbound",
+                "page_size": max(1, min(page_size, 300)),
+                **({"next_page_token": next_page_token} if next_page_token else {}),
+            },
+        )
+        if resp.status_code != 200:
+            raise _zoom_phone_response_exception(resp)
+        data = resp.json()
+        page_records = (
+            data.get("call_history") or data.get("call_logs") or data.get("calls") or []
+        )
+        records.extend(page_records)
+        next_page_token = data.get("next_page_token") or ""
+        if not next_page_token:
+            break
+        if next_page_token in seen_page_tokens:
+            raise ZoomPhoneIntegrationError(
+                "Zoom Phone repeated a call-history page token."
             )
-            if resp.status_code != 200:
-                raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
-            data = resp.json()
-            page_records = (
-                data.get("call_history")
-                or data.get("call_logs")
-                or data.get("calls")
-                or []
+        seen_page_tokens.add(next_page_token)
+        if page_count >= 100:
+            raise ZoomPhoneIntegrationError(
+                "Zoom Phone call-history pagination exceeded the safe page limit."
             )
-            records.extend(page_records)
-            next_page_token = data.get("next_page_token") or ""
-            if not next_page_token:
-                break
     return records
 
 
@@ -615,75 +947,170 @@ async def fetch_zoom_phone_call_history_detail(
     call_element_id: str | None = None,
 ) -> dict[str, Any]:
     """Fetch authoritative Zoom Phone detail for a v2 history or v3 element id."""
-    token = await get_zoom_phone_token(db, tenant_id)
-    if not token:
-        raise ZoomPhoneIntegrationError("Zoom Phone OAuth is not connected.")
     if not call_history_id and not call_element_id:
         raise ZoomPhoneIntegrationError("Zoom Phone call identifier was missing.")
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        if call_element_id:
-            resp = await client.get(
-                f"{ZOOM_BASE}/phone/call_element/{call_element_id}",
-                headers={"Authorization": f"Bearer {token}"},
+    if call_element_id:
+        resp = await _zoom_phone_get(
+            db,
+            tenant_id=tenant_id,
+            url=f"{ZOOM_BASE}/phone/call_element/{call_element_id}",
+        )
+    else:
+        resp = await _zoom_phone_get(
+            db,
+            tenant_id=tenant_id,
+            url=f"{ZOOM_BASE}/phone/call_history_detail/{call_history_id}",
+        )
+        if resp.status_code == 404:
+            resp = await _zoom_phone_get(
+                db,
+                tenant_id=tenant_id,
+                url=f"{ZOOM_BASE}/phone/call_history/{call_history_id}",
             )
-        else:
-            resp = await client.get(
-                f"{ZOOM_BASE}/phone/call_history_detail/{call_history_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code == 404:
-                resp = await client.get(
-                    f"{ZOOM_BASE}/phone/call_history/{call_history_id}",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
     if resp.status_code != 200:
-        raise ZoomPhoneIntegrationError(_zoom_phone_error(resp))
+        raise _zoom_phone_response_exception(resp, not_found_retryable=True)
     data = resp.json()
     if not isinstance(data, dict):
         raise ZoomPhoneIntegrationError("Zoom Phone call detail response was invalid.")
     return data
 
 
-async def import_zoom_phone_webhook_event(
+async def _fetch_pending_zoom_phone_call_element_detail(
     db: AsyncSession,
     *,
     tenant_id: str,
-    event: dict[str, Any],
-) -> ZoomPhoneImportResult:
-    """Import completed inbound call-history records from a Zoom webhook event."""
-    records: list[dict[str, Any]] = []
-    for call_log in extract_zoom_phone_webhook_call_logs(event):
-        element_id = _stringify(_first(call_log, "call_element_id"))
-        history_id = _stringify(
-            _first(
-                call_log,
-                "id",
-                "call_history_id",
-                "call_history_uuid",
-                "callLogId",
-            )
+    call_element_id: str,
+) -> dict[str, Any]:
+    """Use a pending grant only for the exact signed v3 call element."""
+    resp = await _zoom_phone_get(
+        db,
+        tenant_id=tenant_id,
+        url=f"{ZOOM_BASE}/phone/call_element/{call_element_id}",
+        pending_exact_verification=True,
+    )
+    if resp.status_code != 200:
+        raise _zoom_phone_response_exception(resp, not_found_retryable=True)
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise ZoomPhoneIntegrationError("Zoom Phone call detail response was invalid.")
+    returned_element_id = _stringify(
+        _first_path(data, "call_element_id", "call_element.call_element_id")
+    )
+    if returned_element_id and not hmac.compare_digest(
+        returned_element_id, call_element_id
+    ):
+        raise ZoomPhonePermanentError(
+            "Zoom Phone returned a different call element during account verification."
         )
-        if not history_id and not element_id:
-            continue
+    return data
+
+
+async def _promote_verified_zoom_account(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    account_id: str,
+) -> None:
+    tenant_uuid = uuid.UUID(str(tenant_id))
+    app = await db.scalar(
+        select(TenantOAuthApp)
+        .where(
+            TenantOAuthApp.tenant_id == tenant_uuid,
+            TenantOAuthApp.provider == ZOOM_PHONE_PROVIDER,
+            TenantOAuthApp.is_active,
+        )
+        .with_for_update()
+    )
+    credential = await db.scalar(
+        select(TenantCredential)
+        .where(
+            TenantCredential.tenant_id == tenant_uuid,
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+            TenantCredential.is_active,
+        )
+        .with_for_update()
+    )
+    if (
+        not app
+        or not app.zoom_account_id
+        or not credential
+        or not credential.service_account_email
+        or not hmac.compare_digest(app.zoom_account_id.strip(), account_id)
+        or not hmac.compare_digest(credential.service_account_email.strip(), account_id)
+        or credential.health not in {"healthy", "account_verification_required"}
+    ):
+        raise ZoomPhoneReauthorizationRequired(
+            "Zoom Phone account mapping changed during verification."
+        )
+    if credential.health == "account_verification_required":
+        credential.health = "healthy"
+        credential.last_refresh_error = None
+
+
+async def import_zoom_phone_webhook_job(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> ZoomPhoneImportResult:
+    """Resolve and import one credential-free durable webhook payload."""
+    event_name = _stringify(payload.get("event_name"))
+    history_id = _stringify(payload.get("call_history_id"))
+    element_id = _stringify(payload.get("call_element_id"))
+    stable_call_id = _stringify(payload.get("stable_call_id"))
+    if event_name not in ZOOM_PHONE_HISTORY_COMPLETED_EVENTS:
+        raise ValueError("Unsupported Zoom Phone durable event type.")
+    if not stable_call_id or not (history_id or element_id):
+        raise ValueError("Zoom Phone durable event is missing a provider call ID.")
+
+    account_verification = payload.get("account_verification")
+    if account_verification is not None:
+        if (
+            not isinstance(account_verification, dict)
+            or account_verification.get("proof") != "signed_v3_call_element"
+            or event_name
+            not in {
+                "phone.callee_call_element_completed",
+                "phone.caller_call_element_completed",
+            }
+            or not element_id
+            or not history_id
+            or not _stringify(account_verification.get("account_id"))
+        ):
+            raise ValueError("Invalid Zoom Phone account-verification proof.")
+        verification_account_id = str(account_verification["account_id"])
+        detail = await _fetch_pending_zoom_phone_call_element_detail(
+            db,
+            tenant_id=tenant_id,
+            call_element_id=element_id,
+        )
+        await _promote_verified_zoom_account(
+            db,
+            tenant_id=tenant_id,
+            account_id=verification_account_id,
+        )
+    else:
         detail = await fetch_zoom_phone_call_history_detail(
             db,
             tenant_id=tenant_id,
             call_history_id=history_id,
             call_element_id=element_id,
         )
-        records.append(
-            {
-                **call_log,
-                **detail,
-                "webhook_call_history_id": history_id,
-                "webhook_call_element_id": element_id,
-                "webhook_event": event.get("event"),
-            }
-        )
-    if not records:
-        return ZoomPhoneImportResult(skipped=0)
-    return await import_zoom_phone_records(db, tenant_id=tenant_id, records=records)
+    record = {
+        **detail,
+        # Stabilize the communication idempotency key across caller/callee and
+        # v2/v3 event variants even when detail includes a leg/element ID.
+        "canonical_call_id": stable_call_id,
+        "webhook_call_history_id": history_id,
+        "webhook_call_element_id": element_id,
+        "webhook_event": event_name,
+    }
+    return await import_zoom_phone_records(
+        db,
+        tenant_id=tenant_id,
+        records=[record],
+    )
 
 
 async def sync_zoom_phone_call_history(

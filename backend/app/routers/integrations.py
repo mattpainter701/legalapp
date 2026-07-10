@@ -1,7 +1,9 @@
 import base64
 import asyncio
+import hashlib
 import json as _json
 import logging
+import re
 import secrets
 import time as _time
 import uuid
@@ -20,12 +22,15 @@ from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
 from app.models.tenant import Tenant
+from app.models.durable_job import DurableJob
+from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES
 from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
 from app.services.integration_observability import apply_scope_audit, missing_scopes
+from app.services.durable_jobs import enqueue_job
 from app.services.tenant_oauth_apps import (
     get_tenant_oauth_app,
     get_zoom_phone_webhook_secret,
@@ -34,11 +39,12 @@ from app.services.tenant_oauth_apps import (
     upsert_zoom_phone_oauth_app,
 )
 from app.services.zoom_phone import (
+    ZOOM_PHONE_HISTORY_COMPLETED_EVENTS,
     ZOOM_PHONE_PROVIDER,
     ZoomPhoneIntegrationError,
-    import_zoom_phone_webhook_event,
     probe_zoom_phone_connection,
     verify_zoom_webhook_signature,
+    zoom_phone_webhook_jobs,
     zoom_webhook_validation_response,
 )
 from app.utils.oauth_security import (
@@ -51,6 +57,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 _STATE_TTL = 600
+ZOOM_WEBHOOK_MAX_BODY_BYTES = 256 * 1024
 _fallback_states: dict[str, float] = {}
 _fallback_state_data: dict[str, dict] = {}
 
@@ -59,6 +66,72 @@ class ZoomPhoneAppCredentialRequest(BaseModel):
     client_id: str = ""
     client_secret: str = ""
     webhook_secret_token: str = ""
+    zoom_account_id: str = ""
+
+
+_ZOOM_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,255}$")
+
+
+def _validate_zoom_account_id(account_id: str) -> str:
+    normalized = account_id.strip()
+    if not _ZOOM_ACCOUNT_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Zoom Account ID must be 8 to 255 characters and contain only "
+                "letters, numbers, hyphens, or underscores."
+            ),
+        )
+    return normalized
+
+
+async def _reset_failed_zoom_account_verification_jobs(
+    db: AsyncSession,
+    *,
+    tenant_id: str,
+    account_id: str,
+) -> int:
+    """Retry signed exact-call proofs after an administrator reauthorizes.
+
+    A wrong-account grant fails its proof job permanently so it cannot hammer
+    Zoom. Once the administrator installs a new grant, the original signed v3
+    event is still valid evidence; reset only those narrowly tagged jobs so the
+    new grant can prove itself without waiting for another customer call.
+    """
+
+    rows = list(
+        (
+            await db.scalars(
+                select(DurableJob).where(
+                    DurableJob.tenant_id == uuid.UUID(str(tenant_id)),
+                    DurableJob.kind == "zoom_phone_call_import",
+                    DurableJob.status == "failed",
+                )
+            )
+        ).all()
+    )
+    reset = 0
+    for row in rows:
+        verification = (row.payload or {}).get("account_verification")
+        if (
+            not isinstance(verification, dict)
+            or verification.get("proof") != "signed_v3_call_element"
+            or not secrets.compare_digest(
+                str(verification.get("account_id") or ""), account_id
+            )
+        ):
+            continue
+        row.status = "pending"
+        row.progress = 0
+        row.attempts = 0
+        row.available_at = datetime.now(timezone.utc)
+        row.leased_at = None
+        row.lease_owner = None
+        row.last_error = None
+        row.result = None
+        row.completed_at = None
+        reset += 1
+    return reset
 
 
 def _gc_fallback_states() -> None:
@@ -214,12 +287,15 @@ def _app_credentials_payload(app, *, source: str | None, platform_ready: bool) -
         "configured": bool(app),
         "source": source,
         "client_id_hint": client_id_hint,
+        "zoom_account_id": getattr(app, "zoom_account_id", None) if app else None,
+        "zoom_account_id_configured": bool(
+            app and getattr(app, "zoom_account_id", None)
+        ),
         "platform_app_configured": platform_ready,
         "redirect_uri": _zoom_phone_redirect_uri(),
         "webhook_url": _zoom_phone_webhook_uri(str(app.tenant_id) if app else None),
         "webhook_secret_configured": bool(
             getattr(app, "encrypted_webhook_secret_token", None)
-            or settings.ZOOM_WEBHOOK_SECRET_TOKEN
         ),
         "required_scopes": settings.ZOOM_PHONE_SCOPES.split(),
     }
@@ -794,8 +870,8 @@ async def zoom_phone_connect(
         raise HTTPException(
             status_code=409,
             detail=(
-                "Zoom Phone OAuth app credentials are not configured. Add your "
-                "firm's Zoom OAuth client ID and secret first."
+                "Zoom Phone OAuth app credentials and Account ID are not "
+                "configured. Complete your firm's Zoom app setup first."
             ),
         )
 
@@ -810,6 +886,10 @@ async def zoom_phone_connect(
             "tenant_id": tenant_id,
             "role": user.role,
             "oauth_app_source": oauth_client.source,
+            "zoom_account_id": oauth_client.account_id,
+            "oauth_client_id_fingerprint": hashlib.sha256(
+                oauth_client.client_id.encode("utf-8")
+            ).hexdigest(),
         },
     )
 
@@ -838,9 +918,36 @@ async def zoom_phone_callback(
     if meta.get("provider") != ZOOM_PHONE_PROVIDER:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "invalid_state")
     await set_tenant_context(db, tenant_id)
+    tenant_active = await db.scalar(
+        select(Tenant.is_active).where(Tenant.id == uuid.UUID(tenant_id))
+    )
+    current_admin = await db.scalar(
+        select(User.id).where(
+            User.id == uuid.UUID(user_id),
+            User.tenant_id == uuid.UUID(tenant_id),
+            User.is_active.is_(True),
+            User.role == "admin",
+        )
+    )
+    if not tenant_active or not current_admin:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "authorization_revoked")
     oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
     if not oauth_client:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "app_credentials_missing")
+    expected_account_id = str(meta.get("zoom_account_id") or "")
+    expected_client_fingerprint = str(meta.get("oauth_client_id_fingerprint") or "")
+    current_client_fingerprint = hashlib.sha256(
+        oauth_client.client_id.encode("utf-8")
+    ).hexdigest()
+    if (
+        not expected_account_id
+        or not expected_client_fingerprint
+        or not secrets.compare_digest(expected_account_id, oauth_client.account_id)
+        or not secrets.compare_digest(
+            expected_client_fingerprint, current_client_fingerprint
+        )
+    ):
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "app_credentials_changed")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
@@ -867,15 +974,28 @@ async def zoom_phone_callback(
     scope_str = token_data.get("scope") or settings.ZOOM_PHONE_SCOPES
     if not access_token:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "no_access_token")
-    zoom_account_id = token_data.get("account_id")
-    if not zoom_account_id:
-        async with httpx.AsyncClient(timeout=20) as client:
-            me_resp = await client.get(
-                "https://api.zoom.us/v2/users/me",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-        if me_resp.status_code == 200:
-            zoom_account_id = me_resp.json().get("account_id")
+    if not refresh_token:
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "refresh_token_missing")
+    zoom_account_id = oauth_client.account_id
+    returned_account_id = str(token_data.get("account_id") or "").strip()
+    if returned_account_id and not secrets.compare_digest(
+        returned_account_id, zoom_account_id
+    ):
+        logger.warning(
+            "Zoom Phone token account does not match the tenant app mapping "
+            "for tenant=%s",
+            tenant_id,
+        )
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "account_mapping_mismatch")
+    account_verified = bool(returned_account_id)
+    credential_health = (
+        "healthy" if account_verified else "account_verification_required"
+    )
+    verification_message = (
+        None
+        if account_verified
+        else "Awaiting a signed Zoom webhook to verify the configured Account ID."
+    )
 
     result = await db.execute(
         select(TenantCredential).where(
@@ -886,12 +1006,12 @@ async def zoom_phone_callback(
     row = result.scalar_one_or_none()
     if row:
         row.encrypted_access_token = encrypt_token(access_token)
-        row.encrypted_refresh_token = (
-            encrypt_token(refresh_token) if refresh_token else None
-        )
+        row.encrypted_refresh_token = encrypt_token(refresh_token)
         row.token_expires_at = _expires_at(expires_in)
         row.scopes = scope_str
         row.is_active = True
+        row.health = credential_health
+        row.last_refresh_error = verification_message
         row.granted_by_user_id = uuid.UUID(user_id)
         row.service_account_email = zoom_account_id
     else:
@@ -907,8 +1027,15 @@ async def zoom_phone_callback(
                 scopes=scope_str,
                 granted_by_user_id=uuid.UUID(user_id),
                 service_account_email=zoom_account_id,
+                health=credential_health,
+                last_refresh_error=verification_message,
             )
         )
+    await _reset_failed_zoom_account_verification_jobs(
+        db,
+        tenant_id=tenant_id,
+        account_id=zoom_account_id,
+    )
     await db.commit()
     return await _post_connect_redirect(db, tenant_id, ZOOM_PHONE_PROVIDER)
 
@@ -968,7 +1095,30 @@ async def _handle_zoom_phone_webhook(
     *,
     tenant_id: str | None = None,
 ) -> dict:
-    body = await request.body()
+    declared_length = request.headers.get("content-length")
+    if declared_length:
+        try:
+            parsed_length = int(declared_length)
+            if parsed_length < 0:
+                raise ValueError
+            if parsed_length > ZOOM_WEBHOOK_MAX_BODY_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="Zoom webhook payload is too large."
+                )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length header."
+            ) from exc
+    chunks: list[bytes] = []
+    body_size = 0
+    async for chunk in request.stream():
+        body_size += len(chunk)
+        if body_size > ZOOM_WEBHOOK_MAX_BODY_BYTES:
+            raise HTTPException(
+                status_code=413, detail="Zoom webhook payload is too large."
+            )
+        chunks.append(chunk)
+    body = b"".join(chunks)
     try:
         event = _json.loads(body.decode("utf-8") if body else "{}")
     except ValueError as exc:
@@ -1015,36 +1165,111 @@ async def _handle_zoom_phone_webhook(
         return {"status": "ignored", "reason": "tenant_not_mapped"}
 
     await set_tenant_context(db, resolved_tenant_id)
-    if event.get("event") not in {
-        "phone.callee_call_history_completed",
-        "phone.caller_call_history_completed",
+    credential = await db.scalar(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == uuid.UUID(resolved_tenant_id),
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+            TenantCredential.is_active,
+        )
+    )
+    oauth_app = await get_tenant_oauth_app(
+        db,
+        tenant_id=resolved_tenant_id,
+        provider=ZOOM_PHONE_PROVIDER,
+    )
+    credential_account_id = (
+        credential.service_account_email.strip()
+        if credential and credential.service_account_email
+        else None
+    )
+    app_account_id = (
+        oauth_app.zoom_account_id.strip()
+        if oauth_app and oauth_app.zoom_account_id
+        else None
+    )
+    event_account_id = (
+        str((event.get("payload") or {}).get("account_id") or "").strip()
+        if isinstance(event.get("payload"), dict)
+        else ""
+    )
+    if (
+        not credential
+        or not credential_account_id
+        or not app_account_id
+        or not secrets.compare_digest(credential_account_id, app_account_id)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Zoom Phone must be reconnected before webhook delivery.",
+        )
+    if not event_account_id or not secrets.compare_digest(
+        event_account_id, app_account_id
+    ):
+        raise HTTPException(status_code=403, detail="Zoom webhook account mismatch")
+
+    account_verification_pending = credential.health == "account_verification_required"
+    if credential.health not in {"healthy", "account_verification_required"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Zoom Phone must be reconnected before webhook delivery.",
+        )
+
+    if account_verification_pending and event.get("event") not in {
+        "phone.callee_call_element_completed",
+        "phone.caller_call_element_completed",
     }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A current Zoom Phone call-element event is required to verify "
+                "the connected account."
+            ),
+        )
+
+    if event.get("event") not in ZOOM_PHONE_HISTORY_COMPLETED_EVENTS:
         return {"status": "ignored", "reason": "event_not_handled"}
 
-    try:
-        result = await import_zoom_phone_webhook_event(
+    jobs = zoom_phone_webhook_jobs(event)
+    if not jobs:
+        return {"status": "ignored", "reason": "no_inbound_call_identifiers"}
+
+    terminal_jobs = 0
+    for job in jobs:
+        job_payload = dict(job.payload)
+        if account_verification_pending:
+            job_payload["account_verification"] = {
+                "account_id": app_account_id,
+                "proof": "signed_v3_call_element",
+            }
+        queued_job = await enqueue_job(
             db,
             tenant_id=resolved_tenant_id,
-            event=event,
+            kind="zoom_phone_call_import",
+            idempotency_key=job.idempotency_key,
+            payload=job_payload,
         )
-        await db.commit()
-        return {
-            "status": "received",
-            "imported": result.imported,
-            "updated": result.updated,
-            "skipped": result.skipped,
-        }
-    except ZoomPhoneIntegrationError as exc:
-        logger.warning("Zoom Phone webhook import failed: %s", exc)
-        return {"status": "received", "warning": str(exc)}
+        terminal_jobs += int(queued_job.status == "failed")
+    # Zoom receives 2xx only after every provider call identifier is durable.
+    # A commit/enqueue failure propagates as 5xx so the provider retries.
+    await db.commit()
+    response = {"status": "accepted", "queued": len(jobs) - terminal_jobs}
+    if terminal_jobs:
+        # The event is already durably represented. Avoid an unbounded provider
+        # redelivery loop; hourly reconciliation repairs it and only then marks
+        # the matching failed job complete.
+        response["reconciliation_pending"] = terminal_jobs
+    return response
 
 
 @router.post("/zoom-phone/webhook")
 async def zoom_phone_webhook(
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
-    return await _handle_zoom_phone_webhook(request, db)
+    del request
+    raise HTTPException(
+        status_code=410,
+        detail="Use the tenant-specific Zoom Phone webhook URL.",
+    )
 
 
 @router.post("/zoom-phone/webhook/{tenant_id}")
@@ -1071,6 +1296,9 @@ async def save_zoom_phone_app_credentials(
     client_id = payload.client_id.strip()
     client_secret = payload.client_secret.strip()
     webhook_secret_token = payload.webhook_secret_token.strip()
+    submitted_account_id = payload.zoom_account_id.strip()
+    if submitted_account_id:
+        submitted_account_id = _validate_zoom_account_id(submitted_account_id)
     existing_app = await get_tenant_oauth_app(
         db,
         tenant_id=tenant_id,
@@ -1081,43 +1309,96 @@ async def save_zoom_phone_app_credentials(
             status_code=422,
             detail="Zoom OAuth client ID and client secret are required.",
         )
+    existing_account_id = str(
+        getattr(existing_app, "zoom_account_id", None) or ""
+    ).strip()
+    zoom_account_id = submitted_account_id or existing_account_id
+    if not zoom_account_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Zoom Account ID is required.",
+        )
+    zoom_account_id = _validate_zoom_account_id(zoom_account_id)
     if bool(client_id) != bool(client_secret):
         raise HTTPException(
             status_code=422,
             detail="Enter both Zoom OAuth client ID and client secret to replace the saved app.",
         )
+    app_changed = existing_app is None or (
+        bool(submitted_account_id)
+        and not secrets.compare_digest(submitted_account_id, existing_account_id)
+    )
     if existing_app and not client_id and not client_secret:
-        if not webhook_secret_token:
+        if not webhook_secret_token and not submitted_account_id:
             raise HTTPException(
                 status_code=422,
-                detail="Enter a webhook secret token or both OAuth fields to update Zoom Phone setup.",
+                detail=(
+                    "Enter a Zoom Account ID, webhook secret token, or both OAuth "
+                    "fields to update Zoom Phone setup."
+                ),
             )
-        existing_app.encrypted_webhook_secret_token = encrypt_token(
-            webhook_secret_token
-        )
+        if webhook_secret_token:
+            existing_app.encrypted_webhook_secret_token = encrypt_token(
+                webhook_secret_token
+            )
+        existing_app.zoom_account_id = zoom_account_id
         existing_app.configured_by_user_id = user.id
+        existing_app.is_active = True
         app = existing_app
         await db.flush()
     else:
+        if not webhook_secret_token and not getattr(
+            existing_app, "encrypted_webhook_secret_token", None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Zoom webhook secret token is required.",
+            )
+        if existing_app:
+            try:
+                app_changed = app_changed or not (
+                    secrets.compare_digest(
+                        decrypt_token(existing_app.encrypted_client_id), client_id
+                    )
+                    and secrets.compare_digest(
+                        decrypt_token(existing_app.encrypted_client_secret),
+                        client_secret,
+                    )
+                )
+            except Exception:
+                app_changed = True
         app = await upsert_zoom_phone_oauth_app(
             db,
             tenant_id=tenant_id,
             user_id=str(user.id),
             client_id=client_id,
             client_secret=client_secret,
+            zoom_account_id=zoom_account_id,
             webhook_secret_token=webhook_secret_token or None,
             redirect_uri=_zoom_phone_redirect_uri(),
             scopes=settings.ZOOM_PHONE_SCOPES,
         )
+    if app_changed:
+        credential = await db.scalar(
+            select(TenantCredential).where(
+                TenantCredential.tenant_id == user.tenant_id,
+                TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+            )
+        )
+        if credential:
+            credential.is_active = False
+            credential.health = "reauthorization_required"
+            credential.last_refresh_error = (
+                "Zoom OAuth app credentials or account mapping changed; reconnect "
+                "is required."
+            )
     await db.commit()
     return {
         "status": "saved",
         "app_credentials": _app_credentials_payload(
             app,
             source="tenant",
-            platform_ready=bool(
-                settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
-            ),
+            platform_ready=False,
         ),
     }
 
@@ -1139,17 +1420,25 @@ async def clear_zoom_phone_app_credentials(
     )
     if app:
         app.is_active = False
+    credential = await db.scalar(
+        select(TenantCredential).where(
+            TenantCredential.tenant_id == user.tenant_id,
+            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+        )
+    )
+    if credential:
+        credential.is_active = False
+        credential.health = "reauthorization_required"
+        credential.last_refresh_error = (
+            "Zoom OAuth app credentials were cleared; reconnect is required."
+        )
     await db.commit()
     return {
         "status": "cleared",
         "app_credentials": _app_credentials_payload(
             None,
-            source="platform"
-            if settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
-            else None,
-            platform_ready=bool(
-                settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET
-            ),
+            source=None,
+            platform_ready=False,
         ),
     }
 
@@ -1565,7 +1854,6 @@ async def zoom_phone_status(
         select(TenantCredential).where(
             TenantCredential.tenant_id == user.tenant_id,
             TenantCredential.provider == ZOOM_PHONE_PROVIDER,
-            TenantCredential.is_active,
         )
     )
     row = result.scalar_one_or_none()
@@ -1579,25 +1867,51 @@ async def zoom_phone_status(
         row.scopes if row else None,
         settings.ZOOM_PHONE_SCOPES,
     )
-    platform_ready = bool(settings.ZOOM_CLIENT_ID and settings.ZOOM_CLIENT_SECRET)
-    tenant_app_ready = bool(app)
-    configured = tenant_app_ready or platform_ready
-    connected = bool(row)
-    app_source = (
-        "tenant" if tenant_app_ready else "platform" if platform_ready else None
+    provider_missing_scopes = bool(row and row.health == "missing_scopes")
+    if provider_missing_scopes and not missing:
+        # Zoom can reject code 104 even when its token response claimed every
+        # requested scope. Surface the actual provider verdict to the admin.
+        missing = settings.ZOOM_PHONE_SCOPES.split()
+    platform_ready = False
+    app_account_id = (
+        app.zoom_account_id.strip() if app and app.zoom_account_id else None
     )
+    credential_account_id = (
+        row.service_account_email.strip() if row and row.service_account_email else None
+    )
+    account_mapping_matches = bool(
+        app_account_id
+        and credential_account_id
+        and secrets.compare_digest(app_account_id, credential_account_id)
+    )
+    account_verification_required = bool(
+        row
+        and row.health == "account_verification_required"
+        and account_mapping_matches
+    )
+    tenant_app_ready = bool(app and app_account_id)
+    configured = tenant_app_ready
+    connected = bool(
+        row
+        and row.is_active
+        and row.encrypted_refresh_token
+        and account_mapping_matches
+        and row.health == "healthy"
+    )
+    app_source = "tenant" if tenant_app_ready else None
     status_payload = {
         "configured": configured,
         "connected": connected,
         "provider": ZOOM_PHONE_PROVIDER,
         "app_source": app_source,
         "tenant_app_configured": tenant_app_ready,
+        "zoom_account_id_configured": bool(app_account_id),
+        "account_verification_required": account_verification_required,
         "platform_app_configured": platform_ready,
         "redirect_uri": _zoom_phone_redirect_uri(),
         "webhook_url": _zoom_phone_webhook_uri(tenant_id),
         "webhook_secret_configured": bool(
             getattr(app, "encrypted_webhook_secret_token", None)
-            or settings.ZOOM_WEBHOOK_SECRET_TOKEN
         ),
         "app_credentials": _app_credentials_payload(
             app,
@@ -1610,13 +1924,23 @@ async def zoom_phone_status(
         "expires_at": row.token_expires_at.isoformat()
         if row and row.token_expires_at
         else None,
+        "health": row.health if row else "disconnected",
+        "reconnect_required": bool(
+            row
+            and not account_verification_required
+            and (not connected or provider_missing_scopes or bool(missing))
+        ),
         "status": (
             "not_configured"
             if not configured
+            else "missing_scopes"
+            if provider_missing_scopes or missing
+            else "account_verification_required"
+            if account_verification_required
+            else "reauthorization_required"
+            if row and not connected
             else "not_connected"
             if not connected
-            else "missing_scopes"
-            if missing
             else "connected"
         ),
     }

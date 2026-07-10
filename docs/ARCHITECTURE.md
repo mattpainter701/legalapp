@@ -129,14 +129,18 @@ sequenceDiagram
     participant N as Nginx
     participant A as FastAPI
     participant D as PostgreSQL/RLS
+    participant W as Durable Zoom worker
     participant U as Intake user
     participant T as Assignee
 
     Z->>N: signed event / tenant webhook URL
     N->>A: POST /api/integrations/zoom-phone/webhook/{tenant_id}
-    A->>A: validate CRC or webhook signature
-    A->>D: set tenant context, load encrypted app secret
-    A->>D: store/update inbound communication record
+    A->>A: validate CRC or webhook signature + account mapping
+    A->>D: commit one idempotent call job under tenant RLS
+    A-->>Z: 2xx only after durable commit
+    W->>D: claim tenant call job
+    W->>Z: fetch authoritative call detail
+    W->>D: atomic insert/update inbound communication record
     U->>A: review caller, contact/history matches, notes
     A->>D: create/update contact or lead and assignment task
     A-->>T: in-app task; optional configured notification
@@ -144,17 +148,33 @@ sequenceDiagram
     A->>D: task lifecycle + customer communication history
 ```
 
-The tenant may own the Zoom account-level OAuth app through Administration >
-Zoom. A platform environment app is a fallback. The shipped intake integration
-requests call-history/call-detail scopes; it does not fetch Zoom recording or
-transcript content. Production acceptance requires all of the following through
-the real public hostname:
+The tenant must own the Zoom account-level OAuth app configured through
+Administration > Zoom; shared platform/S2S Phone credentials are not accepted.
+The administrator records the firm's non-secret Zoom Account ID with the app.
+If Zoom includes an account ID in the token response, OAuth rejects a mismatch,
+but Zoom does not guarantee that field. Every new grant therefore remains in
+`account_verification_required`: API probes and imports are blocked until a
+correctly signed v3 call-element event supplies a matching `payload.account_id`
+**and** the pending grant successfully fetches that event's exact call
+history/detail from Zoom. The signed event proves the app account; the matching
+provider fetch proves the grant can access that same account. Only then does one
+transaction mark the grant healthy and import the call.
+This explicit mapping avoids requesting a broader Zoom user-profile scope merely
+to discover the account after authorization.
+The shipped intake integration requests call-history/call-detail scopes; it
+does not fetch Zoom recording or transcript content. A dedicated queue lane
+retries transient failures and hourly reconciliation covers missed delivery.
+Production acceptance requires all of the following through the real public
+hostname:
 
-1. OAuth connect/reconnect and API connection test.
-2. Zoom URL-validation CRC response through nginx/TLS.
-3. A real inbound call appears once in Call Intake.
-4. Intake creates a specifically assigned task.
-5. The assignee can view and update that task without cross-tenant leakage.
+1. OAuth connect/reconnect saves a grant pending provider account proof.
+2. Zoom URL-validation CRC response succeeds through nginx/TLS.
+3. A correctly signed v3 event for a real inbound call proves the app account.
+4. The pending grant fetches that exact call, becomes healthy atomically with
+   import, and the call appears once in Call Intake.
+5. The API connection test passes.
+6. Intake creates a specifically assigned task.
+7. The assignee can view and update that task without cross-tenant leakage.
 
 Unit and E2E tests support this evidence but do not replace the live provider
 proof.
@@ -252,8 +272,11 @@ or provider claims require separate evidence and owner approval.
 `scripts/deploy_prod.sh` is the on-host deployment gate. It performs preflight,
 captures a pre-deploy dump/count manifest, starts PostgreSQL, builds the selected
 topology, gates startup on migrations, waits for API/scheduler/nginx, validates
-nginx and frontend image contents, runs production checks, and refuses a
-post-deploy count decrease.
+nginx and frontend image contents, refuses a post-deploy count decrease before
+external provider checks, and then runs strict production checks. A fresh empty
+host may use `BOOTSTRAP_MODE=true` once so an administrator can reach the UI and
+configure its tenant-owned Zoom app; that mode is explicitly **NOT GO-LIVE** and
+must be followed by the default strict production check.
 
 Deployment is not the backup strategy. Before changing production, create and
 copy an encrypted backup off-host. A rollback decision must preserve the new

@@ -31,6 +31,7 @@ class TenantOAuthApp(Base):
     encrypted_webhook_secret_token: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
+    zoom_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     redirect_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
     configured_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

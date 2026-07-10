@@ -119,9 +119,12 @@ else
   warnings+=("Recurring encrypted Restic backups are not configured; retain the proven manual off-host procedure until they are")
 fi
 
-if [[ -z "$(get_env ZOOM_WEBHOOK_SECRET_TOKEN)" && -z "$(get_env ZOOM_CLIENT_ID)" ]]; then
-  warnings+=("Zoom must be provisioned as a tenant-owned app and verified by production_check.sh")
-fi
+for legacy_zoom_key in ZOOM_WEBHOOK_SECRET_TOKEN ZOOM_PHONE_CLIENT_ID ZOOM_PHONE_CLIENT_SECRET ZOOM_PHONE_ACCOUNT_ID; do
+  if [[ -n "$(get_env "$legacy_zoom_key")" ]]; then
+    errors+=("$legacy_zoom_key is unsupported; provision Zoom Phone as a tenant-owned OAuth app")
+  fi
+done
+warnings+=("Zoom Phone tenant app, account mapping, CRC, and API access are verified by production_check.sh")
 if [[ -z "$(get_env ALERT_WEBHOOK_URL)" ]]; then
   warnings+=("ALERT_WEBHOOK_URL is not set; GitHub production-health issues remain the primary alert channel")
 fi
