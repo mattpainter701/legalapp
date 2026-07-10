@@ -36,19 +36,36 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     return chunks
 
 
-def extract_text_from_pdf(file_bytes: bytes) -> str:
+def extract_text_from_pdf(
+    file_bytes: bytes,
+    *,
+    max_pages: int | None = None,
+    max_chars: int | None = None,
+) -> str:
     """Extract text from PDF bytes using pypdf."""
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(file_bytes))
     text_parts = []
+    extracted_chars = 0
 
     for page_num, page in enumerate(reader.pages):
+        if max_pages is not None and page_num >= max_pages:
+            break
         page_text = page.extract_text()
         if page_text:
+            if max_chars is not None:
+                remaining = max_chars - extracted_chars
+                if remaining <= 0:
+                    break
+                page_text = page_text[:remaining]
             text_parts.append(page_text)
+            extracted_chars += len(page_text)
+            if max_chars is not None and extracted_chars >= max_chars:
+                break
 
-    return "\n\n".join(text_parts)
+    extracted = "\n\n".join(text_parts)
+    return extracted[:max_chars] if max_chars is not None else extracted
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
@@ -72,13 +89,22 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     return "\n\n".join(text_parts)
 
 
-def extract_text(file_bytes: bytes, content_type: str, filename: str) -> str:
+def extract_text(
+    file_bytes: bytes,
+    content_type: str,
+    filename: str,
+    *,
+    max_pdf_pages: int | None = None,
+    max_pdf_chars: int | None = None,
+) -> str:
     """Route to the correct text extractor based on content type or filename."""
     ct_lower = (content_type or "").lower()
     fn_lower = (filename or "").lower()
 
     if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
-        return extract_text_from_pdf(file_bytes)
+        return extract_text_from_pdf(
+            file_bytes, max_pages=max_pdf_pages, max_chars=max_pdf_chars
+        )
 
     if (
         ct_lower

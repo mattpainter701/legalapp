@@ -24,8 +24,9 @@ state, and failure modes discovered during the first production bring-up.
   - `courtlistener-loader`: one-shot S3 loader/chunker.
   - `courtlistener-sync`: placeholder for later low-volume REST sync.
   - `embedding-dispatcher`: launches Jetson embedding workers over SSH.
-- Main backend uses `MCP_SERVER_URL=http://courtlistener-mcp:8021` and exposes
-  CourtListener through `/api/mcp`.
+- Main backend uses `MCP_SERVER_URL=http://courtlistener-mcp:8021` with a
+  dedicated `MCP_UPSTREAM_API_KEY`. Internal chat can query the private engine;
+  public `/api/mcp` remains unavailable while `MCP_PRODUCT_ENABLED=false`.
 - Jetsons are embedding workers only. Do not mount Jetson storage as the live
   Postgres data directory.
 
@@ -61,7 +62,8 @@ cd /home/varta/legalapp
 docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml up -d courtlistener-db courtlistener-mcp
 docker ps --filter name=legalapp-courtlistener --format "{{.Names}} {{.Status}}"
 curl -sf http://127.0.0.1:8021/health
-curl -sf http://127.0.0.1:8021/api/mcp
+curl -sf -H "X-Clarity-Internal-Key: $MCP_UPSTREAM_API_KEY" \
+  http://127.0.0.1:8021/api/mcp
 ```
 
 Main app health:
@@ -330,19 +332,24 @@ Raw MCP smoke:
 ```bash
 python3 - <<'PY'
 import json, urllib.request
+import os
 payload = {"name": "search_caselaw", "arguments": {"query": "Appaloosa NDIC", "top_k": 3}}
 req = urllib.request.Request(
     "http://127.0.0.1:8021/api/mcp/tools/call",
     data=json.dumps(payload).encode(),
-    headers={"Content-Type": "application/json"},
+    headers={
+        "Content-Type": "application/json",
+        "X-Clarity-Internal-Key": os.environ["MCP_UPSTREAM_API_KEY"],
+    },
     method="POST",
 )
 print(json.load(urllib.request.urlopen(req, timeout=30)))
 PY
 ```
 
-Main app MCP tool call requires auth. Do not rotate a tenant MCP API key just
-for testing; the raw key is shown only once.
+The private sidecar smoke requires the server-to-server key. Public product
+smokes must remain off for the first-customer launch. When a later release is
+approved, use an existing scoped product key; raw keys are shown only once.
 
 ## Known Pitfalls
 

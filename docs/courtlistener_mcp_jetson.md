@@ -21,19 +21,24 @@ Set the main backend to proxy MCP calls:
 
 ```env
 MCP_SERVER_URL=http://courtlistener-mcp:8021
+MCP_UPSTREAM_API_KEY=<same-32+-character-secret-on-backend-and-sidecar>
+MCP_PRODUCT_ENABLED=false
 ```
 
 Endpoint contract:
 
-- `GET /api/mcp` is public metadata and proxies the CourtListener MCP manifest
-  when `MCP_SERVER_URL` is set.
-- `POST /api/mcp/tools/call` requires either a bearer JWT or `X-API-Key`
-  before the backend forwards to CourtListener MCP.
-- `GET /api/mcp/api-key` and `POST /api/mcp/api-key` stay in the main app.
-  The admin UI uses `GET /api/mcp/api-key` for tenant MCP configuration and
-  receives the live proxied CourtListener tool list.
+- Public `/api/mcp` is the official SDK-backed Streamable HTTP endpoint and is
+  unavailable while `MCP_PRODUCT_ENABLED=false`. Optional metadata lives at
+  `/api/mcp/manifest` and is also hidden while disabled.
+- The private sidecar requires `X-Clarity-Internal-Key` matching
+  `MCP_UPSTREAM_API_KEY`. Public clients never receive this credential.
+- The backend compatibility adapter accepts an application JWT or a scoped
+  `X-MCP-API-Key`; legacy `X-API-Key` is rejected.
+- Legacy `GET/POST /api/mcp/api-key` issuance returns HTTP 410. Tenant admins
+  use `/api/mcp/product` and `/api/mcp/product-keys`; key creation remains
+  unavailable until product, tenant, entitlement, billing and Stripe gates pass.
 - Do not rotate a tenant MCP API key just for smoke tests. The raw key is shown
-  only once on regeneration, so a live `X-API-Key` smoke requires the current
+  only once on creation, so a live `X-MCP-API-Key` smoke requires the current
   key from the tenant admin or an intentional key rotation.
 
 On the hypervisor, `/home/varta/legalapp/.env` is the production credential
@@ -137,7 +142,8 @@ Smoke the MCP endpoint:
 
 ```powershell
 Invoke-RestMethod http://localhost:8021/health
-Invoke-RestMethod http://localhost:8021/api/mcp
+$headers = @{ "X-Clarity-Internal-Key" = $env:MCP_UPSTREAM_API_KEY }
+Invoke-RestMethod http://localhost:8021/api/mcp -Headers $headers
 ```
 
 2026-06-25 smoke result: Jetson 3 embedded all 237 staged MVP smoke chunks with
@@ -159,7 +165,8 @@ Invoke-RestMethod http://localhost:8021/api/mcp
   `[STREAM_COMPLETE]` so the source ledger receives the stored MCP citations
   without requiring a manual reload.
 
-2026-06-26 production endpoint hardening smoke result:
+2026-06-26 historical production endpoint smoke result (superseded by the
+current product flag, dedicated upstream credential, and official protocol):
 
 - `POST /api/mcp/tools/call` without credentials returned 401 and did not proxy.
 - `GET /api/mcp` returned `clarity-courtlistener` with 7 tools.

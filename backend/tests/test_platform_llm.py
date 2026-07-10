@@ -3,9 +3,9 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from app.routers import platform as platform_router
 from app.routers import platform_llm as platform_llm_router
 from app.models.llm_provider_key import LLMProviderKey
+from tests.platform_auth_helpers import platform_headers
 
 TEST_PLATFORM_KEY = "test-platform-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -47,8 +47,7 @@ class _FakeLiteLLMClient:
 
 @pytest.mark.asyncio
 async def test_platform_llm_config_round_trip(client: AsyncClient):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
 
     update = await client.put(
         "/api/platform/llm-config",
@@ -460,8 +459,7 @@ async def test_litellm_reload_rejects_different_file_backed_alias(monkeypatch):
 async def test_provider_route_builder_rejects_mismatched_key_provider(
     client: AsyncClient, db_session
 ):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
 
     key = LLMProviderKey(
         name="DeepSeek test key",
@@ -492,8 +490,7 @@ async def test_provider_route_builder_rejects_mismatched_key_provider(
 
 @pytest.mark.asyncio
 async def test_provider_key_invalid_uuid_returns_400(client: AsyncClient):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
 
     resp = await client.delete(
         "/api/platform/llm/provider-keys/not-a-uuid",

@@ -15,8 +15,11 @@ import app.models  # noqa: F401 — registers all models on Base.metadata
 # Alembic Config object
 config = context.config
 
-# Override sqlalchemy.url from environment if set
-database_url = os.environ.get("DATABASE_URL")
+# Migrations always prefer the owner/DDL credential. Runtime SQLAlchemy still
+# receives DATABASE_URL=APP_DATABASE_URL (clarity_app) and remains NOBYPASSRLS.
+database_url = os.environ.get("MIGRATOR_DATABASE_URL") or os.environ.get(
+    "DATABASE_URL"
+)
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 

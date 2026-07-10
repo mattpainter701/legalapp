@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -8,16 +7,19 @@ from typing import Any
 
 import stripe
 from fastapi import HTTPException
+from redis.exceptions import RedisError
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.tenant import Tenant
+from app.models.durable_job import DurableJob
 from app.services.gateway_privacy import retained_gateway_query_text
+from app.services.durable_jobs import enqueue_job
 
 settings = get_settings()
-logger = logging.getLogger(__name__)
+_fallback_burst_hits: dict[str, tuple[int, float]] = {}
 
 DEFAULT_ALLOWED_TOOLS = [
     "search_caselaw",
@@ -87,47 +89,43 @@ def current_month_window(now: datetime | None = None) -> tuple[datetime, datetim
     return start, end
 
 
-async def _emit_stripe_mcp_meter_event(
-    *,
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    event_id: uuid.UUID,
-    value: int,
-) -> None:
-    if (
-        value <= 0
-        or not settings.STRIPE_SECRET_KEY
-        or not settings.STRIPE_MCP_METER_EVENT_NAME
-    ):
-        return
-
-    tenant = (
-        await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    ).scalar_one_or_none()
-    if not tenant or not tenant.stripe_customer_id:
-        return
-
+async def deliver_mcp_meter_event(payload: dict[str, Any]) -> dict[str, str]:
+    """Deliver one durable usage event to Stripe with a stable identifier."""
+    if not settings.STRIPE_SECRET_KEY or not settings.STRIPE_MCP_METER_EVENT_NAME:
+        raise RuntimeError("Stripe MCP metering is not configured")
     meter_event = getattr(getattr(stripe, "billing", None), "MeterEvent", None)
     if meter_event is None:
-        logger.warning(
-            "Stripe SDK does not expose billing.MeterEvent; MCP usage was not sent"
-        )
-        return
+        raise RuntimeError("Stripe SDK does not expose billing.MeterEvent")
 
     stripe.api_key = settings.STRIPE_SECRET_KEY
-    try:
-        await asyncio.to_thread(
-            meter_event.create,
-            event_name=settings.STRIPE_MCP_METER_EVENT_NAME,
-            payload={
-                "stripe_customer_id": tenant.stripe_customer_id,
-                "value": str(value),
-            },
-            identifier=f"mcp_usage_{event_id}",
+    await asyncio.to_thread(
+        meter_event.create,
+        event_name=settings.STRIPE_MCP_METER_EVENT_NAME,
+        payload={
+            "stripe_customer_id": payload["stripe_customer_id"],
+            "value": str(payload.get("value", 1)),
+        },
+        identifier=payload["identifier"],
+    )
+    return {"identifier": payload["identifier"]}
+
+
+def ensure_mcp_product_access(tenant: Tenant | Any) -> None:
+    if not settings.MCP_PRODUCT_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP product access is disabled")
+    if not getattr(tenant, "is_active", False):
+        raise HTTPException(status_code=403, detail="Tenant is inactive")
+    if getattr(tenant, "mcp_entitlement_status", "disabled") != "enabled":
+        raise HTTPException(status_code=403, detail="MCP entitlement is not active")
+    if getattr(tenant, "mcp_billing_status", "disabled") != "active":
+        raise HTTPException(status_code=402, detail="MCP billing is not active")
+    if not getattr(tenant, "stripe_customer_id", None):
+        raise HTTPException(
+            status_code=402, detail="MCP billing customer is not configured"
         )
-    except stripe.StripeError as exc:
-        logger.warning(
-            "Stripe MCP meter event failed for tenant %s: %s", tenant_id, exc
+    if not settings.STRIPE_SECRET_KEY or not settings.STRIPE_MCP_METER_EVENT_NAME:
+        raise HTTPException(
+            status_code=503, detail="MCP usage metering is not configured"
         )
 
 
@@ -138,8 +136,19 @@ async def create_product_key(
     user_id: uuid.UUID,
     name: str,
     monthly_call_limit: int | None = None,
+    burst_limit_per_minute: int | None = None,
     allowed_tools: list[str] | None = None,
 ) -> tuple[MCPProductKey, str]:
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    ensure_mcp_product_access(tenant)
+    monthly_limit = monthly_call_limit or settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT
+    burst_limit = burst_limit_per_minute or settings.MCP_DEFAULT_BURST_LIMIT_PER_MINUTE
+    if not 1 <= monthly_limit <= settings.MCP_MAX_MONTHLY_CALL_LIMIT:
+        raise HTTPException(status_code=400, detail="Invalid monthly MCP call limit")
+    if not 1 <= burst_limit <= settings.MCP_MAX_BURST_LIMIT_PER_MINUTE:
+        raise HTTPException(status_code=400, detail="Invalid MCP burst limit")
     raw_key = generate_product_key()
     product_key = MCPProductKey(
         tenant_id=tenant_id,
@@ -147,7 +156,8 @@ async def create_product_key(
         key_hash=hash_key(raw_key),
         key_prefix=raw_key[:12],
         allowed_tools=normalize_allowed_tools(allowed_tools),
-        monthly_call_limit=monthly_call_limit,
+        monthly_call_limit=monthly_limit,
+        burst_limit_per_minute=burst_limit,
         created_by_user_id=user_id,
     )
     db.add(product_key)
@@ -203,16 +213,68 @@ async def resolve_product_key(
     product_key, tenant = row
     if not product_key.is_active or product_key.revoked_at is not None:
         raise HTTPException(status_code=401, detail="MCP API key has been revoked")
+    ensure_mcp_product_access(tenant)
     return product_key, tenant
+
+
+def _fallback_burst_increment(key: str) -> tuple[int, int]:
+    now = datetime.now(timezone.utc).timestamp()
+    expires_at = (int(now) // 60 + 1) * 60
+    count, existing_expiry = _fallback_burst_hits.get(key, (0, expires_at))
+    if existing_expiry <= now:
+        count, existing_expiry = 0, expires_at
+    count += 1
+    _fallback_burst_hits[key] = (count, existing_expiry)
+    return count, max(1, int(existing_expiry - now))
+
+
+async def enforce_product_key_burst_limit(
+    redis, product_key: MCPProductKey | Any
+) -> None:
+    limit = int(
+        getattr(product_key, "burst_limit_per_minute", None)
+        or settings.MCP_DEFAULT_BURST_LIMIT_PER_MINUTE
+    )
+    bucket = int(datetime.now(timezone.utc).timestamp()) // 60
+    key = f"rate:mcp:key:{product_key.id}:{bucket}"
+    try:
+        if redis is None:
+            if not settings.DEV_MODE:
+                raise HTTPException(
+                    status_code=503, detail="MCP rate limiter is unavailable"
+                )
+            count, retry_after = _fallback_burst_increment(key)
+        else:
+            count, ttl = await redis.eval(
+                "local c=redis.call('INCR',KEYS[1]); "
+                "if c==1 then redis.call('EXPIRE',KEYS[1],60) end; "
+                "return {c,redis.call('TTL',KEYS[1])}",
+                1,
+                key,
+            )
+            count, retry_after = int(count), max(1, int(ttl))
+    except RedisError as exc:
+        if not settings.DEV_MODE:
+            raise HTTPException(
+                status_code=503, detail="MCP rate limiter is unavailable"
+            ) from exc
+        count, retry_after = _fallback_burst_increment(key)
+    if count > limit:
+        raise HTTPException(
+            status_code=429,
+            detail="MCP API key burst limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 async def enforce_product_key_quota(
     db: AsyncSession,
     product_key: MCPProductKey | Any,
 ) -> None:
-    limit = getattr(product_key, "monthly_call_limit", None)
-    if not limit:
-        return
+    limit = int(
+        getattr(product_key, "monthly_call_limit", None)
+        or settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT
+    )
     await db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
         {"lock_key": f"mcp_product_key:{product_key.id}"},
@@ -278,14 +340,24 @@ async def record_mcp_usage(
         )
     await db.flush()
     stripe_value = 1 if product_key_id and status_code < 400 else 0
-    await db.commit()
     if stripe_value:
-        await _emit_stripe_mcp_meter_event(
-            db=db,
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+        if not tenant or not tenant.stripe_customer_id:
+            raise RuntimeError("MCP usage cannot be metered without a Stripe customer")
+        meter_job = await enqueue_job(
+            db,
             tenant_id=tenant_id,
-            event_id=event.id,
-            value=stripe_value,
+            kind="mcp_stripe_meter",
+            idempotency_key=str(event.id),
+            payload={
+                "usage_event_id": str(event.id),
+                "stripe_customer_id": tenant.stripe_customer_id,
+                "value": stripe_value,
+                "identifier": f"mcp_usage_{event.id}",
+            },
         )
+        meter_job.max_attempts = max(meter_job.max_attempts, 12)
+    await db.commit()
     return event
 
 
@@ -348,4 +420,26 @@ async def usage_summary(
             }
             for key_id, calls, results in by_key_result.all()
         ],
+    }
+
+
+async def metering_outbox_summary(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> dict[str, int]:
+    rows = (
+        await db.execute(
+            select(DurableJob.status, func.count(DurableJob.id))
+            .where(
+                DurableJob.tenant_id == tenant_id,
+                DurableJob.kind == "mcp_stripe_meter",
+            )
+            .group_by(DurableJob.status)
+        )
+    ).all()
+    counts = {status: int(count) for status, count in rows}
+    return {
+        "pending": counts.get("pending", 0),
+        "running": counts.get("running", 0),
+        "completed": counts.get("completed", 0),
+        "failed": counts.get("failed", 0),
     }

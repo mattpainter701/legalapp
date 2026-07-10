@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -7,14 +8,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from starlette.routing import Route
 
 from app.config import get_settings
-from app.database import engine
+from app.database import async_session_maker, engine, set_tenant_context
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.tenant import TenantMiddleware
 from app.middleware.module_guard import ModuleGuardMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.access_log import ApiAccessLogMiddleware
+from app.middleware.platform_audit import PlatformAuditMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.documents import router as documents_router
@@ -59,6 +62,7 @@ from app.routers.esignature import router as esignature_router
 from app.routers.esignature import portal_router as esignature_portal_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.licensing import router as licensing_router
+from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.scheduler import LegalScheduler
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
@@ -220,7 +224,11 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Plugin cache manager initialization failed: {exc}")
 
-    yield
+    # The official MCP SDK owns JSON-RPC lifecycle and Streamable HTTP
+    # semantics. Its public endpoint remains fail-closed unless
+    # MCP_PRODUCT_ENABLED is explicitly enabled.
+    async with protocol_lifespan():
+        yield
 
     # Shutdown
     if getattr(app.state, "scheduler", None):
@@ -277,7 +285,16 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Platform-Key"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Platform-Key",
+        "X-MCP-API-Key",
+        "Mcp-Protocol-Version",
+        "Mcp-Session-Id",
+        "Last-Event-ID",
+    ],
+    expose_headers=["Mcp-Session-Id"],
 )
 
 # Tenant middleware (must come after CORS)
@@ -286,6 +303,8 @@ app.add_middleware(TenantMiddleware)
 app.add_middleware(ModuleGuardMiddleware)  # fail-closed plan/module enforcement
 
 app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
+
+app.add_middleware(PlatformAuditMiddleware)
 
 app.add_middleware(ApiAccessLogMiddleware)
 
@@ -296,6 +315,17 @@ app.add_middleware(RequestIdMiddleware)
 # ─────────────────────────────────────────────────────
 # Routers
 # ─────────────────────────────────────────────────────
+# Register the exact protocol URL before the compatibility router. A Starlette
+# Route (rather than a Mount) prevents it from swallowing
+# /api/mcp/product-keys and the REST compatibility subpaths.
+app.router.routes.append(
+    Route(
+        "/api/mcp",
+        endpoint=protocol_endpoint,
+        methods=["GET", "POST", "DELETE"],
+        name="mcp_streamable_http",
+    )
+)
 app.include_router(auth_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
@@ -392,6 +422,104 @@ async def health_check():
         "database": "connected",
         **_build_metadata(),
     }
+
+
+@app.get("/health/readiness", tags=["health"])
+async def health_readiness(request: Request):
+    """Non-sensitive production readiness used by off-host monitoring.
+
+    The response intentionally exposes only component states. Detailed errors,
+    tenant identifiers, queue contents, and infrastructure addresses remain in
+    server logs and the authenticated operator check.
+    """
+    states = {
+        "disk": "unavailable",
+        "database": "unavailable",
+        "redis": "unavailable",
+        "scheduler": "stale",
+        "queue": "stale",
+    }
+
+    try:
+        usage = shutil.disk_usage(settings.UPLOAD_DIR)
+        used_percent = (usage.used / usage.total * 100) if usage.total else 100
+        states["disk"] = (
+            "ok" if used_percent < settings.HEALTH_DISK_MAX_PERCENT else "full"
+        )
+    except Exception:
+        logger.exception("Readiness disk probe failed")
+
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is not None:
+        try:
+            await redis_client.ping()
+            states["redis"] = "ok"
+        except Exception:
+            logger.exception("Readiness Redis probe failed")
+
+    try:
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+            states["database"] = "ok"
+            tenant_ids = list(
+                (
+                    await session.execute(
+                        text("SELECT id FROM tenants WHERE is_active ORDER BY id")
+                    )
+                ).scalars()
+            )
+            scheduler_ok = True
+            queue_ok = True
+            for tenant_id in tenant_ids:
+                await set_tenant_context(session, str(tenant_id))
+                heartbeat = await session.scalar(
+                    text(
+                        """
+                        SELECT 1
+                        FROM scheduler_logs
+                        WHERE agent_name = 'scheduler-heartbeat'
+                          AND status = 'completed'
+                          AND tenant_id = :tenant_id
+                          AND run_at >= now() - make_interval(mins => :age)
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant_id,
+                        "age": settings.HEALTH_SCHEDULER_MAX_AGE_MINUTES,
+                    },
+                )
+                if not heartbeat:
+                    scheduler_ok = False
+                stale = await session.scalar(
+                    text(
+                        """
+                        SELECT count(*)
+                        FROM durable_jobs
+                        WHERE
+                          (status = 'pending' AND available_at < now() - make_interval(mins => :age))
+                          OR (status = 'running' AND (leased_at IS NULL OR leased_at < now() - interval '15 minutes'))
+                          OR (status = 'failed' AND attempts >= max_attempts)
+                        """
+                    ),
+                    {"age": settings.HEALTH_QUEUE_MAX_AGE_MINUTES},
+                )
+                if stale:
+                    queue_ok = False
+            states["scheduler"] = "ok" if scheduler_ok else "stale"
+            states["queue"] = "ok" if queue_ok else "stale"
+    except Exception:
+        logger.exception("Readiness database/scheduler/queue probe failed")
+
+    healthy = all(value == "ok" for value in states.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "ok" if healthy else "unhealthy",
+            "components": states,
+            **_build_metadata(),
+        },
+    )
 
 
 @app.get("/api/version", tags=["health"])

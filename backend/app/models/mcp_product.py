@@ -29,7 +29,12 @@ class MCPProductKey(Base):
     )
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     allowed_tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    monthly_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    monthly_call_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1000, server_default="1000"
+    )
+    burst_limit_per_minute: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60"
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

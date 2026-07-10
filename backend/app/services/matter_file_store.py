@@ -10,15 +10,26 @@ When matter.cloud_folder is provided (pre-provisioned subfolder IDs), uploads sk
 the multi-hop folder traversal and go directly to the pre-created folder.
 """
 
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.provider_http import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderNotFound,
+    ProviderThrottled,
+)
 from app.services.token_vault import get_fresh_token
 
 settings = get_settings()
@@ -26,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GOOGLE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
+GOOGLE_DOWNLOAD_BASE = "https://www.googleapis.com/drive/v3"
 
 DOCUMENT_CATEGORY_FOLDER_MAP = {
     "pleading": "pleadings",
@@ -62,8 +74,176 @@ class StorageResult:
         return self.error is None
 
 
+class MatterFileReadError(RuntimeError):
+    """Base exception for a fail-closed stored-document read."""
+
+
+class MatterFileAccessError(MatterFileReadError):
+    """The document is outside the requested tenant or local storage root."""
+
+
+class MatterFileMetadataError(MatterFileReadError):
+    """Durable storage metadata is missing or unsupported."""
+
+
+class MatterFileNotFound(MatterFileReadError):
+    """The local document no longer exists."""
+
+
+class MatterFileTooLarge(MatterFileReadError):
+    """The stored document exceeds the bounded read size."""
+
+
+class MatterFileIntegrityError(MatterFileReadError):
+    """Stored bytes do not match persisted size or hash evidence."""
+
+
 class MatterFileStore:
     """Store matter files in the customer's connected cloud storage."""
+
+    async def read_matter_file_bytes(
+        self,
+        *,
+        db: AsyncSession,
+        tenant_id: str,
+        document: Any,
+        expected_sha256: str | None = None,
+        expected_size: int | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Read a tenant-owned MatterDocument using durable provider metadata.
+
+        Cloud ``storage_path`` values are display URLs and are deliberately never
+        requested. Google/Microsoft reads are constructed only from provider item
+        and drive IDs, using a freshly resolved tenant OAuth token. Local reads are
+        constrained to that tenant's upload root. Every path is size-bounded and
+        can be cryptographically bound to a caller-supplied SHA-256.
+        """
+        if document is None or str(getattr(document, "tenant_id", "")) != str(
+            tenant_id
+        ):
+            raise MatterFileAccessError("Document is not owned by this tenant")
+
+        limit = max_bytes or settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        if limit <= 0:
+            raise MatterFileMetadataError("Document read limit must be positive")
+
+        persisted_size = (
+            expected_size
+            if expected_size is not None
+            else getattr(document, "file_size", None)
+        )
+        if persisted_size is not None:
+            try:
+                persisted_size = int(persisted_size)
+            except (TypeError, ValueError) as exc:
+                raise MatterFileMetadataError(
+                    "Document size metadata is invalid"
+                ) from exc
+            if persisted_size < 0:
+                raise MatterFileMetadataError("Document size metadata is invalid")
+            if persisted_size > limit:
+                raise MatterFileTooLarge("Document exceeds the maximum read size")
+
+        backend = _normalized_read_backend(document)
+        if backend == "local":
+            raw_path = getattr(document, "storage_path", None)
+            if not raw_path:
+                raise MatterFileMetadataError("Local document path is missing")
+            path = _safe_existing_local_path(str(tenant_id), str(raw_path))
+            content = await asyncio.to_thread(_read_local_file_capped, path, limit)
+        else:
+            item_id = str(getattr(document, "provider_object_id", "") or "").strip()
+            if not item_id:
+                raise MatterFileMetadataError(
+                    "Cloud document is missing its durable provider item ID"
+                )
+            encoded_item_id = quote(item_id, safe="")
+            if backend == "google_drive":
+                token_provider = "google"
+                provider_label = "Google Drive"
+                url = f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}?alt=media"
+            elif backend in ("onedrive", "sharepoint"):
+                token_provider = "microsoft"
+                provider_label = "Microsoft Graph"
+                drive_id = str(getattr(document, "provider_drive_id", "") or "").strip()
+                if backend == "sharepoint" and not drive_id:
+                    raise MatterFileMetadataError(
+                        "SharePoint document is missing its durable drive ID"
+                    )
+                if drive_id:
+                    url = (
+                        f"{GRAPH_BASE}/drives/{quote(drive_id, safe='')}/items/"
+                        f"{encoded_item_id}/content"
+                    )
+                else:
+                    url = f"{GRAPH_BASE}/me/drive/items/{encoded_item_id}/content"
+            else:
+                raise MatterFileMetadataError(
+                    f"Unsupported document storage backend: {backend or 'unknown'}"
+                )
+
+            token = await get_fresh_token(db, str(tenant_id), token_provider)
+            if not token:
+                raise ProviderAuthError(f"{provider_label} credentials are unavailable")
+            content = await self._download_provider_bytes(
+                url=url,
+                token=token,
+                provider_label=provider_label,
+                max_bytes=limit,
+            )
+
+        _validate_read_integrity(
+            content,
+            expected_size=persisted_size,
+            expected_sha256=expected_sha256,
+        )
+        return content
+
+    async def _download_provider_bytes(
+        self,
+        *,
+        url: str,
+        token: str,
+        provider_label: str,
+        max_bytes: int,
+    ) -> bytes:
+        """Stream provider bytes with a hard cap, including redirected content."""
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                async with client.stream(
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as response:
+                    _raise_for_download_response(response, provider_label)
+                    content_length = response.headers.get("Content-Length")
+                    if content_length:
+                        try:
+                            if int(content_length) > max_bytes:
+                                raise MatterFileTooLarge(
+                                    "Document exceeds the maximum read size"
+                                )
+                        except ValueError:
+                            pass
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise MatterFileTooLarge(
+                                "Document exceeds the maximum read size"
+                            )
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+        except MatterFileReadError:
+            raise
+        except ProviderError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderError(
+                f"{provider_label} document download failed before completion"
+            ) from exc
 
     async def store_matter_file(
         self,
@@ -81,7 +261,10 @@ class MatterFileStore:
 
         When matter_cloud_folder is provided, uploads directly to the pre-provisioned
         subfolder ID instead of traversing the folder tree.
-        preferred_provider controls which cloud is tried first.
+        When preferred_provider is set, that configured cloud is exclusive; a
+        failed configured-cloud upload falls back to local storage with an
+        actionable warning in ``StorageResult.error``. With no preference,
+        providers retain their historical first-available cascade.
         """
         result = await self.store_matter_file_result(
             db=db,
@@ -138,7 +321,13 @@ class MatterFileStore:
             matter_cloud_folder, "sharepoint", "drive_id"
         )
 
-        providers = _ordered_providers(preferred_provider)
+        explicit_provider = bool(str(preferred_provider or "").strip())
+        configured_provider = _normalize_configured_provider(preferred_provider)
+        providers = (
+            [configured_provider]
+            if explicit_provider and configured_provider
+            else ([] if explicit_provider else _ordered_providers(None))
+        )
 
         for provider in providers:
             if provider == "onedrive":
@@ -180,9 +369,31 @@ class MatterFileStore:
                 if result and result.succeeded:
                     return result
 
-        # Fallback: local disk
-        return await self._store_local(
+        # Fallback: local disk. An explicit primary cloud never spills into a
+        # different cloud provider; surface the configured-provider failure so
+        # callers can warn the user while retaining the locally saved bytes.
+        local_result = await self._store_local(
             tenant_id, matter_slug, canonical_folder, filename, content
+        )
+        if not explicit_provider:
+            return local_result
+
+        warning = _configured_provider_fallback_warning(configured_provider)
+        logger.warning(
+            "Configured cloud upload failed for tenant %s via %s; saved %s locally",
+            tenant_id,
+            configured_provider or "unsupported provider",
+            filename,
+        )
+        return StorageResult(
+            provider=local_result.provider,
+            backend=local_result.backend,
+            storage_path=local_result.storage_path,
+            web_url=local_result.web_url,
+            provider_item_id=local_result.provider_item_id,
+            drive_id=local_result.drive_id,
+            parent_id=local_result.parent_id,
+            error=warning,
         )
 
     # Files larger than this use chunked/resumable upload to avoid timeouts.
@@ -703,16 +914,130 @@ class MatterFileStore:
         content: bytes,
     ) -> StorageResult:
         """Store file on local disk. Returns the absolute storage path."""
-        rel_path = f"matters/{matter_slug}/{category}/{filename}"
-        full_path = Path(settings.UPLOAD_DIR) / tenant_id / rel_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_bytes(content)
+        full_path = _safe_new_local_path(
+            tenant_id,
+            "matters",
+            matter_slug,
+            category,
+            filename,
+        )
+        await asyncio.to_thread(_write_local_file, full_path, content)
         logger.info("Stored %s locally at %s", filename, full_path)
         return StorageResult(
             provider="local",
             backend="local",
             storage_path=str(full_path),
         )
+
+
+def _normalized_read_backend(document: Any) -> str | None:
+    """Resolve backend labels without ever treating a display URL as a read URL."""
+    backend = getattr(document, "_storage_backend", None)
+    if not backend:
+        backend = getattr(document, "storage_backend", None)
+    provider = getattr(document, "storage_provider", None)
+    value = str(backend or provider or "").strip().lower().replace("-", "_")
+    aliases = {
+        "google": "google_drive",
+        "gdrive": "google_drive",
+        "drive": "google_drive",
+        "microsoft": "onedrive",
+        "ms_graph": "onedrive",
+        "one_drive": "onedrive",
+        "share_point": "sharepoint",
+    }
+    normalized = aliases.get(value, value) or None
+    if normalized:
+        return normalized
+
+    storage_path = str(getattr(document, "storage_path", "") or "")
+    if storage_path and not storage_path.lower().startswith(("http://", "https://")):
+        return "local"
+    return None
+
+
+def _tenant_local_root(tenant_id: str) -> Path:
+    return (Path(settings.UPLOAD_DIR) / tenant_id).resolve()
+
+
+def _ensure_within_root(path: Path, root: Path) -> Path:
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise MatterFileAccessError(
+            "Local document path escapes the tenant storage root"
+        ) from exc
+    return path
+
+
+def _safe_existing_local_path(tenant_id: str, raw_path: str) -> Path:
+    root = _tenant_local_root(tenant_id)
+    path = Path(raw_path).resolve()
+    _ensure_within_root(path, root)
+    if not path.is_file():
+        raise MatterFileNotFound("Local document was not found")
+    return path
+
+
+def _safe_new_local_path(tenant_id: str, *parts: str) -> Path:
+    root = _tenant_local_root(tenant_id)
+    path = (root.joinpath(*parts)).resolve()
+    return _ensure_within_root(path, root)
+
+
+def _read_local_file_capped(path: Path, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            total += len(chunk)
+            if total > max_bytes:
+                raise MatterFileTooLarge("Document exceeds the maximum read size")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _write_local_file(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+def _validate_read_integrity(
+    content: bytes,
+    *,
+    expected_size: int | None,
+    expected_sha256: str | None,
+) -> None:
+    if expected_size is not None and len(content) != expected_size:
+        raise MatterFileIntegrityError(
+            "Document bytes do not match persisted size metadata"
+        )
+    if expected_sha256:
+        normalized = str(expected_sha256).strip().lower()
+        if len(normalized) != 64 or any(
+            ch not in "0123456789abcdef" for ch in normalized
+        ):
+            raise MatterFileMetadataError("Expected SHA-256 metadata is invalid")
+        actual = hashlib.sha256(content).hexdigest()
+        if not hmac.compare_digest(actual, normalized):
+            raise MatterFileIntegrityError(
+                "Document bytes do not match the expected SHA-256"
+            )
+
+
+def _raise_for_download_response(response: httpx.Response, provider_label: str) -> None:
+    status = response.status_code
+    if status < 400:
+        return
+    message = f"{provider_label} document download failed with HTTP {status}"
+    kwargs = {"status_code": status}
+    if status in (401, 403):
+        raise ProviderAuthError(message, **kwargs)
+    if status == 404:
+        raise ProviderNotFound(message, **kwargs)
+    if status == 429:
+        raise ProviderThrottled(message, **kwargs)
+    raise ProviderError(message, **kwargs)
 
 
 def _extract_subfolder_id(
@@ -769,6 +1094,39 @@ def _ordered_providers(preferred: str | None) -> list[str]:
     if preferred in all_providers:
         return [preferred] + [p for p in all_providers if p != preferred]
     return all_providers
+
+
+def _normalize_configured_provider(preferred: str | None) -> str | None:
+    normalized = str(preferred or "").strip().lower().replace("-", "_")
+    aliases = {
+        "one_drive": "onedrive",
+        "share_point": "sharepoint",
+        "google": "google_drive",
+        "gdrive": "google_drive",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in {"onedrive", "sharepoint", "google_drive"}:
+        return normalized
+    return None
+
+
+def _configured_provider_fallback_warning(provider: str | None) -> str:
+    labels = {
+        "onedrive": "Microsoft OneDrive",
+        "sharepoint": "Microsoft SharePoint",
+        "google_drive": "Google Drive",
+    }
+    if provider is None:
+        return (
+            "The configured cloud provider is unsupported; bytes were saved to "
+            "local storage. Select Auto or a supported primary cloud provider, "
+            "then retry."
+        )
+    label = labels[provider]
+    return (
+        f"Configured {label} upload failed; bytes were saved to local storage. "
+        f"Reconnect {label} or verify its folder permissions, then retry."
+    )
 
 
 def _storage_result_from_graph_item(

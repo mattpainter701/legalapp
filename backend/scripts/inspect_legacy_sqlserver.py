@@ -11,7 +11,6 @@ import csv
 import json
 import os
 import re
-import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date, datetime

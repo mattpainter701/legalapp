@@ -1,4 +1,6 @@
 from functools import lru_cache
+import json
+from datetime import datetime, timezone
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,6 +26,9 @@ class Settings(BaseSettings):
     # to False and a single dedicated scheduler container sets it to True. Jobs
     # also take a Postgres advisory lock so a stray second runner cannot double-fire.
     RUN_SCHEDULER: bool = True
+    HEALTH_DISK_MAX_PERCENT: int = 90
+    HEALTH_SCHEDULER_MAX_AGE_MINUTES: int = 5
+    HEALTH_QUEUE_MAX_AGE_MINUTES: int = 15
 
     # ── Reverse proxy / rate limiting ────────────────────────────────────────
     # Number of trusted proxy hops in front of the app (e.g. nginx = 1). The
@@ -70,6 +75,9 @@ class Settings(BaseSettings):
     # Token encryption key for OAuth tokens at rest (Fernet symmetric)
     # Required: base64-encoded Fernet key (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     TOKEN_ENCRYPTION_KEY: str = ""
+    # Staged Fernet rotation keyring, newest key first. New values use the
+    # first key while decryption accepts every listed key.
+    TOKEN_ENCRYPTION_KEYS: str = ""
 
     # Azure OpenAI (Copilot backend)
     AZURE_OPENAI_ENDPOINT: str = ""
@@ -135,12 +143,37 @@ class Settings(BaseSettings):
     STRIPE_CANCEL_URL: str = ""  # e.g. https://yourdomain.com/billing?cancel=1
 
     # Super-admin platform key — set a long random token; never commit
+    # Leave unset on new deployments; this only backs the time-boxed legacy
+    # bootstrap bridge when explicitly enabled below.
     PLATFORM_SECRET_KEY: str = ""
+    # Identity-bound, scope-capped SHA-256 bootstrap entries (JSON list).
+    PLATFORM_BOOTSTRAP_CREDENTIALS_JSON: str = "[]"
+    # Separate signing key for short-lived operator session tokens.
+    PLATFORM_TOKEN_SIGNING_KEY: str = ""
+    # Time-boxed migration bridge for the legacy static bootstrap key.
+    PLATFORM_LEGACY_BOOTSTRAP_ENABLED: bool = False
+    PLATFORM_LEGACY_BOOTSTRAP_OPERATOR_ID: str = ""
+    PLATFORM_LEGACY_BOOTSTRAP_EXPIRES_AT: str = ""
+    PLATFORM_LEGACY_BOOTSTRAP_MAX_SCOPES: str = "platform:read"
+    PLATFORM_TOKEN_TTL_MINUTES: int = 15
+    PLATFORM_TOKEN_MAX_TTL_MINUTES: int = 60
+    PLATFORM_RATE_LIMIT_PER_MINUTE: int = 120
+    PLATFORM_BOOTSTRAP_LIMIT_PER_5_MINUTES: int = 5
 
     # Optional separate vectorDB for public CourtListener chunks (BGE embeddings)
     # If empty, public_chunks table lives in main DATABASE_URL
     VECTORDB_URL: str = ""
     MCP_SERVER_URL: str = ""
+    # Public/sellable MCP is fail-closed until every product, protocol and
+    # operational release gate has passed. Internal research is independent.
+    MCP_PRODUCT_ENABLED: bool = False
+    # Dedicated backend-to-CourtListener credential. User/app credentials are
+    # never forwarded to the private service.
+    MCP_UPSTREAM_API_KEY: str = ""
+    MCP_DEFAULT_MONTHLY_CALL_LIMIT: int = 1000
+    MCP_MAX_MONTHLY_CALL_LIMIT: int = 100000
+    MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
+    MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
 
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.
@@ -213,15 +246,21 @@ def validate_token_encryption_key(settings: Settings) -> None:
     try:
         from cryptography.fernet import Fernet
 
-        key = settings.TOKEN_ENCRYPTION_KEY
-        if not key:
+        keys = [
+            item.strip()
+            for item in settings.TOKEN_ENCRYPTION_KEYS.replace("\n", ",").split(",")
+            if item.strip()
+        ]
+        if not keys and settings.TOKEN_ENCRYPTION_KEY:
+            keys = [settings.TOKEN_ENCRYPTION_KEY]
+        if not keys:
             raise ValueError(
-                "TOKEN_ENCRYPTION_KEY is required but not set. "
+                "TOKEN_ENCRYPTION_KEYS or TOKEN_ENCRYPTION_KEY is required but not set. "
                 'Generate one with: python -c "from cryptography.fernet import Fernet; '
                 'print(Fernet.generate_key().decode())"'
             )
-        # Validate it's a valid Fernet key
-        Fernet(key.encode() if isinstance(key, str) else key)
+        for key in keys:
+            Fernet(key.encode() if isinstance(key, str) else key)
     except ValueError as e:
         raise ValueError(f"TOKEN_ENCRYPTION_KEY must be a valid Fernet key: {e}") from e
     except Exception as e:
@@ -281,15 +320,22 @@ def validate_secret_key(settings: Settings) -> None:
         )
 
 
-def validate_platform_secret_key(settings: Settings) -> None:
-    """Validate PLATFORM_SECRET_KEY when set (empty disables platform endpoints).
+def validate_jwt_algorithm(settings: Settings) -> None:
+    """Keep application session tokens on the single reviewed HMAC profile."""
+    if settings.ALGORITHM != "HS256":
+        raise ValueError(
+            "ALGORITHM must be exactly HS256 for application session tokens"
+        )
 
-    The platform router already rejects requests when this is short via a
-    per-request check; validating at startup fails fast instead of leaving a
-    weak key live until the first request exercises it.
-    """
+
+def validate_platform_secret_key(settings: Settings) -> None:
+    """Validate the optional, time-boxed legacy bootstrap bridge secret."""
     key = settings.PLATFORM_SECRET_KEY
     if not key:
+        if settings.PLATFORM_LEGACY_BOOTSTRAP_ENABLED:
+            raise ValueError(
+                "PLATFORM_SECRET_KEY is required while the legacy bootstrap bridge is enabled"
+            )
         return
     if len(key) < 32:
         raise ValueError(
@@ -302,11 +348,132 @@ def validate_platform_secret_key(settings: Settings) -> None:
             "a real secret."
         )
 
+    if settings.PLATFORM_LEGACY_BOOTSTRAP_ENABLED:
+        if not settings.PLATFORM_LEGACY_BOOTSTRAP_OPERATOR_ID.strip():
+            raise ValueError(
+                "PLATFORM_LEGACY_BOOTSTRAP_OPERATOR_ID is required while the legacy bridge is enabled"
+            )
+        expiry = _parse_platform_expiry(
+            settings.PLATFORM_LEGACY_BOOTSTRAP_EXPIRES_AT,
+            "PLATFORM_LEGACY_BOOTSTRAP_EXPIRES_AT",
+        )
+        if expiry <= datetime.now(timezone.utc):
+            raise ValueError("The legacy platform bootstrap bridge has expired")
+
+
+_PLATFORM_SCOPES = {
+    "platform:read",
+    "platform:write",
+    "platform:llm:read",
+    "platform:llm:write",
+}
+
+
+def _parse_platform_expiry(value: str, field: str) -> datetime:
+    if not value:
+        raise ValueError(f"{field} is required")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_platform_bootstrap_settings(settings: Settings) -> None:
+    try:
+        entries = json.loads(settings.PLATFORM_BOOTSTRAP_CREDENTIALS_JSON or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "PLATFORM_BOOTSTRAP_CREDENTIALS_JSON must be valid JSON"
+        ) from exc
+    if not isinstance(entries, list):
+        raise ValueError("PLATFORM_BOOTSTRAP_CREDENTIALS_JSON must be a JSON list")
+    seen_hashes: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Platform bootstrap entry {index} must be an object")
+        operator_id = str(entry.get("operator_id") or "").strip()
+        key_hash = str(entry.get("key_hash") or "")
+        scopes = entry.get("scopes")
+        if not operator_id or len(operator_id) > 120:
+            raise ValueError(
+                f"Platform bootstrap entry {index} has an invalid operator_id"
+            )
+        if len(key_hash) != 64 or any(ch not in "0123456789abcdef" for ch in key_hash):
+            raise ValueError(
+                f"Platform bootstrap entry {index} has an invalid key_hash"
+            )
+        if (
+            not isinstance(scopes, list)
+            or not scopes
+            or not all(isinstance(scope, str) for scope in scopes)
+            or set(scopes) - _PLATFORM_SCOPES
+        ):
+            raise ValueError(f"Platform bootstrap entry {index} has invalid scopes")
+        if key_hash in seen_hashes:
+            raise ValueError("Platform bootstrap key hashes must be unique")
+        seen_hashes.add(key_hash)
+        _parse_platform_expiry(
+            str(entry.get("expires_at") or ""),
+            f"platform bootstrap entry {index} expires_at",
+        )
+
+    has_bootstrap = bool(entries) or settings.PLATFORM_LEGACY_BOOTSTRAP_ENABLED
+    if settings.PLATFORM_LEGACY_BOOTSTRAP_ENABLED:
+        legacy_scopes = {
+            item.strip()
+            for item in settings.PLATFORM_LEGACY_BOOTSTRAP_MAX_SCOPES.split(",")
+            if item.strip()
+        }
+        if not legacy_scopes or legacy_scopes - _PLATFORM_SCOPES:
+            raise ValueError("PLATFORM_LEGACY_BOOTSTRAP_MAX_SCOPES is invalid")
+    if has_bootstrap:
+        signing_key = settings.PLATFORM_TOKEN_SIGNING_KEY
+        if len(signing_key) < 32 or _looks_like_placeholder(signing_key):
+            raise ValueError(
+                "PLATFORM_TOKEN_SIGNING_KEY must be a distinct random value of at least 32 characters"
+            )
+        if signing_key == settings.PLATFORM_SECRET_KEY:
+            raise ValueError(
+                "PLATFORM_TOKEN_SIGNING_KEY must not equal PLATFORM_SECRET_KEY"
+            )
+
+
+def validate_mcp_security_settings(settings: Settings) -> None:
+    if settings.MCP_SERVER_URL and len(settings.MCP_UPSTREAM_API_KEY) < 32:
+        raise ValueError(
+            "MCP_UPSTREAM_API_KEY must be at least 32 characters whenever "
+            "MCP_SERVER_URL is configured"
+        )
+    if (
+        not 1
+        <= settings.MCP_DEFAULT_MONTHLY_CALL_LIMIT
+        <= settings.MCP_MAX_MONTHLY_CALL_LIMIT
+    ):
+        raise ValueError("Invalid MCP monthly limit defaults")
+    if (
+        not 1
+        <= settings.MCP_DEFAULT_BURST_LIMIT_PER_MINUTE
+        <= settings.MCP_MAX_BURST_LIMIT_PER_MINUTE
+    ):
+        raise ValueError("Invalid MCP burst limit defaults")
+    if (
+        not 1
+        <= settings.PLATFORM_TOKEN_TTL_MINUTES
+        <= settings.PLATFORM_TOKEN_MAX_TTL_MINUTES
+    ):
+        raise ValueError("Invalid platform token TTL defaults")
+
 
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
     validate_token_encryption_key(settings)
     validate_secret_key(settings)
+    validate_jwt_algorithm(settings)
     validate_platform_secret_key(settings)
+    validate_platform_bootstrap_settings(settings)
+    validate_mcp_security_settings(settings)
     return settings

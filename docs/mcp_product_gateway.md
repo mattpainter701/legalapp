@@ -1,7 +1,9 @@
 # MCP Product Gateway
 
-LegalApp sells CourtListener MCP access through the LegalApp backend, not by
-publicly exposing LiteLLM.
+LegalApp is designed to offer CourtListener MCP access through the LegalApp
+backend, not by publicly exposing LiteLLM. It is not currently a public or
+sellable product; the global release flag remains off until every gate in this
+document has passed.
 
 ## Runtime Shape
 
@@ -15,25 +17,35 @@ publicly exposing LiteLLM.
   to LiteLLM unless a later design deliberately adopts LiteLLM MCP Gateway
   virtual keys.
 
-## Public Endpoints
+## Release State And Protocol
 
-- `GET /api/mcp` returns the tool manifest.
-- `POST /api/mcp/tools/call` accepts the existing REST tool-call shape.
-- `POST /api/mcp/messages` accepts JSON-RPC `tools/call` payloads.
-- `GET /api/mcp/sse` returns a minimal SSE discovery event pointing clients at
-  `/api/mcp/messages`.
+- Public MCP is disabled unless `MCP_PRODUCT_ENABLED=true`. Production must keep
+  it false until protocol, billing, deployment, monitoring and restore gates pass.
+- `/api/mcp` is the official SDK-backed Streamable HTTP endpoint and performs
+  initialization, protocol negotiation and tool discovery.
+- `POST /api/mcp/tools/call` is a compatibility REST adapter, not an MCP transport.
+- `/api/mcp/messages` and `/api/mcp/sse` are retired and return HTTP 410.
+- `GET /api/mcp/manifest` is optional metadata and returns 404 while the product
+  flag is disabled.
 
-External product calls must use `X-MCP-API-Key`. The legacy `X-API-Key` tenant
-key remains for backward compatibility but is not the sellable product-key
-surface.
+The server baseline is MCP `2025-06-18`; the official SDK performs version
+negotiation, initialization, `notifications/initialized`, `tools/list`, and
+`tools/call`. Header API-key authentication is a product choice, not a promise
+that every third-party MCP client can configure that header. Interoperability
+must be proven with each client the commercial offering names.
+
+External product calls use `X-MCP-API-Key`. Legacy unscoped `X-API-Key`
+credentials are invalidated by migration 087 and issuance returns HTTP 410.
 
 ## Tenant Admin Controls
 
-Tenant admins manage product keys from `/mcp`:
+The `/mcp` admin surface can list historical keys and show disabled state while
+the release flag is off. Creation remains fail-closed. After a future approved
+release, tenant admins can:
 
 - create named `clmcp_` keys
 - choose allowed tools
-- set an optional monthly call limit
+- set bounded monthly and per-minute limits (neither can be unlimited)
 - view 30-day usage totals and per-key usage
 - revoke keys
 
@@ -42,7 +54,7 @@ not raw secrets.
 
 ## Tool Catalog
 
-The current sellable CourtListener MCP scope list is:
+The candidate CourtListener MCP scope list is:
 
 - `search_caselaw`: hybrid keyword/vector search over locally loaded authority.
 - `get_case_details`: metadata and chunks for one `opinion_id` or `cluster_id`.
@@ -69,20 +81,84 @@ The current sellable CourtListener MCP scope list is:
 - `tenant_id`
 - `product_key_id` for external keys, null for internal chat
 - `user_id` for app-authenticated calls
-- `auth_type`: `product_key`, `legacy_tenant_key`, `jwt`, or `internal_chat`
-- `transport`: `rest`, `messages`, or `internal`
+- `auth_type`: `product_key`, `jwt`, or `internal_chat`
+- `transport`: `streamable_http`, `rest`, or `internal`
 - `tool_name`, `status_code`, `result_count`, `latency_ms`
 - IP/user-agent for external calls
 
-Quota enforcement is per product key and counts successful calls in the current
-calendar month. Tool scopes are checked before proxying to `courtlistener-mcp`.
+Quota enforcement is per key and counts successful calls in the current calendar
+month. Redis enforces the per-key burst limit. Tool scope, tenant activity,
+explicit MCP entitlement, billing state and Stripe metering configuration are
+checked before proxying.
+
+Stripe subscription/payment webhooks update the MCP billing state. Past-due,
+unpaid, canceled, deleted, disabled, or suspended state is denied before tool
+execution. Redis failure also denies product traffic in production rather than
+falling back to a process-local limiter.
+
+Successful external calls atomically enqueue a `mcp_stripe_meter` durable job in
+the same database transaction as the usage event. The scheduler retries Stripe
+delivery with a stable identifier; failed jobs remain inspectable and replayable.
+This is durable at-least-once delivery with provider idempotency, not synchronous
+confirmation that an invoice has already been updated. Operations must reconcile
+usage rows, durable-job state, Stripe meter events, and invoices.
+
+There is no prepaid-credit product today. Marketing and UI must describe usage
+as metered only after commercial terms are finalized; a call is never represented
+as drawing down credits unless a real credit ledger and pre-call balance gate ship.
 
 ## Deployment Notes
 
-Migration `070_mcp_product_gateway.py` creates the product-key and usage-event
-tables with tenant RLS. Apply migrations before exposing product-key creation.
+Migration `070_mcp_product_gateway.py` creates product keys and usage. Migration
+`087_mcp_product_security.py` invalidates legacy keys, adds mandatory key limits,
+and adds explicit tenant entitlement/billing states.
 
-Recommended public DNS shape:
+The backend and private CourtListener sidecar must share a distinct 32+ character
+`MCP_UPSTREAM_API_KEY`. The sidecar rejects manifest and tool calls without it;
+the backend never forwards application JWTs or customer API keys upstream.
 
-- `mcp.legalapp.example.com` -> nginx/cloudflare route -> backend `/api/mcp`
-- keep `courtlistener-mcp`, `courtlistener-db`, and LiteLLM private
+Start the private sidecar under the same Compose project so it shares the
+private network with the backend:
+
+```bash
+docker compose --env-file .env -p legalapp \
+  -f docker-compose.courtlistener-mcp.yml \
+  up -d --build courtlistener-db courtlistener-mcp
+```
+
+Host diagnostic ports must remain bound to `127.0.0.1`. The existing public
+application origin exposes the future transport at `/api/mcp`; introducing a
+new MCP hostname would require an explicit nginx, origin/host allowlist, TLS,
+monitoring, and client-auth review.
+
+## Product release checklist
+
+Do not change `MCP_PRODUCT_ENABLED` until all evidence is recorded on the exact
+release revision:
+
+- official SDK lifecycle/transport suite and target-client interoperability
+  through production nginx/TLS;
+- legacy issuance and `X-API-Key` rejection after migration `087`;
+- tenant deactivation, entitlement suspension, payment failure, cancellation,
+  key revocation, tool denial, quota exhaustion, burst exhaustion, and Redis
+  outage all fail before upstream execution;
+- a successful call creates one usage row and one durable meter job, retry is
+  idempotent, Stripe receives it, reconciliation agrees, and exhausted jobs
+  alert;
+- a dedicated upstream credential is present on both services and neither
+  customer keys nor application JWTs appear in upstream logs;
+- off-host backup and clean-host restore include MCP keys, usage, and durable
+  jobs without exposing raw secrets;
+- public readiness, scheduler, queue, HTTP, TLS, disk, database, and Redis
+  alerts have a tested delivery and recovery path;
+- published pricing, quota, billing, privacy, retention, support, and incident
+  terms match the actual enforcement; and
+- there is still no “prepaid credits” claim unless a durable credit ledger and
+  pre-call balance reservation/gate are implemented and tested.
+
+Protocol references:
+
+- [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle)
+- [MCP transports](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
+- [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+- [Official Python SDK](https://github.com/modelcontextprotocol/python-sdk)

@@ -28,6 +28,7 @@ import ast
 import importlib
 import inspect
 import sys
+import textwrap
 
 import pytest
 
@@ -57,7 +58,11 @@ CANONICAL_AUTH_FUNCS = {
 # require_teams_enabled(), whose body calls get_current_user() — the name
 # "get_current_user" shows up in the AST scan but teams.py itself has no such
 # module attribute to resolve via getattr).
-AUTH_CALL_NAMES_LITERAL = {"_require_platform_key"} | {
+AUTH_CALL_NAMES_LITERAL = {
+    "_require_platform_key",
+    "authenticate_product_request",
+    "verify_platform_bootstrap_key",
+} | {
     f.__name__ for f in CANONICAL_AUTH_FUNCS
 }
 
@@ -175,15 +180,21 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         "/api/v1/smb/agents/register",
     ): "pairing-code registration, rate-limited",
     # MCP discovery — manifest/SSE-endpoint-URL only, no tenant data. Actual
-    # tool calls go through /api/mcp/tools/call and /api/mcp/messages, which
-    # ARE gated by an MCP product key.
-    (frozenset({"GET"}), "/api/mcp"): "manifest/capabilities only, no tenant data",
-    (frozenset({"GET"}), "/api/mcp/sse"): "returns only a discovery endpoint URL",
+    # Tool calls use the gated /api/mcp Streamable HTTP endpoint. Retired
+    # pseudo-transports below return only HTTP 410 and no tenant data.
+    (frozenset({"GET"}), "/api/mcp/manifest"): "feature-gated product metadata",
+    (frozenset({"POST"}), "/api/mcp/messages"): "retired transport returns HTTP 410",
+    (frozenset({"GET"}), "/api/mcp/sse"): "retired transport returns HTTP 410",
     # Infra endpoints consumed by orchestrators/browsers, not app data.
     # GET-only: FastAPI does not auto-add HEAD for these (unlike the
     # docs/openapi/redoc routes it registers itself).
     (frozenset({"GET"}), "/health"): "liveness probe",
+    (frozenset({"GET"}), "/health/readiness"): "component readiness probe",
     (frozenset({"GET"}), "/health/llm"): "liveness probe",
+    (
+        frozenset({"GET"}),
+        "/api/version",
+    ): "public build identity for the pre-auth UI; returns no tenant data",
 }
 
 # Routes that only exist in the route table when DEV_MODE=true (docs/openapi
@@ -221,7 +232,7 @@ def _called_names(func) -> set[str]:
     except (OSError, TypeError):
         return set()
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(textwrap.dedent(source))
     except SyntaxError:
         return set()
     names: set[str] = set()
@@ -277,15 +288,27 @@ def _iter_unique_routes():
     seen = set()
     for route in app.routes:
         endpoint = getattr(route, "endpoint", None)
-        if endpoint is None:
-            continue
-        methods = frozenset(getattr(route, "methods", None) or [])
-        path = route.path
-        key = (methods, path)
-        if key in seen:
-            continue
-        seen.add(key)
-        yield methods, path, endpoint
+        entries = [route] if endpoint is not None else []
+
+        # FastAPI 0.139 keeps included APIRouters as lazy `_IncludedRouter`
+        # entries instead of flattening every APIRoute into `app.routes`.
+        # Its effective contexts carry the fully-prefixed path, methods and
+        # endpoint that the dispatcher actually serves.
+        effective_contexts = getattr(route, "effective_route_contexts", None)
+        if endpoint is None and callable(effective_contexts):
+            entries = list(effective_contexts())
+
+        for entry in entries:
+            endpoint = getattr(entry, "endpoint", None)
+            path = getattr(entry, "path", None)
+            if endpoint is None or path is None:
+                continue
+            methods = frozenset(getattr(entry, "methods", None) or [])
+            key = (methods, path)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield methods, path, endpoint
 
 
 def test_every_route_is_authenticated_or_explicitly_public():
@@ -294,12 +317,13 @@ def test_every_route_is_authenticated_or_explicitly_public():
         if (methods, path) in PUBLIC_ROUTES or (methods, path) in DEV_MODE_ONLY_ROUTES:
             continue
 
-        module = importlib.import_module(endpoint.__module__)
-        direct = _called_names(endpoint)
+        target = endpoint if inspect.isfunction(endpoint) else endpoint.__call__
+        module = importlib.import_module(target.__module__)
+        direct = _called_names(target)
         all_names = _resolve_transitively(module, direct, depth=3, visited=set())
 
         if not _resolves_to_auth(module, all_names):
-            unrecognized.append((sorted(methods), path, endpoint.__qualname__))
+            unrecognized.append((sorted(methods), path, target.__qualname__))
 
     if unrecognized:
         lines = "\n".join(

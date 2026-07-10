@@ -23,6 +23,7 @@ function CopyButton({ value }) {
       onClick={handle}
       className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line text-brand-muted hover:text-brand-ink"
       title={copied ? 'Copied' : 'Copy'}
+      aria-label={`${copied ? 'Copied' : 'Copy'} ${value}`}
     >
       <Copy size={15} />
     </button>
@@ -72,7 +73,8 @@ export default function MCPPage({ embedded = false }) {
   const [newKey, setNewKey] = useState(null)
   const [form, setForm] = useState({
     name: 'CourtListener API',
-    monthly_call_limit: '',
+    monthly_call_limit: '5000',
+    burst_limit_per_minute: '60',
     allowed_tools: [],
   })
 
@@ -110,11 +112,12 @@ export default function MCPPage({ embedded = false }) {
     try {
       const result = await createMcpProductKey({
         name: form.name,
-        monthly_call_limit: form.monthly_call_limit ? Number(form.monthly_call_limit) : null,
+        monthly_call_limit: Number(form.monthly_call_limit),
+        burst_limit_per_minute: Number(form.burst_limit_per_minute),
         allowed_tools: allToolsSelected ? null : form.allowed_tools,
       })
       setNewKey(result.api_key)
-      setForm({ name: 'CourtListener API', monthly_call_limit: '', allowed_tools: [] })
+      setForm({ name: 'CourtListener API', monthly_call_limit: '5000', burst_limit_per_minute: '60', allowed_tools: [] })
       await getMcpProductKeys().then(setData)
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to create MCP key')
@@ -146,6 +149,22 @@ export default function MCPPage({ embedded = false }) {
     return (
       <div className="flex min-h-[320px] items-center justify-center bg-brand-bg">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-accent border-t-transparent" />
+      </div>
+    )
+  }
+
+  if (data?.product_enabled === false) {
+    return (
+      <div className={embedded ? '' : 'min-h-screen bg-brand-bg'}>
+        <div className={embedded ? 'space-y-4' : 'mx-auto max-w-3xl px-4 py-10'}>
+          <h1 className="font-serif text-2xl font-bold text-brand-ink">CourtListener MCP</h1>
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 text-amber-950" role="status">
+            <p className="font-semibold">MCP product access is disabled</p>
+            <p className="mt-1 text-sm">
+              New keys and external client connections are unavailable while protocol, billing, and operational release gates are being completed.
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
@@ -208,13 +227,11 @@ export default function MCPPage({ embedded = false }) {
         <div className="mb-6 rounded-lg border border-brand-line bg-brand-surface p-5">
           <p className="mb-4 text-sm font-semibold text-brand-ink">Connection endpoints</p>
           <div className="grid gap-3 md:grid-cols-2">
-            <CodeBlock label="REST tool call" value={transports.rest || `${data?.mcp_server_url}/tools/call`} />
-            <CodeBlock label="JSON-RPC messages" value={transports.messages || `${data?.mcp_server_url}/messages`} />
-            <CodeBlock label="SSE discovery" value={transports.sse || `${data?.mcp_server_url}/sse`} />
+            <CodeBlock label="Streamable HTTP" value={transports.streamable_http || data?.mcp_server_url || '/api/mcp'} />
             <CodeBlock label="Auth header" value="X-MCP-API-Key: clmcp_..." />
           </div>
           <p className="mt-3 text-xs text-brand-muted">
-            Register the SSE URL with Claude/OpenAI-compatible MCP clients, or call the messages endpoint directly for streamable HTTP JSON-RPC.
+            Standards-compliant clients connect to the single Streamable HTTP endpoint and negotiate the MCP protocol there.
           </p>
         </div>
 
@@ -242,8 +259,20 @@ export default function MCPPage({ embedded = false }) {
                 min="1"
                 value={form.monthly_call_limit}
                 onChange={(e) => setForm((prev) => ({ ...prev, monthly_call_limit: e.target.value }))}
-                placeholder="Unlimited"
                 className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink"
+                required
+              />
+            </label>
+
+            <label className="mb-4 block">
+              <span className="mb-1 block text-xs font-semibold uppercase text-brand-muted">Burst limit per minute</span>
+              <input
+                type="number"
+                min="1"
+                value={form.burst_limit_per_minute}
+                onChange={(e) => setForm((prev) => ({ ...prev, burst_limit_per_minute: e.target.value }))}
+                className="w-full rounded-md border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink"
+                required
               />
             </label>
 
@@ -315,7 +344,7 @@ export default function MCPPage({ embedded = false }) {
                       <td className="py-3 pr-3 font-medium text-brand-ink">{key.name}</td>
                       <td className="py-3 pr-3 font-mono text-xs text-brand-muted">{key.api_key_masked}</td>
                       <td className="py-3 pr-3 text-brand-ink">{key.usage?.calls || 0}</td>
-                      <td className="py-3 pr-3 text-brand-muted">{key.monthly_call_limit || 'Unlimited'}</td>
+                      <td className="py-3 pr-3 text-brand-muted">{key.monthly_call_limit ?? 'Not configured'}</td>
                       <td className="py-3 pr-3">
                         <span className={key.is_active ? 'text-emerald-700' : 'text-brand-muted'}>
                           {key.is_active ? 'Active' : 'Revoked'}

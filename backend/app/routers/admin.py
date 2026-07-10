@@ -1251,6 +1251,21 @@ async def configure_customer_llm(
             detail="customer_llm_provider must be 'gemini' or 'copilot'",
         )
 
+    endpoint = None
+    deployment = None
+    if body.use_customer_llm:
+        from app.services.byok_security import (
+            normalize_customer_llm_endpoint,
+            validate_customer_llm_deployment,
+        )
+
+        endpoint = normalize_customer_llm_endpoint(
+            body.customer_llm_provider or "", body.endpoint
+        )
+        deployment = validate_customer_llm_deployment(
+            body.customer_llm_provider or "", body.deployment
+        )
+
     result = await db.execute(
         select(TenantSettings).where(TenantSettings.tenant_id == admin.tenant_id)
     )
@@ -1264,8 +1279,8 @@ async def configure_customer_llm(
 
     # Store sensitive fields in JSON config
     config = {
-        "endpoint": body.endpoint,
-        "deployment": body.deployment,
+        "endpoint": endpoint,
+        "deployment": deployment,
     }
     if body.api_key:
         from app.services.token_vault import encrypt_token

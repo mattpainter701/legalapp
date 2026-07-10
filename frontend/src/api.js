@@ -918,18 +918,23 @@ export const createCheckoutSession = () => api.post('/billing/checkout-session')
 export const createPortalSession = () => api.post('/billing/portal').then((r) => r.data)
 
 // MCP
-export const getMcpInfo = () => api.get('/mcp/api-key').then((r) => r.data)
-export const regenerateMcpApiKey = () => api.post('/mcp/api-key').then((r) => r.data)
 export const getMcpProductKeys = () => api.get('/mcp/product-keys').then((r) => r.data)
 export const createMcpProductKey = (data) => api.post('/mcp/product-keys', data).then((r) => r.data)
 export const revokeMcpProductKey = (keyId) => api.delete(`/mcp/product-keys/${keyId}`).then((r) => r.data)
 export const getMcpUsage = (days = 30) => api.get('/mcp/usage', { params: { days } }).then((r) => r.data)
 
 // Platform (uses platform key header — passed explicitly)
-const platformApi = (platformKey) =>
+export const createPlatformSession = (bootstrapKey) =>
+  axios.post(
+    `${BASE_URL}/platform/auth/token`,
+    {},
+    { headers: { 'X-Platform-Key': bootstrapKey } },
+  ).then((r) => r.data)
+
+const platformApi = (platformToken) =>
   axios.create({
     baseURL: BASE_URL,
-    headers: { 'X-Platform-Key': platformKey },
+    headers: { Authorization: `Bearer ${platformToken}` },
   })
 
 export const getPlatformTenants = (key, page = 1) =>
@@ -1355,6 +1360,45 @@ export const deleteTemplate = (id) =>
 
 export const renderTemplate = (id, data) =>
   api.post(`/templates/${id}/render`, data).then(r => r.data)
+
+export const readBlobErrorDetail = async (blob) => {
+  const text = await blob.text()
+  try {
+    const parsed = JSON.parse(text)
+    return String(parsed?.detail || parsed?.message || text)
+  } catch {
+    return text
+  }
+}
+
+export const renderTemplateFile = (id, data) =>
+  api.post(`/templates/${id}/render-file`, data, { responseType: 'blob' }).then((r) => {
+    const disposition = r.headers?.['content-disposition'] || ''
+    const encodedMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+    const basicMatch = disposition.match(/filename="?([^";]+)"?/i)
+    const filename = encodedMatch
+      ? decodeURIComponent(encodedMatch[1])
+      : basicMatch?.[1] || `generated-template-${id}.pdf`
+    return {
+      blob: r.data,
+      filename,
+      contentType: r.headers?.['content-type'] || r.data?.type || 'application/octet-stream',
+    }
+  }).catch(async (error) => {
+    const blob = error?.response?.data
+    if (blob instanceof Blob) {
+      try {
+        const detail = await readBlobErrorDetail(blob)
+        if (detail) {
+          error.message = String(detail)
+          if (error.response) error.response.data = { detail: String(detail) }
+        }
+      } catch {
+        // Preserve the original transport error when the blob cannot be read.
+      }
+    }
+    throw error
+  })
 
 export const discoverTemplateVariables = (id, data = {}) =>
   api.post(`/templates/${id}/smart-fill-preview`, data).then(r => r.data)

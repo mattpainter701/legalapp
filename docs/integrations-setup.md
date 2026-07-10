@@ -1,86 +1,184 @@
-# Integration Setup
+# Integration setup and production proof
 
-## Entra Redirect Verification
+An integration is not production-ready merely because an OAuth row exists.
+Each enabled provider needs an exact redirect URI, least necessary scopes,
+encrypted credential storage, token refresh, a live read/write operation where
+applicable, disconnect/revocation behavior, monitoring, and a customer-owned
+support path.
 
-Verify the Microsoft app registration contains both web redirect URIs:
+For the first Call Intake customer, enable and prove Zoom Phone only. Do not ask
+for Microsoft, Google, Teams, QBO, or Stripe consent until the customer's
+licensed workflow needs it.
 
-```powershell
-az ad app show --id <MICROSOFT_CLIENT_ID> --query "web.redirectUris"
-```
+## Common requirements
 
-Expected production URIs:
+- All production callback and webhook URLs use the canonical HTTPS origin.
+- Provider console URI values match byte-for-byte, including path and absence
+  of a trailing slash.
+- OAuth state is short-lived, single-use, and bound to provider, intent, user,
+  tenant, and initiating role.
+- Backend and scheduler have the staged `TOKEN_ENCRYPTION_KEYS` keyring before
+  any credential is saved.
+- Tenant-owned provider app credentials are preferred where the customer needs
+  ownership and independent revocation.
+- Never paste client secrets, refresh tokens, webhook secrets, authorization
+  codes, or raw provider responses into tickets or logs.
+
+## Microsoft Entra
+
+The app registration needs separate login and integration-consent redirects:
 
 ```text
-https://legalapp.perevagagroup.com/api/auth/microsoft/callback
-https://legalapp.perevagagroup.com/api/integrations/microsoft/callback
+https://<DOMAIN>/api/auth/microsoft/callback
+https://<DOMAIN>/api/integrations/microsoft/callback
 ```
 
-The first URI supports login. The second supports the admin/user integration consent flow. Login can work while integration consent fails if the second URI is missing.
-
-## Zoom V1
-
-Add these variables in deployment config:
-
-```env
-ZOOM_CLIENT_ID=
-ZOOM_CLIENT_SECRET=
-ZOOM_REDIRECT_URI=https://legalapp.perevagagroup.com/api/integrations/zoom/callback
-ZOOM_WEBHOOK_SECRET_TOKEN=
-```
-
-The app stores user-level Zoom OAuth tokens by default. If an admin connects Zoom with `intent=admin`, the tenant credential is used as the shared firm Zoom fallback.
-
-## Zoom Phone Intake
-
-For the standalone Call Intake product, configure an account-level Zoom OAuth app
-before onboarding the first tenant:
-
-```env
-ZOOM_CLIENT_ID=<zoom account-level OAuth client id>
-ZOOM_CLIENT_SECRET=<zoom account-level OAuth client secret>
-ZOOM_PHONE_REDIRECT_URI=https://legalapp.perevagagroup.com/api/integrations/zoom-phone/callback
-ZOOM_WEBHOOK_SECRET_TOKEN=<zoom webhook secret token>
-ZOOM_PHONE_SCOPES="phone:read:list_call_logs:admin phone:read:call_log:admin"
-```
-
-In the Zoom app:
-
-1. Add the production Phone redirect URI shown above.
-2. Grant the two least-privilege Phone scopes listed in `ZOOM_PHONE_SCOPES`.
-3. Add a Phone event subscription using the tenant-specific webhook URL displayed
-   under **Administration → Zoom**.
-4. Subscribe to `phone.callee_call_element_completed` and
-   `phone.caller_call_element_completed`. The application also accepts the v2
-   `call_history_completed` events during migration.
-5. Authorize the tenant from **Administration → Zoom**, run **Test connection**,
-   then place one inbound answered call and one missed call to verify the live feed.
-
-The production callback and webhook URLs must be publicly reachable over HTTPS.
-The intake integration reads account call history and call-element details; it does
-not request recording or transcript content scopes.
-
-## Teams App Package
-
-Generated app ID:
-
-```env
-TEAMS_APP_ID=b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22
-```
-
-The Teams package lives at `teams-app/clarity-legal-teams.zip`. It includes:
-
-- Personal tab: `https://legalapp.perevagagroup.com/teams`
-- Configurable team tab: `https://legalapp.perevagagroup.com/teams/config`
-- Valid domain: `legalapp.perevagagroup.com`
-
-If the Microsoft client ID changes, regenerate the package:
+Verify the registered values without displaying a secret:
 
 ```powershell
-.\teams-app\package.ps1 -MicrosoftClientId <MICROSOFT_CLIENT_ID>
+az ad app show --id $env:MICROSOFT_CLIENT_ID --query "web.redirectUris" --output table
 ```
 
-## SharePoint V1
+Current delegated integration scopes are broad because the full platform can
+sync users, search/read mail, read/write files, access SharePoint sites, and
+read/write calendars:
 
-V1 uses the existing Microsoft consent model with `Files.ReadWrite.All` and `Sites.Read.All`. Admins bind a SharePoint site and document library in Admin → Integrations. The binding stores site ID, site URL, drive ID, drive name, root item ID, folder path, health, and primary-storage status.
+- tenant admin: `offline_access User.Read.All Mail.Read Files.ReadWrite.All Sites.Read.All Calendars.ReadWrite`
+- individual user: `offline_access User.Read Mail.Read Files.ReadWrite.All Calendars.ReadWrite`
 
-Phase 2 can move to `Sites.Selected` with explicit selected-site grants and stricter admin approval.
+These are not appropriate for an intake-only tenant that does not use those
+features. A future least-privilege deployment should split provider apps or use
+incremental consent; SharePoint should move toward `Sites.Selected` with
+explicit site grants. Until then, document the granted scopes in the customer
+security record and disable unused integration modules.
+
+Production proof: login callback, admin/user consent callback, status with no
+missing scopes, one token refresh, the exact licensed Graph operation, and
+disconnect/revocation.
+
+## Google Workspace
+
+Register:
+
+```text
+https://<DOMAIN>/api/auth/google/callback
+https://<DOMAIN>/api/integrations/google/callback
+```
+
+Current admin consent can request directory read, Gmail read, calendar, and
+Drive access; user consent can request Gmail read, calendar, and Drive access.
+As with Microsoft, do not request this bundle for the first intake-only customer
+unless those workflows are purchased and reviewed.
+
+Production proof: login callback, integration callback, granted-scope audit,
+token refresh, one licensed Drive/Gmail/Calendar operation, storage destination
+verification when enabled, and disconnect/revocation.
+
+## Zoom meetings
+
+Meeting OAuth is separate from Zoom Phone intake:
+
+```dotenv
+ZOOM_CLIENT_ID=
+ZOOM_CLIENT_SECRET=
+ZOOM_REDIRECT_URI=https://<DOMAIN>/api/integrations/zoom/callback
+```
+
+It uses meeting/user scopes for meeting creation and lookup. Do not describe
+meeting OAuth as proof that Zoom Phone call intake works.
+
+## Zoom Phone intake
+
+### Recommended tenant-owned app
+
+Create an account-level Zoom OAuth app owned by the customer. In Zoom App
+Marketplace configure:
+
+- redirect URI:
+  `https://<DOMAIN>/api/integrations/zoom-phone/callback`
+- scopes:
+  `phone:read:list_call_logs:admin phone:read:call_log:admin`
+- event subscription URL: copy the tenant-specific URL shown under
+  **Administration > Zoom**:
+  `https://<DOMAIN>/api/integrations/zoom-phone/webhook/<tenant-id>`
+- handled events:
+  `phone.callee_call_history_completed` and
+  `phone.caller_call_history_completed`
+
+The admin enters the app client ID, client secret, and webhook secret in
+**Administration > Zoom**. The backend stores them encrypted. Raw values are not
+returned after save. The administrator then connects the Zoom account through
+OAuth and runs **Test connection**.
+
+The integration imports inbound call-history facts into tenant-scoped
+communication records. This release does **not** fetch Zoom recording or
+transcript content, so do not grant or market recording/transcript access.
+
+### Platform app fallback
+
+`ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`, and `ZOOM_WEBHOOK_SECRET_TOKEN` can act
+as a shared platform fallback when no active tenant-owned app exists.
+`ZOOM_PHONE_CLIENT_ID`, `ZOOM_PHONE_CLIENT_SECRET`, and
+`ZOOM_PHONE_ACCOUNT_ID` support the server-to-server token fallback used by
+call-history sync. Shared credentials increase blast radius and must not be the
+default for a customer-owned production integration.
+
+### Required production proof
+
+1. Save tenant app credentials and confirm only masked/configured state returns.
+2. Connect/reconnect through the public callback and run **Test connection**.
+3. Run the production gate; its Zoom URL-validation CRC request must return an
+   `encryptedToken` through public nginx and TLS.
+4. Place one real answered inbound call and one missed inbound call.
+5. Confirm each appears once in Call Intake with the expected caller, time,
+   direction, and result.
+6. Save one intake to a specifically assigned task; confirm the assignee can
+   view, reassign/log contact, and close it.
+7. Re-send a provider event or sync the same history window and confirm no
+   duplicate customer task is created.
+
+The operator command is part of the release gate:
+
+```bash
+ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
+  bash scripts/production_check.sh
+```
+
+## QuickBooks Online
+
+Register
+`QBO_REDIRECT_URI=https://<DOMAIN>/api/integrations/qbo/callback` and choose the
+correct sandbox/production environment. Before enabling for a tenant, prove
+OAuth state validation, refresh, company identity, one licensed synchronization
+operation, idempotency, and disconnect. QBO tokens participate in the Fernet
+rotation workflow.
+
+## Teams and SharePoint
+
+The Teams package uses the same canonical HTTPS domain and a configured
+`TEAMS_APP_ID`. Teams features can be disabled with
+`TEAMS_FEATURE_ENABLED=false`; leave them disabled for tenants that did not buy
+the workflow.
+
+SharePoint currently depends on the Microsoft consent bundle above. The app can
+store a selected site/library/folder binding and route matter files there, but
+operators must verify the returned provider object, drive, parent, and web URL.
+A successful local fallback is not proof that SharePoint storage succeeded.
+
+## Integration acceptance record
+
+For each enabled provider, record without secrets:
+
+- customer/tenant and provider app owner;
+- app/client identifier suffix, redirect URI, and granted scopes;
+- UTC connection and last successful refresh times;
+- live operation tested and resulting provider object/event ID suffix;
+- ingress hostname and webhook/CRC result where applicable;
+- disconnect/revoke test;
+- alert owner and escalation route; and
+- release commit and environment.
+
+The credential rotation procedure is in
+[credential_security_operations.md](credential_security_operations.md). The
+first-customer Zoom go/no-go is in
+[FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md](FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md).

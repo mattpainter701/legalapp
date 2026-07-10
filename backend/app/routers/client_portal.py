@@ -18,6 +18,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -29,7 +30,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,8 +57,20 @@ from app.schemas.client_portal import (
     PortalMessageCreate,
     PortalMessageResponse,
 )
-from app.services.matter_file_store import MatterFileStore
+from app.services.matter_file_store import (
+    MatterFileAccessError,
+    MatterFileIntegrityError,
+    MatterFileMetadataError,
+    MatterFileNotFound,
+    MatterFileStore,
+    MatterFileTooLarge,
+)
 from app.services.email import send_client_portal_invite
+from app.services.provider_http import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderNotFound,
+)
 from app.services.portal_token import (
     PORTAL_TOKEN_EXPIRE_MINUTES,
     create_matter_portal_token,
@@ -395,7 +407,7 @@ async def portal_upload_document(
         )
 
     safe_filename = os.path.basename(file.filename)
-    storage_path = await matter_file_store.store_matter_file(
+    storage_result = await matter_file_store.store_matter_file_result(
         db=db,
         tenant_id=str(ctx.tenant_id),
         matter_slug=matter.slug,
@@ -403,6 +415,7 @@ async def portal_upload_document(
         filename=safe_filename,
         content=file_bytes,
         content_type=file.content_type or "application/octet-stream",
+        matter_cloud_folder=matter.cloud_folder,
     )
     # Client uploads are visible to the client (uploaded_by_user_id stays NULL).
     doc = MatterDocument(
@@ -413,7 +426,13 @@ async def portal_upload_document(
         filename=safe_filename,
         content_type=file.content_type,
         file_size=len(file_bytes),
-        storage_path=storage_path,
+        storage_path=storage_result.storage_path,
+        storage_provider=storage_result.provider,
+        storage_backend=storage_result.backend,
+        provider_object_id=storage_result.provider_item_id,
+        provider_drive_id=storage_result.drive_id,
+        provider_parent_id=storage_result.parent_id,
+        storage_error=storage_result.error,
         description=description,
         document_category="client-portal",
         portal_visible=True,
@@ -449,12 +468,53 @@ async def portal_download_document(
         )
     )
     doc = result.scalar_one_or_none()
-    if doc is None or not doc.storage_path or not os.path.exists(doc.storage_path):
+    if doc is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(
-        path=doc.storage_path,
-        filename=doc.filename,
+    try:
+        content = await matter_file_store.read_matter_file_bytes(
+            db=db,
+            tenant_id=str(ctx.tenant_id),
+            document=doc,
+        )
+    except MatterFileTooLarge as exc:
+        raise HTTPException(
+            status_code=413, detail="File is too large to download"
+        ) from exc
+    except ProviderAuthError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The firm's document storage connection needs attention",
+        ) from exc
+    except (MatterFileNotFound, ProviderNotFound) as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    except MatterFileIntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The stored file failed its integrity check",
+        ) from exc
+    except (MatterFileAccessError, MatterFileMetadataError) as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="The connected document provider is temporarily unavailable",
+        ) from exc
+
+    safe_name = (doc.filename or "document").replace("\r", "").replace("\n", "")
+    fallback_name = safe_name.encode("ascii", "ignore").decode() or "document"
+    fallback_name = fallback_name.replace('"', "'").replace("\\", "_")
+    disposition = (
+        f'attachment; filename="{fallback_name}"; '
+        f"filename*=UTF-8''{quote(safe_name, safe='')}"
+    )
+    return Response(
+        content=content,
         media_type=doc.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": disposition,
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

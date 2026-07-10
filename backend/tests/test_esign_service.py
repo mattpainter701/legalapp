@@ -1,18 +1,25 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+from types import SimpleNamespace
 import uuid
 
 import pytest
 
+from app.models.matter_document import MatterDocument
 from app.models.signature import SignatureRequest, SignatureSigner
+import app.routers.esignature as esignature_router
 from app.routers.esignature import _source_document_is_unchanged
 from app.schemas.signature import PortalSignRequest
 from app.services.esign.service import (
+    complete_request_if_done,
     mark_request_expired_if_needed,
     next_pending_signers,
     record_portal_decline,
     signer_can_act_now,
     record_portal_signature,
 )
+from app.services.matter_file_store import MatterFileIntegrityError, StorageResult
+import app.services.esign.service as esign_service
 
 
 def _request(*signers, enforce_signing_order=False, expires_at=None, status="sent"):
@@ -111,25 +118,152 @@ async def test_signature_audit_records_explicit_consent_and_client_evidence():
 
 
 @pytest.mark.asyncio
-async def test_bound_source_detects_document_mutation(tmp_path):
-    path = tmp_path / "agreement.txt"
-    path.write_bytes(b"version one")
-
-    class Doc:
-        storage_path = str(path)
+async def test_bound_source_detects_document_mutation(monkeypatch):
+    state = {"matches": True}
 
     class DB:
         async def get(self, _model, _id):
-            return Doc()
+            return SimpleNamespace(
+                tenant_id=req.tenant_id,
+                matter_id=req.matter_id,
+                file_size=len(b"version one"),
+            )
 
-    import hashlib
+    async def fake_read(**kwargs):
+        assert kwargs["tenant_id"] == str(req.tenant_id)
+        assert kwargs["expected_sha256"] == req.source_document_sha256
+        if not state["matches"]:
+            raise MatterFileIntegrityError("mutated")
+        return b"version one"
+
+    monkeypatch.setattr(
+        esignature_router.matter_file_store,
+        "read_matter_file_bytes",
+        fake_read,
+    )
 
     req = _request()
     req.document_id = uuid.uuid4()
     req.source_document_sha256 = hashlib.sha256(b"version one").hexdigest()
+    req.source_document_size = len(b"version one")
     assert await _source_document_is_unchanged(DB(), req) is True
-    path.write_bytes(b"version two")
+    state["matches"] = False
     assert await _source_document_is_unchanged(DB(), req) is False
+
+
+@pytest.mark.asyncio
+async def test_two_completions_create_distinct_immutable_evidence_with_full_metadata(
+    monkeypatch,
+):
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    source = SimpleNamespace(
+        id=source_id,
+        tenant_id=tenant_id,
+        matter_id=matter_id,
+        filename="Client Agreement.pdf",
+    )
+    matter = SimpleNamespace(
+        id=matter_id,
+        tenant_id=tenant_id,
+        slug="client-agreement",
+        matter_name="Client Agreement",
+        cloud_folder={"google_drive": {"id": "matter-folder"}},
+    )
+
+    def completed_request(request_id):
+        signer = SimpleNamespace(
+            status="signed",
+            sign_order=0,
+            audit={"method": "portal_typed", "request": str(request_id)},
+            name="Client Signer",
+            email="client@example.com",
+            typed_signature="Client Signer",
+            signed_at=datetime.now(timezone.utc),
+            signed_ip="203.0.113.10",
+        )
+        return SimpleNamespace(
+            id=request_id,
+            tenant_id=tenant_id,
+            matter_id=matter_id,
+            document_id=source_id,
+            status="partially_signed",
+            signers=[signer],
+            source_document_sha256=hashlib.sha256(b"source").hexdigest(),
+            source_document_size=len(b"source"),
+            evidence_sha256=None,
+            completion_artifact_sha256=None,
+            provider_envelope_id=None,
+            completed_at=None,
+        )
+
+    class DB:
+        def __init__(self):
+            self.documents = {source_id: source}
+            self.added = []
+
+        async def get(self, model, row_id):
+            assert model is MatterDocument
+            return self.documents.get(row_id)
+
+        def add(self, row):
+            self.added.append(row)
+            if isinstance(row, MatterDocument):
+                self.documents[row.id] = row
+
+    uploads = []
+
+    async def fake_store(**kwargs):
+        uploads.append(kwargs)
+        index = len(uploads)
+        return StorageResult(
+            provider="google",
+            backend="google_drive",
+            storage_path=f"https://drive.google.com/file/d/evidence-{index}/view",
+            web_url=f"https://drive.google.com/file/d/evidence-{index}/view",
+            provider_item_id=f"evidence-{index}",
+            drive_id=f"drive-{index}",
+            parent_id="matter-folder",
+        )
+
+    monkeypatch.setattr(
+        esign_service._file_store,
+        "store_matter_file_result",
+        fake_store,
+    )
+    db = DB()
+    first_request = completed_request(uuid.uuid4())
+    second_request = completed_request(uuid.uuid4())
+
+    first = await complete_request_if_done(db, first_request, matter)
+    second = await complete_request_if_done(db, second_request, matter)
+
+    assert first is not None and second is not None
+    assert first.filename != second.filename
+    assert first_request.id.hex in first.filename
+    assert second_request.id.hex in second.filename
+    assert first_request.completion_artifact_sha256[:16] in first.filename
+    assert second_request.completion_artifact_sha256[:16] in second.filename
+    assert [upload["filename"] for upload in uploads] == [
+        first.filename,
+        second.filename,
+    ]
+    assert len({upload["filename"] for upload in uploads}) == 2
+
+    assert first.storage_provider == "google"
+    assert first.storage_backend == "google_drive"
+    assert first.provider_object_id == "evidence-1"
+    assert first.provider_drive_id == "drive-1"
+    assert first.provider_parent_id == "matter-folder"
+    assert second.provider_object_id == "evidence-2"
+    assert first_request.provider_envelope_id == str(first.id)
+    assert second_request.provider_envelope_id == str(second.id)
+
+    # A retry of an already completed request returns the original artifact and
+    # cannot upload or overwrite evidence again.
+    assert await complete_request_if_done(db, first_request, matter) is first
+    assert len(uploads) == 2
 
 
 def test_portal_signature_consent_is_fail_closed_by_default():

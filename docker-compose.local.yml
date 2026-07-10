@@ -7,7 +7,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: ${LOCAL_API_URL:-http://localhost:8010/api}
+        VITE_API_URL: ${LOCAL_API_URL:-/api}
     ports:
       - "3010:3000"
 
@@ -24,7 +24,7 @@ services:
       - "80:80"
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     ports:
       - "5434:5432"
 
@@ -41,7 +41,7 @@ services:
       - "5435:5432"
 
   vectordb:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     environment:
       POSTGRES_USER: vectordb
       POSTGRES_PASSWORD: vectordb

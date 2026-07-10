@@ -7,9 +7,9 @@ Agents:
   3. docket-watcher   — Mon 8:00 AM ET: check active matters for approaching deadlines
   4. oc-status        — Mon 9:00 AM ET: weekly portfolio status email to admins
 
-For DB access: jobs create their own AsyncSession (outside FastAPI request context).
-Cross-tenant queries deliberately bypass RLS by setting a blank tenant context so
-all tenants' data is accessible globally for the scheduler.
+For DB access, jobs create their own AsyncSession (outside FastAPI request
+context). The scheduler enumerates active tenant identifiers and runs each job
+under that tenant's normal RLS context; it never opens a cross-tenant data path.
 """
 
 import hashlib
@@ -20,13 +20,15 @@ import uuid
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 
 from app.config import get_settings
 from app.database import async_session_maker, set_tenant_context
@@ -36,6 +38,7 @@ from app.models.smb_agent import SmbAgent
 from app.models.estate import EstateDeadline
 from app.models.scheduler import SchedulerLog
 from app.models.task import Task
+from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
@@ -57,6 +60,12 @@ FEDERAL_REGISTER_RSS = "https://www.federalregister.gov/api/v1/articles.rss"
 # ─────────────────────────────────────────────────────────────────────────────
 
 AGENT_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "name": "scheduler-heartbeat",
+        "display_name": "Scheduler Heartbeat",
+        "description": "Writes a tenant-scoped liveness record for production monitoring.",
+        "schedule": "Every minute",
+    },
     {
         "name": "renewal-watcher",
         "display_name": "Renewal Watcher",
@@ -125,12 +134,73 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _bypass_rls(session) -> None:
+_scheduler_tenant_id: ContextVar[uuid.UUID | None] = ContextVar(
+    "scheduler_tenant_id", default=None
+)
+
+
+async def _apply_scheduler_tenant_context(session) -> None:
+    """Bind the tenant selected by the scheduler runner to this transaction.
+
+    Scheduler work must never attempt to bypass RLS.  The old implementation
+    wrote an empty tenant GUC, which either matched no rows or raised an invalid
+    UUID error depending on the table policy.  Every job now executes once per
+    active tenant and uses the same tenant context as an authenticated request.
     """
-    Set a blank tenant context so RLS policies evaluate to true for all rows.
-    This allows cross-tenant queries inside scheduled jobs.
-    """
-    await session.execute(text("SET LOCAL app.current_tenant_id = ''"))
+    tenant_id = _scheduler_tenant_id.get()
+    if tenant_id is None:
+        raise RuntimeError("Scheduler job started without a tenant context")
+    await set_tenant_context(session, str(tenant_id))
+
+
+async def _commit_and_restore_scheduler_context(session) -> None:
+    """Commit a job transaction and immediately open a tenant-scoped one."""
+    await session.commit()
+    await _apply_scheduler_tenant_context(session)
+
+
+async def _rollback_and_restore_scheduler_context(session) -> None:
+    """Roll back a failed tenant operation without losing its RLS context."""
+    await session.rollback()
+    await _apply_scheduler_tenant_context(session)
+
+
+async def _run_for_active_tenants(coro_fn: Callable[[], Awaitable[Any]]) -> list[Any]:
+    """Run a scheduler coroutine independently for every active tenant."""
+    async with async_session_maker() as session:
+        tenant_ids = list(
+            (
+                await session.execute(
+                    select(Tenant.id)
+                    .where(Tenant.is_active.is_(True))
+                    .order_by(Tenant.id)
+                )
+            ).scalars()
+        )
+
+    results: list[Any] = []
+    for tenant_id in tenant_ids:
+        token = _scheduler_tenant_id.set(tenant_id)
+        try:
+            results.append(await coro_fn())
+        except Exception:
+            logger.exception("Scheduler tenant run failed for tenant %s", tenant_id)
+            results.append(None)
+        finally:
+            _scheduler_tenant_id.reset(token)
+    return results
+
+
+def tenant_scoped_job(coro_fn: Callable[..., Awaitable[Any]]):
+    """Decorate a job so scheduled and manual runs process active tenants."""
+
+    @wraps(coro_fn)
+    async def _wrapped(*args, **kwargs):
+        if _scheduler_tenant_id.get() is not None:
+            return await coro_fn(*args, **kwargs)
+        return await _run_for_active_tenants(lambda: coro_fn(*args, **kwargs))
+
+    return _wrapped
 
 
 async def _get_tenant_admins(session, tenant_id: uuid.UUID) -> List[User]:
@@ -147,13 +217,30 @@ async def _get_tenant_admins(session, tenant_id: uuid.UUID) -> List[User]:
 
 async def _log_start(session, agent_name: str) -> SchedulerLog:
     """Create a 'running' SchedulerLog entry and return it."""
-    log = SchedulerLog(
-        agent_name=agent_name,
-        run_at=datetime.now(timezone.utc),
-        status="running",
-    )
-    session.add(log)
+    await _apply_scheduler_tenant_context(session)
+    tenant_id = _scheduler_tenant_id.get()
+    log = None
+    if agent_name == "scheduler-heartbeat":
+        # Heartbeats are current state, not an audit history. Reuse one row per
+        # tenant so a one-minute probe cannot grow scheduler_logs without bound.
+        log = await session.scalar(
+            select(SchedulerLog)
+            .where(
+                SchedulerLog.agent_name == agent_name,
+                SchedulerLog.tenant_id == tenant_id,
+            )
+            .order_by(SchedulerLog.run_at.desc())
+            .limit(1)
+        )
+    if log is None:
+        log = SchedulerLog(agent_name=agent_name, tenant_id=tenant_id)
+        session.add(log)
+    log.run_at = datetime.now(timezone.utc)
+    log.status = "running"
+    log.summary = None
+    log.error_message = None
     await session.commit()
+    await _apply_scheduler_tenant_context(session)
     await session.refresh(log)
     return log
 
@@ -422,6 +509,16 @@ class LegalScheduler:
             max_instances=1,
         )
 
+        self.scheduler.add_job(
+            self._guarded("scheduler-heartbeat", self.run_scheduler_heartbeat),
+            "interval",
+            minutes=1,
+            id="scheduler-heartbeat",
+            name="Scheduler Heartbeat",
+            replace_existing=True,
+            max_instances=1,
+        )
+
         # renewal-watcher: Mon 8:00 AM ET
         self.scheduler.add_job(
             self._guarded("renewal-watcher", self.run_renewal_watcher),
@@ -486,7 +583,7 @@ class LegalScheduler:
             replace_existing=True,
         )
 
-        agent_count = 7
+        agent_count = 8
 
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:
@@ -546,8 +643,27 @@ class LegalScheduler:
         """Return the APScheduler job object for a given agent name."""
         return self.scheduler.get_job(agent_name)
 
+    @tenant_scoped_job
+    async def run_scheduler_heartbeat(self) -> None:
+        """Prove that the scheduler can read each active tenant under RLS."""
+        async with async_session_maker() as session:
+            log = await _log_start(session, "scheduler-heartbeat")
+            try:
+                await _apply_scheduler_tenant_context(session)
+                user_count = await session.scalar(
+                    select(func.count()).select_from(User)
+                )
+                await _log_complete(
+                    session,
+                    log,
+                    f"Tenant scheduler heartbeat healthy; {user_count or 0} user(s) visible.",
+                )
+            except Exception as exc:
+                await _log_failed(session, log, f"{type(exc).__name__}: {exc}")
+
     # ─── Agent: renewal-watcher ───────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_renewal_watcher(self) -> None:
         """
         1. Query all active renewals where renewal_date <= 90 days from today
@@ -560,7 +676,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "renewal-watcher")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 cutoff = date.today() + timedelta(days=90)
                 today = date.today()
@@ -591,7 +707,7 @@ class LegalScheduler:
 
                 emails_sent = 0
                 for tenant_id, tenant_renewals in by_tenant.items():
-                    await _bypass_rls(session)
+                    await _apply_scheduler_tenant_context(session)
 
                     # Build alert dicts
                     alerts = []
@@ -658,6 +774,7 @@ class LegalScheduler:
 
     # ─── Agent: reg-monitor ───────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_reg_monitor(self) -> None:
         """
         1. Fetch Federal Register RSS feed for last 7 days
@@ -674,7 +791,7 @@ class LegalScheduler:
                 # Fetch RSS once — shared across all tenants
                 articles = await _fetch_federal_register_rss()
 
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 # Find all tenants with a regulatory-legal practice profile
                 from app.models.plugin import PracticeProfile
@@ -694,7 +811,7 @@ class LegalScheduler:
                     tenant_id = profile.tenant_id
                     tenants_with_profile.add(tenant_id)
 
-                    await _bypass_rls(session)
+                    await _apply_scheduler_tenant_context(session)
 
                     # Filter articles for this tenant's profile
                     relevant_articles = _filter_rss_for_tenant(
@@ -745,6 +862,7 @@ class LegalScheduler:
 
     # ─── Agent: docket-watcher ────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_docket_watcher(self) -> None:
         """
         1. Query all active (non-closed) matters
@@ -757,7 +875,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "docket-watcher")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 result = await session.execute(
                     select(Matter).where(Matter.is_closed.is_(False))
@@ -818,7 +936,7 @@ class LegalScheduler:
 
                 emails_sent = 0
                 for tenant_id, tenant_alerts in alerts_by_tenant.items():
-                    await _bypass_rls(session)
+                    await _apply_scheduler_tenant_context(session)
 
                     admins = await _get_tenant_admins(session, tenant_id)
                     if not admins:
@@ -886,6 +1004,7 @@ class LegalScheduler:
 
     # ─── Agent: oc-status ─────────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_oc_status(self) -> None:
         """
         Weekly portfolio status email for each tenant:
@@ -898,7 +1017,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "oc-status")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 # All active matters across all tenants
                 result = await session.execute(
@@ -917,7 +1036,7 @@ class LegalScheduler:
                 emails_sent = 0
 
                 for tenant_id, tenant_matters in by_tenant.items():
-                    await _bypass_rls(session)
+                    await _apply_scheduler_tenant_context(session)
 
                     # Count by risk level
                     by_risk: Dict[str, int] = defaultdict(int)
@@ -1043,13 +1162,14 @@ class LegalScheduler:
 
     # ─── Agent: task-reminder ─────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def _check_task_reminders(self) -> None:
         """Email reminders for tasks due within the next 24 hours that are not completed/cancelled."""
         logger.info("[task-reminder] Starting run")
         async with async_session_maker() as session:
             log = await _log_start(session, "task-reminder")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 now_utc = datetime.now(timezone.utc)
                 today = now_utc.date()
@@ -1110,7 +1230,7 @@ class LegalScheduler:
                         if sent:
                             emails_sent += 1
                             task.reminder_sent_at = now_utc
-                            await session.commit()
+                            await _commit_and_restore_scheduler_context(session)
                     except Exception as exc:
                         logger.error(
                             "[task-reminder] Failed to send reminder for task %s to %s: %s",
@@ -1134,6 +1254,7 @@ class LegalScheduler:
 
     # ─── Agent: estate-deadline-watcher ───────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_estate_deadline_watcher(self) -> None:
         """Email reminders for estate tax/court deadlines due within 14 days.
 
@@ -1145,7 +1266,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "estate-deadline-watcher")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 now_utc = datetime.now(timezone.utc)
                 today = now_utc.date()
@@ -1229,7 +1350,7 @@ class LegalScheduler:
 
                     if sent_any:
                         dl.reminder_sent_at = now_utc
-                        await session.commit()
+                        await _commit_and_restore_scheduler_context(session)
 
                 summary = (
                     f"Found {len(deadlines)} estate deadline(s) within 14 days. "
@@ -1247,6 +1368,7 @@ class LegalScheduler:
 
     # ─── Agent: cloud-sync ────────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_cloud_sync(self) -> None:
         """Sync cloud file/email metadata for every tenant with active credentials.
 
@@ -1258,7 +1380,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "cloud-sync")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 result = await session.execute(
                     select(TenantCredential.tenant_id)
@@ -1295,14 +1417,14 @@ class LegalScheduler:
                                 status="completed",
                                 items_ok=provider_total,
                             )
-                            await session.commit()
+                            await _commit_and_restore_scheduler_context(session)
                     except Exception as tenant_err:
                         logger.warning(
                             "[cloud-sync] Sync failed for tenant %s: %s",
                             tenant_id,
                             tenant_err,
                         )
-                        await session.rollback()
+                        await _rollback_and_restore_scheduler_context(session)
                         await capture_integration_error(
                             session,
                             tenant_id=tenant_id,
@@ -1319,11 +1441,11 @@ class LegalScheduler:
                             items_failed=1,
                             error_summary=str(tenant_err),
                         )
-                        await session.commit()
+                        await _commit_and_restore_scheduler_context(session)
 
                 # Restore bypass context for the final log commit (sync_all set a
                 # tenant-scoped context on the shared session).
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 summary = (
                     f"Synced {tenants_synced}/{len(tenant_ids)} tenant(s); "
@@ -1335,11 +1457,12 @@ class LegalScheduler:
             except Exception as exc:
                 error_msg = f"{type(exc).__name__}: {exc}"
                 logger.exception("[cloud-sync] Unhandled error: %s", error_msg)
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
                 await _log_failed(session, log, error_msg)
 
     # ─── Agent: correspondence-capture ────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_correspondence_capture(self) -> None:
         """Capture matching emails into matters for every connected user.
 
@@ -1354,7 +1477,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "correspondence-capture")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 result = await session.execute(
                     select(TenantCredential.tenant_id)
@@ -1408,7 +1531,7 @@ class LegalScheduler:
                                 status="completed",
                                 items_ok=counts.get("captured", 0),
                             )
-                            await session.commit()
+                            await _commit_and_restore_scheduler_context(session)
                         except Exception as user_err:
                             logger.warning(
                                 "[correspondence-capture] Failed for user %s (%s): %s",
@@ -1416,7 +1539,7 @@ class LegalScheduler:
                                 provider,
                                 user_err,
                             )
-                            await session.rollback()
+                            await _rollback_and_restore_scheduler_context(session)
                             await capture_integration_error(
                                 session,
                                 tenant_id=tenant_id,
@@ -1433,9 +1556,9 @@ class LegalScheduler:
                                 items_failed=1,
                                 error_summary=str(user_err),
                             )
-                            await session.commit()
+                            await _commit_and_restore_scheduler_context(session)
 
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
                 summary = (
                     f"Scanned {users_scanned} mailbox(es) across "
                     f"{len(tenant_ids)} tenant(s); captured {total_captured} email(s)."
@@ -1448,11 +1571,12 @@ class LegalScheduler:
                 logger.exception(
                     "[correspondence-capture] Unhandled error: %s", error_msg
                 )
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
                 await _log_failed(session, log, error_msg)
 
     # ─── Agent: user-sync ─────────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_user_sync(self) -> None:
         """Sync directory users for every tenant with active credentials.
 
@@ -1466,7 +1590,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "user-sync")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 result = await session.execute(
                     select(TenantCredential.tenant_id, TenantCredential.provider).where(
@@ -1509,7 +1633,7 @@ class LegalScheduler:
                             status="completed",
                             items_ok=seen,
                         )
-                        await session.commit()
+                        await _commit_and_restore_scheduler_context(session)
                     except Exception as tenant_err:
                         failed += 1
                         logger.warning(
@@ -1518,7 +1642,7 @@ class LegalScheduler:
                             tenant_id,
                             tenant_err,
                         )
-                        await _bypass_rls(session)
+                        await _apply_scheduler_tenant_context(session)
                         try:
                             await user_sync_svc.record_sync_failure(
                                 session, str(tenant_id), provider, str(tenant_err)
@@ -1545,9 +1669,9 @@ class LegalScheduler:
                             items_failed=1,
                             error_summary=str(tenant_err),
                         )
-                        await session.commit()
+                        await _commit_and_restore_scheduler_context(session)
 
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
                 summary = (
                     f"Synced {synced} credential(s); {total_users} user(s) seen; "
                     f"{failed} failed."
@@ -1558,18 +1682,19 @@ class LegalScheduler:
             except Exception as exc:
                 error_msg = f"{type(exc).__name__}: {exc}"
                 logger.exception("[user-sync] Unhandled error: %s", error_msg)
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
                 await _log_failed(session, log, error_msg)
 
     # ─── Agent: smb-heartbeat ──────────────────────────────────────────────────
 
+    @tenant_scoped_job
     async def _check_smb_agent_heartbeats(self) -> None:
         """Mark active SMB agents as paused when their last heartbeat is older than 15 minutes (or null)."""
         logger.info("[smb-heartbeat] Starting run")
         async with async_session_maker() as session:
             log = await _log_start(session, "smb-heartbeat")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
 
@@ -1594,7 +1719,7 @@ class LegalScheduler:
                     agent.status = "paused"
                     paused_count += 1
 
-                await session.commit()
+                await _commit_and_restore_scheduler_context(session)
 
                 summary = f"Paused {paused_count} stale SMB agent(s) (no heartbeat in 15 min)."
                 await _log_complete(session, log, summary)
@@ -1607,6 +1732,7 @@ class LegalScheduler:
 
     # ─── Agent: chat-attachment-cleanup ───────────────────────────────────────
 
+    @tenant_scoped_job
     async def run_chat_attachment_cleanup(self) -> None:
         """Delete expired misc-chat session attachments and their files.
 
@@ -1619,7 +1745,7 @@ class LegalScheduler:
         async with async_session_maker() as session:
             log = await _log_start(session, "chat-attachment-cleanup")
             try:
-                await _bypass_rls(session)
+                await _apply_scheduler_tenant_context(session)
 
                 now = datetime.now(timezone.utc)
                 result = await session.execute(
@@ -1646,7 +1772,7 @@ class LegalScheduler:
                     await session.delete(doc)
                     deleted += 1
 
-                await session.commit()
+                await _commit_and_restore_scheduler_context(session)
 
                 summary = f"Deleted {deleted} expired chat attachment(s)."
                 await _log_complete(session, log, summary)
@@ -1667,6 +1793,7 @@ class LegalScheduler:
         Returns a status dict with the result.
         """
         agent_map = {
+            "scheduler-heartbeat": self.run_scheduler_heartbeat,
             "renewal-watcher": self.run_renewal_watcher,
             "reg-monitor": self.run_reg_monitor,
             "docket-watcher": self.run_docket_watcher,

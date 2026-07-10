@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getTasks,
@@ -94,6 +94,7 @@ function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff 
     <div>
       <div className="flex gap-2">
         <input
+          aria-label={placeholder}
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => {
@@ -136,7 +137,56 @@ function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff 
   )
 }
 
+function useDialogFocus(onClose) {
+  const dialogRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement
+    const focusableElements = () => dialogRef.current?.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    )
+    const focusTimer = window.setTimeout(() => {
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        focusableElements()?.[0]?.focus()
+      }
+    }, 0)
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = focusableElements()
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.clearTimeout(focusTimer)
+      document.removeEventListener('keydown', handleKeyDown)
+      previouslyFocused?.focus?.()
+    }
+  }, [])
+
+  return dialogRef
+}
+
 function CreateTaskModal({ onClose, onCreate }) {
+  const dialogRef = useDialogFocus(onClose)
   const [form, setForm] = useState({
     title: '',
     task_type: 'general',
@@ -174,30 +224,30 @@ function CreateTaskModal({ onClose, onCreate }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4" role="dialog" aria-modal="true" aria-labelledby="create-task-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
-          <h2 className="text-base font-semibold text-brand-ink font-sans">New Task</h2>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <h2 id="create-task-title" className="text-base font-semibold text-brand-ink font-sans">New Task</h2>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Title *</label>
-            <input value={form.title} onChange={e => set('title', e.target.value)}
+            <input aria-label="Task title" value={form.title} onChange={e => set('title', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm focus:outline-none focus:border-brand-accent"
               placeholder="Task description" required autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Type</label>
-              <select value={form.task_type} onChange={e => set('task_type', e.target.value)}
+              <select aria-label="Task type" value={form.task_type} onChange={e => set('task_type', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Priority</label>
-              <select value={form.priority} onChange={e => set('priority', e.target.value)}
+              <select aria-label="Task priority" value={form.priority} onChange={e => set('priority', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -208,7 +258,7 @@ function CreateTaskModal({ onClose, onCreate }) {
           </div>
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Due Date</label>
-            <input type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)}
+            <input aria-label="Task due date" type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
           </div>
           <div>
@@ -232,14 +282,14 @@ function CreateTaskModal({ onClose, onCreate }) {
           {assignee && (
             <div>
               <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Message to Assignee</label>
-              <textarea value={assignmentNote} onChange={e => setAssignmentNote(e.target.value)} rows={2}
+              <textarea aria-label="Message to assignee" value={assignmentNote} onChange={e => setAssignmentNote(e.target.value)} rows={2}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
                 placeholder="Personal note included in the assignment email…" />
             </div>
           )}
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea value={form.description} onChange={e => set('description', e.target.value)} rows={2}
+            <textarea aria-label="Task notes" value={form.description} onChange={e => set('description', e.target.value)} rows={2}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
           {error && (
@@ -261,6 +311,7 @@ function CreateTaskModal({ onClose, onCreate }) {
 }
 
 function QualifyIntakeModal({ task, onClose, onQualified }) {
+  const dialogRef = useDialogFocus(onClose)
   const [query, setQuery] = useState('')
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
@@ -313,14 +364,14 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="qualify-intake-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-brand-ink font-sans">Qualify Intake Lead</h2>
+            <h2 id="qualify-intake-title" className="text-base font-semibold text-brand-ink font-sans">Qualify Intake Lead</h2>
             <p className="text-xs text-brand-muted mt-0.5">Assign the qualified intake to an attorney and preserve the call notes.</p>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
 
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
@@ -337,6 +388,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign Attorney *</label>
             <div className="flex gap-2">
               <input
+                aria-label="Search attorney"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 onKeyDown={e => {
@@ -379,6 +431,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Partner Notes</label>
             <textarea
+              aria-label="Partner notes"
               value={partnerNotes}
               onChange={e => setPartnerNotes(e.target.value)}
               rows={3}
@@ -390,6 +443,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description</label>
             <textarea
+              aria-label="Case description"
               value={caseDescription}
               onChange={e => setCaseDescription(e.target.value)}
               rows={3}
@@ -401,6 +455,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Estimated Value</label>
             <input
+              aria-label="Estimated value"
               type="number"
               min="0"
               step="0.01"
@@ -434,6 +489,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
 }
 
 function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
+  const dialogRef = useDialogFocus(onClose)
   const leadId = leadIdFromTaskRef(task)
   const [lead, setLead] = useState(null)
   const [loadingLead, setLoadingLead] = useState(true)
@@ -510,14 +566,14 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="open-matter-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-brand-ink font-sans">Open Matter from Intake</h2>
+            <h2 id="open-matter-title" className="text-base font-semibold text-brand-ink font-sans">Open Matter from Intake</h2>
             <p className="text-xs text-brand-muted mt-0.5">Creates the matter in waiting-fee-agreement status and links the intake contact as client.</p>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
 
         {loadingLead ? (
@@ -535,19 +591,19 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
 
             <div>
               <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Name *</label>
-              <input value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
+              <input aria-label="Matter name" value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
-                <input value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
+                <input aria-label="Matter type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
-                <input value={form.role} onChange={e => set('role', e.target.value)}
+                <input aria-label="Our role" value={form.role} onChange={e => set('role', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
             </div>
@@ -555,31 +611,31 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
-                <input value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
+                <input aria-label="Jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
-                <input value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
+                <input aria-label="Counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
             </div>
 
             <div>
               <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description / Intake Notes</label>
-              <textarea value={form.description} onChange={e => set('description', e.target.value)} rows={4}
+              <textarea aria-label="Case description and intake notes" value={form.description} onChange={e => set('description', e.target.value)} rows={4}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
             </div>
 
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Budget</label>
-                <input type="number" min="0" step="0.01" value={form.budget_amount} onChange={e => set('budget_amount', e.target.value)}
+                <input aria-label="Matter budget" type="number" min="0" step="0.01" value={form.budget_amount} onChange={e => set('budget_amount', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm font-mono" />
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Billing</label>
-                <select value={form.billing_method} onChange={e => set('billing_method', e.target.value)}
+                <select aria-label="Billing method" value={form.billing_method} onChange={e => set('billing_method', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                   {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(method => (
                     <option key={method} value={method}>{method.replace('_', ' ')}</option>
@@ -588,7 +644,7 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Hourly Rate</label>
-                <input type="number" min="0" step="0.01" value={form.hourly_rate} onChange={e => set('hourly_rate', e.target.value)}
+                <input aria-label="Hourly rate" type="number" min="0" step="0.01" value={form.hourly_rate} onChange={e => set('hourly_rate', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm font-mono" />
               </div>
             </div>
@@ -614,6 +670,7 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
 }
 
 function LogContactModal({ task, onClose, onLogged }) {
+  const dialogRef = useDialogFocus(onClose)
   const [method, setMethod] = useState('call')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
@@ -634,19 +691,19 @@ function LogContactModal({ task, onClose, onLogged }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4" role="dialog" aria-modal="true" aria-labelledby="log-contact-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-brand-ink font-sans">Log Customer Contact</h2>
+            <h2 id="log-contact-title" className="text-base font-semibold text-brand-ink font-sans">Log Customer Contact</h2>
             <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">How were they contacted?</label>
-            <select value={method} onChange={e => setMethod(e.target.value)}
+            <select aria-label="Contact method" value={method} onChange={e => setMethod(e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
               <option value="call">Phone call</option>
               <option value="email">Email</option>
@@ -657,7 +714,7 @@ function LogContactModal({ task, onClose, onLogged }) {
           </div>
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+            <textarea aria-label="Contact notes" value={note} onChange={e => setNote(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="What was discussed, next steps..." />
           </div>
@@ -680,6 +737,7 @@ function LogContactModal({ task, onClose, onLogged }) {
 }
 
 function ReassignTaskModal({ task, onClose, onReassigned }) {
+  const dialogRef = useDialogFocus(onClose)
   const [selectedUser, setSelectedUser] = useState(null)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
@@ -707,14 +765,14 @@ function ReassignTaskModal({ task, onClose, onReassigned }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4" role="dialog" aria-modal="true" aria-labelledby="reassign-task-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-brand-ink font-sans">Reassign Task</h2>
+            <h2 id="reassign-task-title" className="text-base font-semibold text-brand-ink font-sans">Reassign Task</h2>
             <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
@@ -723,7 +781,7 @@ function ReassignTaskModal({ task, onClose, onReassigned }) {
           </div>
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason / Message</label>
-            <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
+            <textarea aria-label="Reassignment reason or message" value={note} onChange={e => setNote(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="Why this is being reassigned — included in the assignment email and the customer history." />
           </div>
@@ -746,6 +804,7 @@ function ReassignTaskModal({ task, onClose, onReassigned }) {
 }
 
 function CloseTaskModal({ task, onClose, onClosed }) {
+  const dialogRef = useDialogFocus(onClose)
   const [outcome, setOutcome] = useState('completed')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -770,19 +829,19 @@ function CloseTaskModal({ task, onClose, onClosed }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+      <div ref={dialogRef} className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4" role="dialog" aria-modal="true" aria-labelledby="close-task-title">
         <div className="px-6 py-4 border-b border-brand-line flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-brand-ink font-sans">Close Task</h2>
+            <h2 id="close-task-title" className="text-base font-semibold text-brand-ink font-sans">Close Task</h2>
             <p className="text-xs text-brand-muted mt-0.5 truncate max-w-xs">{task.title}</p>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink">✕</button>
+          <button type="button" onClick={onClose} aria-label="Close dialog" className="text-brand-muted hover:text-brand-ink">✕</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Outcome</label>
-            <select value={outcome} onChange={e => setOutcome(e.target.value)}
+            <select aria-label="Task outcome" value={outcome} onChange={e => setOutcome(e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
               <option value="completed">Completed — work is done</option>
               <option value="cancelled">Cancelled — no longer needed</option>
@@ -790,7 +849,7 @@ function CloseTaskModal({ task, onClose, onClosed }) {
           </div>
           <div>
             <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason *</label>
-            <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            <textarea aria-label="Reason for closing task" value={reason} onChange={e => setReason(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="Outcome or why it's being closed — recorded on the task and in the customer history."
               required />
@@ -864,6 +923,8 @@ function TaskRow({
     >
       <button
         onClick={() => onComplete(task)}
+        aria-label={`${task.status === 'completed' ? 'Reopen' : 'Complete'} task: ${task.title}`}
+        aria-pressed={task.status === 'completed'}
         className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
           task.status === 'completed'
             ? 'bg-brand-green border-brand-green text-white'
@@ -951,14 +1012,14 @@ function TaskRow({
             <button
               onClick={() => onReassign(task)}
               title="Reassign this task to another staff member"
-              className="opacity-0 group-hover:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-accent hover:text-brand-accent transition-all"
+              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-accent hover:text-brand-accent transition-all"
             >
               Reassign
             </button>
             <button
               onClick={() => onCloseTask(task)}
               title="Close this task with a reason"
-              className="opacity-0 group-hover:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-ink hover:text-brand-ink transition-all"
+              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-ink hover:text-brand-ink transition-all"
             >
               Close
             </button>
@@ -973,7 +1034,8 @@ function TaskRow({
             onClick={handleRemind}
             disabled={reminding || task.status === 'completed'}
             title="Send reminder email"
-            className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-accent transition-all disabled:opacity-30"
+            aria-label={`Send reminder for ${task.title}`}
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-accent transition-all disabled:opacity-30"
           >
             <Bell size={13} />
           </button>
@@ -993,6 +1055,7 @@ function TaskRow({
               type="button"
               onClick={() => onConfirmDelete(task.id)}
               disabled={isDeleting}
+              aria-label={`Confirm delete task: ${task.title}`}
               className="rounded bg-red-700 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-800 disabled:opacity-60"
             >
               {isDeleting ? 'Deleting' : 'Delete'}
@@ -1001,7 +1064,8 @@ function TaskRow({
         ) : (
           <button
             onClick={() => onDeleteRequest(task.id)}
-            className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
+            aria-label={`Delete task: ${task.title}`}
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
           >
             <Trash2 size={13} />
           </button>
@@ -1043,6 +1107,12 @@ export default function TasksPage() {
   const [logContactTask, setLogContactTask] = useState(null)
   const [reassignTask, setReassignTask] = useState(null)
   const [closeTask, setCloseTask] = useState(null)
+  const createTaskButtonRef = useRef(null)
+
+  const closeCreate = useCallback(() => {
+    setShowCreate(false)
+    window.setTimeout(() => createTaskButtonRef.current?.focus(), 0)
+  }, [])
 
   const canOpenMatters = canAccessModuleList(user?.enabled_modules, 'matters')
 
@@ -1190,6 +1260,7 @@ export default function TasksPage() {
             </p>
           </div>
           <button
+            ref={createTaskButtonRef}
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white rounded-lg text-sm font-medium hover:bg-brand-ink/90 transition-colors"
           >
@@ -1199,7 +1270,7 @@ export default function TasksPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-3 mb-6 flex-wrap">
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+          <select aria-label="Filter tasks by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
             className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
             <option value="">All statuses</option>
             <option value="pending">Pending</option>
@@ -1207,7 +1278,7 @@ export default function TasksPage() {
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
           </select>
-          <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
+          <select aria-label="Filter tasks by priority" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
             <option value="">All priorities</option>
             <option value="urgent">Urgent</option>
@@ -1215,7 +1286,7 @@ export default function TasksPage() {
             <option value="medium">Medium</option>
             <option value="low">Low</option>
           </select>
-          <select value={filterType} onChange={e => setFilterType(e.target.value)}
+          <select aria-label="Filter tasks by type" value={filterType} onChange={e => setFilterType(e.target.value)}
             className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
             <option value="">All types</option>
             {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
@@ -1331,9 +1402,9 @@ export default function TasksPage() {
 
       {showCreate && (
         <CreateTaskModal
-          onClose={() => setShowCreate(false)}
+          onClose={closeCreate}
           onCreate={() => {
-            setShowCreate(false)
+            closeCreate()
             loadTasks()
           }}
         />

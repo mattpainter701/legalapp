@@ -12,11 +12,11 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Manifest|Type|Lockfile present|Lockfiles|Tracked dependency count|
 |-|-|-|-|-|
-|backend/requirements.txt|python requirements|no|none|35|
-|mcp-server/requirements.txt|python requirements|no|none|7|
+|backend/requirements.txt|python requirements|no|none|38|
+|mcp-server/requirements.txt|python requirements|no|none|8|
 |scripts/requirements.txt|python requirements|no|none|7|
 |scripts/tabs3_export/requirements.txt|python requirements|no|none|2|
-|frontend/package.json|npm package|yes|frontend/package-lock.json|14|
+|frontend/package.json|npm package|yes|frontend/package-lock.json|25|
 |word-addin/package.json|npm package|no|none|1|
 |agent/pyproject.toml|python project|no|none|11|
 
@@ -25,7 +25,7 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |Ecosystem|Name|Specifier|Scope|Source|
 |-|-|-|-|-|
 |npm|@microsoft/teams-js|^2.53.0|dependencies|frontend/package.json|
-|npm|axios|^1.7.9|dependencies|frontend/package.json|
+|npm|axios|^1.18.1|dependencies|frontend/package.json|
 |npm|date-fns|^4.1.0|dependencies|frontend/package.json|
 |npm|lucide-react|^0.475.0|dependencies|frontend/package.json|
 |npm|react|^18.3.1|dependencies|frontend/package.json|
@@ -33,11 +33,22 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |npm|react-dropzone|^14.3.5|dependencies|frontend/package.json|
 |npm|react-markdown|^9.0.1|dependencies|frontend/package.json|
 |npm|react-router-dom|^6.28.0|dependencies|frontend/package.json|
+|npm|@eslint/js|^10.0.1|devDependencies|frontend/package.json|
+|npm|@testing-library/jest-dom|^6.9.1|devDependencies|frontend/package.json|
+|npm|@testing-library/react|^16.3.2|devDependencies|frontend/package.json|
+|npm|@testing-library/user-event|^14.6.1|devDependencies|frontend/package.json|
 |npm|@vitejs/plugin-react|^4.3.4|devDependencies|frontend/package.json|
 |npm|autoprefixer|^10.4.20|devDependencies|frontend/package.json|
+|npm|eslint|^10.6.0|devDependencies|frontend/package.json|
+|npm|eslint-plugin-react-hooks|^7.1.1|devDependencies|frontend/package.json|
+|npm|eslint-plugin-react-refresh|^0.5.3|devDependencies|frontend/package.json|
+|npm|globals|^17.7.0|devDependencies|frontend/package.json|
+|npm|jest-axe|^10.0.0|devDependencies|frontend/package.json|
+|npm|jsdom|^29.1.1|devDependencies|frontend/package.json|
 |npm|postcss|^8.4.49|devDependencies|frontend/package.json|
 |npm|tailwindcss|^3.4.17|devDependencies|frontend/package.json|
 |npm|vite|^6.0.3|devDependencies|frontend/package.json|
+|npm|vitest|^4.1.10|devDependencies|frontend/package.json|
 |npm|http-server|^14.1.1|devDependencies|word-addin/package.json|
 |pypi|pytest|>=8.0|optional:dev|agent/pyproject.toml|
 |pypi|pytest-asyncio|>=0.23|optional:dev|agent/pyproject.toml|
@@ -51,47 +62,51 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pypi|tomli|>=2.0;python_version<'3.11'|runtime|agent/pyproject.toml|
 |pypi|tomli_w|>=1.0|runtime|agent/pyproject.toml|
 |pypi|aiofiles|==24.1.0|runtime/dev|backend/requirements.txt|
-|pypi|aiosmtplib|==3.0.1|runtime/dev|backend/requirements.txt|
+|pypi|aiosmtplib|==5.1.1|runtime/dev|backend/requirements.txt|
 |pypi|alembic|==1.14.0|runtime/dev|backend/requirements.txt|
 |pypi|apscheduler|==3.10.4|runtime/dev|backend/requirements.txt|
 |pypi|asyncpg|==0.30.0|runtime/dev|backend/requirements.txt|
-|pypi|authlib|==1.3.2|runtime/dev|backend/requirements.txt|
+|pypi|authlib|==1.6.12|runtime/dev|backend/requirements.txt|
 |pypi|bcrypt|>=4.0,<5.0|runtime/dev|backend/requirements.txt|
-|pypi|cryptography|==44.0.2|runtime/dev|backend/requirements.txt|
+|pypi|cryptography|==48.0.1|runtime/dev|backend/requirements.txt|
 |pypi|email-validator|==2.2.0|runtime/dev|backend/requirements.txt|
-|pypi|fastapi|==0.115.5|runtime/dev|backend/requirements.txt|
+|pypi|fastapi|==0.139.0|runtime/dev|backend/requirements.txt|
 |pypi|google-api-python-client|==2.160.0|runtime/dev|backend/requirements.txt|
 |pypi|google-auth-oauthlib|==1.2.1|runtime/dev|backend/requirements.txt|
 |pypi|httpx|==0.28.1|runtime/dev|backend/requirements.txt|
 |pypi|itsdangerous|==2.2.0|runtime/dev|backend/requirements.txt|
+|pypi|jsonschema|==4.26.0|runtime/dev|backend/requirements.txt|
+|pypi|mcp|==1.28.1|runtime/dev|backend/requirements.txt|
 |pypi|openai|==1.58.1|runtime/dev|backend/requirements.txt|
 |pypi|pgvector|==0.3.6|runtime/dev|backend/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|backend/requirements.txt|
-|pypi|pydantic|==2.10.3|runtime/dev|backend/requirements.txt|
+|pypi|pydantic|==2.11.10|runtime/dev|backend/requirements.txt|
 |pypi|pydantic-settings|==2.6.1|runtime/dev|backend/requirements.txt|
-|pypi|pypdf|==5.1.0|runtime/dev|backend/requirements.txt|
-|pypi|pytest|==8.3.4|runtime/dev|backend/requirements.txt|
-|pypi|pytest-asyncio|==0.24.0|runtime/dev|backend/requirements.txt|
+|pypi|pypdf|==6.14.2|runtime/dev|backend/requirements.txt|
+|pypi|pytest|==9.0.3|runtime/dev|backend/requirements.txt|
+|pypi|pytest-asyncio|==1.4.0|runtime/dev|backend/requirements.txt|
 |pypi|pytest-env|==1.1.5|runtime/dev|backend/requirements.txt|
 |pypi|python-dateutil|==2.9.0|runtime/dev|backend/requirements.txt|
 |pypi|python-docx|==1.1.2|runtime/dev|backend/requirements.txt|
-|pypi|python-dotenv|==1.0.1|runtime/dev|backend/requirements.txt|
-|pypi|python-jose[cryptography]|==3.3.0|runtime/dev|backend/requirements.txt|
-|pypi|python-multipart|==0.0.20|runtime/dev|backend/requirements.txt|
+|pypi|python-dotenv|==1.2.2|runtime/dev|backend/requirements.txt|
+|pypi|python-jose[cryptography]|==3.5.0|runtime/dev|backend/requirements.txt|
+|pypi|python-multipart|==0.0.32|runtime/dev|backend/requirements.txt|
 |pypi|redis|==5.2.1|runtime/dev|backend/requirements.txt|
 |pypi|reportlab|==4.2.5|runtime/dev|backend/requirements.txt|
 |pypi|ruff|==0.8.4|runtime/dev|backend/requirements.txt|
 |pypi|sqlalchemy|==2.0.36|runtime/dev|backend/requirements.txt|
+|pypi|starlette|==1.3.1|runtime/dev|backend/requirements.txt|
 |pypi|stripe|==11.3.0|runtime/dev|backend/requirements.txt|
 |pypi|tiktoken|==0.8.0|runtime/dev|backend/requirements.txt|
-|pypi|uvicorn[standard]|==0.32.1|runtime/dev|backend/requirements.txt|
-|pypi|fastapi|==0.115.5|runtime/dev|mcp-server/requirements.txt|
+|pypi|uvicorn[standard]|==0.51.0|runtime/dev|backend/requirements.txt|
+|pypi|fastapi|==0.139.0|runtime/dev|mcp-server/requirements.txt|
 |pypi|httpx|==0.28.1|runtime/dev|mcp-server/requirements.txt|
 |pypi|pgvector|==0.3.6|runtime/dev|mcp-server/requirements.txt|
 |pypi|psycopg2-binary|==2.9.10|runtime/dev|mcp-server/requirements.txt|
 |pypi|pydantic|==2.10.3|runtime/dev|mcp-server/requirements.txt|
-|pypi|python-dotenv|==1.0.1|runtime/dev|mcp-server/requirements.txt|
-|pypi|uvicorn[standard]|==0.32.1|runtime/dev|mcp-server/requirements.txt|
+|pypi|python-dotenv|==1.2.2|runtime/dev|mcp-server/requirements.txt|
+|pypi|starlette|==1.3.1|runtime/dev|mcp-server/requirements.txt|
+|pypi|uvicorn[standard]|==0.51.0|runtime/dev|mcp-server/requirements.txt|
 |pypi|httpx|unbounded|runtime/dev|scripts/requirements.txt|
 |pypi|openai|unbounded|runtime/dev|scripts/requirements.txt|
 |pypi|pgvector|unbounded|runtime/dev|scripts/requirements.txt|
@@ -106,31 +121,31 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 
 |Image|Source|Line|Pinned by digest|Internal stage reference|
 |-|-|-|-|-|
-|python:3.11-slim|backend/Dockerfile|4|no|no|
-|base|backend/Dockerfile|17|no|yes|
-|base|backend/Dockerfile|23|no|yes|
-|node:20-alpine|frontend/Dockerfile|1|no|no|
-|node:20-alpine|frontend/Dockerfile|10|no|no|
-|nginx:alpine|nginx/Dockerfile|1|no|no|
-|docker.litellm.ai/berriai/litellm:main-latest|litellm/Dockerfile|1|no|no|
-|python:3.12-slim|mcp-server/Dockerfile|1|no|no|
+|python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3|backend/Dockerfile|1|yes|no|
+|base|backend/Dockerfile|15|no|yes|
+|base|backend/Dockerfile|21|no|yes|
+|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
+|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|14|yes|no|
+|nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
+|docker.litellm.ai/berriai/litellm:main-v1.72.6-stable@sha256:2c3f50ed1ea59ec9e175711c808c3bf15f023643fe50fb1ba1d0f9dc827a356d|litellm/Dockerfile|1|yes|no|
+|python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf|mcp-server/Dockerfile|1|yes|no|
 
 ## Compose/runtime images
 
 |Image|Source|Line|Pinned by digest|
 |-|-|-|-|
-|pgvector/pgvector:pg16|docker-compose.yml|3|no|
-|redis:7-alpine|docker-compose.yml|17|no|
-|postgres:16-alpine|docker-compose.yml|27|no|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.yml|3|yes|
+|redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99|docker-compose.yml|17|yes|
+|postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777|docker-compose.yml|27|yes|
 |legalapp-litellm:main-v1.72.6|docker-compose.yml|44|no|
-|pgvector/pgvector:pg16|docker-compose.local.yml|27|no|
-|pgvector/pgvector:pg16|docker-compose.local.yml|44|no|
-|pgvector/pgvector:pg16|docker-compose.hypervisor.yml|3|no|
-|redis:7-alpine|docker-compose.hypervisor.yml|18|no|
-|postgres:16-alpine|docker-compose.hypervisor.yml|29|no|
-|legalapp-litellm:main-latest|docker-compose.hypervisor.yml|46|no|
-|pgvector/pgvector:pg16|docker-compose.override.yml|25|no|
-|pgvector/pgvector:pg16|docker-compose.override.yml|34|no|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|27|yes|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|44|yes|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.hypervisor.yml|3|yes|
+|redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99|docker-compose.hypervisor.yml|20|yes|
+|postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777|docker-compose.hypervisor.yml|34|yes|
+|legalapp-litellm:main-v1.72.6|docker-compose.hypervisor.yml|51|no|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|24|yes|
+|pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|33|yes|
 
 ## AI/model routes to track
 

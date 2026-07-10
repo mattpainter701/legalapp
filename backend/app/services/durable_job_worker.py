@@ -102,6 +102,38 @@ async def _run_cloud_sync(row: DurableJob) -> dict:
     return {"documents_found": len(docs), "documents_ingested": imported}
 
 
+async def _run_user_sync(row: DurableJob) -> dict:
+    """Run a tenant-requested directory sync in the scheduler-owned worker."""
+    from app.models.tenant_credential import TenantCredential
+    from app.services.user_sync import user_sync
+
+    tenant_id = str(row.tenant_id)
+    results: dict[str, dict] = {}
+    async with async_session_maker() as session:
+        await set_tenant_context(session, tenant_id)
+        providers = list(
+            (
+                await session.execute(
+                    select(TenantCredential.provider).where(
+                        TenantCredential.is_active,
+                        TenantCredential.provider.in_(["microsoft", "google"]),
+                    )
+                )
+            ).scalars()
+        )
+        for provider in sorted(set(providers)):
+            if provider == "microsoft":
+                results[provider] = await user_sync.sync_microsoft_users(
+                    session, tenant_id
+                )
+            else:
+                results[provider] = await user_sync.sync_google_users(
+                    session, tenant_id
+                )
+            await set_tenant_context(session, tenant_id)
+    return {"providers": results, "provider_count": len(results)}
+
+
 async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     async with async_session_maker() as db:
         await set_tenant_context(db, str(tenant_id))
@@ -109,11 +141,18 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
         if not row:
             return False
         try:
-            result = await (
-                _run_document_ingest(row)
-                if row.kind == "document_ingest"
-                else _run_cloud_sync(row)
-            )
+            if row.kind == "document_ingest":
+                result = await _run_document_ingest(row)
+            elif row.kind == "cloud_sync":
+                result = await _run_cloud_sync(row)
+            elif row.kind == "mcp_stripe_meter":
+                from app.services.mcp_product import deliver_mcp_meter_event
+
+                result = await deliver_mcp_meter_event(row.payload)
+            elif row.kind == "user_sync":
+                result = await _run_user_sync(row)
+            else:
+                raise ValueError(f"Unsupported durable job kind: {row.kind}")
             await set_tenant_context(db, str(tenant_id))
             row = await db.get(DurableJob, job_id)
             await finish_job(db, row, result=result)

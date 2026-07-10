@@ -1,17 +1,18 @@
-# Deploy to production VPS on push to main.
+# Operator-triggered production deployment. Pushes to main never mutate
+# production automatically; run this only after CI and release gates pass.
 #
 # Required repository secrets (Settings → Secrets → Actions):
 #   VPS_HOST        — IP or hostname of the production VPS
 #   VPS_USER        — SSH user (e.g. deploy)
 #   VPS_SSH_KEY     — Private SSH key (corresponding public key must be in ~/.ssh/authorized_keys on VPS)
+#   VPS_KNOWN_HOSTS — Pre-verified known_hosts line for the production SSH host
 #   VPS_APP_DIR     — Absolute path to the app on VPS (e.g. /home/deploy/legalapp)
+#   PRODUCTION_ORIGIN — Canonical HTTPS origin, e.g. https://legal.example.com
 #   SLACK_WEBHOOK_URL — (optional) Slack incoming webhook for deploy notifications
 
 name: Deploy to Production
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       build_mode:
@@ -40,9 +41,14 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
-      - name: Add VPS to known hosts
+      - name: Add pinned VPS host key
+        env:
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          test -n "$VPS_KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy
         env:
@@ -63,10 +69,11 @@ jobs:
           "
 
       - name: Health check
+        env:
+          PRODUCTION_ORIGIN: ${{ secrets.PRODUCTION_ORIGIN }}
         run: |
-          echo "Waiting 15s for services to stabilise..."
-          sleep 15
-          STATUS=$(curl -sf --max-time 10 https://${{ secrets.VPS_HOST }}/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "unreachable")
+          test -n "$PRODUCTION_ORIGIN"
+          STATUS=$(curl -sf --retry 12 --retry-all-errors --retry-delay 5 --max-time 10 "$PRODUCTION_ORIGIN/health/readiness" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "unreachable")
           echo "Health: $STATUS"
           if [ "$STATUS" != "ok" ]; then
             echo "::error::Health check failed — status=$STATUS"

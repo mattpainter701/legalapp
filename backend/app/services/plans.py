@@ -69,7 +69,9 @@ PLANS: dict[str, Plan] = {
         modules=["mcp"],
         default_module="mcp",
         billing_tier="payg",
-        public_signup=True,
+        # MCP remains operator-provisioned only until the product, billing, and
+        # production readiness gates are deliberately enabled.
+        public_signup=False,
         upsell_target="full-platform",
     ),
     "full-platform": Plan(

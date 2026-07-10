@@ -229,6 +229,9 @@ async def stripe_webhook(
     elif event_type == "invoice.payment_failed":
         await _handle_payment_failed(db, event_data)
 
+    elif event_type in ("invoice.paid", "invoice.payment_succeeded"):
+        await _handle_payment_succeeded(db, event_data)
+
     return {"status": "ok", "event_type": event_type}
 
 
@@ -251,6 +254,7 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
     status = subscription.get("status", "")
     subscription_id = subscription.get("id")
     tenant.stripe_subscription_id = subscription_id
+    tenant.stripe_subscription_status = status or "unknown"
 
     if status in ("active", "trialing"):
         items = subscription.get("items", {}).get("data", [])
@@ -263,8 +267,12 @@ async def _handle_subscription_updated(db: AsyncSession, subscription: dict) -> 
                 break
         tenant.billing_tier = billing_tier
         tenant.is_active = True
-    elif status in ("canceled", "unpaid", "past_due"):
+        tenant.mcp_billing_status = "active"
+    else:
         tenant.billing_tier = "payg"
+        tenant.mcp_billing_status = (
+            "past_due" if status in ("unpaid", "past_due") else "suspended"
+        )
         if status == "canceled":
             tenant.stripe_subscription_id = None
 
@@ -282,6 +290,8 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription: dict) -> 
 
     tenant.billing_tier = "payg"
     tenant.stripe_subscription_id = None
+    tenant.stripe_subscription_status = "canceled"
+    tenant.mcp_billing_status = "suspended"
     await db.commit()
 
 
@@ -294,8 +304,19 @@ async def _handle_payment_failed(db: AsyncSession, invoice: dict) -> None:
     if tenant is None:
         return
 
-    attempt_count = invoice.get("attempt_count", 1)
+    tenant.stripe_subscription_status = "past_due"
+    tenant.mcp_billing_status = "past_due"
+    await db.commit()
 
-    if attempt_count >= 3:
-        tenant.billing_tier = "payg"
+
+async def _handle_payment_succeeded(db: AsyncSession, invoice: dict) -> None:
+    customer_id = invoice.get("customer")
+    if not customer_id:
+        return
+    tenant = await _find_tenant_by_customer(db, customer_id)
+    if tenant is None:
+        return
+    if tenant.stripe_subscription_id:
+        tenant.stripe_subscription_status = "active"
+        tenant.mcp_billing_status = "active"
         await db.commit()

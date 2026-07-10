@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.operator_audit import OperatorAuditLog
 from app.routers import platform_llm as platform_llm_router
+from tests.platform_auth_helpers import platform_headers
 
 TEST_PLATFORM_KEY = "test-platform-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -28,14 +29,15 @@ async def _add_provider_key(db_session, *, provider_id: str = "openrouter"):
 
 async def _audit_actions(db_session):
     result = await db_session.execute(select(OperatorAuditLog))
-    return result.scalars().all()
+    return [
+        row for row in result.scalars().all() if row.action != "platform.request"
+    ]
 
 
 @pytest.mark.asyncio
 async def test_route_save_records_operator_audit(
     client: AsyncClient, db_session, monkeypatch
 ):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
     key = await _add_provider_key(db_session)
 
     async def fake_reload(config, keys_by_id):
@@ -51,7 +53,7 @@ async def test_route_save_records_operator_audit(
 
     response = await client.put(
         "/api/platform/llm/routes",
-        headers={"X-Platform-Key": TEST_PLATFORM_KEY},
+        headers=platform_headers(),
         json={
             "standard": {
                 "provider_id": key.provider_id,
@@ -83,12 +85,11 @@ async def test_route_save_records_operator_audit(
 async def test_provider_key_delete_records_provider_disable_audit(
     client: AsyncClient, db_session
 ):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
     key = await _add_provider_key(db_session, provider_id="opencode-zen")
 
     response = await client.delete(
         f"/api/platform/llm/provider-keys/{key.id}",
-        headers={"X-Platform-Key": TEST_PLATFORM_KEY},
+        headers=platform_headers(),
     )
 
     assert response.status_code == 200
@@ -107,7 +108,6 @@ async def test_provider_key_delete_records_provider_disable_audit(
 async def test_model_test_records_operator_audit(
     client: AsyncClient, db_session, monkeypatch
 ):
-    platform_llm_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
     key = await _add_provider_key(db_session, provider_id="openrouter")
     monkeypatch.setattr(platform_llm_router, "decrypt_token", lambda value: "sk-test")
 
@@ -144,7 +144,7 @@ async def test_model_test_records_operator_audit(
 
     response = await client.post(
         "/api/platform/llm/routes/test",
-        headers={"X-Platform-Key": TEST_PLATFORM_KEY},
+        headers=platform_headers(),
         json={
             "provider_id": "openrouter",
             "key_id": str(key.id),

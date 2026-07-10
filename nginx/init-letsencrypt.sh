@@ -32,7 +32,9 @@ SSL_DIR="$SCRIPT_DIR/ssl"           # mounted as /etc/nginx/ssl in nginx contain
 LE_DIR="$SCRIPT_DIR/letsencrypt"   # full Let's Encrypt data dir (renewal config etc.)
 WEBROOT_DIR="$SCRIPT_DIR/webroot"  # served by nginx for ACME http-01 challenge
 
-COMPOSE="docker compose -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.prod.yml"
+ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
+COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}"
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 echo ""
 echo "  Domain : $DOMAIN"
@@ -73,19 +75,19 @@ chmod 644 "$SSL_DIR/fullchain.pem"
 # nginx serves /.well-known/acme-challenge/ from /var/www/certbot (port 80)
 # and the https vhost from the temp cert (port 443).
 echo "==> Starting nginx ..."
-$COMPOSE up -d nginx
+"${COMPOSE[@]}" up -d nginx
 echo "    Waiting for nginx to be ready ..."
 for i in $(seq 1 10); do
     sleep 2
-    if $COMPOSE exec -T nginx nginx -t &>/dev/null; then
+    if "${COMPOSE[@]}" exec -T nginx nginx -t &>/dev/null; then
         break
     fi
     echo "    ($i/10) still waiting ..."
 done
 
-if ! $COMPOSE ps nginx | grep -qE "Up|running"; then
+if ! "${COMPOSE[@]}" ps nginx | grep -qE "Up|running"; then
     echo "ERROR: nginx failed to start — check logs:"
-    $COMPOSE logs --tail=50 nginx
+    "${COMPOSE[@]}" logs --tail=50 nginx
     exit 1
 fi
 echo "    nginx is up."
@@ -130,7 +132,7 @@ echo "    Cert valid until: $EXPIRY"
 # ─── Step 5: reload nginx with real cert ─────────────────────────────────────
 echo ""
 echo "==> Reloading nginx with real cert ..."
-$COMPOSE exec -T nginx nginx -s reload
+"${COMPOSE[@]}" exec -T nginx nginx -s reload
 echo "    Done."
 
 # ─── Step 6: install renewal cron ────────────────────────────────────────────
@@ -152,7 +154,7 @@ echo "  Renewal : every Monday 03:00 via cron"
 echo "================================================================="
 echo ""
 echo "Start the full prod stack:"
-echo "  $COMPOSE up -d"
+echo "  docker compose --env-file $ENV_FILE -f $COMPOSE_FILE up -d"
 echo ""
 echo "Verify:"
 echo "  curl -I https://$DOMAIN/health"

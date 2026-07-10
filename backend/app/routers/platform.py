@@ -1,7 +1,9 @@
 """
 Platform super-admin API.
 
-Authenticated by X-Platform-Key header matching settings.PLATFORM_SECRET_KEY.
+Authenticated by short-lived, scoped platform bearer tokens. Bootstrap secrets
+can only be exchanged at ``/api/platform/auth/token`` and are never accepted by
+operational routes.
 This is NOT a per-tenant admin endpoint — it has visibility across ALL tenants
 and is intended for the SaaS operator only.
 
@@ -13,7 +15,6 @@ Endpoints:
   GET  /api/platform/health          — row counts and index info
 """
 
-import hmac
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -40,6 +41,11 @@ from app.services.llm_routing import (
 )
 from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
 from app.services.operator_audit import record_operator_audit
+from app.services.platform_auth import (
+    issue_platform_token,
+    require_platform_token,
+    verify_platform_bootstrap_key,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -49,10 +55,7 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 
 def _require_platform_key(request: Request) -> None:
-    key = request.headers.get("X-Platform-Key", "")
-    secret = settings.PLATFORM_SECRET_KEY
-    if not secret or len(secret) < 32 or not hmac.compare_digest(key, secret):
-        raise HTTPException(status_code=403, detail="Invalid or missing platform key")
+    require_platform_token(request)
 
 
 # ── Operator integration readiness ────────────────────────────────────────────
@@ -139,6 +142,9 @@ class TenantSummary(BaseModel):
     is_active: bool
     stripe_customer_id: Optional[str]
     stripe_subscription_id: Optional[str]
+    stripe_subscription_status: str
+    mcp_entitlement_status: str
+    mcp_billing_status: str
     user_count: int
     requests_30d: int
     cost_usd_30d: float
@@ -158,6 +164,8 @@ class TenantUpdate(BaseModel):
     enabled_modules: Optional[list[str]] = None
     default_module: Optional[str] = None
     plan: Optional[str] = None
+    mcp_entitlement_status: Optional[str] = None
+    mcp_billing_status: Optional[str] = None
 
 
 class PlatformLLMConfigUpdate(BaseModel):
@@ -186,6 +194,11 @@ class PlatformMCPOverview(BaseModel):
     results_30d: int
     period_start: datetime
     period_end: datetime
+
+
+class PlatformTokenRequest(BaseModel):
+    scopes: list[str] | None = None
+    ttl_minutes: int | None = None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -225,6 +238,45 @@ def _validate_modules(values: list[str] | None) -> list[str] | None:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+
+@router.post("/auth/token")
+async def create_platform_session(
+    body: PlatformTokenRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Exchange the offline bootstrap secret for a short-lived scoped token."""
+    principal = verify_platform_bootstrap_key(request.headers.get("X-Platform-Key", ""))
+    token, expires_at, scopes = issue_platform_token(
+        subject=principal.operator_id,
+        scopes=body.scopes,
+        allowed_scopes=principal.scopes,
+        ttl_minutes=body.ttl_minutes,
+        not_after=principal.expires_at,
+    )
+    request.state.platform_actor_id = principal.operator_id
+    request.state.platform_scope = "platform:bootstrap"
+    await record_operator_audit(
+        db,
+        request,
+        action="platform.session.issued",
+        resource_type="platform_session",
+        actor_type=principal.credential_type,
+        actor_id=principal.operator_id,
+        metadata={
+            "scopes": scopes,
+            "expires_at": expires_at.isoformat(),
+            "bootstrap_expires_at": principal.expires_at.isoformat(),
+        },
+    )
+    await db.commit()
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at.isoformat(),
+        "scopes": scopes,
+    }
 
 
 @router.get("/tenants")
@@ -287,6 +339,9 @@ async def list_tenants(
                 is_active=t.is_active,
                 stripe_customer_id=_mask(t.stripe_customer_id),
                 stripe_subscription_id=_mask(t.stripe_subscription_id),
+                stripe_subscription_status=t.stripe_subscription_status,
+                mcp_entitlement_status=t.mcp_entitlement_status,
+                mcp_billing_status=t.mcp_billing_status,
                 user_count=user_counts.get(str(t.id), 0),
                 requests_30d=usage.get(str(t.id), (0, 0))[0],
                 cost_usd_30d=usage.get(str(t.id), (0, 0))[1],
@@ -349,6 +404,9 @@ async def get_tenant_detail(
             is_active=tenant.is_active,
             stripe_customer_id=_mask(tenant.stripe_customer_id),
             stripe_subscription_id=_mask(tenant.stripe_subscription_id),
+            stripe_subscription_status=tenant.stripe_subscription_status,
+            mcp_entitlement_status=tenant.mcp_entitlement_status,
+            mcp_billing_status=tenant.mcp_billing_status,
             user_count=len(users),
             requests_30d=int(u.requests),
             cost_usd_30d=float(u.cost),
@@ -443,6 +501,31 @@ async def update_tenant(
             "to": body.is_active,
         }
         tenant.is_active = body.is_active
+
+    if body.mcp_entitlement_status is not None:
+        if body.mcp_entitlement_status not in {"disabled", "enabled", "suspended"}:
+            raise HTTPException(
+                status_code=400, detail="Invalid MCP entitlement status"
+            )
+        audit_changes["mcp_entitlement_status"] = {
+            "from": tenant.mcp_entitlement_status,
+            "to": body.mcp_entitlement_status,
+        }
+        tenant.mcp_entitlement_status = body.mcp_entitlement_status
+
+    if body.mcp_billing_status is not None:
+        if body.mcp_billing_status not in {
+            "disabled",
+            "active",
+            "past_due",
+            "suspended",
+        }:
+            raise HTTPException(status_code=400, detail="Invalid MCP billing status")
+        audit_changes["mcp_billing_status"] = {
+            "from": tenant.mcp_billing_status,
+            "to": body.mcp_billing_status,
+        }
+        tenant.mcp_billing_status = body.mcp_billing_status
 
     if body.seat_count is not None:
         if body.seat_count < 0:
@@ -739,7 +822,7 @@ async def platform_mcp_overview(
                 "last_used_at": last_used,
                 "created_at": key.created_at.isoformat() if key.created_at else None,
                 "billing": {
-                    "mode": "payg",
+                    "mode": "metered_usage",
                     "meter": "mcp_product_key_calls",
                     "line_item": "MCP usage",
                     "stripe_customer_id": _mask(tenant.stripe_customer_id),
@@ -771,14 +854,11 @@ async def platform_mcp_overview(
         "keys": key_payload,
         "connection": {
             "server_url": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp",
-            "messages": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/messages",
-            "sse": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/sse",
+            "streamable_http": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp",
+            "rest_compatibility": f"{settings.BACKEND_URL.rstrip('/')}/api/mcp/tools/call",
             "auth_header": "X-MCP-API-Key",
         },
-        "backlog": {
-            "revoke_after_days_unused": 180,
-            "status": "planned",
-        },
+        "product_enabled": settings.MCP_PRODUCT_ENABLED,
     }
 
 

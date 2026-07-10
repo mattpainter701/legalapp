@@ -1,113 +1,111 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# deploy_prod.sh — Deploy latest code to cloud VPS
-#
-# Flow:
-#   1. Push current branch to git remote (if not already pushed)
-#   2. SSH to VPS, git pull main
-#   3. docker compose pull (if using registry) or build
-#   4. Restart services (migrator init container runs migrations automatically)
-#   5. Health check
-#
-# Usage:
-#   bash scripts/deploy_prod.sh [--build | --pull]
-#   --build:  rebuild images on VPS (default for self-hosted, no registry)
-#   --pull:   pull from container registry (set REGISTRY in .env.prod)
-# ─────────────────────────────────────────────────────────────────────────────
+# Deploy the already-checked-out revision on the production host.
+# The CI workflow (or an operator) owns git fetch/pull; this script owns the
+# preflight, data guard, build, migration topology, restart, and verification.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-
-if [[ -f "$ROOT_DIR/.env.prod" ]]; then
-  set -a; source "$ROOT_DIR/.env.prod"; set +a
-fi
-
-: "${VPS_HOST:?Set VPS_HOST in .env.prod}"
-: "${VPS_USER:?Set VPS_USER in .env.prod}"
-: "${VPS_APP_DIR:=/home/${VPS_USER}/legalapp}"
-: "${VPS_SSH_PORT:=22}"
-: "${GIT_BRANCH:=main}"
+cd "$ROOT_DIR"
 
 MODE="${1:---build}"
-COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+case "$MODE" in
+  --build|--pull) ;;
+  *) echo "Usage: bash scripts/deploy_prod.sh [--build|--pull]" >&2; exit 2 ;;
+esac
 
-echo "Deploying to $VPS_HOST (branch: $GIT_BRANCH, mode: $MODE)"
+ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$ROOT_DIR/docker-compose.hypervisor.yml}}"
+[[ -f "$ENV_FILE" ]] || { echo "ERROR: missing production environment file: $ENV_FILE" >&2; exit 2; }
+read -r -a compose_file_list <<< "$COMPOSE_FILES"
+(( ${#compose_file_list[@]} > 0 )) || { echo "ERROR: no production Compose files configured" >&2; exit 2; }
+for compose_file in "${compose_file_list[@]}"; do
+  [[ -f "$compose_file" ]] || { echo "ERROR: missing production Compose file: $compose_file" >&2; exit 2; }
+done
 
-# ── 1. Ensure local changes are pushed ───────────────────────────────────────
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$CURRENT_BRANCH" != "$GIT_BRANCH" ]]; then
-  echo "WARNING: current branch is $CURRENT_BRANCH, not $GIT_BRANCH"
-  read -rp "Continue anyway? [y/N] " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || exit 1
+export APP_COMMIT="${APP_COMMIT:-$(git rev-parse HEAD)}"
+export APP_VERSION="${APP_VERSION:-$(git rev-parse --short HEAD)}"
+export APP_BUILD_TIME="${APP_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+
+compose=(docker compose --env-file "$ENV_FILE")
+# prod_data_guard.sh accepts a shell-style Compose prefix for compatibility.
+compose_guard_files="--env-file $ENV_FILE"
+for compose_file in "${compose_file_list[@]}"; do
+  compose+=( -f "$compose_file" )
+  compose_guard_files+=" -f $compose_file"
+done
+
+echo "==> Deploying $APP_VERSION with the hardened production topology"
+ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/prod_env_preflight.sh
+
+if [[ ! -r nginx/ssl/fullchain.pem || ! -r nginx/ssl/privkey.pem ]]; then
+  echo "ERROR: nginx TLS certificate files are missing." >&2
+  echo "Provision them after DNS is live: bash nginx/init-letsencrypt.sh <domain> <email>" >&2
+  exit 3
 fi
 
-git push origin "$CURRENT_BRANCH" 2>&1 || echo "Push failed or nothing to push — continuing"
+# Bring up only PostgreSQL before the guard. This supports both an existing
+# deployment and first boot without exposing the database on the host.
+"${compose[@]}" up -d postgres
+for _ in $(seq 1 30); do
+  postgres_id="$("${compose[@]}" ps -q postgres 2>/dev/null || true)"
+  postgres_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$postgres_id" 2>/dev/null || true)"
+  [[ "$postgres_health" == healthy ]] && break
+  sleep 2
+done
+[[ "$postgres_health" == healthy ]] || { "${compose[@]}" logs --tail=100 postgres; exit 4; }
 
-# ── 2. Deploy on VPS ─────────────────────────────────────────────────────────
-ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
-  set -e
-  cd "$VPS_APP_DIR"
+echo "==> Capturing pre-deploy backup and exact data counts"
+data_guard_output="$(COMPOSE_FILES="$compose_guard_files" BACKUP_DIR=backups bash scripts/prod_data_guard.sh pre)"
+printf '%s\n' "$data_guard_output"
+data_guard_counts="$(printf '%s\n' "$data_guard_output" | awk -F= '/^PREDEPLOY_COUNTS=/ {print $2}')"
+[[ -n "$data_guard_counts" ]] || { echo "ERROR: data guard did not return a count manifest" >&2; exit 5; }
 
-  echo "==> Pulling latest code"
-  git fetch origin
-  git checkout $GIT_BRANCH
-  git reset --hard origin/$GIT_BRANCH
+if [[ "$MODE" == "--pull" ]]; then
+  echo "==> Pulling referenced upstream images"
+  "${compose[@]}" pull --ignore-buildable
+fi
 
-  # Copy prod env if it exists (manage separately, never in git)
-  # .env should already exist on VPS from first deploy
+echo "==> Building application images"
+"${compose[@]}" build backend scheduler migrator frontend nginx litellm
 
-  echo "==> Current commit: \$(git log --oneline -1)"
-  export APP_COMMIT="\$(git rev-parse HEAD)"
-  export APP_VERSION="\$(git rev-parse --short HEAD)"
-  export APP_BUILD_TIME="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "==> Build version: \$APP_VERSION"
+echo "==> Starting services; the one-shot migrator gates API and scheduler startup"
+"${compose[@]}" up -d --force-recreate
 
-  DATA_GUARD_COUNTS=""
-  if [[ -f scripts/prod_data_guard.sh ]]; then
-    echo "==> Backing up database and capturing pre-deploy data counts"
-    DATA_GUARD_OUTPUT=\$(COMPOSE_FILES="$COMPOSE_FILES" BACKUP_DIR=backups bash scripts/prod_data_guard.sh pre)
-    echo "\$DATA_GUARD_OUTPUT"
-    DATA_GUARD_COUNTS=\$(printf '%s\n' "\$DATA_GUARD_OUTPUT" | awk -F= '/^PREDEPLOY_COUNTS=/ {print \$2}')
-  fi
+for _ in $(seq 1 90); do
+  backend_id="$("${compose[@]}" ps -q backend 2>/dev/null || true)"
+  scheduler_id="$("${compose[@]}" ps -q scheduler 2>/dev/null || true)"
+  nginx_id="$("${compose[@]}" ps -q nginx 2>/dev/null || true)"
+  backend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$backend_id" 2>/dev/null || true)"
+  scheduler_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$scheduler_id" 2>/dev/null || true)"
+  nginx_state="$(docker inspect --format '{{.State.Status}}' "$nginx_id" 2>/dev/null || true)"
+  [[ "$backend_health" == healthy && "$scheduler_health" == healthy && "$nginx_state" == running ]] && break
+  sleep 2
+done
+if [[ "$backend_health" != healthy || "$scheduler_health" != healthy || "$nginx_state" != running ]]; then
+  "${compose[@]}" logs --tail=150 migrator backend scheduler nginx
+  exit 6
+fi
 
-  if [[ "$MODE" == "--pull" ]]; then
-    echo "==> Pulling images from registry"
-    docker compose $COMPOSE_FILES pull
-  else
-    echo "==> Building images on VPS"
-    docker compose $COMPOSE_FILES build --no-cache backend frontend
-  fi
+"${compose[@]}" exec -T nginx nginx -t
 
-  echo "==> Rolling restart (migrator init container will run migrations)"
-  docker compose $COMPOSE_FILES up -d
+readiness="$("${compose[@]}" exec -T backend python - <<'PY'
+import json
+import urllib.request
+with urllib.request.urlopen("http://127.0.0.1:8000/health/readiness", timeout=10) as response:
+    print(json.load(response)["status"])
+PY
+)"
+[[ "$readiness" == ok ]] || { "${compose[@]}" logs --tail=150 backend scheduler; exit 7; }
 
-  echo "==> Waiting for health check…"
-  for i in \$(seq 1 12); do
-    STATUS=\$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
-    if [[ "\$STATUS" == "ok" ]]; then
-      echo "==> Backend healthy after \$((i * 5))s"
-      break
-    fi
-    echo "   waiting… (\$((i * 5))s)"
-    sleep 5
-  done
+echo "==> Verifying frontend image contents"
+"${compose[@]}" exec -T frontend sh -s < scripts/verify_frontend_runtime.sh
 
-  if [[ "\$STATUS" != "ok" ]]; then
-    echo "ERROR: Backend did not become healthy. Check logs:"
-    docker compose $COMPOSE_FILES logs --tail=50 backend
-    exit 1
-  fi
+echo "==> Running production readiness, scheduler, Zoom ingress, HTTP, and TLS gates"
+ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/production_check.sh
 
-  if [[ -n "\$DATA_GUARD_COUNTS" ]]; then
-    echo "==> Verifying post-deploy data counts"
-    COMPOSE_FILES="$COMPOSE_FILES" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "\$DATA_GUARD_COUNTS"
-  fi
+echo "==> Verifying that no existing table or tenant count decreased"
+COMPOSE_FILES="$compose_guard_files" BACKUP_DIR=backups bash scripts/prod_data_guard.sh post "$data_guard_counts"
 
-  echo "==> Cleaning up old images"
-  docker image prune -f
-
-  echo "==> Deploy complete: \$(date)"
-REMOTE
-
-echo "Deploy finished successfully."
+docker image prune -f
+echo "Deploy complete: version=$APP_VERSION commit=$APP_COMMIT built=$APP_BUILD_TIME"

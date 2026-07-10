@@ -18,9 +18,12 @@ the production-readiness sprint. Pair this with `docs/SPRINT_PROD_READINESS.md`.
   still import them.
 - A stdlib `HEALTHCHECK` hits `/health` (the slim image has no `curl`).
 
-**Base-image pinning:** the Dockerfile keeps `python:3.11-slim` with a clearly
-marked TODO to pin by digest in prod. Get the digest with
-`docker buildx imagetools inspect python:3.11-slim` and replace the `FROM` line.
+**Base-image pinning:** production Dockerfiles pin Python, Node, nginx, and
+LiteLLM bases by digest. The base, local, hypervisor, and CourtListener Compose
+files also pin PostgreSQL/pgvector and Redis references by digest. Human-readable
+tags remain beside the digest for maintenance context. A dependency update must
+change the reviewed digest, rebuild, run the full test/rehearsal gates, and
+regenerate the SBOM inventory.
 
 **Image scanning:** add a container scan (e.g. Trivy) to CI and fail on
 HIGH/CRITICAL CVEs:
@@ -60,7 +63,7 @@ appended.
 
 ### The problem
 
-When using **cloudflared tunnel** (as in the current PoC), traffic does not arrive
+When using a **cloudflared tunnel**, traffic does not arrive
 at nginx from Cloudflare's public edge IPs. Instead, cloudflared connects from inside
 the Docker network (e.g., `172.24.0.0/16`). The `set_real_ip_from` block lists
 only Cloudflare's public ranges, so nginx's `real_ip_module` never activates, and
@@ -113,23 +116,60 @@ not the Docker bridge IP (`172.24.0.x`). If it still shows the bridge IP, the
 RLS is already defined and forced in tables, but enforcement is only real when the
 app connects as a non-owner, no-`BYPASSRLS` role.
 
-- Run `backend/scripts/provision_app_role.sql` once as a superuser/DB owner.
+- Fresh databases create the role through
+  `scripts/init_clarity_app_role.sh` mounted in `/docker-entrypoint-initdb.d`.
+  For an existing database, run `backend/scripts/provision_app_role.sql` once
+  as the database owner with its placeholders replaced through a protected
+  operator workflow.
 - Set `APP_DATABASE_URL` in production env to the `clarity_app` DSN:
-  - Example: `postgresql+asyncpg://clarity_app:...@localhost:5432/legalapp?ssl=require`
+  - Docker-local example:
+    `postgresql+asyncpg://clarity_app:...@postgres:5432/legalapp`
+  - Use the managed provider's TLS DSN for an off-host database.
 - Deploy services. `backend` and `scheduler` in compose now read:
-  - `DATABASE_URL=${APP_DATABASE_URL:-${DATABASE_URL}}`
+  - `DATABASE_URL=${APP_DATABASE_URL}` in production topologies.
 - Keep migrations on owner role:
-  - `migrator` resolves `DATABASE_URL` from `MIGRATOR_DATABASE_URL` when set, else falls back to `DATABASE_URL`.
+  - `migrator` resolves `DATABASE_URL` from `MIGRATOR_DATABASE_URL`.
 - Confirm startup logs show `DB role check passed` and direct DB checks show:
   - `rolsuper = false` and `rolbypassrls = false` for `clarity_app`.
 
 ## 6. Secrets
 
-- Move secrets out of plaintext `.env` into Docker secrets / a secret manager.
-- Rotate `SECRET_KEY`, `PLATFORM_SECRET_KEY`, DB and Redis passwords; document the
-  rotation cadence.
+- The current Compose implementation reads a host `.env` and injects values as
+  container environment variables. Protect it with owner-only permissions,
+  restrict host/Docker access, exclude it from backups that are not encrypted,
+  and never print it during preflight. Native Docker secrets or a cloud secret
+  manager remain a hardening improvement; do not claim that integration exists
+  today.
+- Rotate `SECRET_KEY`, `PLATFORM_TOKEN_SIGNING_KEY`, hashed bootstrap
+  credentials, the staged Fernet keyring, the dedicated MCP upstream key, DB,
+  LiteLLM, and Redis passwords; document the rotation cadence. Leave the legacy
+  `PLATFORM_SECRET_KEY` bridge unset.
 - `REDIS_PASSWORD` is enforced in `docker-compose.prod.yml`
   (`redis-server --requirepass`).
+
+Validate configuration without printing values:
+
+```bash
+ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
+  bash scripts/prod_env_preflight.sh
+```
+
+## 7. Production verification and deployment authority
+
+Pushes to `main` do not automatically mutate production. The GitHub **Deploy to
+Production** workflow is operator-triggered, requires a pre-verified
+`VPS_KNOWN_HOSTS` entry (not trust-on-first-use `ssh-keyscan`), and verifies the
+canonical `PRODUCTION_ORIGIN/health/readiness` endpoint after the on-host gate.
+
+The authoritative on-host path remains `scripts/deploy_prod.sh`. The existing
+Skynet deployment additionally follows the repository production-deployment
+skill. Do not launch the workflow and a manual/skill deployment concurrently.
+
+The scheduled **Production public health** workflow checks readiness, frontend,
+and the 14-day TLS floor every ten minutes, reconciles one GitHub issue, and can
+send an optional transition webhook. The on-host `production_check.sh` adds
+disk, container, database, authenticated Redis, tenant scheduler, durable queue,
+Zoom CRC, public HTTP, and TLS checks.
 
 ## Related changes in this sprint
 

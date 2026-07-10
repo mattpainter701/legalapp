@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -46,6 +46,11 @@ class DocumentTemplate(Base):
     variable_schema: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     signer_roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
     branding_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    source_storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    source_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_test_rendered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

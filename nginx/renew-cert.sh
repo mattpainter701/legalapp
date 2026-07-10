@@ -19,7 +19,9 @@ SSL_DIR="$SCRIPT_DIR/ssl"
 LE_DIR="$SCRIPT_DIR/letsencrypt"
 WEBROOT_DIR="$SCRIPT_DIR/webroot"
 
-COMPOSE="docker compose -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.prod.yml"
+ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
+COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}"
+COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -60,6 +62,6 @@ chmod 600 "$SSL_DIR/privkey.pem"
 chmod 644 "$SSL_DIR/fullchain.pem"
 
 log "Reloading nginx ..."
-$COMPOSE exec -T nginx nginx -s reload
+"${COMPOSE[@]}" exec -T nginx nginx -s reload
 
 log "Done. Cert valid until: $NEW_EXPIRY"

@@ -35,6 +35,21 @@ def _expired_credential(test_tenant, provider="microsoft"):
     )
 
 
+def test_staged_keyring_decrypts_old_and_rotates_to_new(monkeypatch):
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+    old_ciphertext = Fernet(old_key.encode()).encrypt(b"credential").decode()
+    monkeypatch.setattr(
+        token_vault.settings, "TOKEN_ENCRYPTION_KEYS", f"{new_key},{old_key}"
+    )
+
+    assert token_vault.decrypt_token(old_ciphertext) == "credential"
+    rotated = token_vault.rotate_token_ciphertext(old_ciphertext)
+    assert Fernet(new_key.encode()).decrypt(rotated.encode()) == b"credential"
+    with pytest.raises(Exception):
+        Fernet(old_key.encode()).decrypt(rotated.encode())
+
+
 class _TokenRow:
     def __init__(self):
         self.encrypted_access_token = token_vault.encrypt_token("old-access")

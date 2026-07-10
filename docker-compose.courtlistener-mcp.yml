@@ -1,6 +1,6 @@
 services:
   courtlistener-db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     environment:
       POSTGRES_USER: ${COURTLISTENER_DB_USER:-courtlistener}
       POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}
@@ -23,11 +23,12 @@ services:
     environment:
       VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
       COURTLISTENER_API_KEY: ${COURTLISTENER_API_KEY:-}
+      MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_QUERY_EMBEDDING_URL: ${MCP_QUERY_EMBEDDING_URL:-}
       MCP_QUERY_EMBEDDING_MODEL: ${MCP_QUERY_EMBEDDING_MODEL:-mixedbread-ai/mxbai-embed-large-v1}
       MCP_QUERY_EMBEDDING_TIMEOUT_SECONDS: ${MCP_QUERY_EMBEDDING_TIMEOUT_SECONDS:-5}
     ports:
-      - "${COURTLISTENER_MCP_PORT:-8021}:8021"
+      - "${COURTLISTENER_MCP_BIND:-127.0.0.1}:${COURTLISTENER_MCP_PORT:-8021}:8021"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8021/health')\""]
       interval: 15s

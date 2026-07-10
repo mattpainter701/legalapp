@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter, MatterEvent
 from app.models.signature import SignatureRequest, SignatureSigner
-from app.services.esign.certificate import build_certificate
+from app.services.esign.certificate import (
+    build_certificate,
+    immutable_certificate_filename,
+)
 from app.services.matter_file_store import MatterFileStore
 
 _file_store = MatterFileStore()
@@ -123,6 +126,28 @@ async def complete_request_if_done(
 ) -> MatterDocument | None:
     """If all signers have signed, finalize the request. Returns the executed
     MatterDocument when completion happens, else None. Caller commits."""
+    if request.status == "completed":
+        if not request.provider_envelope_id:
+            raise RuntimeError(
+                "Completed signature request is missing its evidence artifact ID"
+            )
+        try:
+            artifact_id = uuid.UUID(str(request.provider_envelope_id))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Completed signature request has an invalid evidence artifact ID"
+            ) from exc
+        existing = await db.get(MatterDocument, artifact_id)
+        if (
+            existing is None
+            or str(existing.tenant_id) != str(request.tenant_id)
+            or str(existing.matter_id) != str(request.matter_id)
+        ):
+            raise RuntimeError(
+                "Completed signature request evidence artifact is unavailable"
+            )
+        return existing
+
     signers = list(request.signers)
     if not signers or any(s.status != "signed" for s in signers):
         request.status = "partially_signed"
@@ -143,7 +168,7 @@ async def complete_request_if_done(
         json.dumps(evidence_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     request.evidence_sha256 = evidence_sha256
-    content, filename, content_type = build_certificate(
+    content, _suggested_filename, content_type = build_certificate(
         matter_name=matter.matter_name,
         document_name=document_name or "document",
         signers=signers,
@@ -152,7 +177,13 @@ async def complete_request_if_done(
         evidence_sha256=evidence_sha256,
     )
     request.completion_artifact_sha256 = hashlib.sha256(content).hexdigest()
-    storage_path = await _file_store.store_matter_file(
+    filename = immutable_certificate_filename(
+        document_name=document_name or "document",
+        request_id=str(request.id),
+        artifact_sha256=request.completion_artifact_sha256,
+        content_type=content_type,
+    )
+    storage_result = await _file_store.store_matter_file_result(
         db=db,
         tenant_id=str(matter.tenant_id),
         matter_slug=matter.slug,
@@ -160,6 +191,7 @@ async def complete_request_if_done(
         filename=filename,
         content=content,
         content_type=content_type,
+        matter_cloud_folder=matter.cloud_folder,
     )
     signed_doc = MatterDocument(
         id=uuid.uuid4(),
@@ -169,7 +201,13 @@ async def complete_request_if_done(
         filename=filename,
         content_type=content_type,
         file_size=len(content),
-        storage_path=storage_path,
+        storage_path=storage_result.storage_path,
+        storage_provider=storage_result.provider,
+        storage_backend=storage_result.backend,
+        provider_object_id=storage_result.provider_item_id,
+        provider_drive_id=storage_result.drive_id,
+        provider_parent_id=storage_result.parent_id,
+        storage_error=storage_result.error,
         description=(
             "Signature acknowledgment certificate; cryptographically bound to the "
             "source document, not a signed or modified source document"

@@ -1,266 +1,267 @@
-# Clarity Legal — Data Architecture
+# Clarity Legal architecture and trust boundaries
 
-How documents, context, and memory flow through the system. This doc covers the retrieval pipeline, storage decisions, tenant isolation, and the cloud-native search model.
+This document describes the release architecture as implemented. It separates
+customer-facing readiness from capabilities that exist in code but are still
+release-gated.
 
----
+## 1. Production topology
 
-## Three-tier retrieval model
+Clarity is a containerized single-host application for the first-customer
+release.
 
-The system answers user questions by assembling context from three independent sources, each with a different storage and retrieval strategy.
+```mermaid
+flowchart TB
+    internet["Public internet"] -->|"TCP 80/443"| nginx["Nginx\nTLS, headers, limits, routing"]
+    nginx --> frontend["React/Vite static application"]
+    nginx --> backend["FastAPI API\nRUN_SCHEDULER=false"]
 
-### Tier 1 — Session Attachments (zero embeddings)
+    migrator["One-shot Alembic migrator\nlegalapp owner role"] --> postgres[("PostgreSQL 16 + pgvector")]
+    backend -->|"clarity_app / FORCE RLS"| postgres
+    backend --> redis[("Redis 7\nauthenticated")]
+    backend --> litellm["LiteLLM gateway"]
+    litellm --> litellmdb[("LiteLLM PostgreSQL")]
+    litellm --> models["Configured model providers"]
 
-**Trigger:** User drags a file into a chat conversation.
+    scheduler["Dedicated single scheduler\nRUN_SCHEDULER=true"] --> postgres
+    scheduler --> redis
 
-**Flow:**
-```
-File upload → save to UPLOAD_DIR/{tenant_id}/{document_id}
-  → User sends message with attachment_ids: [doc_id, ...]
-  → extract_text() on-demand (pypdf for PDF, python-docx for DOCX, UTF-8 for .txt)
-  → Inject raw text into LLM context window (capped at 4000 chars per file)
-  → LLM answers
-  → Text discarded after response
-```
-
-**What's stored:** Only the original file on disk (for re-download). No embeddings, no chunks, no vector search.
-
-**Why:** Like attaching a file in ChatGPT or Claude — the file is relevant to this conversation only. Embedding every drag-and-drop would waste GPU cycles and storage on transient context.
-
-**Memory bridge:** If the conversation reveals durable information (client preferences, matter facts, workflow patterns), the memory service harvests it automatically every 10 messages and stores it in `UserMemory`.
-
-### Tier 2 — Project / Matter Documents (full RAG)
-
-**Trigger:** User explicitly uploads a document for permanent indexing (drag-and-drop in a matter workspace, or "Save to project").
-
-**Flow:**
-```
-File upload → save to UPLOAD_DIR/{tenant_id}/{document_id}
-  → Background task: _process_document()
-    → extract_text() (via asyncio.to_thread, offloads CPU work)
-    → chunk_text() (500-token chunks, 50-token overlap, tiktoken cl100k_base)
-    → embed_batch() (OpenAI text-embedding-3-small, 1536-dim)
-    → INSERT into pgvector `chunks` table
-  → Document.status = "indexed"
-  → Chunks are now RAG-searchable
+    backend --> integrations["Microsoft, Google, Zoom, QBO, Stripe, SMTP"]
+    backend -. "X-Clarity-Internal-Key" .-> courtlistener["Private CourtListener service"]
+    courtlistener --> courtlistenerdb[("Private CourtListener pgvector DB")]
 ```
 
-**At query time:**
-```
-User question → embed_text(question) → pgvector cosine similarity (<=>)
-  → SELECT top_k chunks WHERE tenant_id = ? ORDER BY similarity
-  → build_rag_context() with case names, citations, relevance scores
-  → Inject into LLM context
-```
+The production Compose invariants are:
 
-**What's stored:** Full document text in pgvector chunks, embeddings, metadata (case_name, citation, court, decision_date).
+- Only nginx publishes host ports 80 and 443.
+- PostgreSQL, Redis, backend, frontend, LiteLLM, scheduler, and optional
+  CourtListener services have no public listener.
+- `migrator` must finish successfully before API or scheduler startup.
+- API processes set `RUN_SCHEDULER=false`; one scheduler process sets it to
+  `true`. PostgreSQL advisory locks remain a duplicate-run backstop.
+- Backend and scheduler use `APP_DATABASE_URL`, which must identify the
+  `clarity_app` role. Alembic uses `MIGRATOR_DATABASE_URL`, which identifies the
+  owner role.
+- `/health/readiness` reports only component states for disk, database, Redis,
+  scheduler heartbeat, and durable queue. It does not expose tenant IDs,
+  credentials, queue payloads, or infrastructure addresses.
 
-**Why:** These are the firm's authoritative documents — engagement letters, precedent, templates, key cases. They should be permanently searchable across all sessions and matters.
+`docker-compose.hypervisor.yml` is the existing Skynet topology. A conventional
+Linux VPS, including AWS Lightsail, uses `docker-compose.yml` plus
+`docker-compose.prod.yml`. Both paths use digest-pinned foundational images and
+the same nginx-only public boundary.
 
-### Tier 3 — Cloud Search / Live RAG (metadata only)
+## 2. Persistence and failure domains
 
-**Trigger:** Tenant has connected Google Workspace or Microsoft 365 in onboarding. Cloud search is enabled.
+| Data | Persistence | Backup requirement |
+|---|---|---|
+| Application PostgreSQL | Named volume on the hypervisor; `/data/legalapp/postgres` bind mount in base+prod | Custom-format `pg_dump`, checksum, count manifest, encrypted off-host Restic snapshot, isolated restore proof |
+| Uploaded and generated files | `./uploads` on the hypervisor; `/data/legalapp/uploads` in base+prod; mounted at `/app/uploads` in the container | Included in the off-host snapshot and compared during restore rehearsal |
+| Redis | Persistent Compose volume with AOF enabled in production | Operational state only; PostgreSQL remains the durable business record |
+| LiteLLM PostgreSQL | Dedicated volume/bind mount | Back up when gateway spend/config history is a recovery requirement |
+| CourtListener corpus | Separate Compose volumes | Rebuildable corpus, but operational backup policy depends on ingest cost and local modifications |
 
-**Flow:**
-```
-User question
-  → RetrievalPlanner.plan(question)
-    → LLM decides: should_search? which sources? what keywords?
-    → Output: {"sources":["gmail","drive"],"keywords":["renewal","Acme"],...}
-  → CloudSearchService.search(plan)
-    → Google Drive: GET /drive/v3/files?q=fullText contains 'keyword'...
-    → Gmail: GET /gmail/v1/users/me/messages?q=from:acme.com...
-    → Microsoft Graph: POST /search/query {entityTypes: [driveItem,message]}
-    → Returns ranked CloudHit objects (snippet-only, no full text yet)
-  → CloudSearchService.fetch_contents(top_N_hits)
-    → Fetch full text for top N results from provider API
-    → Truncate to 2000 chars each
-  → build_cloud_context() → merge with pgvector context
-  → LLM answers
-  → Content discarded after response
-```
+This is not a highly available design. One host, one application database, one
+Redis instance, and local file storage are single failure domains. The first
+customer may run on this topology only with monitoring, encrypted off-host
+backup, and a tested clean-host restore. Multi-host orchestration, database
+failover, Redis failover, and point-in-time recovery are future scaling work.
 
-**What's stored locally (cloud_metadata_index table):**
+## 3. Identity and authorization boundaries
 
-| Column | Purpose |
-|-|-|
-| `object_id` | Provider-native ID (Drive file ID, Gmail message ID, Graph item ID) |
-| `title` | File name or email subject |
-| `snippet` | First 500 characters — routing hint, never full content |
-| `modified_time` | For sync freshness |
-| `owner_email`, `participants` | For access control and people-filtered queries |
-| `mime_type`, `size_bytes` | For type/size filtering |
-| `web_url` | Direct link to open in cloud |
-| `sync_cursor` | Delta token for incremental sync |
+### Application users
 
-**What's never stored:** Full document bodies, email bodies, attachment contents, or embeddings of cloud data.
+Email/password and Microsoft/Google sign-in issue a short-lived access token in
+an HTTP-only cookie. Refresh tokens rotate and are tracked in Redis for replay
+prevention and revocation. A signed plan claim drives navigation, while
+`ModuleGuardMiddleware` independently blocks API prefixes outside the tenant's
+licensed modules.
 
-**Why:** A firm might have 4TB of records in Google Drive. Ingesting everything is impractical, expensive, and creates a data residency problem. Cloud search treats the customer's own cloud as the retrieval index — we only store routing metadata. Customer data stays in the customer's tenant. Offboarding means deleting metadata rows and revoking OAuth — no data migration needed.
+Tenant identity is never accepted from request JSON. Authenticated user and
+tenant identity come from the verified session. Public provider callbacks and
+webhooks use provider-bound state, tenant-specific URLs, signatures, or shared
+secrets as appropriate.
 
----
+### Platform operators
 
-## Context assembly order
+A raw platform bootstrap secret is accepted only at
+`POST /api/platform/auth/token`. Production configuration stores its SHA-256
+hash with a fixed operator identity, maximum scopes, and expiry. Exchange
+returns a scoped bearer token with a default 15-minute lifetime. Platform
+requests are rate limited and written to the operator audit log.
 
-When a chat message is processed, context is assembled in this priority:
+The legacy static `PLATFORM_SECRET_KEY` is a time-boxed migration bridge only.
+New deployments leave `PLATFORM_LEGACY_BOOTSTRAP_ENABLED=false` and the legacy
+secret unset.
 
-```
-1. Conversation history (last 10 messages)
-2. Session attachments (if attachment_ids provided)
-3. Matter context (if matter_id provided — cached)
-4. pgvector RAG chunks (tenant documents + public CourtListener)
-5. Cloud search hits (if tenant has active integrations)
-6. User memory context (from memory_service)
-```
+### Stored provider credentials
 
-Attachment text and matter context appear first because they're the most directly relevant. RAG and cloud search provide supporting legal authority. Memory provides user-level preferences and learned patterns.
+OAuth tokens, tenant-owned OAuth app secrets, QBO tokens, tenant BYOK keys, and
+platform model-provider keys are encrypted at the application layer. The
+newest key in `TOKEN_ENCRYPTION_KEYS` encrypts writes; remaining keys decrypt
+old ciphertext during a staged rotation. This keyring does not replace host or
+volume encryption and is currently injected through the host's protected
+`.env` file.
 
----
+Tenant BYOK does not accept an arbitrary administrator-controlled base URL.
+Provider selection and URL validation restrict outbound destinations so a
+tenant configuration cannot turn the backend into an SSRF or prompt-exfiltration
+proxy.
 
-## Memory system
+## 4. Tenant isolation
 
-The memory service bridges sessions without requiring document embeddings.
+Tenant-scoped request handlers call `set_tenant_context()` before data access.
+PostgreSQL tables use Row Level Security with `FORCE ROW LEVEL SECURITY`, and
+the runtime role is `NOSUPERUSER NOBYPASSRLS`. Application predicates remain in
+queries as defense in depth and to keep test intent visible.
 
-**Auto-memory (every 10 messages):**
-```
-Conversation reaches 10 messages
-  → summarize_conversation()
-    → LLM reads transcript (truncated to 2000 chars)
-    → Produces summary + key facts
-    → Stored as UserMemory (type: interaction_pattern)
-  → update_user_memory_summary()
-    → Concatenates last 5 interaction_patterns + all preferences
-    → Writes to User.memory_summary (raw text)
-```
+Cross-tenant operations use narrow, explicit system paths. They must set a
+transaction-local bypass only where a corresponding RLS bypass policy exists,
+enumerate active tenants, and then restore tenant context. The dedicated
+scheduler processes each active tenant separately. Scheduler logs are
+tenant-scoped at migration `088`; legacy null-tenant rows are not returned by
+tenant APIs.
 
-**Injection at query time:**
-```
-get_memory_context_for_injection()
-  → Reads User.memory_summary
-  → Appends 3 most recent interaction_pattern memories
-  → Returns formatted string
-  → Injected into LLM system prompt as "USER CONTEXT"
-```
+## 5. First-customer workflow: Zoom call to assigned task
 
-**What memory captures (without storing documents):**
-- Client names and preferences mentioned across sessions
-- Practice area expertise patterns
-- Workflow preferences ("always use California law", "prefer email over Slack")
-- Matter facts surfaced in conversation (harvested from context, not from files)
+```mermaid
+sequenceDiagram
+    participant Z as Zoom Phone
+    participant N as Nginx
+    participant A as FastAPI
+    participant D as PostgreSQL/RLS
+    participant U as Intake user
+    participant T as Assignee
 
----
-
-## Cloud integration flow
-
-### OAuth token model
-
-```
-┌─────────────────────────────────────────────────────┐
-│                 Token Hierarchy                      │
-├─────────────────┬───────────────────────────────────┤
-│ TenantCredential│ Admin-consented org-wide access    │
-│ (per tenant)    │ Used for: user dir sync, cloud     │
-│                 │ folder init, tenant-level search   │
-├─────────────────┼───────────────────────────────────┤
-│ UserOAuthToken  │ Per-user delegated access          │
-│ (per user)      │ Used for: reading user's mail,     │
-│                 │ calendar, drive files              │
-└─────────────────┴───────────────────────────────────┘
+    Z->>N: signed event / tenant webhook URL
+    N->>A: POST /api/integrations/zoom-phone/webhook/{tenant_id}
+    A->>A: validate CRC or webhook signature
+    A->>D: set tenant context, load encrypted app secret
+    A->>D: store/update inbound communication record
+    U->>A: review caller, contact/history matches, notes
+    A->>D: create/update contact or lead and assignment task
+    A-->>T: in-app task; optional configured notification
+    T->>A: view, reassign, log customer contact, complete/close
+    A->>D: task lifecycle + customer communication history
 ```
 
-Both token types are Fernet-encrypted at rest (`TOKEN_ENCRYPTION_KEY`). `token_vault.py` handles transparent refresh — services call `get_fresh_token()` / `get_fresh_user_token()` and always get a valid access token.
+The tenant may own the Zoom account-level OAuth app through Administration >
+Zoom. A platform environment app is a fallback. The shipped intake integration
+requests call-history/call-detail scopes; it does not fetch Zoom recording or
+transcript content. Production acceptance requires all of the following through
+the real public hostname:
 
-### Cloud search token fallback
+1. OAuth connect/reconnect and API connection test.
+2. Zoom URL-validation CRC response through nginx/TLS.
+3. A real inbound call appears once in Call Intake.
+4. Intake creates a specifically assigned task.
+5. The assignee can view and update that task without cross-tenant leakage.
 
+Unit and E2E tests support this evidence but do not replace the live provider
+proof.
+
+## 6. PDF template data flow
+
+```mermaid
+flowchart LR
+    upload["Admin uploads PDF"] --> inspect["Validate PDF\nreject password, active content, XFA"]
+    inspect --> fields["Discover AcroForm widgets\nmax 250 pages / 200 fields"]
+    fields --> retain["Retain immutable source\npath + SHA-256 metadata"]
+    retain --> review["Review field mapping and preview"]
+    review --> activate["Admin activates template"]
+    activate --> fill["Matter/user values + reviewed edits"]
+    fill --> render["Fill and flatten by default"]
+    render --> store["Matter document + timeline provenance"]
 ```
-CloudSearchService.search()
-  → Try get_fresh_user_token() first (narrower scope, safer)
-  → Fall back to get_fresh_token() (tenant-level, broader)
-  → Missing token → skip that provider, return empty results
-  → Never fails the chat — cloud search is additive
-```
 
----
+PDF layout is preserved because the renderer fills actual AcroForm widget
+positions in the retained source. Static or scanned PDFs without AcroForm
+fields can be analyzed but cannot become generation templates. Password
+protection, JavaScript/actions, embedded files, XFA, unsupported widget
+appearances, unsafe scripts/glyphs, and values that cannot fit safely fail with
+an actionable error instead of emitting a silently corrupted document.
 
-## Tenant isolation
+Preview does not store a matter document and does not enforce required fields.
+Saving an active template to a matter enforces required fields, creates a
+unique output name, stores the binary through the matter-file store, and adds a
+matter event with source/output hashes and renderer metadata. Signature fields
+remain blank for a later signing workflow.
 
-Every query path enforces tenant isolation at two layers:
+See [PDF template operations](PDF_TEMPLATE_OPERATIONS.md).
 
-**Application layer:** `TenantMiddleware` extracts JWT from cookies, sets `request.state.tenant_id`. All router handlers call `set_tenant_context(db, tenant_id)`.
+## 7. Retrieval and cloud data
 
-**Database layer:** PostgreSQL Row Level Security. Every tenant-scoped table has:
-```sql
-ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;
-ALTER TABLE {table} FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON {table}
-  USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
-```
+Clarity has three distinct context paths:
 
-`FORCE ROW LEVEL SECURITY` means even the table owner can't bypass the policy. Unauthenticated requests see empty result sets (not errors) because of `true` (missing_ok).
+1. **Session attachments:** stored for download, extracted on demand, and
+   bounded before prompt injection. They are not automatically embedded.
+2. **Indexed documents:** text is chunked, embedded, and stored in pgvector for
+   tenant RAG. Public CourtListener chunks use a separate public corpus path.
+3. **Live cloud search:** Microsoft/Google provider search returns candidates;
+   bounded content from selected hits is used for the request. The local cloud
+   metadata index stores routing metadata rather than mirroring an entire drive
+   or mailbox.
 
-This applies to: documents, chunks, conversations, messages, contacts, tasks, matters, practice_profiles, prompt_overrides, cloud_metadata_index, and all billing records.
+Matter-file output chooses the configured cloud provider when available and can
+fall back to local storage. A fallback is reported to the caller; operators
+must monitor storage errors rather than assume every generated file reached a
+cloud provider.
 
----
+AI/provider logging and retention depend on the configured gateway and model
+provider. LiteLLM raw message logging is disabled by default, but infrastructure
+configuration and vendor contracts still determine the full data-handling
+posture.
 
-## Cache strategy
+## 8. MCP boundary and release gate
 
-| Cache Type | Key Format | TTL |
-|-|-|-|
-| RAG results | `rag:{tenant_id}\|{user_id}\|{question[:50]}` | 900-3600s (expertise-based) |
-| LLM responses | `llm:{tenant_id}\|{user_id}\|{question[:50]}\|{context_hash[:16]}` | 300-1800s |
-| Matter context | `matter:{tenant_id}\|{matter_id}` | 1800-7200s |
-| Prompt overrides | `prompt:{tenant_id}\|{plugin}\|{skill}` | 3600s (overrides) / 300s (defaults) |
-| Cloud search | `cloud_search:{tenant_id}\|{md5(question)[:16]}` | 300s |
+Public MCP is not part of the first-customer product.
 
-Expertise-aware TTLs: junior users get longer caches (they ask repetitive questions), senior users get shorter caches (they ask novel questions). Skill-based multipliers further adjust TTLs (commercial contract review: ×1.5, AI governance: ×0.6).
+- `MCP_PRODUCT_ENABLED=false` makes the public manifest and transport
+  unavailable.
+- Legacy unscoped `X-API-Key` issuance is retired and migration `087`
+  invalidates existing legacy tenant API keys.
+- The implemented `/api/mcp` endpoint uses the official Python SDK Streamable
+  HTTP lifecycle and protocol negotiation.
+- A product key is accepted only for an active tenant with explicit MCP
+  entitlement, active billing, Stripe customer/meter configuration, tool scope,
+  remaining monthly quota, and an available Redis burst limiter.
+- A successful product call writes its usage event and durable Stripe meter job
+  in one database transaction. Delivery retries use a stable identifier.
+- Backend-to-sidecar traffic uses a dedicated `MCP_UPSTREAM_API_KEY`; application
+  JWTs and customer keys are never forwarded.
 
----
+These controls make the implementation fail closed; they do not constitute
+commercial approval. Do not enable or promote MCP until the product-specific
+deployment, billing reconciliation, monitoring, restore, and support gates in
+[MCP product gateway](mcp_product_gateway.md) pass.
 
-## Feature flags
+## 9. Marketing and SEO boundary
 
-Per-tenant configuration in `TenantSettings`:
+The public SPA emits absolute canonical/Open Graph/Twitter metadata, JSON-LD,
+`robots.txt`, and a sitemap when built with `VITE_PUBLIC_SITE_URL`. Only `/`,
+`/privacy`, and `/terms` are indexable. Private routes are runtime-labeled
+`noindex, nofollow` and omitted from the sitemap.
 
-| Flag | Default | Controls |
-|-|-|-|
-| `enable_auto_memory` | true | Auto-memory generation every 10 messages |
-| `enable_pii_detection` | true | PII scanning on user input + matter context |
-| `enable_skill_routing` | true | Plugin skill routing in chat |
-| `enable_matter_context` | true | Matter metadata injection |
-| `use_customer_llm` | false | Firm brings own Azure/Gemini key |
-| `cache_enabled` | true | Master cache toggle |
-| `cache_ttl_multiplier` | 1.0 | Per-tenant TTL scaling (0.5-2.0) |
+This is still a client-rendered SPA, not SSR. Static metadata and a noscript
+summary improve discovery, but crawl rendering and Core Web Vitals must be
+measured after deployment. Public claims must stay within implemented and
+operationally verified behavior; certification, uptime, trial, price, customer,
+or provider claims require separate evidence and owner approval.
 
-Cloud search is controlled globally by `CLOUD_SEARCH_ENABLED` (env var) — it's additive and non-blocking, so safe to enable for all tenants with connected integrations.
+## 10. Deployment and rollback boundary
 
----
+`scripts/deploy_prod.sh` is the on-host deployment gate. It performs preflight,
+captures a pre-deploy dump/count manifest, starts PostgreSQL, builds the selected
+topology, gates startup on migrations, waits for API/scheduler/nginx, validates
+nginx and frontend image contents, runs production checks, and refuses a
+post-deploy count decrease.
 
-## Diagram: end-to-end chat flow
+Deployment is not the backup strategy. Before changing production, create and
+copy an encrypted backup off-host. A rollback decision must preserve the new
+database state: do not downgrade migrations or restore an old dump merely to
+roll back containers without first assessing writes made after deployment.
+Prefer rolling application code forward. If rollback is required, record the
+deployed commit, failed gate, data-change window, selected image/commit, and
+post-rollback production check.
 
-```
-User: "Find the Acme renewal discussion and check if the SOW conflicts with our playbook"
-
-  1. TenantMiddleware → JWT → tenant_id, user_id
-  2. set_tenant_context() → PostgreSQL RLS active
-  3. Save user message
-  4. Load conversation history (last 10 messages)
-  5. Load session attachments → extract text → prepend to context
-  6. Load matter context (cached) → prepend to context
-  7. pgvector RAG:
-     a) embed_text("renewal Acme SOW playbook") → 1536-dim vector
-     b) SELECT FROM chunks WHERE tenant_id=? ORDER BY embedding <=> vec LIMIT 8
-     c) embed_public_query(same) → 384-dim vector (BGE-small)
-     d) SELECT FROM public_chunks ORDER BY embedding <=> vec LIMIT 8
-  8. Cloud search (in parallel with #7):
-     a) RetrievalPlanner → {"sources":["gmail","drive"],"keywords":["renewal","SOW","Acme"]}
-     b) Gmail API → messages?q=renewal SOW Acme → 4 hits
-     c) Drive API → files?q=fullText contains 'SOW' → 3 hits
-     d) fetch_contents(top 5) → 5 x 2000-char excerpts
-     e) build_cloud_context() → formatted with source URLs
-  9. Merge contexts: attachments + matter + RAG + cloud
-  10. Load memory context: User.memory_summary + last 3 interaction_patterns
-  11. LLM.complete(history + merged_context + memory_context)
-  12. apply_guardrails() → PII scrub, AI disclosure check
-  13. Save assistant message with sources, citations, relevance scores
-  14. Record UsageRecord (tokens, cost, cache hits, RAG metadata)
-  15. If message_count % 10 == 0 → trigger auto-memory generation
-
-  Total latency: ~2-4s (embeddings + pgvector + cloud APIs run in parallel)
-```
+The complete executable procedure and go/no-go checklist are in
+[FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md](FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md).

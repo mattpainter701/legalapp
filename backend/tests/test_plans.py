@@ -32,7 +32,7 @@ def test_mcp_only_plan_shape():
     plan = get_plan("mcp-only")
     assert plan.modules == ["mcp"]
     assert plan.default_module == "mcp"
-    assert plan.public_signup is True
+    assert plan.public_signup is False
     assert plan.upsell_target == "full-platform"
     assert plan.billing_tier == "payg"
 
@@ -40,7 +40,7 @@ def test_mcp_only_plan_shape():
 def test_public_plans_only_returns_signup_enabled():
     ids = {p.id for p in public_plans()}
     assert "intake-only" in ids
-    assert "mcp-only" in ids
+    assert "mcp-only" not in ids
     assert "full-platform" not in ids
 
 

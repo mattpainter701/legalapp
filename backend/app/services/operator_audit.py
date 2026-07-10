@@ -4,6 +4,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.operator_audit import OperatorAuditLog
+from app.middleware.rate_limit import _client_ip
 
 _SENSITIVE_KEYS = {
     "api_key",
@@ -75,10 +76,7 @@ async def record_operator_audit(
     actor_type: str = "platform_key",
     actor_id: str | None = None,
 ) -> OperatorAuditLog:
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    ip_address = forwarded_for.split(",", 1)[0].strip()
-    if not ip_address and request.client:
-        ip_address = request.client.host
+    ip_address = _client_ip(request)
 
     entry = OperatorAuditLog(
         action=action,

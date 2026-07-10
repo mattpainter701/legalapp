@@ -4,6 +4,7 @@ import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
 import FormLabelAssociator from './components/accessibility/FormLabelAssociator'
+import SeoHead from './components/SeoHead'
 import VersionBadge from './components/VersionBadge'
 import { getMe } from './api'
 import { canAccessModuleList } from './moduleAccess'
@@ -189,6 +190,7 @@ function LegacyBillingRedirect() {
 export default function App() {
   return (
     <AuthProvider>
+      <SeoHead />
       <ToastProvider>
         <ConfirmProvider>
         <FormLabelAssociator />

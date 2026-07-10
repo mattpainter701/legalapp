@@ -1,0 +1,16 @@
+name: Fresh-host production rehearsal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and prove a clean isolated deployment
+        run: bash scripts/rehearse_fresh_host.sh

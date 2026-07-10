@@ -31,7 +31,10 @@ services:
       # job, causing duplicate invoices/emails.
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      TOKEN_ENCRYPTION_KEYS: ${TOKEN_ENCRYPTION_KEYS:-}
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
+      MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
+      MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
       RUN_SCHEDULER: "false"
     volumes:
       - /data/legalapp/uploads:/app/uploads   # host-mounted encrypted volume
@@ -62,7 +65,10 @@ services:
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      TOKEN_ENCRYPTION_KEYS: ${TOKEN_ENCRYPTION_KEYS:-}
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
+      MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
+      MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
       RUN_SCHEDULER: "true"
     volumes:
       - /data/legalapp/uploads:/app/uploads
@@ -100,9 +106,12 @@ services:
           cpus: '1.0'
 
   frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_PUBLIC_SITE_URL: https://${DOMAIN}
+        VITE_CONTACT_URL: ${VITE_CONTACT_URL:?Set VITE_CONTACT_URL in .env}
     restart: unless-stopped
-    volumes:
-      - frontend_dist:/app/dist
     environment:
       - VITE_API_URL=/api
     deploy:
@@ -113,10 +122,14 @@ services:
   postgres:
     restart: unless-stopped
     ports: []    # no external exposure in prod
-    volumes:
-      - /data/legalapp/postgres:/var/lib/postgresql/data   # host-mounted encrypted volume
     environment:
-      - POSTGRES_PASSWORD_FILE=/run/secrets/pg_password
+      POSTGRES_USER: legalapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: legalapp
+      CLARITY_APP_PASSWORD: ${CLARITY_APP_PASSWORD:?Set CLARITY_APP_PASSWORD in .env}
+    volumes:
+      - /data/legalapp/postgres:/var/lib/postgresql/data
+      - ./scripts/init_clarity_app_role.sh:/docker-entrypoint-initdb.d/10-clarity-app-role.sh:ro
     deploy:
       resources:
         limits:
@@ -127,6 +140,13 @@ services:
     restart: unless-stopped
     ports: []    # no external exposure in prod
     command: redis-server --requirepass ${REDIS_PASSWORD} --save 60 1 --appendonly yes
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -139,4 +159,6 @@ services:
     volumes:
       - ./nginx/ssl:/etc/nginx/ssl:ro           # cert files (written by renew-cert.sh)
       - ./nginx/webroot:/var/www/certbot:ro     # ACME challenge files (written by certbot)
-      - frontend_dist:/usr/share/nginx/html/dist:ro   # frontend static assets
+    ports:
+      - "80:80"
+      - "443:443"

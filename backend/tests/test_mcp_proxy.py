@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.routers import mcp
 from app.routers.mcp import ToolCallRequest, _mcp_proxy_url
+from app.services import mcp_protocol
 
 
 def test_mcp_proxy_url_joins_base_and_api_path():
@@ -42,7 +43,10 @@ async def test_call_tool_authenticates_before_proxy(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_tool_proxies_after_auth(monkeypatch):
     tenant_id = uuid.uuid4()
-    request = SimpleNamespace(headers={"Authorization": "Bearer test"})
+    request = SimpleNamespace(
+        headers={"Authorization": "Bearer test"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
     body = ToolCallRequest(
         name="search_caselaw",
         arguments={"query": "bankruptcy exemption", "top_k": 2},
@@ -103,20 +107,60 @@ async def test_proxied_tool_names_uses_live_manifest(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manifest_falls_back_when_upstream_unavailable(monkeypatch):
+async def test_manifest_fails_closed_when_upstream_unavailable(monkeypatch):
     async def proxy_unavailable(path, request):
         raise RuntimeError("dns unavailable")
 
     monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
     monkeypatch.setattr(mcp.settings, "BACKEND_URL", "https://legalapp.example")
+    monkeypatch.setattr(mcp.settings, "MCP_PRODUCT_ENABLED", True)
     monkeypatch.setattr(mcp, "_proxy_get", proxy_unavailable)
+    mcp_protocol.clear_tool_catalog_cache()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await mcp.mcp_manifest(SimpleNamespace(headers={}))
+    finally:
+        mcp_protocol.clear_tool_catalog_cache()
 
-    manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}))
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "MCP tool catalog is unavailable"
 
+
+@pytest.mark.asyncio
+async def test_public_manifest_never_leaks_private_protocol_claim(monkeypatch):
+    async def private_manifest(path, request):
+        assert path == "/api/mcp"
+        return {
+            "protocolVersion": "2024-11-05",
+            "serverInfo": {"name": "private-courtlistener", "version": "0.1.0"},
+            "tools": [
+                {
+                    "name": name,
+                    "description": f"Private authenticated definition for {name}.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                }
+                for name in mcp.DEFAULT_ALLOWED_TOOLS
+            ],
+        }
+
+    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(mcp.settings, "BACKEND_URL", "https://legalapp.example")
+    monkeypatch.setattr(mcp.settings, "MCP_PRODUCT_ENABLED", True)
+    monkeypatch.setattr(mcp, "_proxy_get", private_manifest)
+    mcp_protocol.clear_tool_catalog_cache()
+    try:
+        manifest = await mcp.mcp_manifest(SimpleNamespace(headers={}))
+    finally:
+        mcp_protocol.clear_tool_catalog_cache()
+
+    assert manifest["protocolVersion"] == "2025-06-18"
     assert manifest["serverInfo"]["name"] == "clarity-legal"
     assert (
-        manifest["transports"]["messages"]
-        == "https://legalapp.example/api/mcp/messages"
+        manifest["transports"]["streamable_http"] == "https://legalapp.example/api/mcp"
     )
     assert {tool["name"] for tool in manifest["tools"]} == set(
         mcp.DEFAULT_ALLOWED_TOOLS
@@ -124,37 +168,11 @@ async def test_manifest_falls_back_when_upstream_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_key_lookup_sets_tenant_context_before_admin_query(monkeypatch):
-    tenant_id = uuid.uuid4()
-    tenant = SimpleNamespace(id=tenant_id)
-    admin = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")
-    calls = []
+async def test_legacy_api_key_is_rejected_without_database_lookup():
+    with pytest.raises(HTTPException) as exc:
+        await mcp._get_user_and_tenant(
+            SimpleNamespace(headers={"X-API-Key": "raw-test-key"}),
+            object(),
+        )
 
-    class Result:
-        def __init__(self, value):
-            self.value = value
-
-        def scalar_one_or_none(self):
-            return self.value
-
-    class FakeDb:
-        async def execute(self, statement):
-            calls.append(("execute", len(calls), statement))
-            if len([call for call in calls if call[0] == "execute"]) == 1:
-                return Result(tenant)
-            return Result(admin)
-
-    async def record_tenant_context(db, context_tenant_id):
-        calls.append(("context", context_tenant_id))
-
-    monkeypatch.setattr(mcp, "set_tenant_context", record_tenant_context)
-
-    user, resolved_tenant = await mcp._get_user_and_tenant(
-        SimpleNamespace(headers={"X-API-Key": "raw-test-key"}),
-        FakeDb(),
-    )
-
-    assert user is admin
-    assert resolved_tenant is tenant
-    assert [call[0] for call in calls] == ["execute", "context", "execute"]
-    assert calls[1] == ("context", str(tenant_id))
+    assert exc.value.status_code == 401

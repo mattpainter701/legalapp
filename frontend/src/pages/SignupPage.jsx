@@ -30,12 +30,8 @@ export default function SignupPage() {
   const [searchParams] = useSearchParams()
   const { login: authLogin } = useAuth()
   const plan = searchParams.get('plan')
-  const isPlanSignup = ['intake-only', 'mcp-only'].includes(plan)
-  const planLabel = plan === 'intake-only'
-    ? 'Call Intake + Tasks'
-    : plan === 'mcp-only'
-      ? 'MCP Access'
-      : null
+  const isPlanSignup = plan === 'intake-only'
+  const planLabel = plan === 'intake-only' ? 'Call Intake + Tasks' : null
   const [form, setForm] = useState({
     email: '',
     password: '',
@@ -113,7 +109,7 @@ export default function SignupPage() {
           <div className="mb-6 rounded-xl border border-brand-accent/30 bg-brand-accent/5 px-4 py-3">
             <p className="text-xs font-bold uppercase tracking-wider text-brand-accent">Selected product</p>
             <p className="mt-1 font-serif text-lg font-bold text-brand-ink">{planLabel}</p>
-            <p className="mt-1 text-xs text-brand-ink-2">14-day trial. You can invite your team after setup.</p>
+            <p className="mt-1 text-xs text-brand-ink-2">Create the workspace first. You can invite your team after setup.</p>
           </div>
         )}
 

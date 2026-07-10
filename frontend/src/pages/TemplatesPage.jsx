@@ -7,8 +7,11 @@ import {
   updateTemplate,
   deleteTemplate,
   renderTemplate,
+  renderTemplateFile,
   getMattersV2,
   discoverTemplateVariables,
+  getMatterDocumentDownloadUrl,
+  triggerBlobDownload,
 } from '../api'
 import {
   FileText,
@@ -21,15 +24,12 @@ import {
   Sparkles,
   Check,
   ClipboardList,
-  PenLine,
-  CheckCircle2,
-  Palette,
   Clock3,
   AlertCircle,
   Search,
   Wand2,
-  FileCheck2,
   Upload,
+  Download,
 } from 'lucide-react'
 
 const CATEGORY_COLORS = {
@@ -51,9 +51,6 @@ const CATEGORY_LABELS = {
 const TABS = [
   { key: 'templates', label: 'Templates', icon: FileText },
   { key: 'generate', label: 'Generate / Smart Fill', icon: Wand2 },
-  { key: 'esign', label: 'E-Sign Queue', icon: PenLine },
-  { key: 'approvals', label: 'Approvals', icon: CheckCircle2 },
-  { key: 'branding', label: 'Branding / Settings', icon: Palette },
 ]
 
 const normalizeItems = (data) => (Array.isArray(data) ? data : (data?.items || []))
@@ -64,7 +61,9 @@ const getErrorMessage = (err, fallback) => (
 
 const getTemplateVariables = (template) => {
   const matches = template?.body?.match(/\{\{(.+?)\}\}/g) || []
-  return [...new Set(matches.map((m) => m.slice(2, -2).trim()).filter(Boolean))]
+  const bodyNames = matches.map((m) => m.slice(2, -2).trim()).filter(Boolean)
+  const schemaNames = (template?.variable_schema?.fields || []).map((field) => field?.name).filter(Boolean)
+  return [...new Set([...bodyNames, ...schemaNames])]
 }
 
 const friendlyVariableLabel = (name) => name
@@ -129,14 +128,17 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
   const [category, setCategory] = useState(initial?.category || 'other')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const isPdfTemplate = String(initial?.format || '').toLowerCase() === 'pdf'
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!title.trim() || !body.trim()) return
+    if (!title.trim() || (!isPdfTemplate && !body.trim())) return
     setSaving(true)
     setError(null)
     try {
-      await onSubmit({ title: title.trim(), body: body.trim(), category })
+      await onSubmit(isPdfTemplate
+        ? { title: title.trim(), category }
+        : { title: title.trim(), body: body.trim(), category })
     } catch (err) {
       setError(getErrorMessage(err, 'Failed to save template.'))
     } finally {
@@ -152,10 +154,11 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
         </div>
       )}
       <div>
-        <label className="block text-sm font-medium text-brand-ink mb-1">
+        <label htmlFor="template-title" className="block text-sm font-medium text-brand-ink mb-1">
           Title
         </label>
         <input
+          id="template-title"
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -165,10 +168,11 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
         />
       </div>
       <div>
-        <label className="block text-sm font-medium text-brand-ink mb-1">
+        <label htmlFor="template-category" className="block text-sm font-medium text-brand-ink mb-1">
           Category
         </label>
         <select
+          id="template-category"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
@@ -180,22 +184,32 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
           ))}
         </select>
       </div>
-      <div>
-        <label className="block text-sm font-medium text-brand-ink mb-1">
-          Body
-        </label>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono"
-          rows={16}
-          placeholder={'Dear {{client_name}},\n\nThis letter confirms...\n\nSincerely,\n{{attorney_name}}'}
-          required
-        />
-        <p className="text-xs text-brand-muted mt-1">
-          Use {'{{variable_name}}'} for placeholders.
-        </p>
-      </div>
+      {isPdfTemplate ? (
+        <div role="note" className="rounded border border-brand-line bg-brand-bg px-3 py-2">
+          <p className="text-sm font-medium text-brand-ink">PDF layout and field mappings come from the source file.</p>
+          <p className="mt-1 text-xs text-brand-muted">
+            Rename or recategorize this template here. To replace its PDF or mappings, recreate it from Upload Sample and verify the new preview before activation.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <label htmlFor="template-body" className="block text-sm font-medium text-brand-ink mb-1">
+            Body
+          </label>
+          <textarea
+            id="template-body"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono"
+            rows={16}
+            placeholder={'Dear {{client_name}},\n\nThis letter confirms...\n\nSincerely,\n{{attorney_name}}'}
+            required
+          />
+          <p className="text-xs text-brand-muted mt-1">
+            Use {'{{variable_name}}'} for placeholders.
+          </p>
+        </div>
+      )}
       <div className="flex justify-end gap-3 pt-2">
         <button
           type="button"
@@ -216,20 +230,55 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
   )
 }
 
+const isPdfSourceMissing = (template) => (
+  String(template?.format || '').toLowerCase() === 'pdf'
+  && (!template?.source_filename || !template?.source_sha256)
+)
+
+export const replaceTemplateVariable = (body, from, to) => {
+  if (!from || !to || from === to) return body
+  const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return String(body || '').replace(new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'), `{{${to}}}`)
+}
+
+export const normalizeVariableName = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+
+export const downloadRenderedText = (rendered, title) => {
+  const filename = `${String(title || 'generated-document').replace(/[^a-z0-9._-]+/gi, '_')}.md`
+  triggerBlobDownload(new Blob([String(rendered || '')], { type: 'text/markdown;charset=utf-8' }), filename)
+}
+
 function UploadTemplateForm({ onCreated, onCancel }) {
   const [file, setFile] = useState(null)
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('other')
   const [analysis, setAnalysis] = useState(null)
+  const [draftBody, setDraftBody] = useState('')
+  const [mappedFields, setMappedFields] = useState([])
   const [analyzing, setAnalyzing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  const buildFormData = ({ includeCategory = false } = {}) => {
+  const reviewedFields = () => mappedFields.map(({ _bodyName, ...field }) => field)
+
+  const reviewedVariableSchema = () => ({
+    ...(analysis?.suggested_variable_schema || {}),
+    fields: reviewedFields(),
+  })
+
+  const buildFormData = ({ includeCategory = false, includeReview = false } = {}) => {
     const form = new FormData()
     form.append('file', file)
     if (title.trim()) form.append('title', title.trim())
     if (includeCategory) form.append('category', category)
+    if (includeReview) {
+      if (draftBody.trim()) form.append('reviewed_body', draftBody)
+      form.append('variable_schema', JSON.stringify(reviewedVariableSchema()))
+    }
     return form
   }
 
@@ -244,6 +293,8 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       const form = buildFormData()
       const result = await analyzeTemplateUpload(form)
       setAnalysis(result)
+      setDraftBody(result.body || result.extracted_text || '')
+      setMappedFields((result.suggested_variable_schema?.fields || []).map((field) => ({ ...field, _bodyName: field.name })))
       if (!title.trim()) setTitle(result.title || '')
     } catch (err) {
       setError(getErrorMessage(err, 'Could not analyze that sample.'))
@@ -253,11 +304,45 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   }
 
   const handleCreate = async () => {
-    if (!file) return
+    if (!file || !analysis) {
+      setError('Analyze the sample and review the extracted text and fields before creating the template.')
+      return
+    }
+    const isPdfUpload = String(analysis.format || '').toLowerCase() === 'pdf'
+    if (isPdfUpload && !mappedFields.some((field) => field?.pdf_field_name)) {
+      setError('This PDF has no fillable form fields. Make the source PDF fillable, then upload and analyze it again.')
+      return
+    }
+    if (!title.trim() || (!isPdfUpload && !draftBody.trim())) {
+      setError(isPdfUpload ? 'Template title is required.' : 'Template title and extracted body are required.')
+      return
+    }
+    if (mappedFields.some((field) => !normalizeVariableName(field.name))) {
+      setError('Every included field needs a valid variable name.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      await createTemplateFromUpload(buildFormData({ includeCategory: true }))
+      if (isPdfUpload) {
+        // The source PDF must go through the multipart endpoint so the server
+        // can retain the original bytes and its form/layout metadata.
+        await createTemplateFromUpload(buildFormData({ includeCategory: true, includeReview: true }))
+      } else {
+        await createTemplate({
+          title: title.trim(),
+          body: draftBody,
+          category,
+          status: 'draft',
+          format: analysis.format || 'markdown',
+          variable_schema: {
+            ...(analysis.suggested_variable_schema || {}),
+            fields: reviewedFields(),
+          },
+          branding_profile: analysis.detected_branding_profile || {},
+          description: `Draft created from reviewed upload: ${file.name}`,
+        })
+      }
       onCreated()
     } catch (err) {
       setError(getErrorMessage(err, 'Could not create template from upload.'))
@@ -266,8 +351,22 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     }
   }
 
-  const fields = analysis?.suggested_variable_schema?.fields || []
+  const fields = mappedFields
   const branding = analysis?.detected_branding_profile || {}
+  const isPdfAnalysis = String(analysis?.format || '').toLowerCase() === 'pdf'
+  const hasPdfMappings = fields.some((field) => field?.pdf_field_name)
+
+  const renameField = (index, rawName) => {
+    const nextName = normalizeVariableName(rawName)
+    const currentField = fields[index]
+    const previousBodyName = currentField?._bodyName || currentField?.name
+    setMappedFields((current) => current.map((field, fieldIndex) => (
+      fieldIndex === index
+        ? { ...field, name: nextName, _bodyName: nextName || field._bodyName || field.name }
+        : field
+    )))
+    if (previousBodyName && nextName) setDraftBody((current) => replaceTemplateVariable(current, previousBodyName, nextName))
+  }
 
   return (
     <div className="space-y-4">
@@ -279,15 +378,18 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
       <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
         <div>
-          <label className="block text-sm font-medium text-brand-ink mb-1">
+          <label htmlFor="template-sample-file" className="block text-sm font-medium text-brand-ink mb-1">
             Sample document
           </label>
           <input
+            id="template-sample-file"
             type="file"
             accept=".docx,.pdf,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
             onChange={(e) => {
               setFile(e.target.files?.[0] || null)
               setAnalysis(null)
+              setDraftBody('')
+              setMappedFields([])
             }}
             className="block w-full text-sm text-brand-ink file:mr-3 file:px-3 file:py-2 file:rounded file:border file:border-brand-line file:bg-brand-bg file:text-brand-ink file:text-xs file:font-semibold"
           />
@@ -334,11 +436,11 @@ function UploadTemplateForm({ onCreated, onCancel }) {
         <button
           type="button"
           onClick={handleCreate}
-          disabled={saving || !file}
+          disabled={saving || !file || !analysis || (isPdfAnalysis && !hasPdfMappings)}
           className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
         >
           <Upload size={16} />
-          {saving ? 'Creating...' : 'Create draft template'}
+          {saving ? 'Creating...' : analysis ? 'Create reviewed template' : 'Analyze before creating'}
         </button>
         <button
           type="button"
@@ -350,7 +452,26 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       </div>
 
       {analysis && (
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-4 pt-2">
+        <div className="space-y-4 pt-2">
+          {isPdfAnalysis && (
+            <div className="border border-brand-green/30 rounded bg-brand-green/10 p-4 text-sm text-brand-ink">
+              <p className="font-semibold">Original PDF design preserved</p>
+              <p className="mt-1 text-brand-muted">The source PDF remains the rendering canvas. Field mappings fill its PDF form controls; extracted text is used only for search and smart-fill context.</p>
+            </div>
+          )}
+          {isPdfAnalysis && !hasPdfMappings && (
+            <div role="alert" className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4 text-sm text-brand-ink">
+              <p className="font-semibold">No fillable PDF form fields detected</p>
+              <p className="mt-1 text-brand-muted">This sample cannot be created as a generation template. Make the source PDF fillable with AcroForm fields, then upload and analyze it again.</p>
+            </div>
+          )}
+          {String(analysis.format || '').toLowerCase() === 'docx' && (
+            <div role="alert" className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4 text-sm text-brand-ink">
+              <p className="font-semibold">Text-extraction template</p>
+              <p className="mt-1 text-brand-muted">DOCX samples are currently imported as reviewed text. Review the extracted Markdown below before creating this draft.</p>
+            </div>
+          )}
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
           <div className="border border-brand-line rounded bg-brand-bg p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
@@ -359,20 +480,21 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               </div>
               <span className="text-xs text-brand-muted">{fields.length} field{fields.length === 1 ? '' : 's'}</span>
             </div>
-            <pre className="whitespace-pre-wrap text-xs text-brand-ink font-mono max-h-72 overflow-y-auto">
-              {analysis.body_preview || analysis.extracted_text || 'No preview text extracted.'}
-            </pre>
+            <label htmlFor="reviewed-template-body" className="block text-xs font-semibold text-brand-muted mb-2">{isPdfAnalysis ? 'Smart-fill/search text (does not alter page design)' : 'Extracted template body'}</label>
+            <textarea id="reviewed-template-body" value={draftBody} readOnly={isPdfAnalysis} onChange={(event) => setDraftBody(event.target.value)} rows={18} className="w-full rounded border border-brand-line bg-brand-surface-2 p-3 font-mono text-xs text-brand-ink read-only:opacity-75" />
           </div>
 
           <div className="space-y-3">
             <div className="border border-brand-line rounded bg-brand-bg p-4">
               <p className="text-sm font-semibold text-brand-ink mb-2">Detected fields</p>
               {fields.length > 0 ? (
-                <div className="space-y-2">
-                  {fields.slice(0, 8).map((field) => (
-                    <div key={field.name} className="text-xs">
-                      <p className="font-mono text-brand-ink">{'{{'}{field.name}{'}}'}</p>
-                      <p className="text-brand-muted truncate">{field.example || field.label}</p>
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {fields.map((field, index) => (
+                    <div key={`${index}-${field.name}`} className="text-xs">
+                      <label htmlFor={`mapped-field-${index}`} className="block text-brand-muted mb-1">{field.label || `Field ${index + 1}`}</label>
+                      <input id={`mapped-field-${index}`} value={field.name || ''} onChange={(event) => renameField(index, event.target.value)} className="w-full rounded border border-brand-line bg-brand-surface-2 px-2 py-1.5 font-mono text-brand-ink" />
+                      {field.pdf_field_name && <p className="mt-1 font-mono text-brand-accent-2">PDF field: {field.pdf_field_name}</p>}
+                      {(field.example || field.source_path) && <p className="mt-1 text-brand-muted break-words">{field.example || field.source_path}</p>}
                     </div>
                   ))}
                 </div>
@@ -400,6 +522,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                 </ul>
               </div>
             )}
+          </div>
           </div>
         </div>
       )}
@@ -481,6 +604,13 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [matterId, setMatterId] = useState('')
   const [rendered, setRendered] = useState(null)
   const [matterDocId, setMatterDocId] = useState(null)
+  const [savedDownloadUrl, setSavedDownloadUrl] = useState('')
+  const [outputFilename, setOutputFilename] = useState('')
+  const [outputFormat, setOutputFormat] = useState('')
+  const [storageBackend, setStorageBackend] = useState('')
+  const [storageWarning, setStorageWarning] = useState('')
+  const [filePreview, setFilePreview] = useState(null)
+  const [filePreviewUrl, setFilePreviewUrl] = useState('')
   const [rendering, setRendering] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -489,20 +619,63 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [smartFillMessage, setSmartFillMessage] = useState('')
 
   const names = useMemo(() => getTemplateVariables(template), [template])
+  const fieldDefinitions = useMemo(() => Object.fromEntries(
+    (template?.variable_schema?.fields || [])
+      .filter((field) => field?.name)
+      .map((field) => [field.name, field]),
+  ), [template])
+  const isPdfTemplate = String(template?.format || '').toLowerCase() === 'pdf'
+  const canSaveToMatter = Boolean(template?.is_active)
+  const fillableNames = useMemo(
+    () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature'),
+    [names, fieldDefinitions],
+  )
+  const requiredUnresolvedNames = fillableNames.filter((name) => {
+    const field = fieldDefinitions[name]
+    if (!field?.required) return false
+    if (field.field_type === 'checkbox') return variables[name] !== 'true'
+    return !String(variables[name] || '').trim()
+  })
+  const optionalUnfilledNames = fillableNames.filter((name) => {
+    const field = fieldDefinitions[name]
+    if (field?.required) return false
+    if (field?.field_type === 'checkbox') return variables[name] === ''
+    return !String(variables[name] || '').trim()
+  })
 
   useEffect(() => {
     const initialVars = {}
-    names.forEach((name) => {
-      initialVars[name] = ''
+    fillableNames.forEach((name) => {
+      initialVars[name] = fieldDefinitions[name]?.field_type === 'checkbox' ? 'false' : ''
     })
     setVariables(initialVars)
     setSaved(false)
     setRendered(null)
     setMatterDocId(null)
-  }, [names])
+    setSavedDownloadUrl('')
+    setOutputFilename('')
+    setOutputFormat('')
+    setStorageBackend('')
+    setStorageWarning('')
+    setFilePreview(null)
+    setFilePreviewUrl('')
+  }, [fillableNames, fieldDefinitions])
+
+  useEffect(() => () => {
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl)
+  }, [filePreviewUrl])
+
+  const invalidatePreview = () => {
+    setRendered(null)
+    setFilePreview(null)
+    setFilePreviewUrl('')
+    setOutputFilename('')
+    setOutputFormat('')
+  }
 
   const setVariable = (name, value) => {
     setSaved(false)
+    invalidatePreview()
     setVariables((prev) => ({ ...prev, [name]: value }))
   }
 
@@ -538,7 +711,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     try {
       const res = await discoverTemplateVariables(template.id, {
         matter_id: matterId.trim(),
-        variables: names,
+        variables: fillableNames,
       })
       const discovered = normalizeDiscovery(res)
       if (Object.keys(discovered).length === 0) {
@@ -547,6 +720,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         return
       }
       setVariables((prev) => ({ ...prev, ...discovered }))
+      invalidatePreview()
       setSaved(false)
       setSmartFillState('ready')
       setSmartFillMessage('Smart-fill values loaded. Review each field before saving.')
@@ -565,14 +739,23 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     setRendering(true)
     setError(null)
     try {
-      const res = await renderTemplate(template.id, {
-        variables,
-        matter_id: matterId.trim() || null,
-      })
-      setRendered(res.rendered)
-      if (res.matter_document_id) {
-        setMatterDocId(res.matter_document_id)
+      const payload = { variables, matter_id: null }
+      if (isPdfTemplate) {
+        const result = await renderTemplateFile(template.id, payload)
+        const nextUrl = URL.createObjectURL(result.blob)
+        setFilePreview({ blob: result.blob, filename: result.filename, contentType: result.contentType })
+        setFilePreviewUrl(nextUrl)
+        setOutputFilename(result.filename)
+        setOutputFormat('pdf')
+        setRendered(null)
+      } else {
+        const res = await renderTemplate(template.id, payload)
+        setRendered(res.rendered)
+        setFilePreview(null)
+        setFilePreviewUrl('')
       }
+      setMatterDocId(null)
+      setSaved(false)
     } catch (err) {
       setError(getErrorMessage(err, 'Render failed.'))
     } finally {
@@ -582,18 +765,34 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
   const handleSave = async () => {
     if (!matterId.trim()) return
+    if (!canSaveToMatter) {
+      setError('Activate this template after verifying its preview before saving a generated document to a matter.')
+      return
+    }
+    if (requiredUnresolvedNames.length > 0) {
+      setError(`Complete ${requiredUnresolvedNames.length} required field${requiredUnresolvedNames.length === 1 ? '' : 's'} before saving.`)
+      return
+    }
     setSaving(true)
     setError(null)
+    setStorageWarning('')
     try {
       const res = await renderTemplate(template.id, {
         variables,
         matter_id: matterId.trim(),
       })
-      setRendered(res.rendered)
+      if (!isPdfTemplate) setRendered(res.rendered || rendered)
+      setSavedDownloadUrl(res.download_url || '')
+      setOutputFilename(res.output_filename || res.filename || outputFilename || '')
+      setOutputFormat(res.output_format || res.format || (isPdfTemplate ? 'pdf' : 'markdown'))
+      setStorageBackend(res.storage_backend || '')
+      setStorageWarning(res.storage_warning || '')
       if (res.matter_document_id) {
         setMatterDocId(res.matter_document_id)
+        setSaved(true)
+      } else {
+        setError('The server rendered the text but did not return a saved matter document.')
       }
-      setSaved(true)
     } catch (err) {
       setError(getErrorMessage(err, 'Save failed.'))
     } finally {
@@ -602,11 +801,17 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   return (
-    <Modal title={`Generate Document: ${template.title}`} onClose={onClose}>
+    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={onClose}>
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
             {error}
+          </div>
+        )}
+
+        {!canSaveToMatter && (
+          <div role="status" className="text-sm text-brand-amber bg-brand-amber/10 border border-brand-amber/30 px-3 py-2">
+            This template is inactive. Preview and verify it here, then activate it before saving any generated document to a matter.
           </div>
         )}
 
@@ -667,24 +872,86 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
               Fields To Review
             </h3>
             <div className="space-y-2">
-              {names.map((name) => (
-                <div key={name}>
-                  <label className="block text-xs font-medium text-brand-muted mb-0.5">
-                    {friendlyVariableLabel(name)}
+              {names.map((name) => {
+                const field = fieldDefinitions[name] || {}
+                const fieldType = field.field_type || 'text'
+                const label = field.label || friendlyVariableLabel(name)
+                const inputId = `template-variable-${name}`
+                const options = (field.options || []).map((option) => (
+                  typeof option === 'object'
+                    ? { value: option.value ?? option.name ?? option.label ?? '', label: option.label ?? option.name ?? option.value ?? '' }
+                    : { value: option, label: option }
+                ))
+                return (
+                <div key={name} className={fieldType === 'signature' ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
+                  <label htmlFor={fieldType === 'signature' ? undefined : inputId} className="block text-xs font-medium text-brand-muted mb-0.5">
+                    {label}{field.required && fieldType !== 'signature' ? ' *' : ''}
                     <span className="font-mono text-brand-muted ml-2">
                       {'{{'}{name}{'}}'}
                     </span>
                   </label>
-                  <input
-                    type="text"
-                    value={variables[name] || ''}
-                    onChange={(e) => setVariable(name, e.target.value)}
-                    className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
-                    placeholder={`Enter ${friendlyVariableLabel(name)}`}
-                  />
+                  {fieldType === 'signature' ? (
+                    <p className="text-sm text-brand-muted">
+                      Signature area is left blank for signing; it is not populated during document generation.
+                      {field.pdf_field_name ? ` PDF field: ${field.pdf_field_name}.` : ''}
+                    </p>
+                  ) : fieldType === 'checkbox' ? (
+                    <label className="inline-flex items-center gap-2 text-sm text-brand-ink py-1">
+                      <input
+                        id={inputId}
+                        type="checkbox"
+                        checked={variables[name] === 'true'}
+                        onChange={(e) => setVariable(name, e.target.checked ? 'true' : 'false')}
+                        className="h-4 w-4 rounded border-brand-line text-brand-accent focus:ring-brand-accent"
+                      />
+                      Checked
+                    </label>
+                  ) : (fieldType === 'choice' || fieldType === 'radio') && options.length > 0 ? (
+                    <select
+                      id={inputId}
+                      value={variables[name] || ''}
+                      onChange={(e) => setVariable(name, e.target.value)}
+                      className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
+                    >
+                      <option value="">Select {label}</option>
+                      {options.map((option) => <option key={String(option.value)} value={option.value}>{option.label}</option>)}
+                    </select>
+                  ) : fieldType === 'multiline' || field.multiline ? (
+                    <textarea
+                      id={inputId}
+                      rows={3}
+                      value={variables[name] || ''}
+                      onChange={(e) => setVariable(name, e.target.value)}
+                      className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
+                      placeholder={`Enter ${label}`}
+                    />
+                  ) : (
+                    <input
+                      id={inputId}
+                      type="text"
+                      value={variables[name] || ''}
+                      onChange={(e) => setVariable(name, e.target.value)}
+                      className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
+                      placeholder={`Enter ${label}`}
+                    />
+                  )}
+                  {field.pdf_field_name && fieldType !== 'signature' && (
+                    <p className="mt-1 text-[11px] text-brand-muted">PDF field: {field.pdf_field_name}{field.page ? ` · Page ${field.page}` : ''}</p>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
+            <p className={`mt-2 text-xs ${requiredUnresolvedNames.length ? 'text-brand-amber' : 'text-brand-green'}`} role="status">
+              {requiredUnresolvedNames.length
+                ? `${requiredUnresolvedNames.length} required field${requiredUnresolvedNames.length === 1 ? '' : 's'} still need review before saving.`
+                : 'All required fields are ready.'}
+            </p>
+            {optionalUnfilledNames.length > 0 && (
+              <p className="mt-1 text-xs text-brand-muted">
+                {optionalUnfilledNames.length} optional field{optionalUnfilledNames.length === 1 ? '' : 's'} left unfilled; saving is still allowed.
+              </p>
+            )}
           </div>
         )}
 
@@ -705,7 +972,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || saved || !matterId.trim()}
+            disabled={saving || saved || !matterId.trim() || !canSaveToMatter}
+            title={!canSaveToMatter ? 'Activate this verified template before saving to a matter' : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-accent hover:opacity-90 rounded disabled:opacity-50"
           >
             {saved ? (
@@ -723,47 +991,56 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
 
         {rendered && (
           <div>
-            <h3 className="text-sm font-medium text-brand-ink mb-2">
-              Rendered Output
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-medium text-brand-ink">
+              {outputFormat === 'pdf' ? 'PDF Preview' : 'Text Preview'}
             </h3>
+              <button type="button" onClick={() => downloadRenderedText(rendered, template.title)} className="inline-flex items-center gap-1.5 rounded border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-surface-2">
+                <Download size={14} /> Download preview
+              </button>
+            </div>
             <div className="bg-brand-bg border border-brand-line rounded p-4 whitespace-pre-wrap font-mono text-sm text-brand-ink max-h-96 overflow-y-auto">
               {rendered}
             </div>
-            {matterDocId && (
-              <p className="text-xs text-brand-green mt-1">
-                Saved as matter document: {matterDocId}
+          </div>
+        )}
+
+        {filePreviewUrl && filePreview && (
+          <div>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium text-brand-ink">PDF Preview</h3>
+                <p className="text-xs text-brand-muted">{filePreview.filename}</p>
+              </div>
+              <button type="button" onClick={() => triggerBlobDownload(filePreview.blob, filePreview.filename)} className="inline-flex items-center gap-1.5 rounded border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-surface-2">
+                <Download size={14} /> Download preview
+              </button>
+            </div>
+            <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
+              <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
+            </object>
+          </div>
+        )}
+
+        {matterDocId && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-brand-green/30 bg-brand-green/10 px-3 py-2">
+              <p className="text-xs text-brand-green">
+                Saved to the matter{outputFilename ? ` as ${outputFilename}` : ''}{outputFormat ? ` (${outputFormat.toUpperCase()})` : ''}{storageBackend ? ` in ${storageBackend.replaceAll('_', ' ')}` : ''}.
               </p>
+              <a href={savedDownloadUrl || getMatterDocumentDownloadUrl(matterId.trim(), matterDocId)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-accent-2 underline">
+                <Download size={14} /> Download saved document
+              </a>
+            </div>
+            {storageWarning && (
+              <div role="alert" className="rounded border border-brand-amber/40 bg-brand-amber/10 px-3 py-2 text-xs text-brand-ink">
+                {storageWarning}
+              </div>
             )}
           </div>
         )}
       </div>
     </Modal>
-  )
-}
-
-function ComingSoonPanel({ icon: Icon, title, description, items }) {
-  return (
-    <div className="bg-brand-surface-2 border border-brand-line rounded-lg p-6">
-      <div className="flex items-start gap-4">
-        <div className="p-2 rounded bg-brand-bg text-brand-accent">
-          <Icon size={22} />
-        </div>
-        <div>
-          <h2 className="text-lg font-semibold text-brand-ink">{title}</h2>
-          <p className="text-sm text-brand-muted mt-1 max-w-3xl">
-            {description}
-          </p>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
-        {items.map((item) => (
-          <div key={item.title} className="border border-brand-line rounded p-4 bg-brand-bg">
-            <p className="text-sm font-medium text-brand-ink">{item.title}</p>
-            <p className="text-xs text-brand-muted mt-1">{item.body}</p>
-          </div>
-        ))}
-      </div>
-    </div>
   )
 }
 
@@ -849,13 +1126,15 @@ export default function TemplatesPage() {
     }
   }
 
-  const bodyPreview = (body) => (
-    body.length > 100 ? `${body.slice(0, 100)}...` : body
-  )
+  const bodyPreview = (body) => {
+    const text = String(body || '')
+    return text.length > 100 ? `${text.slice(0, 100)}...` : text
+  }
 
-  const activeTemplates = templates.filter((tpl) => tpl.is_active).length
+  const activeGenerationTemplates = templates.filter((tpl) => tpl.is_active && !isPdfSourceMissing(tpl))
+  const activeTemplateCount = templates.filter((tpl) => tpl.is_active).length
   const variableCount = templates.reduce((sum, tpl) => sum + getTemplateVariables(tpl).length, 0)
-  const selectedTemplate = templates.find((tpl) => tpl.is_active) || templates[0] || null
+  const selectedTemplate = activeGenerationTemplates[0] || null
 
   const renderTemplatesPanel = () => {
     if (templates.length === 0) {
@@ -876,6 +1155,7 @@ export default function TemplatesPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {templates.map((tpl) => {
           const vars = getTemplateVariables(tpl)
+          const sourceMissing = isPdfSourceMissing(tpl)
           return (
             <div
               key={tpl.id}
@@ -898,14 +1178,33 @@ export default function TemplatesPage() {
                   {bodyPreview(tpl.body)}
                 </p>
 
+                {sourceMissing && (
+                  <div role="alert" className="mb-3 border border-brand-amber/40 rounded bg-brand-amber/10 px-3 py-2">
+                    <p className="text-xs font-semibold text-brand-ink">Source missing — recreate this PDF template</p>
+                    <p className="mt-0.5 text-[11px] text-brand-muted">This older record cannot generate documents. Create a replacement from the original fillable PDF, verify it, then remove this record.</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowUpload(true)}
+                      className="mt-2 text-xs font-semibold text-brand-accent-2 underline"
+                    >
+                      Recreate from Upload Sample
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <span className="inline-flex items-center text-xs font-semibold uppercase text-brand-accent-2 border border-brand-line rounded px-2 py-1">
+                    {tpl.format || 'markdown'}
+                  </span>
                   <span className="inline-flex items-center gap-1 text-xs text-brand-muted border border-brand-line rounded px-2 py-1">
                     <ClipboardList size={12} />
                     {vars.length} field{vars.length === 1 ? '' : 's'}
                   </span>
                   <button
                     onClick={() => toggleActive(tpl)}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    disabled={sourceMissing}
+                    title={sourceMissing ? 'Recreate the template from its original PDF before activating it' : undefined}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                       tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'
                     }`}
                     aria-label={tpl.is_active ? 'Deactivate template' : 'Activate template'}
@@ -931,10 +1230,14 @@ export default function TemplatesPage() {
                   </button>
                   <button
                     onClick={() => setRenderTarget(tpl)}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-muted hover:text-brand-ink border border-brand-line rounded"
+                    disabled={sourceMissing}
+                    title={sourceMissing
+                      ? 'Recreate the template from its original PDF before previewing it'
+                      : (tpl.is_active ? 'Generate a document' : 'Preview this draft; activate it before saving to a matter')}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-muted hover:text-brand-ink border border-brand-line rounded disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <Sparkles size={14} />
-                    Generate
+                    {tpl.is_active ? <Sparkles size={14} /> : <Eye size={14} />}
+                    {tpl.is_active ? 'Generate' : 'Preview draft'}
                   </button>
                   <button
                     onClick={() => setDeleteTarget(tpl)}
@@ -964,7 +1267,8 @@ export default function TemplatesPage() {
           </div>
           <button
             onClick={() => selectedTemplate && setRenderTarget(selectedTemplate)}
-            disabled={!selectedTemplate}
+            disabled={!selectedTemplate || isPdfSourceMissing(selectedTemplate)}
+            title={isPdfSourceMissing(selectedTemplate) ? 'Re-upload the source PDF before generating' : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
           >
             <Sparkles size={16} />
@@ -973,7 +1277,7 @@ export default function TemplatesPage() {
         </div>
 
         <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
-          {templates.slice(0, 6).map((tpl) => {
+          {activeGenerationTemplates.slice(0, 6).map((tpl) => {
             const vars = getTemplateVariables(tpl)
             return (
               <button
@@ -988,18 +1292,16 @@ export default function TemplatesPage() {
                       {vars.length} review field{vars.length === 1 ? '' : 's'}
                     </p>
                   </div>
-                  <span className={`text-[10px] uppercase px-2 py-0.5 rounded-full font-semibold shrink-0 ${
-                    tpl.is_active ? 'bg-brand-green/10 text-brand-green' : 'bg-brand-muted/10 text-brand-muted'
-                  }`}>
-                    {tpl.is_active ? 'Active' : 'Draft'}
+                  <span className="text-[10px] uppercase px-2 py-0.5 rounded-full font-semibold shrink-0 bg-brand-green/10 text-brand-green">
+                    Active
                   </span>
                 </div>
               </button>
             )
           })}
-          {templates.length === 0 && (
+          {activeGenerationTemplates.length === 0 && (
             <div className="border border-dashed border-brand-line rounded p-6 text-center md:col-span-2">
-              <p className="text-sm text-brand-muted">Create a template before generating documents.</p>
+              <p className="text-sm text-brand-muted">Activate a verified template before generating matter documents.</p>
             </div>
           )}
         </div>
@@ -1041,7 +1343,7 @@ export default function TemplatesPage() {
             Document Automation
           </h1>
           <p className="text-sm text-brand-muted mt-1">
-            Build templates, generate matter-ready documents, and prepare them for approvals and e-signature.
+            Build high-fidelity templates, smart-fill matter data, preview the result, and save finalized documents to the matter file.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
@@ -1069,7 +1371,7 @@ export default function TemplatesPage() {
         </div>
         <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
           <p className="text-xs text-brand-muted uppercase tracking-wider">Active</p>
-          <p className="text-2xl font-semibold text-brand-ink mt-1">{activeTemplates}</p>
+          <p className="text-2xl font-semibold text-brand-ink mt-1">{activeTemplateCount}</p>
         </div>
         <div className="bg-brand-surface-2 border border-brand-line rounded p-4">
           <p className="text-xs text-brand-muted uppercase tracking-wider">Mapped Fields</p>
@@ -1108,42 +1410,6 @@ export default function TemplatesPage() {
 
       {activeTab === 'templates' && renderTemplatesPanel()}
       {activeTab === 'generate' && renderGeneratePanel()}
-      {activeTab === 'esign' && (
-        <ComingSoonPanel
-          icon={PenLine}
-          title="E-Sign Queue"
-          description="The matter-level signature workflow remains available today. This workspace is ready to centralize generated documents, signer roles, reminders, voids, and completed audit certificates."
-          items={[
-            { title: 'Ready to send', body: 'Generated matter documents can be queued here once the cross-matter endpoint lands.' },
-            { title: 'Signer status', body: 'Track sent, viewed, signed, declined, expired, and voided states.' },
-            { title: 'Executed copies', body: 'Surface signed documents and audit certificates saved back to matters.' },
-          ]}
-        />
-      )}
-      {activeTab === 'approvals' && (
-        <ComingSoonPanel
-          icon={FileCheck2}
-          title="Approvals"
-          description="Template lifecycle and attorney review states can plug into this panel without changing the existing template editor."
-          items={[
-            { title: 'Draft review', body: 'Submit templates for test render and activation approval.' },
-            { title: 'Generated output', body: 'Route completed drafts for attorney approval before signing or filing.' },
-            { title: 'Version history', body: 'Prepare for immutable versions, compare, clone, and rollback.' },
-          ]}
-        />
-      )}
-      {activeTab === 'branding' && (
-        <ComingSoonPanel
-          icon={Palette}
-          title="Branding / Settings"
-          description="Tenant branding hooks are framed here for letterhead, packet covers, e-sign emails, and portal delivery notices."
-          items={[
-            { title: 'Letterhead', body: 'Logos, colors, firm address, and disclaimer fields.' },
-            { title: 'Packet defaults', body: 'Cover-page settings, output naming, and document visibility.' },
-            { title: 'Provider settings', body: 'Dropbox Sign and DocuSign credential checks can fail closed here.' },
-          ]}
-        />
-      )}
 
       {showCreate && (
         <Modal title="Create Template" onClose={() => setShowCreate(false)}>

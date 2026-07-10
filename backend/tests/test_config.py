@@ -2,7 +2,37 @@ import os
 import pytest
 from cryptography.fernet import Fernet
 
-from app.config import Settings, validate_token_encryption_key
+from app.config import (
+    Settings,
+    validate_jwt_algorithm,
+    validate_mcp_security_settings,
+    validate_platform_bootstrap_settings,
+    validate_token_encryption_key,
+)
+
+
+def test_application_jwt_algorithm_is_strictly_hs256():
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        ALGORITHM="HS256",
+    )
+    validate_jwt_algorithm(settings)
+
+
+@pytest.mark.parametrize("algorithm", ["ES256", "RS256", "none", "hs256", ""])
+def test_application_jwt_algorithm_rejects_every_other_profile(algorithm):
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        ALGORITHM=algorithm,
+    )
+    with pytest.raises(ValueError, match="exactly HS256"):
+        validate_jwt_algorithm(settings)
 
 
 def test_token_encryption_key_required():
@@ -28,7 +58,7 @@ def test_token_encryption_key_missing_raises():
     os.environ["SECRET_KEY"] = "test-secret"
 
     with pytest.raises(
-        ValueError, match="TOKEN_ENCRYPTION_KEY is required but not set"
+        ValueError, match="TOKEN_ENCRYPTION_KEYS or TOKEN_ENCRYPTION_KEY is required"
     ):
         settings = Settings()
         validate_token_encryption_key(settings)
@@ -41,7 +71,7 @@ def test_token_encryption_key_invalid_raises():
     os.environ["SECRET_KEY"] = "test-secret"
 
     with pytest.raises(
-        ValueError, match="TOKEN_ENCRYPTION_KEY must be a valid Fernet key"
+        ValueError, match="must be a valid Fernet key"
     ):
         settings = Settings()
         validate_token_encryption_key(settings)
@@ -56,3 +86,37 @@ def test_mcp_server_url_defaults_to_empty_for_local_fallback():
     settings = Settings(_env_file=None)
 
     assert settings.MCP_SERVER_URL == ""
+
+
+def test_mcp_upstream_key_required_when_private_service_is_configured():
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        MCP_SERVER_URL="http://courtlistener-mcp:8021",
+        MCP_UPSTREAM_API_KEY="",
+    )
+    with pytest.raises(ValueError, match="MCP_UPSTREAM_API_KEY"):
+        validate_mcp_security_settings(settings)
+
+
+def test_platform_bootstrap_requires_identity_scope_expiry_and_distinct_signing_key():
+    import hashlib
+    import json
+
+    entry = {
+        "operator_id": "ops@example.com",
+        "key_hash": hashlib.sha256(b"bootstrap").hexdigest(),
+        "scopes": ["platform:read"],
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql://test",
+        SECRET_KEY="x" * 48,
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        PLATFORM_BOOTSTRAP_CREDENTIALS_JSON=json.dumps([entry]),
+        PLATFORM_TOKEN_SIGNING_KEY="s" * 48,
+    )
+    validate_platform_bootstrap_settings(settings)

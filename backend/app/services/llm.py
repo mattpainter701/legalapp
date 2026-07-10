@@ -6,6 +6,7 @@ from typing import AsyncGenerator, List, Tuple
 from openai import APIConnectionError, APIError, AsyncOpenAI
 
 from app.config import get_settings
+from app.services.byok_security import normalize_customer_llm_endpoint
 from app.services.gateway_privacy import gateway_metadata as sanitized_gateway_metadata
 
 settings = get_settings()
@@ -46,11 +47,6 @@ def _llm_error_msg(exc: Exception) -> str:
 # Public OpenAI-compatible endpoints for tenant BYOK providers that don't
 # require a tenant-supplied endpoint. Copilot (Azure OpenAI) always requires
 # a tenant-supplied endpoint — Azure deployments are per-resource.
-_CUSTOMER_PROVIDER_BASE_URLS: dict[str, str] = {
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
-}
-
-
 SYSTEM_PROMPT_TEMPLATE = """You are a senior paralegal and legal analyst working for {tenant_name}. You support attorneys with research, drafting, and analysis. You are precise, discreet, and bound by professional ethics.
 
 CAPABILITIES:
@@ -183,14 +179,11 @@ class LLMService:
         """
         if not customer_api_key:
             return self.client
-        base_url = customer_endpoint or _CUSTOMER_PROVIDER_BASE_URLS.get(
-            customer_provider or ""
+        # Revalidate here so legacy or tampered database values cannot bypass
+        # the persistence-time SSRF boundary.
+        base_url = normalize_customer_llm_endpoint(
+            customer_provider or "", customer_endpoint
         )
-        if not base_url:
-            raise RuntimeError(
-                f"No endpoint configured for customer LLM provider "
-                f"'{customer_provider}' — set an endpoint in tenant LLM settings"
-            )
         return AsyncOpenAI(api_key=customer_api_key, base_url=base_url)
 
     async def complete(

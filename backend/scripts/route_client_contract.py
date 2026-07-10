@@ -181,7 +181,7 @@ def _consume_braced_object(source: str, start: int) -> int:
             elif ch == in_string:
                 in_string = None
         else:
-            if ch in {"\"", "'", "`"}:
+            if ch in {'"', "'", "`"}:
                 in_string = ch
             elif ch == "{":
                 depth += 1
@@ -230,7 +230,11 @@ def extract_frontend_api_calls(frontend_path: str | Path) -> set[FrontendCall]:
             path = f"/api{path}"
         if not path.startswith("/api/") and path != "/api":
             return
-        calls.add(FrontendCall(method=method, path=path, line=_line_at(offsets, index), raw=path))
+        calls.add(
+            FrontendCall(
+                method=method, path=path, line=_line_at(offsets, index), raw=path
+            )
+        )
 
     # axios-style calls, including alternate client instances.
     axios_method_pattern = re.compile(
@@ -306,17 +310,24 @@ def extract_frontend_api_calls(frontend_path: str | Path) -> set[FrontendCall]:
 def extract_backend_routes(app) -> dict[str, set[str]]:
     routes: dict[str, set[str]] = defaultdict(set)
     for route in app.routes:
-        path = getattr(route, "path", None)
-        if not path or not isinstance(path, str):
-            continue
-        normalized_path = normalize_path(path)
-        methods = getattr(route, "methods", None)
-        if not methods:
-            continue
-        for method in methods:
-            normalized = normalize_backend_method(method)
-            if normalized:
-                routes[normalized_path].add(normalized)
+        entries = [route]
+        effective_contexts = getattr(route, "effective_route_contexts", None)
+        if getattr(route, "endpoint", None) is None and callable(effective_contexts):
+            # FastAPI 0.139 retains included routers lazily. These contexts are
+            # the fully-prefixed routes that the live dispatcher serves.
+            entries = list(effective_contexts())
+        for entry in entries:
+            path = getattr(entry, "path", None)
+            if not path or not isinstance(path, str):
+                continue
+            normalized_path = normalize_path(path)
+            methods = getattr(entry, "methods", None)
+            if not methods:
+                continue
+            for method in methods:
+                normalized = normalize_backend_method(method)
+                if normalized:
+                    routes[normalized_path].add(normalized)
     return routes
 
 
@@ -365,10 +376,7 @@ def main() -> int:
     parser.add_argument(
         "frontend_path",
         nargs="?",
-        default=Path(__file__).resolve().parents[2]
-        / "frontend"
-        / "src"
-        / "api.js",
+        default=Path(__file__).resolve().parents[2] / "frontend" / "src" / "api.js",
         help="Path to frontend/src/api.js",
     )
     args = parser.parse_args()
@@ -380,7 +388,9 @@ def main() -> int:
     missing, mismatched = compare_frontend_to_backend(calls, backend_routes)
 
     if not missing and not mismatched:
-        print(f"PASS: {len(calls)} frontend API call sites match backend route contracts.")
+        print(
+            f"PASS: {len(calls)} frontend API call sites match backend route contracts."
+        )
         return 0
 
     if missing:
@@ -392,7 +402,9 @@ def main() -> int:
         print("Frontend method not allowed by backend route:")
         for call, methods in mismatched:
             live = ", ".join(sorted(methods))
-            print(f"  - {call.method} {call.path} -> backend allows {live} (api.js:{call.line})")
+            print(
+                f"  - {call.method} {call.path} -> backend allows {live} (api.js:{call.line})"
+            )
 
     return 1
 

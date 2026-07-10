@@ -1,15 +1,15 @@
 import React from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   ShieldCheck, BadgeCheck, Scale, Lock, Landmark, Building2, UserCircle,
   Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
-  Gavel, FileText, FileSearch, CalendarClock, Plug, FolderInput, Mic, MonitorSmartphone,
+  Gavel, FileText, FileSearch, CalendarClock, Plug, FolderInput, MonitorSmartphone,
   Sparkles,
 } from 'lucide-react'
-import bothSidesImg from '../assets/home/both-sides-1280.webp'
-import bothSidesSmallImg from '../assets/home/both-sides-720.webp'
-import libraryImg from '../assets/home/library-1280.webp'
-import librarySmallImg from '../assets/home/library-720.webp'
+import balancedAccessImg from '../assets/home/balanced-access-record-editorial-v1-1280.webp'
+import balancedAccessSmallImg from '../assets/home/balanced-access-record-editorial-v1-720.webp'
+import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.webp'
+import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
 
 const SKILLS = [
   { icon: Scale, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
@@ -27,7 +27,7 @@ const ADDONS = [
   {
     icon: Vault,
     name: 'Trust & Estate management',
-    description: 'Estate portfolios with role-aware access for trustees, grantors, and beneficiaries \u2014 asset tracking, tax analysis, and probate, kept court-ready.',
+    description: 'Estate portfolios with role-aware access for trustees, grantors, and beneficiaries \u2014 asset tracking, tax analysis, and probate records organized for review.',
   },
   {
     icon: Handshake,
@@ -40,12 +40,12 @@ const PILLARS = [
   {
     icon: ShieldCheck,
     title: 'Grounded in your sources',
-    body: 'Answers are drawn from your firm\u2019s document library and public case law \u2014 not invented. When the model reasons beyond a source, it says so.',
+    body: 'Research can draw from your firm\u2019s document library and public case law. Review linked sources and apply professional judgment before relying on an answer.',
   },
   {
     icon: BadgeCheck,
     title: 'Cited & verifiable',
-    body: 'Every claim is tagged by confidence \u2014 settled, verify, or general knowledge \u2014 with citations you can open and check before you rely on it.',
+    body: 'Research responses can include confidence labels and citations you can open and check before you rely on them.',
   },
   {
     icon: Scale,
@@ -58,30 +58,30 @@ const HOW = [
   {
     icon: FileText,
     title: 'Drafts from your own templates',
-    body: 'Point Clarity at your firm\u2019s templates and prior work product. It drafts new documents in your house style \u2014 ready for an attorney\u2019s edits.',
+    body: 'Use your firm\u2019s templates and approved source material to prepare drafts for attorney editing and review.',
   },
   {
     icon: FileSearch,
     title: 'Reviews documents for gaps',
-    body: 'Drop in a contract, brief, or estate plan and Clarity flags missing clauses, inconsistencies, and risk \u2014 each note linked back to its source.',
+    body: 'Document-review workflows can surface possible gaps and inconsistencies for an attorney to verify against the source.',
   },
   {
     icon: CalendarClock,
     title: 'Manages schedules & deadlines',
-    body: 'Track matters, renewals, and filing dates in one place. Clarity surfaces what\u2019s due and rolls deadlines forward on the cadence you set.',
+    body: 'Track matters, renewals, and due dates in one place. Scheduled reminders surface work on the configured cadence.',
   },
 ]
 
 const FEATURES = [
   {
     icon: Gavel,
-    title: 'Backed by real court records',
-    body: 'Answers draw on public case law and court records \u2014 cited and confidence-tagged so you can verify before you rely on them.',
+    title: 'Source-linked legal research',
+    body: 'When public-law sources are configured, research can include citations and confidence labels for attorney verification.',
   },
   {
     icon: Plug,
-    title: 'Microsoft 365 & Google Docs',
-    body: 'Work where you already work. Open, edit, and save documents straight to Microsoft 365 and Google Docs.',
+    title: 'Microsoft 365 & Google Drive sources',
+    body: 'Connect supported Microsoft and Google cloud sources so authorized users can bring documents into matter workflows.',
   },
   {
     icon: FolderInput,
@@ -89,9 +89,9 @@ const FEATURES = [
     body: 'Drag files in, or connect enterprise file shares so Clarity reads from the documents your firm already keeps.',
   },
   {
-    icon: Mic,
-    title: 'Voice transcription',
-    body: 'Dictate notes, intake calls, and memos. Clarity transcribes and turns them into searchable, citable work product.',
+    icon: ClipboardList,
+    title: 'Call Intake & Zoom Phone',
+    body: 'Capture caller details, history, outcomes, and assigned follow-up tasks. Configured Zoom Phone webhooks can add call records to the intake queue.',
   },
   {
     icon: MonitorSmartphone,
@@ -125,6 +125,8 @@ function Pill({ label, classes }) {
 export default function HomePage() {
   const navigate = useNavigate()
   const goLogin = () => navigate('/login')
+  const startIntake = () => navigate('/signup?plan=intake-only')
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
   const scrollTo = (id) => (e) => {
     e.preventDefault()
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -132,6 +134,12 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-brand-bg text-brand-ink">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-brand-ink focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
+      >
+        Skip to main content
+      </a>
       {/* ── Top nav ───────────────────────────────────────────────── */}
       <header className="sticky top-0 z-40 bg-brand-bg/85 backdrop-blur border-b border-brand-line">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -141,53 +149,54 @@ export default function HomePage() {
             </div>
             <span className="font-serif font-bold text-[17px] tracking-tight">Clarity Legal</span>
           </div>
-          <nav className="hidden md:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
+          <nav aria-label="Marketing" className="hidden md:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
             <a href="#how" onClick={scrollTo('how')} className="hover:text-brand-ink transition-colors">How it works</a>
             <a href="#features" onClick={scrollTo('features')} className="hover:text-brand-ink transition-colors">Features</a>
             <a href="#skills" onClick={scrollTo('skills')} className="hover:text-brand-ink transition-colors">Practice areas</a>
             <a href="#modules" onClick={scrollTo('modules')} className="hover:text-brand-ink transition-colors">Add-ons</a>
-            <a href="#pricing" onClick={scrollTo('pricing')} className="hover:text-brand-ink transition-colors">Pricing</a>
+            <a href="#pricing" onClick={scrollTo('pricing')} className="hover:text-brand-ink transition-colors">Plans</a>
           </nav>
           <div className="flex items-center gap-3">
             <button onClick={goLogin} className="text-[14px] font-sans font-semibold text-brand-ink hover:text-brand-accent-2 transition-colors">
               Sign in
             </button>
-            <button onClick={goLogin} className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
-              Start free trial
+            <button onClick={startIntake} className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
+              Start with Call Intake
             </button>
           </div>
         </div>
       </header>
 
+      <main id="main-content" tabIndex="-1">
       {/* ── Hero ──────────────────────────────────────────────────── */}
       <section className="max-w-6xl mx-auto px-6 pt-16 pb-20 md:pt-24 md:pb-28">
         <div className="grid lg:grid-cols-[1.05fr_1fr] gap-16 items-center">
           <div>
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">
-              Clarity Legal · Legal-safe AI for modern firms
+              Clarity Legal · Legal work software for modern firms
             </span>
             <h1 className="font-serif font-bold text-[44px] md:text-[56px] leading-[1.05] tracking-tight mt-5">
-              A legal-safe AI coworker for the{' '}
+              An AI-assisted workspace for the{' '}
               <em className="italic text-brand-accent-2">most considered</em> work in law.
             </h1>
             <p className="text-brand-ink-2 font-sans text-[18px] leading-relaxed mt-6 max-w-xl">
-              Clarity answers from public case law and court records, drafts from your own templates,
-              and reviews documents for gaps — legal-research claims are source-tagged and framed for attorney review. It
-              connects to Microsoft 365, Google Docs, and your file shares, and follows you across
+              Clarity can use configured public-law sources, draft from your own templates,
+              and support document review — legal-research output is framed for attorney verification. It
+              can connect to Microsoft 365, Google Drive, and configured file shares, and follows you across
               mobile, desktop, and the web.
             </p>
             <div className="flex flex-wrap items-center gap-3 mt-8">
-              <button onClick={goLogin} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
-                Start a 14-day trial <ArrowRight size={18} />
+              <button onClick={startIntake} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
+                Start with Call Intake <ArrowRight size={18} />
               </button>
               <a href="#features" onClick={scrollTo('features')} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-surface border border-brand-line text-brand-ink font-sans font-semibold rounded-xl hover:border-brand-ink hover:bg-brand-bg-soft transition-all shadow-sm">
                 Tour the platform
               </a>
             </div>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-9 text-[13px] font-sans text-brand-muted">
-              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> 14-day trial, no card required</span>
+              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> Call Intake and Tasks from day one</span>
               <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> Source-tagged for attorney review</span>
-              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> SOC 2 Type II in progress</span>
+              <span className="inline-flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-brand-accent" /> Firm data isolated by tenant</span>
             </div>
           </div>
 
@@ -201,7 +210,7 @@ export default function HomePage() {
                   <span className="font-serif font-semibold text-[14px]">Clarity Legal</span>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold bg-brand-green/10 text-brand-green border border-brand-green/20">
-                  <ShieldCheck size={12} /> Legal-safe
+                  <ShieldCheck size={12} /> Attorney review workflow
                 </span>
               </div>
               <div className="px-5 py-5 space-y-4">
@@ -231,19 +240,24 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── Trust ribbon ──────────────────────────────────────────── */}
+      {/* ── Verifiable capability ribbon ───────────────────────── */}
       <section className="border-y border-brand-line bg-brand-bg-soft/40">
         <div className="max-w-6xl mx-auto px-6 py-8">
           <p className="text-center text-[11px] font-sans font-bold uppercase tracking-[0.16em] text-brand-muted mb-5">
-            Trusted by considered firms
+            Built for accountable legal work
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-3 text-brand-ink-2 font-serif text-[15px]">
-            <span>Halloway &amp; Pierce LLP</span>
-            <span>Reyes Family Law</span>
-            <span>Okonjo · Trust Counsel</span>
-            <span>Brennan Estate Group</span>
-            <span>North &amp; Vale Mediators</span>
-            <span>Whitfield Family Law</span>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { icon: BadgeCheck, label: 'Source-tagged research' },
+              { icon: FileText, label: 'Attorney-controlled drafts' },
+              { icon: Plug, label: 'Microsoft, Google & Zoom' },
+              { icon: Lock, label: 'Tenant-isolated workspace' },
+            ].map(({ icon: Icon, label }) => (
+              <div key={label} className="flex items-center justify-center gap-2.5 rounded-xl border border-brand-line bg-brand-surface px-4 py-3 text-brand-ink-2 shadow-sm">
+                <Icon size={16} strokeWidth={1.75} className="shrink-0 text-brand-accent-2" aria-hidden="true" />
+                <span className="font-sans text-[13px] font-semibold">{label}</span>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -253,7 +267,7 @@ export default function HomePage() {
         <div className="max-w-2xl">
           <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Your AI coworker</span>
           <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-            It learns your firm, then does the heavy lifting.
+            Uses your configured sources, with your team in control.
           </h2>
           <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
             Clarity reads your templates and documents for context, then drafts, reviews, and keeps
@@ -279,7 +293,7 @@ export default function HomePage() {
           <div className="max-w-2xl mb-12">
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">One platform</span>
             <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-              Everything your practice needs, in one secure workspace.
+              Core legal operations, in one tenant-scoped workspace.
             </h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
               From court-record-backed answers to the tools your team uses every day — Clarity connects
@@ -300,16 +314,16 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── The legal-safe difference ─────────────────────────────── */}
+      {/* ── Review-first workflows ────────────────────────────────── */}
       <section id="platform" className="max-w-6xl mx-auto px-6 py-20 md:py-24 scroll-mt-20">
         <div className="max-w-2xl">
-          <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">The legal-safe difference</span>
+          <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Review-first workflows</span>
           <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-            Powerful AI, built to be trusted in a law practice.
+            AI-assisted workflows designed for lawyer review.
           </h2>
           <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-            Generic chatbots guess. Clarity is engineered around the guarantees attorneys
-            actually need before relying on a machine.
+            General-purpose models can answer without your firm context. Clarity emphasizes
+            linked sources, review steps, and clear boundaries before work is relied upon.
           </p>
         </div>
         <div className="grid md:grid-cols-3 gap-6 mt-12">
@@ -332,12 +346,12 @@ export default function HomePage() {
             <div className="max-w-2xl">
               <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Practice-area skills</span>
               <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-                Built-in expertise for the work you do.
+                Configured workflows for the work you do.
               </h2>
               <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-                Clarity comes with ready-made skills for each practice area — guided workflows
-                that know the documents, checks, and language of your field, all cited and
-                framed for attorney review.
+                Clarity includes practice-area workflows with relevant document patterns,
+                checks, and terminology. Generated work still requires source verification
+                and attorney review.
               </p>
             </div>
           </div>
@@ -412,20 +426,20 @@ export default function HomePage() {
           <div className="relative">
             <div className="absolute -inset-3 bg-brand-gold/10 rounded-[28px] -rotate-1" aria-hidden />
             <img
-              src={bothSidesImg}
-              srcSet={`${bothSidesSmallImg} 720w, ${bothSidesImg} 1280w`}
+              src={balancedAccessImg}
+              srcSet={`${balancedAccessSmallImg} 720w, ${balancedAccessImg} 1280w`}
               sizes="(max-width: 768px) 100vw, 50vw"
-              alt="Two leather chairs facing each other across a table in a warm, light-filled law office"
+              alt="Two role-specific sets of legal documents converging on one organized record"
               loading="lazy"
-              className="relative w-full aspect-[4/3] object-cover rounded-2xl shadow-xl border border-brand-line"
+              className="relative w-full aspect-[3/2] object-cover rounded-2xl shadow-xl border border-brand-line"
             />
           </div>
         </div>
         <div className="grid sm:grid-cols-3 gap-5 mt-14">
           {[
-            { n: '01', t: 'Keeps the record current', b: 'Reminders and roll-forwards run on the cadence you set, so nothing quietly goes stale.' },
-            { n: '02', t: 'Holds hard conversations', b: 'In mediation, the platform is the neutral — naming items, owning the math, tracking approvals.' },
-            { n: '03', t: 'Makes the trail court-ready', b: 'Every value, citation, and approval is logged. Generate a clean report in one click.' },
+            { n: '01', t: 'Helps keep records current', b: 'Configured reminders and roll-forwards surface work on the cadence you set.' },
+            { n: '02', t: 'Supports hard conversations', b: 'In mediation, a shared workspace can organize items, calculations, and recorded approvals.' },
+            { n: '03', t: 'Keeps a reviewable trail', b: 'Key values, citations, and approvals can be tracked and included in generated reports.' },
           ].map(({ n, t, b }) => (
             <div key={n} className="bg-brand-surface border border-brand-line rounded-2xl p-6">
               <div className="font-serif text-[26px] text-brand-accent-2">{n}</div>
@@ -440,26 +454,26 @@ export default function HomePage() {
       <section id="pricing" className="bg-brand-bg-soft/40 border-y border-brand-line scroll-mt-20">
         <div className="max-w-6xl mx-auto px-6 py-20 md:py-24">
           <div className="text-center max-w-2xl mx-auto mb-14">
-            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Pricing</span>
-            <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">Pricing that fits how you work.</h2>
+            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Plans</span>
+            <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">Start focused, then expand deliberately.</h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-              Start with a single licensed module or run the full matter platform.
-              Add premium model usage, MCP credits, and practice modules only when needed.
+              Begin with Call Intake and Tasks or plan a broader rollout. Scope and
+              commercial terms are confirmed with your firm before production activation.
             </p>
           </div>
           <div className="grid lg:grid-cols-2 gap-8 items-stretch max-w-5xl mx-auto">
             {/* Licensing model */}
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-8">
-              <h3 className="font-serif font-bold text-[22px] mb-2">Licensed straight from your directory</h3>
+              <h3 className="font-serif font-bold text-[22px] mb-2">A practical Call Intake starting point</h3>
               <p className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mb-7">
-                Connect Microsoft Entra ID or Active Directory. We count the people who actually
-                practice — administrators and service accounts never count against your license.
+                Give reception a focused workspace for caller history, outcomes, and assigned
+                follow-up tasks. Add Zoom Phone only after its tenant connection is verified.
               </p>
               <ol className="space-y-5">
                 {[
-                  { icon: Plug, t: 'Connect your directory', b: 'Link Microsoft Entra ID or Active Directory in a few clicks.' },
-                  { icon: UserCircle, t: 'We scan for non-admin users', b: 'Only everyday users are counted — admin and service accounts are excluded.' },
-                  { icon: BadgeCheck, t: 'That\u2019s what\u2019s licensed', b: 'Your seat count always matches your directory. Nothing to reconcile by hand.' },
+                  { icon: ClipboardList, t: 'Capture every caller', b: 'Record contact details, purpose, prior history, and the intake outcome.' },
+                  { icon: UserCircle, t: 'Assign clear follow-up', b: 'Create a staff-owned task as part of the intake workflow.' },
+                  { icon: Plug, t: 'Connect Zoom when ready', b: 'A verified Zoom Phone connection can feed call records into the same queue.' },
                 ].map(({ icon: Icon, t, b }) => (
                   <li key={t} className="flex items-start gap-4">
                     <div className="w-10 h-10 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-accent-2 shrink-0">
@@ -476,21 +490,20 @@ export default function HomePage() {
             {/* Price card */}
             <div className="bg-brand-surface border-[1.5px] border-brand-ink rounded-2xl p-8 shadow-lg flex flex-col">
               <div className="flex items-center justify-between">
-                <h3 className="font-serif font-bold text-[22px]">Clarity Legal Plans</h3>
-                <span className="px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold text-brand-muted bg-brand-bg-soft border border-brand-line">per user</span>
+                <h3 className="font-serif font-bold text-[22px]">Clarity Legal rollout</h3>
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold text-brand-muted bg-brand-bg-soft border border-brand-line">tenant scoped</span>
               </div>
-              <div className="mt-5 flex items-baseline gap-1.5">
-                <span className="font-serif text-[52px] leading-none">$5</span>
-                <span className="text-[15px] text-brand-muted font-sans">/ user / month starter</span>
-              </div>
-              <p className="text-brand-muted font-sans text-[13.5px] mt-2">Billed through Stripe · module access stays tenant-scoped</p>
+              <p className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mt-5">
+                Choose the operational scope first. We document integrations, onboarding,
+                support, and commercial terms before anything is enabled in production.
+              </p>
               <hr className="border-brand-line my-6" />
               <div className="space-y-3">
                 {[
-                  { name: 'Caller Intake Tracker', price: '$5/user/mo', body: 'Reception desk call tracking, lead notes, partner association, history search, and CSV export.' },
-                  { name: 'Standard Matter Management', price: 'full platform', body: 'Matter workflows, contacts, tasks, documents, billing/invoicing, standard chat models, and cloud integrations. Includes caller intake.' },
-                  { name: 'Premium', price: 'metered', body: 'Standard plus card-backed premium model/API usage and user-level model access controls.' },
-                  { name: 'Practice modules', price: 'from $20/user/mo', body: 'Add-on workflows such as trust accounting, mediation, and specialty practice modules.' },
+                  { name: 'Call Intake + Tasks', price: 'available now', body: 'Caller tracking, history, outcomes, staff assignment, and optional verified Zoom Phone intake.' },
+                  { name: 'Matter platform', price: 'planned rollout', body: 'Matter, contact, document, task, billing, and approved integration workflows selected for your firm.' },
+                  { name: 'AI model access', price: 'policy controlled', body: 'Model access and usage controls are configured for the users and providers your firm approves.' },
+                  { name: 'Practice modules', price: 'optional', body: 'Add specialized workflows only after scope, readiness, and access requirements are agreed.' },
                 ].map((plan) => (
                   <div key={plan.name} className="rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -511,86 +524,47 @@ export default function HomePage() {
                   the broader workflows their tenant has licensed.
                 </p>
               </div>
-              <button onClick={goLogin} className="w-full mt-7 py-3 rounded-xl font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
-                Start free trial
+              <button onClick={startIntake} className="w-full mt-7 py-3 rounded-xl font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
+                Create a Call Intake workspace
               </button>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
-                Need SSO, an SLA, or invoiced billing?{' '}
-                <button onClick={goLogin} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</button>.
+                Questions about onboarding or commercial terms?{' '}
+                <a href={contactUrl} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</a>.
               </p>
             </div>
           </div>
 
-          {/* MCP usage-based pricing */}
-          <div className="max-w-5xl mx-auto mt-8">
-            <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 md:p-9">
-              <div className="grid md:grid-cols-[1.45fr_1fr] gap-8 items-center">
-                <div>
-                  <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-[11px] font-sans font-bold uppercase tracking-wider bg-brand-gold/10 text-brand-gold border border-brand-gold/25">
-                    Pay as you go
-                  </span>
-                  <h3 className="font-serif font-bold text-[22px] mt-3 flex items-center gap-2.5">
-                    <Plug size={20} strokeWidth={1.75} className="text-brand-accent-2" />
-                    Clarity MCP — query Clarity from your own tools
-                  </h3>
-                  <p className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mt-2.5">
-                    Connect Clarity to your own systems through our MCP. Buy credits, authenticate
-                    with a username, and every tool call or query draws down your balance — no seat
-                    required, pay only for what you use.
-                  </p>
-                  <div className="flex flex-wrap gap-2.5 mt-5">
-                    {['Prepaid credits', 'Username authentication', 'Metered per tool call', 'No subscription'].map((b) => (
-                      <span key={b} className="px-3 py-1.5 rounded-full text-[12.5px] font-sans font-medium text-brand-ink-2 bg-brand-bg-soft border border-brand-line">
-                        {b}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="md:border-l md:border-brand-line md:pl-8">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="font-serif text-[46px] leading-none">$0.45</span>
-                    <span className="text-[14px] text-brand-muted font-sans">/ tool call</span>
-                  </div>
-                  <p className="text-brand-muted font-sans text-[13px] leading-relaxed mt-2">
-                    Drawn from prepaid credits — each query or tool call consumes one.
-                  </p>
-                  <button onClick={goLogin} className="inline-flex items-center gap-2 mt-5 px-5 py-2.5 bg-brand-ink text-white font-sans font-semibold text-[14px] rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm">
-                    Buy credits <ArrowRight size={16} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
 
       {/* ── Security strip ────────────────────────────────────────── */}
       <section id="security" className="max-w-6xl mx-auto px-6 py-20 md:py-24 scroll-mt-20">
         <div className="bg-brand-ink rounded-3xl px-8 py-14 md:px-16 text-center relative overflow-hidden">
-          <img src={libraryImg} srcSet={`${librarySmallImg} 720w, ${libraryImg} 1280w`} sizes="(max-width: 768px) 100vw, 1152px" alt="" aria-hidden loading="lazy" className="absolute inset-0 w-full h-full object-cover opacity-20" />
+          <img src={secureArchiveImg} srcSet={`${secureArchiveSmallImg} 720w, ${secureArchiveImg} 1280w`} sizes="(max-width: 768px) 100vw, 1152px" alt="" aria-hidden loading="lazy" className="absolute inset-0 w-full h-full object-cover opacity-30" />
           <div className="absolute inset-0 bg-brand-ink/80" aria-hidden />
           <div className="relative">
             <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[12px] font-sans font-semibold bg-white/10 text-white border border-white/15">
               <ShieldCheck size={14} /> Your firm’s data stays isolated
             </span>
             <h2 className="font-serif font-bold text-[34px] md:text-[40px] text-white leading-tight mt-6">
-              14 days. No credit card. Real matters.
+              Start focused. Add the broader platform when you need it.
             </h2>
             <p className="text-white/70 font-sans text-[17px] leading-relaxed mt-4 max-w-2xl mx-auto">
-              Spin up a workspace, bring in one matter, trust, or case, and decide on day 14.
-              We’ll never autopay you in.
+              Begin with Call Intake and Tasks, connect your team, and expand into the
+              broader matter platform when the workflow is right for your firm.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
-              <button onClick={goLogin} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-xl hover:bg-brand-bg transition-all shadow-sm">
-                Start the trial <ArrowRight size={18} />
+              <button onClick={startIntake} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-xl hover:bg-brand-bg transition-all shadow-sm">
+                Start with Call Intake <ArrowRight size={18} />
               </button>
-              <button onClick={goLogin} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
+              <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
                 Book a 20-min walkthrough
-              </button>
+              </a>
             </div>
           </div>
         </div>
       </section>
+      </main>
 
       {/* ── Footer ────────────────────────────────────────────────── */}
       <footer className="border-t border-brand-line">
@@ -599,8 +573,12 @@ export default function HomePage() {
             <Logo size={18} />
             <span className="font-serif font-bold text-[15px]">Clarity Legal</span>
           </div>
-          <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Secure. Private. Accurate.</p>
-          <p className="text-brand-muted font-sans text-[12.5px]">© {new Date().getFullYear()} Clarity Legal</p>
+          <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Built for deliberate legal work.</p>
+          <div className="flex items-center gap-4 text-brand-muted font-sans text-[12.5px]">
+            <Link to="/privacy" className="hover:text-brand-ink">Privacy</Link>
+            <Link to="/terms" className="hover:text-brand-ink">Terms</Link>
+            <span>© {new Date().getFullYear()} Clarity Legal</span>
+          </div>
         </div>
       </footer>
     </div>

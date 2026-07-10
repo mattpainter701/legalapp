@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.tenant_credential import TenantCredential
+from app.models.tenant import Tenant
 from app.models.user_oauth_token import UserOAuthToken
 from app.schemas.integrations import IntegrationStatus, IntegrationsListResponse
 from app.services.teams import TEAMS_CONNECT_SCOPES
@@ -918,7 +919,14 @@ async def _resolve_zoom_phone_webhook_tenant(
     tenant_id: str | None,
 ) -> str | None:
     if tenant_id:
-        return str(uuid.UUID(str(tenant_id)))
+        tenant_uuid = uuid.UUID(str(tenant_id))
+        active = await db.scalar(
+            select(Tenant.id).where(
+                Tenant.id == tenant_uuid,
+                Tenant.is_active.is_(True),
+            )
+        )
+        return str(active) if active else None
     account_id = (
         ((event.get("payload") or {}).get("account_id"))
         if isinstance(event.get("payload"), dict)
@@ -926,15 +934,32 @@ async def _resolve_zoom_phone_webhook_tenant(
     )
     if not account_id:
         return None
-    result = await db.execute(
-        select(TenantCredential).where(
-            TenantCredential.provider == ZOOM_PHONE_PROVIDER,
-            TenantCredential.service_account_email == account_id,
-            TenantCredential.is_active,
-        )
+    # The credential table is forced-RLS. Enumerate active tenants from the
+    # non-tenant-scoped tenant registry, then perform each account lookup under
+    # that tenant's normal RLS context. This preserves support for the legacy
+    # shared webhook URL without introducing a cross-tenant bypass.
+    active_tenant_ids = list(
+        (
+            await db.execute(
+                select(Tenant.id).where(Tenant.is_active.is_(True)).order_by(Tenant.id)
+            )
+        ).scalars()
     )
-    row = result.scalar_one_or_none()
-    return str(row.tenant_id) if row else None
+    for active_tenant_id in active_tenant_ids:
+        await set_tenant_context(db, str(active_tenant_id))
+        row = (
+            await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.tenant_id == active_tenant_id,
+                    TenantCredential.provider == ZOOM_PHONE_PROVIDER,
+                    TenantCredential.service_account_email == account_id,
+                    TenantCredential.is_active,
+                )
+            )
+        ).scalar_one_or_none()
+        if row:
+            return str(row.tenant_id)
+    return None
 
 
 async def _handle_zoom_phone_webhook(
@@ -954,6 +979,12 @@ async def _handle_zoom_phone_webhook(
         raise HTTPException(status_code=400, detail="Invalid Zoom webhook payload")
 
     resolved_tenant_id = await _resolve_zoom_phone_webhook_tenant(db, event, tenant_id)
+    if tenant_id and not resolved_tenant_id:
+        raise HTTPException(status_code=404, detail="Zoom webhook tenant not found")
+    if resolved_tenant_id:
+        # Tenant OAuth app secrets are RLS-protected. Bind the validated path or
+        # account mapping before reading the secret used to authenticate Zoom.
+        await set_tenant_context(db, resolved_tenant_id)
     secret = await get_zoom_phone_webhook_secret(
         db,
         tenant_id=resolved_tenant_id,

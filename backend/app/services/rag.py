@@ -333,10 +333,17 @@ async def search_courtlistener_mcp(
         "name": "search_caselaw",
         "arguments": {"query": query, "top_k": top_k},
     }
+    if not settings.MCP_UPSTREAM_API_KEY:
+        logger.error("CourtListener MCP upstream authentication is not configured")
+        return []
     try:
         timeout = httpx.Timeout(12.0, connect=3.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(
+                url,
+                json=payload,
+                headers={"X-Clarity-Internal-Key": settings.MCP_UPSTREAM_API_KEY},
+            )
             response.raise_for_status()
             response_data = response.json()
     except Exception:

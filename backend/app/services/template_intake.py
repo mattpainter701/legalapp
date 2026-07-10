@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.utils.text_processing import extract_text
+from app.services.pdf_templates import discover_pdf_fields
 
 
 DATE_PATTERN = re.compile(
@@ -77,7 +78,20 @@ def analyze_template_upload(
     content_type: str | None,
     title: str | None = None,
 ) -> TemplateAnalysis:
-    text = extract_text(file_bytes, content_type or "", filename)
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    is_pdf = (
+        file_bytes.startswith(b"%PDF-")
+        or (filename or "").lower().endswith(".pdf")
+        or media_type == "application/pdf"
+    )
+    pdf_fields = discover_pdf_fields(file_bytes) if is_pdf else []
+    text = extract_text(
+        file_bytes,
+        media_type,
+        filename,
+        max_pdf_pages=50,
+        max_pdf_chars=20_000,
+    )
     cleaned = _clean_text(text)
     warnings: list[str] = []
     if not cleaned:
@@ -86,9 +100,34 @@ def analyze_template_upload(
         )
 
     body, fields, body_warnings = _suggest_template_body(cleaned)
-    warnings.extend(body_warnings)
+    if not is_pdf:
+        warnings.extend(body_warnings)
+    if is_pdf and pdf_fields:
+        pdf_variable_lines = []
+        for pdf_field in pdf_fields:
+            name = pdf_field["name"]
+            pdf_variable_lines.append(f"{pdf_field['label']}: {{{{{name}}}}}")
+        # PDF generation is mapped only to real AcroForm fields. Heuristic text
+        # replacements would create UI inputs that cannot be placed reliably.
+        # Prevent placeholder-looking source prose from becoming phantom form
+        # variables; PDF variables are sourced exclusively from AcroForm fields.
+        preview_text = cleaned.replace("{{", "{ {").replace("}}", "} }")
+        body = (
+            f"{preview_text}\n\nPDF form fields\n"
+            if preview_text
+            else "PDF form fields\n"
+        ) + "\n".join(pdf_variable_lines)
+        fields_for_schema = pdf_fields
+    elif is_pdf:
+        body = cleaned
+        fields_for_schema = []
+        warnings.append(
+            "This PDF has no fillable AcroForm fields. Its layout is preserved, but generation is disabled until fillable fields are added."
+        )
+    else:
+        fields_for_schema = [field.as_dict() for field in fields]
     branding = _detect_branding_profile(cleaned, filename)
-    fmt = _format_from_filename(filename, content_type)
+    fmt = "pdf" if is_pdf else _format_from_filename(filename, content_type)
 
     requested_title = (title or "").strip()
     return TemplateAnalysis(
@@ -100,7 +139,7 @@ def analyze_template_upload(
         variable_schema={
             "version": 1,
             "source": "upload_analysis",
-            "fields": [field.as_dict() for field in fields],
+            "fields": fields_for_schema,
         },
         branding_profile=branding,
         warnings=warnings,
@@ -311,10 +350,11 @@ def _title_from_filename(filename: str) -> str:
 
 def _format_from_filename(filename: str, content_type: str | None) -> str:
     lower = (filename or "").lower()
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
     if lower.endswith(".docx"):
         return "docx"
-    if lower.endswith(".pdf"):
+    if lower.endswith(".pdf") or media_type == "application/pdf":
         return "pdf"
-    if lower.endswith(".txt") or (content_type or "").startswith("text/"):
+    if lower.endswith(".txt") or media_type.startswith("text/"):
         return "text"
     return "markdown"

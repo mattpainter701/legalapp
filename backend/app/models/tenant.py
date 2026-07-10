@@ -46,6 +46,15 @@ class Tenant(Base):
     stripe_subscription_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
+    stripe_subscription_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="none", server_default="none"
+    )
+    mcp_entitlement_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="disabled", server_default="disabled"
+    )
+    mcp_billing_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="disabled", server_default="disabled"
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

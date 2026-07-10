@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -25,6 +26,12 @@ def _stub_app():
     return SimpleNamespace(state=SimpleNamespace())
 
 
+@asynccontextmanager
+async def _noop_protocol_lifespan():
+    """Keep DB-startup tests from consuming the SDK manager's one lifecycle."""
+    yield
+
+
 @pytest.mark.asyncio
 async def test_lifespan_continues_in_dev_mode_when_db_connectivity_fails(monkeypatch):
     """DEV_MODE startup keeps serving when first DB ping fails."""
@@ -40,6 +47,7 @@ async def test_lifespan_continues_in_dev_mode_when_db_connectivity_fails(monkeyp
     monkeypatch.setattr(app_main.cache_manager, "close", AsyncMock())
     monkeypatch.setattr(app_main.plugin_cache_manager, "init", AsyncMock())
     monkeypatch.setattr(app_main.plugin_cache_manager, "close", AsyncMock())
+    monkeypatch.setattr(app_main, "protocol_lifespan", _noop_protocol_lifespan)
 
     async with app_main.lifespan(app):
         pass
@@ -69,6 +77,7 @@ async def test_lifespan_fails_closed_when_db_connectivity_fails_in_production(
     monkeypatch.setattr(app_main.cache_manager, "close", AsyncMock())
     monkeypatch.setattr(app_main.plugin_cache_manager, "init", AsyncMock())
     monkeypatch.setattr(app_main.plugin_cache_manager, "close", AsyncMock())
+    monkeypatch.setattr(app_main, "protocol_lifespan", _noop_protocol_lifespan)
 
     with pytest.raises(RuntimeError, match="Database connectivity probe failed"):
         async with app_main.lifespan(app):

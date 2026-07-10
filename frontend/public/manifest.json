@@ -1,8 +1,10 @@
 {
   "name": "Clarity Legal",
   "short_name": "Clarity Legal",
-  "description": "AI-powered legal research and drafting assistant",
+  "description": "Law firm operations and source-aware AI-assisted work, with attorney review.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "theme_color": "#1e3a5f",
   "background_color": "#ffffff",

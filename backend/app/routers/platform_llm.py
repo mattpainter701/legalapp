@@ -1,7 +1,8 @@
 """
 Platform LLM Provider Route Builder.
 
-Authenticated by X-Platform-Key header (same as platform.py).
+Authenticated by short-lived, scoped platform bearer tokens (same as
+``platform.py``).
 
 Endpoints:
   GET  /api/platform/llm/providers                    — list provider presets
@@ -18,7 +19,6 @@ Endpoints:
 """
 
 import asyncio
-import hmac
 import logging
 import time
 import uuid
@@ -37,6 +37,7 @@ from app.models.llm_provider_key import LLMProviderKey
 from app.models.platform import PlatformSetting
 from app.services.llm_routing import LITELLM_PROVIDER, upsert_platform_llm_config
 from app.services.operator_audit import record_operator_audit
+from app.services.platform_auth import require_platform_token
 from app.services.token_vault import decrypt_token, encrypt_token
 
 settings = get_settings()
@@ -54,10 +55,7 @@ RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
 
 
 def _require_platform_key(request: Request) -> None:
-    key = request.headers.get("X-Platform-Key", "")
-    secret = settings.PLATFORM_SECRET_KEY
-    if not secret or len(secret) < 32 or not hmac.compare_digest(key, secret):
-        raise HTTPException(status_code=403, detail="Invalid or missing platform key")
+    require_platform_token(request)
 
 
 # ── Provider presets ────────────────────────────────────────────────────────

@@ -6,18 +6,25 @@ Allows viewing agent run history and manually triggering agents.
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, set_tenant_context
 from app.middleware.tenant import require_admin
 from app.models.scheduler import SchedulerLog
+from app.services.durable_jobs import enqueue_job
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 AGENT_REGISTRY = [
+    {
+        "name": "scheduler-heartbeat",
+        "display_name": "Scheduler Heartbeat",
+        "description": "Confirms tenant-scoped scheduler processing for production monitoring.",
+        "schedule": "Every minute",
+    },
     {
         "name": "renewal-watcher",
         "display_name": "Contract Renewal Watcher",
@@ -72,13 +79,15 @@ class SchedulerLogResponse(BaseModel):
 
 @router.get("/agents", response_model=List[AgentInfo])
 async def list_agents(
-    request: Request,
     db: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    current_user: object = Depends(require_admin),
 ):
     """List all scheduled agents with their last run info."""
     result = await db.execute(
-        select(SchedulerLog).order_by(desc(SchedulerLog.run_at)).limit(100)
+        select(SchedulerLog)
+        .where(SchedulerLog.tenant_id == current_user.tenant_id)
+        .order_by(desc(SchedulerLog.run_at))
+        .limit(100)
     )
     logs = result.scalars().all()
 
@@ -107,13 +116,15 @@ async def list_agents(
 
 @router.get("/logs", response_model=List[SchedulerLogResponse])
 async def get_logs(
-    request: Request,
     db: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    current_user: object = Depends(require_admin),
 ):
     """Return the 50 most recent scheduler run logs."""
     result = await db.execute(
-        select(SchedulerLog).order_by(desc(SchedulerLog.run_at)).limit(50)
+        select(SchedulerLog)
+        .where(SchedulerLog.tenant_id == current_user.tenant_id)
+        .order_by(desc(SchedulerLog.run_at))
+        .limit(50)
     )
     logs = result.scalars().all()
     return [
@@ -132,25 +143,30 @@ async def get_logs(
 @router.post("/agents/{agent_name}/run", status_code=202)
 async def trigger_agent(
     agent_name: str,
-    request: Request,
-    _: object = Depends(require_admin),
+    current_user: object = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Manually trigger a named agent. Returns 202 Accepted immediately."""
-    valid_names = {a["name"] for a in AGENT_REGISTRY}
-    if agent_name not in valid_names:
-        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is None:
-        raise HTTPException(status_code=503, detail="Scheduler not running")
-
-    import asyncio
-
-    asyncio.create_task(scheduler.run_agent_manually(agent_name))
-
+    """Durably queue the supported tenant-scoped manual operation."""
+    if agent_name != "user-sync":
+        raise HTTPException(
+            status_code=410,
+            detail="Manual cross-tenant agent triggers are retired",
+        )
+    tenant_id = current_user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+    minute = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
+    job = await enqueue_job(
+        db,
+        tenant_id=tenant_id,
+        kind="user_sync",
+        idempotency_key=f"manual-user-sync:{minute}",
+        payload={"requested_by_user_id": str(current_user.id)},
+    )
+    await db.commit()
     return {
         "accepted": True,
         "agent": agent_name,
-        "message": f"Agent '{agent_name}' triggered. Check /scheduler/logs for status.",
+        "job_id": str(job.id),
+        "message": "Tenant directory sync queued.",
         "triggered_at": datetime.now(timezone.utc).isoformat(),
     }

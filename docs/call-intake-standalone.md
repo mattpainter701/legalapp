@@ -45,7 +45,8 @@ returns `(plan_id, upsell_target)` for the auth payload and the JWT `plan` claim
 
 Platform admin UI → Tenants → expand a tenant → **Plan** → select `Call Intake` → **Set Plan**.
 
-API (requires `X-Platform-Key`):
+API (requires a short-lived platform bearer token with the matching read/write
+scope; `X-Platform-Key` is accepted only by the bootstrap exchange route):
 
 ```
 GET  /api/platform/plans                      # list available plans
@@ -69,10 +70,10 @@ POST /api/auth/signup/plan
 ```
 
 - Rejected (403) unless the named plan has `public_signup = true` — future tiers opt in by flag.
-- Creates the tenant (`billing_tier = intake_trial`), `TenantSettings.custom_config =
-  {plan, trial_ends_at}` (14-day trial), and an **admin** user, then logs them in.
-- Trial is informational in this release; expiry enforcement + Stripe conversion are
-  planned fast-follows.
+- Creates the tenant (`billing_tier = intake_trial`), internal access-window metadata,
+  and an **admin** user, then logs them in.
+- Access-window metadata is informational in this release. The public site does not
+  promise an automatically enforced trial or conversion until those billing gates ship.
 
 ## Access enforcement (fail-closed)
 

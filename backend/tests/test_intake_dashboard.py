@@ -1,6 +1,10 @@
 import asyncio
 import csv
+import hashlib
+import hmac
 import io
+import json
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -16,6 +20,8 @@ from app.models.intake_dashboard import (
     PartnerRotationState,
 )
 from app.models.tenant import Tenant
+from app.models.tenant_credential import TenantCredential
+from app.models.tenant_oauth_app import TenantOAuthApp
 from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
@@ -32,6 +38,7 @@ from app.services.zoom_phone import (
     verify_zoom_webhook_signature,
     zoom_webhook_validation_response,
 )
+from app.services.token_vault import encrypt_token
 
 
 def test_normalize_phone_strips_formatting_and_country_code():
@@ -154,6 +161,133 @@ def test_extract_zoom_phone_v3_call_element_webhook():
     assert len(logs) == 1
     assert logs[0]["call_element_id"] == "element-1"
     assert logs[0]["call_history_uuid"] == "history-1"
+
+
+@pytest.mark.asyncio
+async def test_zoom_ingress_to_intake_to_assigned_task_e2e(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """Prove the first-customer path from Zoom webhook through the Tasks API."""
+    webhook_secret = "zoom-first-customer-webhook-secret"
+    account_id = "zoom-first-customer-account"
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="first-customer-staff@testfirm.com",
+        full_name="First Customer Staff",
+        role="user",
+        is_active=True,
+    )
+    db_session.add_all(
+        [
+            staff,
+            TenantOAuthApp(
+                tenant_id=test_tenant.id,
+                provider="zoom_phone",
+                encrypted_client_id=encrypt_token("zoom-client"),
+                encrypted_client_secret=encrypt_token("zoom-client-secret"),
+                encrypted_webhook_secret_token=encrypt_token(webhook_secret),
+                configured_by_user_id=test_user.id,
+                is_active=True,
+            ),
+            TenantCredential(
+                tenant_id=test_tenant.id,
+                provider="zoom_phone",
+                encrypted_access_token=encrypt_token("zoom-access-token"),
+                service_account_email=account_id,
+                is_active=True,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    async def fake_call_detail(*_args, **_kwargs):
+        return {
+            "id": "first-customer-call-1",
+            "direction": "inbound",
+            "caller_name": "First Customer Caller",
+            "caller_number": "+1 701-555-0110",
+            "callee_name": "Reception",
+            "start_time": "2026-07-09T14:15:00Z",
+            "result": "answered",
+        }
+
+    monkeypatch.setattr(
+        "app.services.zoom_phone.fetch_zoom_phone_call_history_detail",
+        fake_call_detail,
+    )
+
+    event = {
+        "event": "phone.callee_call_history_completed",
+        "payload": {
+            "account_id": account_id,
+            "object": {
+                "call_logs": [
+                    {
+                        "id": "first-customer-call-1",
+                        "direction": "inbound",
+                        "caller_name": "First Customer Caller",
+                        "caller_number": "+1 701-555-0110",
+                        "callee_name": "Reception",
+                        "start_time": "2026-07-09T14:15:00Z",
+                        "result": "answered",
+                    }
+                ]
+            },
+        },
+    }
+    body = json.dumps(event, separators=(",", ":")).encode()
+    timestamp = str(int(time.time()))
+    digest = hmac.new(
+        webhook_secret.encode(),
+        b"v0:" + timestamp.encode() + b":" + body,
+        hashlib.sha256,
+    ).hexdigest()
+    ingress = await client.post(
+        f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-zm-request-timestamp": timestamp,
+            "x-zm-signature": f"v0={digest}",
+        },
+    )
+    assert ingress.status_code == 200, ingress.text
+    assert ingress.json()["imported"] == 1
+
+    queue = await client.get("/api/intake/dashboard/zoom-phone/calls")
+    assert queue.status_code == 200
+    zoom_call = next(
+        call
+        for call in queue.json()["calls"]
+        if call["external_ref"] == "zoom_phone:call:first-customer-call-1"
+    )
+
+    captured = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "existing_communication_id": zoom_call["id"],
+            "caller_name": "First Customer Caller",
+            "phone": "+1 701-555-0110",
+            "practice_area": "family",
+            "purpose": "Needs an attorney callback",
+            "outcome": "create_lead",
+            "qualified": True,
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Return intake call",
+        },
+    )
+    assert captured.status_code == 201, captured.text
+    task_id = captured.json()["task_id"]
+
+    tasks = await client.get("/api/tasks", params={"limit": 200})
+    assert tasks.status_code == 200
+    task = next(item for item in tasks.json()["items"] if item["id"] == task_id)
+    assert task["source"] == "intake_dashboard"
+    assert task["assigned_to_user_id"] == str(staff.id)
+    assert task["contact_id"] == captured.json()["contact_id"]
+    assert "First Customer Caller" in task["title"]
 
 
 def test_parse_legacy_call_csv_validates_duplicates_and_dates():

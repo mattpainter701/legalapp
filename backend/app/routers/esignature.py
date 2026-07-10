@@ -8,9 +8,8 @@ signs in the portal via the matter-scoped portal token.
 """
 
 import hashlib
-import asyncio
+import logging
 import uuid
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import List
 
@@ -41,9 +40,25 @@ from app.services.esign import (
     record_portal_signature,
     signer_can_act_now,
 )
+from app.services.matter_file_store import (
+    MatterFileAccessError,
+    MatterFileIntegrityError,
+    MatterFileMetadataError,
+    MatterFileNotFound,
+    MatterFileReadError,
+    MatterFileStore,
+    MatterFileTooLarge,
+)
+from app.services.provider_http import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderNotFound,
+)
 
 router = APIRouter(prefix="/api/matters", tags=["esignature"])
 portal_router = APIRouter(prefix="/api/portal/client", tags=["esignature-portal"])
+logger = logging.getLogger(__name__)
+matter_file_store = MatterFileStore()
 
 
 # ── Serialization ───────────────────────────────────────────────────────────
@@ -125,11 +140,28 @@ async def _source_document_is_unchanged(
     if not req.document_id or not req.source_document_sha256:
         return False
     doc = await db.get(MatterDocument, req.document_id)
-    path = Path(doc.storage_path or "") if doc else None
-    if path is None or not path.is_file():
+    if (
+        doc is None
+        or str(doc.tenant_id) != str(req.tenant_id)
+        or str(doc.matter_id) != str(req.matter_id)
+    ):
         return False
-    content = await asyncio.to_thread(path.read_bytes)
-    return hashlib.sha256(content).hexdigest() == req.source_document_sha256
+    try:
+        await matter_file_store.read_matter_file_bytes(
+            db=db,
+            tenant_id=str(req.tenant_id),
+            document=doc,
+            expected_sha256=req.source_document_sha256,
+            expected_size=req.source_document_size,
+        )
+        return True
+    except (MatterFileReadError, ProviderError) as exc:
+        logger.warning(
+            "E-sign source validation failed for request %s: %s",
+            req.id,
+            type(exc).__name__,
+        )
+        return False
 
 
 def _portal_signer_matches_context(
@@ -233,7 +265,11 @@ async def create_signature_request(
         )
 
     # Validate the document belongs to this matter.
-    doc = await db.get(MatterDocument, uuid.UUID(body.document_id))
+    try:
+        document_id = uuid.UUID(body.document_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Document ID is invalid") from None
+    doc = await db.get(MatterDocument, document_id)
     if (
         doc is None
         or str(doc.matter_id) != str(matter_id)
@@ -250,13 +286,42 @@ async def create_signature_request(
                 "Only signature acknowledgments through the internal provider are available."
             ),
         )
-    source_path = Path(doc.storage_path or "")
-    if not doc.storage_path or not source_path.is_file():
+    try:
+        source_bytes = await matter_file_store.read_matter_file_bytes(
+            db=db,
+            tenant_id=str(user.tenant_id),
+            document=doc,
+        )
+    except MatterFileTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail="The source document exceeds the maximum signing size",
+        ) from exc
+    except ProviderAuthError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The document storage connection needs to be reconnected",
+        ) from exc
+    except ProviderNotFound as exc:
         raise HTTPException(
             status_code=409,
-            detail="The source document must be locally available to bind its SHA-256 before signing",
-        )
-    source_bytes = await asyncio.to_thread(source_path.read_bytes)
+            detail="The source document is no longer available in connected storage",
+        ) from exc
+    except (
+        MatterFileAccessError,
+        MatterFileIntegrityError,
+        MatterFileMetadataError,
+        MatterFileNotFound,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The source document cannot be safely bound for signing",
+        ) from exc
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="The connected document provider could not return the source document",
+        ) from exc
 
     req = SignatureRequest(
         id=uuid.uuid4(),
@@ -467,6 +532,7 @@ async def portal_sign(
             SignatureRequest.matter_id == ctx.matter_id,
             SignatureRequest.tenant_id == ctx.tenant_id,
         )
+        .with_for_update()
     )
     req = result.scalar_one_or_none()
     if req is None:
@@ -537,6 +603,7 @@ async def portal_decline(
             SignatureRequest.matter_id == ctx.matter_id,
             SignatureRequest.tenant_id == ctx.tenant_id,
         )
+        .with_for_update()
     )
     req = result.scalar_one_or_none()
     if req is None:

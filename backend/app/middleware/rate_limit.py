@@ -12,6 +12,7 @@ Only LLM/tool-heavy conversation and plugin paths count against tenant daily lim
 """
 
 from datetime import datetime, timezone
+import hashlib
 import time
 from typing import Optional
 
@@ -38,7 +39,7 @@ SKIP_PREFIXES = (
     "/api/auth/",
     "/api/billing/webhook",
     "/api/integrations/zoom-phone/webhook",
-    "/api/platform/",  # platform auth is key-based, not JWT
+    "/api/platform/",  # handled by the dedicated operator limiter below
     "/health",
     "/docs",
     "/openapi.json",
@@ -161,6 +162,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         self._redis: aioredis.Redis | None = getattr(request.app.state, "redis", None)
         path = request.url.path
+
+        # Platform endpoints use a short-lived bearer token and have their own
+        # strict limiter. Bootstrap exchange is keyed by source IP to slow
+        # guessing; normal requests are keyed by a digest of the session token.
+        if path.startswith("/api/platform/"):
+            bootstrap = path == "/api/platform/auth/token"
+            if bootstrap:
+                identity = _client_ip(request)
+                limit = settings.PLATFORM_BOOTSTRAP_LIMIT_PER_5_MINUTES
+                window = 300
+            else:
+                authorization = request.headers.get("authorization", "")
+                identity = hashlib.sha256(authorization.encode()).hexdigest()[:32]
+                limit = settings.PLATFORM_RATE_LIMIT_PER_MINUTE
+                window = 60
+            rate_key = (
+                f"rate:platform:{'bootstrap' if bootstrap else 'token'}:{identity}"
+            )
+            try:
+                if self._redis:
+                    count = await self._redis.incr(rate_key)
+                    if count == 1:
+                        await self._redis.expire(rate_key, window)
+                elif settings.DEV_MODE:
+                    count = _fallback_auth_increment(rate_key, window)
+                else:
+                    return JSONResponse(
+                        status_code=503,
+                        content={"detail": "Platform rate limiter is unavailable"},
+                    )
+            except aioredis.RedisError:
+                if not settings.DEV_MODE:
+                    return JSONResponse(
+                        status_code=503,
+                        content={"detail": "Platform rate limiter is unavailable"},
+                    )
+                count = _fallback_auth_increment(rate_key, window)
+            if count > limit:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Platform request rate limit exceeded"},
+                    headers={"Retry-After": str(window)},
+                )
 
         if request.method == "POST":
             for auth_path, (limit, window_seconds) in AUTH_LIMITS.items():

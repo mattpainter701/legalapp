@@ -106,6 +106,9 @@ async def test_external_product_key_records_usage_after_proxy(monkeypatch):
     async def quota_ok(*args, **kwargs):
         calls.append(("quota", args, kwargs))
 
+    async def burst_ok(*args, **kwargs):
+        return None
+
     async def proxy(path, req, payload):
         return {
             "content": [{"type": "json", "json": {"results": [{}, {}]}}],
@@ -121,6 +124,7 @@ async def test_external_product_key_records_usage_after_proxy(monkeypatch):
     monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
     monkeypatch.setattr(mcp, "resolve_product_key", resolve_key)
     monkeypatch.setattr(mcp, "set_tenant_context", set_context)
+    monkeypatch.setattr(mcp, "enforce_product_key_burst_limit", burst_ok)
     monkeypatch.setattr(mcp, "enforce_product_key_quota", quota_ok)
     monkeypatch.setattr(mcp, "_proxy_post", proxy)
     monkeypatch.setattr(mcp, "record_mcp_usage", record_usage)
@@ -162,31 +166,12 @@ async def test_internal_chat_usage_logging_has_internal_auth_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_product_key_usage_can_emit_stripe_meter_event(
-    monkeypatch, db_session, test_tenant
+async def test_product_key_usage_enqueues_durable_stripe_meter_event(
+    db_session, test_tenant
 ):
     tenant_id = test_tenant.id
     test_tenant.stripe_customer_id = "cus_test123"
     await db_session.commit()
-    calls = []
-
-    class FakeMeterEvent:
-        @staticmethod
-        def create(**kwargs):
-            calls.append(kwargs)
-
-    monkeypatch.setattr(mcp_product.settings, "STRIPE_SECRET_KEY", "sk_test")
-    monkeypatch.setattr(
-        mcp_product.settings,
-        "STRIPE_MCP_METER_EVENT_NAME",
-        "mcp_product_key_calls",
-    )
-    monkeypatch.setattr(
-        mcp_product.stripe,
-        "billing",
-        SimpleNamespace(MeterEvent=FakeMeterEvent),
-        raising=False,
-    )
     key = MCPProductKey(
         tenant_id=tenant_id,
         name="Stripe meter key",
@@ -202,7 +187,7 @@ async def test_product_key_usage_can_emit_stripe_meter_event(
         tenant_id=tenant_id,
         product_key_id=key.id,
         auth_type="product_key",
-        transport="messages",
+        transport="streamable_http",
         tool_name="search_caselaw",
         status_code=200,
         result_count=2,
@@ -214,9 +199,18 @@ async def test_product_key_usage_can_emit_stripe_meter_event(
         )
     ).scalar_one()
     assert saved.tool_name == "search_caselaw"
-    assert calls[0]["event_name"] == "mcp_product_key_calls"
-    assert calls[0]["payload"] == {"stripe_customer_id": "cus_test123", "value": "1"}
-    assert calls[0]["identifier"] == f"mcp_usage_{event.id}"
+    from app.models.durable_job import DurableJob
+
+    job = await db_session.scalar(
+        select(DurableJob).where(
+            DurableJob.tenant_id == tenant_id,
+            DurableJob.kind == "mcp_stripe_meter",
+            DurableJob.idempotency_key == str(event.id),
+        )
+    )
+    assert job is not None
+    assert job.payload["stripe_customer_id"] == "cus_test123"
+    assert job.payload["identifier"] == f"mcp_usage_{event.id}"
 
 
 def test_mcp_messages_accepts_jsonrpc_tools_call_shape():
@@ -242,6 +236,7 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
         name="Partner API",
         allowed_tools=["search_caselaw"],
         monthly_call_limit=250,
+        burst_limit_per_minute=30,
         is_active=True,
     )
 
@@ -271,6 +266,7 @@ async def test_tenant_admin_can_create_product_key(monkeypatch):
     assert result["api_key"] == "clmcp_rawsecret"
     assert result["api_key_masked"].startswith("clmcp_")
     assert result["monthly_call_limit"] == 250
+    assert result["burst_limit_per_minute"] == 30
 
 
 @pytest.mark.asyncio

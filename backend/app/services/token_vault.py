@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,14 +23,30 @@ TOKEN_REFRESH_MAX_DELAY = 2.0
 DB_LOCK_TIMEOUT_MS = 5000
 
 
-def _get_fernet() -> Fernet:
-    key = settings.TOKEN_ENCRYPTION_KEY
-    if not key:
-        raise RuntimeError("TOKEN_ENCRYPTION_KEY is required for OAuth token storage")
+def _configured_fernet_keys() -> list[str]:
+    keys = [
+        item.strip()
+        for item in settings.TOKEN_ENCRYPTION_KEYS.replace("\n", ",").split(",")
+        if item.strip()
+    ]
+    if not keys and settings.TOKEN_ENCRYPTION_KEY:
+        keys = [settings.TOKEN_ENCRYPTION_KEY]
+    if not keys:
+        raise RuntimeError(
+            "TOKEN_ENCRYPTION_KEYS or TOKEN_ENCRYPTION_KEY is required for credential storage"
+        )
+    return keys
+
+
+def _get_fernets() -> list[Fernet]:
     try:
-        return Fernet(key.encode() if isinstance(key, str) else key)
+        return [Fernet(key.encode()) for key in _configured_fernet_keys()]
     except Exception:
-        raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key")
+        raise RuntimeError("Every configured token encryption key must be valid Fernet")
+
+
+def _get_fernet() -> MultiFernet:
+    return MultiFernet(_get_fernets())
 
 
 def _expires_at(expires_in: int) -> datetime:
@@ -79,6 +95,20 @@ def encrypt_token(plaintext: str) -> str:
 
 def decrypt_token(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
+def rotate_token_ciphertext(ciphertext: str) -> str:
+    """Re-encrypt ciphertext with the current primary key.
+
+    Decryption accepts the entire staged keyring, while rotation always writes
+    with the first key. Invalid ciphertext fails closed and is never replaced.
+    """
+    try:
+        return _get_fernet().rotate(ciphertext.encode()).decode()
+    except InvalidToken:
+        raise ValueError(
+            "Stored credential cannot be decrypted with the configured keyring"
+        )
 
 
 def _retry_after_delay(value: str | None) -> float | None:

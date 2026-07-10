@@ -96,7 +96,9 @@ class SchedulerCursor:
 
 class SchedulerConnection:
     def __init__(self, lock_acquired=True, unembedded=0):
-        self.cursor_obj = SchedulerCursor(lock_acquired=lock_acquired, unembedded=unembedded)
+        self.cursor_obj = SchedulerCursor(
+            lock_acquired=lock_acquired, unembedded=unembedded
+        )
         self.commits = 0
         self.rollbacks = 0
 
@@ -113,7 +115,10 @@ class SchedulerConnection:
 def test_schema_defines_mcp_owned_opinion_chunks_with_mxbai_vectors():
     assert "CREATE TABLE IF NOT EXISTS opinion_chunks" in SCHEMA_SQL
     assert "embedding vector(1024)" in SCHEMA_SQL
-    assert "embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1'" in SCHEMA_SQL
+    assert (
+        "embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1'"
+        in SCHEMA_SQL
+    )
     assert "CREATE TABLE IF NOT EXISTS embedding_jobs" in SCHEMA_SQL
     assert "CREATE EXTENSION IF NOT EXISTS vector" in SCHEMA_SQL
     assert "USING hnsw (embedding vector_cosine_ops)" in SCHEMA_SQL
@@ -124,7 +129,10 @@ def test_courtlistener_compose_requires_password_and_local_bind_by_default():
 
     assert "POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:?" in compose
     assert "${COURTLISTENER_DB_BIND:-127.0.0.1}" in compose
-    assert "POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:-courtlistener}" not in compose
+    assert "${COURTLISTENER_MCP_BIND:-127.0.0.1}" in compose
+    assert (
+        "POSTGRES_PASSWORD: ${COURTLISTENER_DB_PASSWORD:-courtlistener}" not in compose
+    )
     assert "${COURTLISTENER_DB_BIND:-0.0.0.0}" not in compose
 
 
@@ -155,8 +163,20 @@ def test_embedding_scheduler_dispatches_when_unembedded_chunks_exist():
             batch_size=32,
             minimum_unembedded=1,
         ),
-        dispatch=lambda targets, script_dir, db_url, batch_size, reverse_tunnel, tunnel_remote_port_base: dispatches.append(
-            (targets, script_dir, db_url, batch_size, reverse_tunnel, tunnel_remote_port_base)
+        dispatch=lambda targets,
+        script_dir,
+        db_url,
+        batch_size,
+        reverse_tunnel,
+        tunnel_remote_port_base: dispatches.append(
+            (
+                targets,
+                script_dir,
+                db_url,
+                batch_size,
+                reverse_tunnel,
+                tunnel_remote_port_base,
+            )
         ),
     )
 
@@ -165,7 +185,10 @@ def test_embedding_scheduler_dispatches_when_unembedded_chunks_exist():
     assert len(dispatches) == 1
     assert dispatches[0][0][0].host == "192.168.1.203"
     assert dispatches[0][1] == "/data/legalapp-embeddings/scripts"
-    assert dispatches[0][2] == "postgresql://courtlistener:secret@192.168.1.10:5434/courtlistener"
+    assert (
+        dispatches[0][2]
+        == "postgresql://courtlistener:secret@192.168.1.10:5434/courtlistener"
+    )
     assert dispatches[0][3] == 32
     assert any("pg_advisory_unlock" in sql for sql, _ in conn.cursor_obj.executions)
 
@@ -182,8 +205,12 @@ def test_embedding_scheduler_skips_when_lock_is_held_or_queue_is_empty():
         minimum_unembedded=1,
     )
 
-    held_result = run_scheduler_once(held, config, dispatch=lambda *args, **kwargs: dispatches.append(args))
-    empty_result = run_scheduler_once(empty, config, dispatch=lambda *args, **kwargs: dispatches.append(args))
+    held_result = run_scheduler_once(
+        held, config, dispatch=lambda *args, **kwargs: dispatches.append(args)
+    )
+    empty_result = run_scheduler_once(
+        empty, config, dispatch=lambda *args, **kwargs: dispatches.append(args)
+    )
 
     assert held_result.dispatched is False
     assert held_result.reason == "lock_held"
@@ -196,6 +223,8 @@ def test_manifest_exposes_domain_scoped_legal_tools():
     manifest = build_tool_manifest()
     names = [tool["name"] for tool in manifest["tools"]]
 
+    assert manifest["catalogVersion"] == "1"
+    assert "protocolVersion" not in manifest
     assert names == TOOL_NAMES
     assert names == [
         "search_caselaw",
@@ -220,7 +249,9 @@ def test_manifest_exposes_domain_scoped_legal_tools():
 
 def test_case_details_contract_requires_exactly_one_identifier():
     manifest = build_tool_manifest()
-    details_tool = next(tool for tool in manifest["tools"] if tool["name"] == "get_case_details")
+    details_tool = next(
+        tool for tool in manifest["tools"] if tool["name"] == "get_case_details"
+    )
     schema = details_tool["inputSchema"]
 
     assert schema["oneOf"] == [
@@ -232,7 +263,9 @@ def test_case_details_contract_requires_exactly_one_identifier():
 
 def test_full_opinion_contract_requires_exactly_one_identifier():
     manifest = build_tool_manifest()
-    full_tool = next(tool for tool in manifest["tools"] if tool["name"] == "get_full_opinion")
+    full_tool = next(
+        tool for tool in manifest["tools"] if tool["name"] == "get_full_opinion"
+    )
     schema = full_tool["inputSchema"]
 
     assert schema["oneOf"] == [
@@ -262,7 +295,9 @@ def test_repository_hybrid_search_uses_vector_and_fts_when_embedding_available()
     assert "source_url" in sql
     assert "{{0,cite}}" not in sql
     assert "{0,cite}" in sql
-    assert any(isinstance(param, str) and param.startswith("[0.001") for param in params)
+    assert any(
+        isinstance(param, str) and param.startswith("[0.001") for param in params
+    )
 
 
 def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
@@ -363,7 +398,9 @@ def test_query_embedding_client_posts_to_configured_provider(monkeypatch):
         (
             "http://jetson-query-embed:8031/embed",
             {
-                "texts": ["Represent this sentence for searching relevant passages: tax deficiency"],
+                "texts": [
+                    "Represent this sentence for searching relevant passages: tax deficiency"
+                ],
                 "model": "mixedbread-ai/mxbai-embed-large-v1",
             },
             2.5,
@@ -397,7 +434,10 @@ def test_loader_allows_large_courtlistener_csv_fields():
 def test_loader_prefers_parallel_bz2_decompressor(monkeypatch, tmp_path):
     archive = tmp_path / "opinions.csv.bz2"
     archive.write_bytes(b"")
-    monkeypatch.setattr("mcp_server.loader.shutil.which", lambda name: "/usr/bin/lbzip2" if name == "lbzip2" else None)
+    monkeypatch.setattr(
+        "mcp_server.loader.shutil.which",
+        lambda name: "/usr/bin/lbzip2" if name == "lbzip2" else None,
+    )
 
     assert bz2_decompress_command(archive) == ["/usr/bin/lbzip2", "-dc", str(archive)]
 
@@ -411,7 +451,7 @@ def test_loader_supports_table_specific_smoke_limits():
 def test_loader_parses_backslash_escaped_multiline_csv_fields(tmp_path):
     sample = tmp_path / "opinions.csv"
     sample.write_text(
-        'id,xml_harvard,cluster_id\n'
+        "id,xml_harvard,cluster_id\n"
         '"1","<opinion type=\\"majority\\">\n<p>text</p>","4249781"\n',
         encoding="utf-8",
     )
@@ -428,7 +468,12 @@ def test_loader_parses_backslash_escaped_multiline_csv_fields(tmp_path):
 
 
 def test_loader_uses_harvard_xml_as_opinion_text_fallback():
-    row = {"plain_text": "", "html_with_citations": "", "html": "", "xml_harvard": "<opinion>text</opinion>"}
+    row = {
+        "plain_text": "",
+        "html_with_citations": "",
+        "html": "",
+        "xml_harvard": "<opinion>text</opinion>",
+    }
 
     assert best_opinion_text(row) == "<opinion>text</opinion>"
 
@@ -576,7 +621,15 @@ def test_mvp_specialty_filter_keeps_tax_immigration_and_regional_bankruptcy():
 
 
 def test_mvp_cluster_filter_prefers_precedential_authority():
-    assert should_keep_cluster({"precedential_status": "Published"}, precedential_only=True)
-    assert should_keep_cluster({"precedential_status": "Precedential"}, precedential_only=True)
-    assert not should_keep_cluster({"precedential_status": "Unpublished"}, precedential_only=True)
-    assert should_keep_cluster({"precedential_status": "Unpublished"}, precedential_only=False)
+    assert should_keep_cluster(
+        {"precedential_status": "Published"}, precedential_only=True
+    )
+    assert should_keep_cluster(
+        {"precedential_status": "Precedential"}, precedential_only=True
+    )
+    assert not should_keep_cluster(
+        {"precedential_status": "Unpublished"}, precedential_only=True
+    )
+    assert should_keep_cluster(
+        {"precedential_status": "Unpublished"}, precedential_only=False
+    )

@@ -4,6 +4,12 @@
 
 ---
 
+> **Historical design record, not an operations guide.** The original proposal
+> below includes superseded SSE, authentication, endpoint, schema, and metering
+> details. The implemented product contract is documented in
+> `docs/mcp_product_gateway.md`; current sidecar operations are documented in
+> `docs/courtlistener_mcp_operations.md`. Public MCP remains disabled by default.
+
 ## 1. System Architecture
 
 The MCP/Vector database runs on a **separate server** from the main LegalApp API. In dev, this is a separate Docker Compose file (`docker-compose.mcp.yml`).
@@ -36,7 +42,7 @@ The MCP/Vector database runs on a **separate server** from the main LegalApp API
 
 1. **Main app RAG queries** → `VECTORDB_URL` → vectordb (read-only for `opinion_chunks`)
 2. **MCP tool calls (REST customers)** → main app `/api/mcp/tools/call` → proxy to MCP server REST endpoint
-3. **MCP tool calls (SSE/AI consumers)** → direct to MCP server `:8020/sse`
+3. **MCP tool calls (external clients)** → LegalApp `/api/mcp` Streamable HTTP
 4. **Metering** → MCP server writes `mcp_usage_logs` + `mcp_rate_limits` to main postgres via `MAIN_DB_URL`
 5. **CourtListener ingest** → MCP server writes `opinions` + `opinion_chunks` + `ingest_runs` to vectordb via `VECTORDB_URL`
 
@@ -561,16 +567,25 @@ Uses the opinion's first chunk embedding as the query vector.
 
 ## 6. MCP Protocol Server
 
+> **Implemented architecture:** LegalApp owns the SDK-backed, stateless
+> Streamable HTTP endpoint at `/api/mcp` and negotiates protocol version
+> `2025-06-18`. The private CourtListener process is a REST tool engine bound to
+> the app network and accepts only `X-Clarity-Internal-Key`. It does not expose
+> public SSE. Product clients use scoped `X-MCP-API-Key` credentials; the
+> unscoped legacy `X-API-Key` and `/api/mcp/api-key` issuance routes are retired.
+> Treat the remaining Sprint 11 text in this section as proposal history.
+
 **Design doc reference:** TASKS 1106
 
 ### 6.1 Architecture
 
-The MCP server is a standalone Python process with two transports:
+LegalApp exposes one official-SDK Streamable HTTP protocol route at `/api/mcp`.
+It is stateless, negotiates protocol version `2025-06-18`, and implements
+initialization, initialized notifications, tool discovery, and tool calls.
 
-1. **SSE Transport** (`:8020`) — for AI tool consumers (Claude Desktop, Cursor, etc.)
-2. **REST Transport** (`:8021`) — for API customers and main app proxy
-
-Uses the official `mcp` Python SDK (`pip install mcp`).
+The separate `courtlistener-mcp` process is not a public protocol server. It is
+a private REST tool engine on port 8021, reachable only from the app network.
+The LegalApp backend authenticates to it with a dedicated internal credential.
 
 ### 6.2 Server Structure
 
@@ -578,50 +593,41 @@ Uses the official `mcp` Python SDK (`pip install mcp`).
 mcp-server/
   mcp_server/
     __init__.py
-    server.py          # MCP server setup, transport config
-    mcp_tools.py       # Tool registry + handlers (7 legal tools)
-    embeddings.py       # MCPEmbeddingService (mxbai-1024 batch)
-    courtlistener_ingest.py  # CourtListenerIngestService
-    models.py           # SQLAlchemy models for vectordb tables
-    database.py         # Async DB session for vectordb
-    scheduler.py        # APScheduler for CL ingest/embed/stats jobs
-    ingest_worker.py    # CLI entry point for bulk ingest
-    embed_worker.py     # CLI entry point for batch embedding
-  pyproject.toml
+    server.py          # private authenticated REST tool engine
+    tools.py           # validated tool manifest
+    repository.py      # CourtListener queries
+    query_embeddings.py
+    loader.py
+    dispatcher.py
+    embedding_scheduler.py
+    database.py
   Dockerfile
 ```
 
-### 6.3 SSE Transport
+### 6.3 Transport And Compatibility Routes
 
-```python
-# SSE endpoint: POST /sse for initialize, GET /sse for event stream
-# Follows MCP spec 2024-11-05
-# Server sends events, client sends requests
-```
+- `/api/mcp`: official SDK-backed Streamable HTTP lifecycle.
+- `/api/mcp/manifest`: optional public metadata, hidden while disabled.
+- `/api/mcp/tools/call`: authenticated REST compatibility adapter.
+- `/api/mcp/product` and `/api/mcp/product-keys`: tenant administration.
+- `/api/mcp/messages` and `/api/mcp/sse`: retired, HTTP 410.
+- `/api/mcp/api-key`: retired unscoped issuance, HTTP 410.
 
-### 6.4 REST Transport
+### 6.4 Authentication
 
-```python
-# GET  /api/mcp           → server manifest + tool list
-# POST /api/mcp/tools/call → invoke tool by name
-# POST /api/mcp/api-key    → regenerate tenant API key (proxy to main app)
-# GET  /api/mcp/api-key    → get API key info (proxy to main app)
-# GET  /api/mcp/usage       → tenant usage stats (reads from main DB)
-```
+- Product clients send a scoped `X-MCP-API-Key` to LegalApp.
+- Application users may use their normal JWT only on the internal compatibility
+  path; their JWT is never forwarded upstream.
+- The private CourtListener service accepts only `X-Clarity-Internal-Key`, whose
+  value comes from `MCP_UPSTREAM_API_KEY` on both services.
+- Legacy `X-API-Key` credentials are invalidated and rejected.
 
-### 6.5 Auth
+### 6.5 Release Gate
 
-- **SSE**: API key provided in `initialize` params, resolved to tenant
-- **REST**: `Authorization: Bearer <jwt>` OR `X-API-Key: <tenant_api_key>` header
-- Both resolve to a `(tenant_id, user_id)` tuple for metering
-
-### 6.6 Main App Proxy
-
-The main app `backend/app/routers/mcp.py` becomes a thin proxy:
-
-- `POST /api/mcp/tools/call` → forwards to MCP server REST endpoint
-- `GET /api/mcp` → returns main app manifest with MCP server URL
-- Keeps `POST/GET /api/mcp/api-key` locally (tenant auth)
+`MCP_PRODUCT_ENABLED=false` hides the protocol endpoint and manifest, prevents
+key creation, and is mandatory for the first-customer release. Enabling it later
+also requires active tenant, explicit entitlement, healthy billing, Stripe
+customer/meter configuration, per-key limits, and production monitoring.
 
 ---
 
@@ -656,47 +662,53 @@ No changes to existing jobs. The main app scheduler continues to run renewal-wat
 
 ## 8. Usage Metering & Rate Limiting
 
+> **Implemented architecture:** LegalApp enforces a Redis per-product-key burst
+> limit and a transaction-serialized monthly key quota before tool execution.
+> Successful external calls atomically write `mcp_usage_events` and enqueue a
+> durable `mcp_stripe_meter` outbox job with a stable Stripe identifier. Product
+> access also requires active tenant, entitlement, billing, Stripe customer, and
+> metering configuration state. The older proposal below is retained only for
+> historical context.
+
 **Design doc reference:** TASKS 1107
 
 ### 8.1 Metering Flow
 
 ```
-Client → MCP Server tool call
-  → Authenticate (JWT or API key → resolve tenant_id)
-  → Check rate limit (mcp_rate_limits table in main DB)
-  → Execute tool query (vectordb)
-  → Write metering log (mcp_usage_logs in main DB)
-  → Increment used_this_month (mcp_rate_limits in main DB)
+Client → LegalApp product gateway
+  → resolve product key and recheck tenant/entitlement/billing state
+  → enforce allowed tool, Redis burst limit, and monthly usage quota
+  → call private CourtListener engine with the service credential
+  → atomically write mcp_usage_events and durable Stripe outbox job
   → Return tool result
 ```
 
-The MCP server writes metering data to the **main app database** (not vectordb), because it needs tenant isolation and RLS.
+The private CourtListener engine never connects to the main application database
+and never receives customer credentials. LegalApp owns policy and metering.
 
 ### 8.2 Rate Limiting
 
-- **Default limits**: 60 requests/minute, 5000 requests/month per tenant
-- **Configurable per-tenant**: `PUT /admin/mcp/rate-limits/{tenant_id}`
-- **Sliding window**: Redis-based rate limiting for RPM, database counter for monthly
-- **Enterprise tiers**: configurable via `mcp_rate_limits.monthly_limit`
+- **Default limits**: 60 requests/minute and 1000 successful calls/month per key.
+- **Bounded configuration**: every product key has mandatory burst and monthly
+  limits; neither may be unlimited.
+- **Concurrency**: monthly quota checks use a PostgreSQL advisory transaction lock.
+- **Availability**: the key limiter fails closed in production when Redis is down.
 
 ### 8.3 Admin Endpoints (on main app)
 
 | Endpoint | Method | Description |
 |-|-|-|
-| `/admin/mcp/usage` | GET | Usage summary with filters (tenant_id, tool, date range) |
-| `/admin/mcp/usage/export` | GET | CSV export for billing |
-| `/admin/mcp/rate-limits/{tenant_id}` | PUT | Set per-tenant limits |
-| `/admin/cl/status` | GET | CL ingest status (proxied from MCP server) |
-| `/admin/cl/ingest/trigger` | POST | Manual ingest trigger (proxied) |
-| `/admin/cl/ingest/history` | GET | Ingest run history (proxied) |
-| `/admin/cl/embed/trigger` | POST | Manual embed trigger (proxied) |
+| `/api/platform/mcp` | GET | Cross-tenant product readiness and usage overview. |
+| `/api/platform/tenants/{id}` | PUT | Explicitly manage entitlement and billing state. |
 
 ### 8.4 Tenant Self-Service
 
 | Endpoint | Method | Description |
 |-|-|-|
-| `/mcp/usage` | GET | Tenant views own usage stats |
-| `/mcp/api-key` | POST/GET | Generate/view API key (existing, on main app) |
+| `/api/mcp/product` | GET | Product state, keys, usage, and outbox status. |
+| `/api/mcp/product-keys` | POST | Create one scoped, bounded key when every gate passes. |
+| `/api/mcp/product-keys/{id}` | DELETE | Revoke a tenant product key. |
+| `/api/mcp/usage` | GET | Tenant usage summary. |
 
 ---
 
@@ -758,17 +770,19 @@ PUBLIC_EMBEDDING_ENRICH_METADATA=true
 PUBLIC_EMBEDDING_VERSION=1
 
 # MCP proxy
-MCP_SERVER_URL=http://mcp:8021
-MCP_RATE_LIMIT_RPM=60
-MCP_RATE_LIMIT_DAILY=5000
+MCP_SERVER_URL=http://courtlistener-mcp:8021
+MCP_UPSTREAM_API_KEY=<dedicated-32+-character-service-secret>
+MCP_PRODUCT_ENABLED=false
+MCP_DEFAULT_BURST_LIMIT_PER_MINUTE=60
+MCP_DEFAULT_MONTHLY_CALL_LIMIT=1000
+STRIPE_MCP_METER_EVENT_NAME=mcp_product_key_calls
 ```
 
 ### MCP Server `.env`
 
 ```env
-# Database connections
+# Private CourtListener database
 VECTORDB_URL=postgresql://legal_rag:password@vectordb:5432/legal_rag
-MAIN_DB_URL=postgresql://legalapp:password@host.docker.internal:5432/legalapp
 
 # CourtListener
 COURTLISTENER_API_KEY=
@@ -783,13 +797,6 @@ PUBLIC_EMBEDDING_ENRICH_METADATA=true
 PUBLIC_EMBEDDING_VERSION=1
 PUBLIC_EMBEDDING_BATCH_SIZE=128
 
-# MCP server
-MCP_SSE_PORT=8020
-MCP_REST_PORT=8021
-MCP_SSE_ENABLED=true
-MCP_REST_ENABLED=true
-
-# Rate limiting
-MCP_RATE_LIMIT_RPM=60
-MCP_RATE_LIMIT_DAILY=5000
+# Private service authentication
+MCP_UPSTREAM_API_KEY=<same-secret-as-legalapp-backend>
 ```

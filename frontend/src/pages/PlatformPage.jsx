@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
@@ -38,8 +38,8 @@ function LoginScreen({ onLogin }) {
     setLoading(true)
     setError(null)
     try {
-      await getPlatformUsage(key)
-      onLogin(key)
+      const session = await createPlatformSession(key)
+      onLogin(session.access_token)
     } catch {
       setError('Invalid platform key')
     } finally {
@@ -61,7 +61,7 @@ function LoginScreen({ onLogin }) {
         </div>
         {error && <p className="text-sm text-brand-rose bg-brand-rose/10 px-3 py-2 rounded-lg mb-4 font-sans">{error}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Platform secret key" className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" required />
+          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Platform bootstrap secret" autoComplete="current-password" className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" required />
           <button type="submit" disabled={loading} className="w-full bg-brand-ink text-white py-2.5 rounded-lg text-sm font-medium font-sans hover:bg-brand-ink-2 disabled:opacity-60 transition-colors">
             {loading ? 'Authenticating…' : 'Access Console'}
           </button>
@@ -224,10 +224,10 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
       <div className="bg-brand-surface border border-brand-line rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">MCP product access</p>
-            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Server keys, usage, and billing</h2>
+            <p className="text-xs font-bold uppercase tracking-widest text-brand-muted mb-2">MCP release controls</p>
+            <h2 className="text-brand-ink font-serif text-2xl font-bold tracking-tight">Protocol, keys, usage, and billing</h2>
             <p className="text-brand-ink-2 font-sans text-sm mt-2 max-w-3xl">
-              Track tenant-created MCP keys and MCP-only customers. Calls are metered as separate PAYG MCP usage.
+              Operator visibility for MCP release validation. Customer access remains unavailable while the product flag is disabled.
             </p>
           </div>
           <button
@@ -251,6 +251,11 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
         <div className="flex justify-center py-12">
           <div className="w-8 h-8 border-4 border-brand-ink border-t-transparent rounded-full animate-spin" />
         </div>
+      ) : data?.product_enabled === false ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-950" role="status">
+          <p className="font-semibold">MCP product access is disabled</p>
+          <p className="mt-1 text-sm">No customer keys can be issued or used until the production release flag is deliberately enabled.</p>
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -264,9 +269,7 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
             <h3 className="font-serif font-bold text-brand-ink mb-4">Client connection</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[
-                ['Server URL', connection.server_url],
-                ['JSON-RPC messages', connection.messages],
-                ['SSE discovery', connection.sse],
+                ['Streamable HTTP', connection.streamable_http],
                 ['Auth header', `${connection.auth_header || 'X-MCP-API-Key'}: clmcp_...`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-brand-line bg-brand-bg px-3 py-2">
@@ -276,7 +279,7 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
               ))}
             </div>
             <p className="mt-3 text-xs text-brand-muted font-sans">
-              Clients should register the SSE URL for discovery or call the messages endpoint directly with the MCP product key header.
+              Standards-compliant clients connect to the Streamable HTTP endpoint. The REST endpoint is compatibility-only.
             </p>
           </div>
 
@@ -310,7 +313,7 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
                           <p className="text-xs text-brand-muted font-mono">{key.api_key_masked}</p>
                         </td>
                         <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{(key.calls_30d || 0).toLocaleString()}</td>
-                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans">{key.monthly_call_limit || 'Unlimited'}</td>
+                        <td className="px-5 py-3 text-center text-sm text-brand-muted font-sans">{key.monthly_call_limit ?? 'Not configured'}</td>
                         <td className="px-5 py-3">
                           <TierBadge tier={key.billing?.mode} />
                           <p className="mt-1 text-[11px] text-brand-muted font-mono">{key.billing?.line_item || 'MCP usage'}</p>
@@ -371,9 +374,6 @@ function PlatformMcpTab({ platformKey, onAuthError }) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3 text-xs text-brand-muted font-sans">
-            Backlog: automatically revoke MCP product keys after 180 days without successful use.
-          </div>
         </>
       )}
     </div>

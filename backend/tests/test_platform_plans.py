@@ -5,16 +5,15 @@ from sqlalchemy import select
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.operator_audit import OperatorAuditLog
 from app.models.tenant import TenantSettings
-from app.routers import platform as platform_router
 from app.services.mcp_product import hash_key
+from tests.platform_auth_helpers import platform_headers
 
 TEST_PLATFORM_KEY = "test-platform-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 
 @pytest.mark.asyncio
 async def test_set_tenant_plan(client: AsyncClient, db_session, test_tenant):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
     resp = await client.put(
         f"/api/platform/tenants/{test_tenant.id}",
         json={"plan": "intake-only"},
@@ -33,8 +32,7 @@ async def test_set_tenant_plan(client: AsyncClient, db_session, test_tenant):
 async def test_clear_tenant_plan_and_audit_update(
     client: AsyncClient, db_session, test_tenant
 ):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
     ts = TenantSettings(
         tenant_id=test_tenant.id,
         custom_config={"plan": "intake-only"},
@@ -54,7 +52,11 @@ async def test_clear_tenant_plan_and_audit_update(
     assert "plan" not in (ts.custom_config or {})
     assert test_tenant.billing_tier == "payg"
 
-    logs = (await db_session.execute(select(OperatorAuditLog))).scalars().all()
+    logs = [
+        row
+        for row in (await db_session.execute(select(OperatorAuditLog))).scalars().all()
+        if row.action != "platform.request"
+    ]
     assert [log.action for log in logs] == ["tenant.updated"]
     assert logs[0].resource_type == "tenant"
     assert logs[0].resource_id == str(test_tenant.id)
@@ -67,8 +69,7 @@ async def test_clear_tenant_plan_and_audit_update(
 
 @pytest.mark.asyncio
 async def test_set_unknown_plan_rejected(client: AsyncClient, test_tenant):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
     resp = await client.put(
         f"/api/platform/tenants/{test_tenant.id}",
         json={"plan": "bogus"},
@@ -78,9 +79,25 @@ async def test_set_unknown_plan_rejected(client: AsyncClient, test_tenant):
 
 
 @pytest.mark.asyncio
+async def test_operator_can_suspend_mcp_entitlement(
+    client: AsyncClient, db_session, test_tenant
+):
+    test_tenant.mcp_entitlement_status = "enabled"
+    test_tenant.mcp_billing_status = "active"
+    await db_session.commit()
+    resp = await client.put(
+        f"/api/platform/tenants/{test_tenant.id}",
+        json={"mcp_entitlement_status": "suspended"},
+        headers=platform_headers(),
+    )
+    assert resp.status_code == 200
+    await db_session.refresh(test_tenant)
+    assert test_tenant.mcp_entitlement_status == "suspended"
+
+
+@pytest.mark.asyncio
 async def test_list_plans(client: AsyncClient):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
     resp = await client.get("/api/platform/plans", headers=headers)
     assert resp.status_code == 200
     plan_ids = {p["id"] for p in resp.json()["plans"]}
@@ -92,8 +109,7 @@ async def test_list_plans(client: AsyncClient):
 async def test_platform_mcp_overview(
     client: AsyncClient, db_session, test_tenant, test_user
 ):
-    platform_router.settings.PLATFORM_SECRET_KEY = TEST_PLATFORM_KEY
-    headers = {"X-Platform-Key": TEST_PLATFORM_KEY}
+    headers = platform_headers()
     key = MCPProductKey(
         tenant_id=test_tenant.id,
         name="Claude Desktop",

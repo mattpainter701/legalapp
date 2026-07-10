@@ -5,6 +5,26 @@ HTML certificate if PDF generation is unavailable for any reason.
 """
 
 from datetime import datetime, timezone
+from html import escape as html_escape
+import re
+
+
+def immutable_certificate_filename(
+    *,
+    document_name: str,
+    request_id: str,
+    artifact_sha256: str,
+    content_type: str,
+) -> str:
+    """Build an immutable, collision-resistant evidence artifact filename."""
+    base = (document_name or "document").rsplit(".", 1)[0]
+    safe_base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("._-")[:80]
+    safe_base = safe_base or "document"
+    request_token = re.sub(r"[^A-Fa-f0-9]+", "", request_id).lower()
+    request_token = request_token or "request"
+    digest = artifact_sha256.strip().lower()
+    extension = "pdf" if content_type == "application/pdf" else "html"
+    return f"{safe_base}-signature-evidence-{request_token}-{digest[:16]}.{extension}"
 
 
 def build_certificate(
@@ -93,20 +113,25 @@ def build_certificate(
         return buf.getvalue(), f"{base}-signature-evidence.pdf", "application/pdf"
     except Exception:
         rows = "".join(
-            f"<tr><td>{s.name} &lt;{s.email}&gt;</td>"
-            f"<td>{s.typed_signature or '—'}</td>"
-            f"<td>{s.signed_at.isoformat() if s.signed_at else '—'}</td>"
-            f"<td>{s.signed_ip or '—'}</td></tr>"
+            f"<tr><td>{html_escape(str(s.name))} &lt;{html_escape(str(s.email))}&gt;</td>"
+            f"<td>{html_escape(str(s.typed_signature or '—'))}</td>"
+            f"<td>{html_escape(s.signed_at.isoformat() if s.signed_at else '—')}</td>"
+            f"<td>{html_escape(str(s.signed_ip or '—'))}</td></tr>"
             for s in signers
         )
+        safe_matter_name = html_escape(str(matter_name))
+        safe_document_name = html_escape(str(document_name or "—"))
+        safe_request_id = html_escape(str(request_id))
+        safe_source_sha256 = html_escape(str(source_sha256 or "unavailable"))
+        safe_evidence_sha256 = html_escape(str(evidence_sha256 or "unavailable"))
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>
 <h1>Signature Acknowledgment Certificate</h1>
 <p>Clarity Legal — Electronic Signature</p>
-<p><b>Matter:</b> {matter_name}<br/><b>Document:</b> {document_name or '—'}<br/>
-<b>Generated:</b> {generated}<br/><b>Request ID:</b> {request_id}<br/>
-<b>Source SHA-256:</b> {source_sha256 or 'unavailable'}<br/>
-<b>Evidence SHA-256:</b> {evidence_sha256 or 'unavailable'}</p>
+<p><b>Matter:</b> {safe_matter_name}<br/><b>Document:</b> {safe_document_name}<br/>
+<b>Generated:</b> {generated}<br/><b>Request ID:</b> {safe_request_id}<br/>
+<b>Source SHA-256:</b> {safe_source_sha256}<br/>
+<b>Evidence SHA-256:</b> {safe_evidence_sha256}</p>
 <p><i>This artifact records acknowledgments; it is not a signed copy of the source document.</i></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <thead><tr><th>Signer</th><th>Signature</th><th>Signed at</th><th>IP</th></tr></thead>

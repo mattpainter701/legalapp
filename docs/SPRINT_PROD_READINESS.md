@@ -1,5 +1,12 @@
 # Sprint 13 — Production Readiness Hardening (Epic)
 
+> Historical planning artifact. Checkbox and `PENDING` labels below reflect the
+> plan when it was written and are not the release status of the current tree.
+> Use [FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md](FIRST_CUSTOMER_PRODUCTION_RUNBOOK.md)
+> for the live go/no-go and [ARCHITECTURE.md](ARCHITECTURE.md) for implemented
+> runtime boundaries. Remaining scale/acquirer work in this file is still a
+> roadmap unless a current test/runbook explicitly proves it.
+
 **Epic goal:** Take Clarity Legal from "feature-complete on a single-host foundation" to
 "acquirer-grade production platform." The product surface is not the problem; the
 foundation is. This epic closes the gaps a technical-diligence team would block a sale on
@@ -144,7 +151,8 @@ hand-written `WHERE tenant_id = ...` clauses; RLS is meant to be the backstop bu
 
 ### 1332. Secrets management in prod (P1, MEDIUM) — PENDING
 - [ ] Move secrets out of `.env` files into a secret manager (Docker secrets / Vault / cloud KMS).
-- [ ] Rotate `SECRET_KEY`, `PLATFORM_SECRET_KEY`, DB and Redis passwords; document rotation.
+- [ ] Rotate `SECRET_KEY`, `PLATFORM_TOKEN_SIGNING_KEY`, hashed bootstrap credentials,
+  DB and Redis passwords; document rotation. Leave the legacy platform bridge unset.
 - [ ] Confirm `REDIS_PASSWORD` enforced in prod compose (it is — verify wiring end-to-end).
 - **Acceptance:** No long-lived secret sits in a plaintext file on the host.
 

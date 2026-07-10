@@ -25,7 +25,9 @@ def _schema(properties: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": properties, "required": required}
 
 
-def _one_case_identifier_schema(extra_properties: dict | None = None, required: list[str] | None = None) -> dict:
+def _one_case_identifier_schema(
+    extra_properties: dict | None = None, required: list[str] | None = None
+) -> dict:
     properties = {"opinion_id": {"type": "integer"}, "cluster_id": {"type": "integer"}}
     if extra_properties:
         properties.update(extra_properties)
@@ -45,7 +47,12 @@ def build_tool_manifest() -> dict:
             "inputSchema": _schema(
                 {
                     "query": {"type": "string"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 8,
+                    },
                     "jurisdiction": {"type": "string"},
                     "date_from": {"type": "string", "format": "date"},
                     "date_to": {"type": "string", "format": "date"},
@@ -75,7 +82,12 @@ def build_tool_manifest() -> dict:
                     "cluster_id": {"type": "integer"},
                     "chunk_id": {"type": "string"},
                     "jurisdiction": {"type": "string"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 8,
+                    },
                 },
                 [],
             ),
@@ -112,7 +124,12 @@ def build_tool_manifest() -> dict:
                 {
                     "jurisdiction": {"type": "string"},
                     "query": {"type": "string"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 8,
+                    },
                 },
                 ["jurisdiction", "query"],
             ),
@@ -124,7 +141,12 @@ def build_tool_manifest() -> dict:
                 {
                     "query": {"type": "string"},
                     "date_from": {"type": "string", "format": "date"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 8,
+                    },
                 },
                 ["query", "date_from"],
             ),
@@ -152,7 +174,12 @@ def build_tool_manifest() -> dict:
                     "jurisdiction": {"type": "string"},
                     "date_from": {"type": "string", "format": "date"},
                     "date_to": {"type": "string", "format": "date"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                    },
                 },
                 ["query"],
             ),
@@ -165,7 +192,12 @@ def build_tool_manifest() -> dict:
                     "query": {"type": "string"},
                     "opinion_ids": {"type": "array", "items": {"type": "integer"}},
                     "cluster_ids": {"type": "array", "items": {"type": "integer"}},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 5,
+                    },
                 },
                 [],
             ),
@@ -182,7 +214,9 @@ def build_tool_manifest() -> dict:
         },
     ]
     return {
-        "protocolVersion": "2024-11-05",
+        # This private endpoint is a REST catalog consumed by the public MCP
+        # gateway, not an MCP transport. Do not advertise a protocol version.
+        "catalogVersion": "1",
         "serverInfo": {"name": "clarity-courtlistener", "version": "0.1.0"},
         "capabilities": {"tools": {}},
         "tools": tools,

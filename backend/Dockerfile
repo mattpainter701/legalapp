@@ -1,7 +1,4 @@
-# pin by digest in prod: replace the line below with a digest-pinned ref, e.g.
-#   FROM python:3.11-slim@sha256:<TODO-REAL-DIGEST> AS base
-# Obtain the current digest with:  docker buildx imagetools inspect python:3.11-slim
-FROM python:3.11-slim AS base
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS base
 
 WORKDIR /app
 
@@ -11,13 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    fonts-nanum \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS builder
 
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip==26.1.2 && \
     pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM base AS final
@@ -25,6 +23,12 @@ FROM base AS final
 # Dependencies installed to /usr/local are world-readable, so the non-root
 # user below can still import them.
 COPY --from=builder /install /usr/local
+
+# Runtime JWT verification is restricted to HS256 for application tokens and
+# RS256 for OAuth identity tokens. Remove python-jose's unused pure-Python ECDSA
+# backend (which has no patched release) and the package installer itself from
+# the production image to reduce vulnerable/runtime mutation surface.
+RUN python -m pip uninstall -y ecdsa pip
 
 COPY . .
 

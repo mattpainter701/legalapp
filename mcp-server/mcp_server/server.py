@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import hmac
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .database import connect
@@ -17,6 +20,19 @@ class ToolCallRequest(BaseModel):
     arguments: dict = Field(default_factory=dict)
 
 
+def require_internal_service_key(
+    supplied: str = Header(default="", alias="X-Clarity-Internal-Key"),
+) -> None:
+    expected = os.getenv("MCP_UPSTREAM_API_KEY", "")
+    if len(expected) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="Private service authentication is not configured",
+        )
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid internal service credential")
+
+
 @app.get("/health")
 def health():
     with connect() as conn:
@@ -28,12 +44,14 @@ def health():
     }
 
 
-@app.get("/api/mcp")
+@app.get("/api/mcp", dependencies=[Depends(require_internal_service_key)])
 def manifest():
     return build_tool_manifest()
 
 
-@app.post("/api/mcp/tools/call")
+@app.post(
+    "/api/mcp/tools/call", dependencies=[Depends(require_internal_service_key)]
+)
 def call_tool(body: ToolCallRequest):
     try:
         with connect() as conn:

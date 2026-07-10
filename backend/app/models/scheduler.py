@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,11 @@ class SchedulerLog(Base):
     """Audit log for every scheduled agent run."""
 
     __tablename__ = "scheduler_logs"
+    __table_args__ = (
+        Index(
+            "ix_scheduler_logs_tenant_agent_run", "tenant_id", "agent_name", "run_at"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

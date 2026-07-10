@@ -61,7 +61,9 @@ export default function LoginPage() {
       navigate(userObj?.default_route || '/matters', { replace: true })
     } catch (err) {
       const detail = err?.response?.data?.detail
-      setError(detail || 'Invalid email or password.')
+      setError(detail || (err?.response
+        ? 'Sign in failed. Please try again.'
+        : 'Unable to reach the sign-in service. Check your connection and try again.'))
     } finally {
       setLoading(false)
     }

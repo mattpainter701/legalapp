@@ -1,0 +1,111 @@
+name: Production public health
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-public-health
+  cancel-in-progress: true
+
+jobs:
+  public-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PRODUCTION_ORIGIN: https://legalapp.perevagagroup.com
+      PRODUCTION_DOMAIN: legalapp.perevagagroup.com
+    steps:
+      - name: Verify API and frontend
+        id: http
+        continue-on-error: true
+        run: |
+          curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/health/readiness" | tee /tmp/readiness.json | grep -q '"status":"ok"'
+          curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/" >/dev/null
+
+      - name: Verify TLS remains valid for 14 days
+        id: tls
+        continue-on-error: true
+        run: |
+          timeout 20 openssl s_client -connect "$PRODUCTION_DOMAIN:443" -servername "$PRODUCTION_DOMAIN" </dev/null 2>/dev/null \
+            | openssl x509 -checkend 1209600 -noout
+
+      - name: Create, update, or resolve production alert
+        id: reconcile
+        uses: actions/github-script@v7
+        env:
+          HTTP_OUTCOME: ${{ steps.http.outcome }}
+          TLS_OUTCOME: ${{ steps.tls.outcome }}
+        with:
+          script: |
+            const title = '[production-alert] Clarity Legal readiness failure';
+            const failed = process.env.HTTP_OUTCOME !== 'success' || process.env.TLS_OUTCOME !== 'success';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find((issue) => issue.title === title);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            if (failed) {
+              const body = [
+                'The scheduled production gate detected an unhealthy signal.',
+                '',
+                `- Readiness/HTTP: ${process.env.HTTP_OUTCOME}`,
+                `- TLS (14-day floor): ${process.env.TLS_OUTCOME}`,
+                `- Run: ${runUrl}`,
+                '',
+                'The public readiness endpoint reports only component states; inspect production logs and run `scripts/production_check.sh` for operator detail.',
+              ].join('\n');
+              if (existing) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body,
+                });
+                core.setOutput('transition', 'ongoing-failure');
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+                core.setOutput('transition', 'new-failure');
+              }
+              core.setFailed('Production readiness or TLS check failed.');
+            } else if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Production recovered. Successful run: ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed',
+              });
+              core.setOutput('transition', 'recovered');
+            } else {
+              core.setOutput('transition', 'healthy');
+            }
+
+      - name: Send optional transition webhook
+        if: ${{ always() && (steps.reconcile.outputs.transition == 'new-failure' || steps.reconcile.outputs.transition == 'recovered') }}
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_TRANSITION: ${{ steps.reconcile.outputs.transition }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "No optional alert webhook configured; GitHub issue delivery remains active."
+            exit 0
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          payload="$(jq -n --arg text "Clarity Legal production health: ${ALERT_TRANSITION}. ${run_url}" '{text: $text}')"
+          curl --fail --silent --show-error --max-time 15 \
+            -H 'Content-Type: application/json' --data "$payload" "$ALERT_WEBHOOK_URL" \
+            || echo "::warning::Optional production alert webhook delivery failed."

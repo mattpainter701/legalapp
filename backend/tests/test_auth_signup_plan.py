@@ -58,7 +58,7 @@ async def test_public_signup_provisions_intake_tenant(public_client, db_session)
 
 
 @pytest.mark.asyncio
-async def test_public_signup_provisions_mcp_tenant(public_client, db_session):
+async def test_public_signup_rejects_mcp_tenant(public_client, db_session):
     resp = await public_client.post(
         "/api/auth/signup/plan",
         json={
@@ -69,23 +69,12 @@ async def test_public_signup_provisions_mcp_tenant(public_client, db_session):
             "full_name": "Owner Two",
         },
     )
-    assert resp.status_code == 201
-    user = (
+    assert resp.status_code == 403
+    assert (
         await db_session.execute(
             select(User).where(User.email == "owner@research-api.co")
         )
-    ).scalar_one()
-    assert user.role == "admin"
-    ts = (
-        await db_session.execute(
-            select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
-        )
-    ).scalar_one()
-    assert ts.custom_config["plan"] == "mcp-only"
-    tenant = (
-        await db_session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
-    ).scalar_one()
-    assert tenant.billing_tier == "payg"
+    ).scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio

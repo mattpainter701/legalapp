@@ -6,9 +6,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.scheduler import SchedulerLog
+from app.models.durable_job import DurableJob
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.services.scheduler import LegalScheduler
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_user_sync_is_durable_and_other_manual_agents_retired(
+    client, db_session, test_tenant
+):
+    response = await client.post("/api/scheduler/agents/user-sync/run")
+    assert response.status_code == 202
+    job = await db_session.get(DurableJob, uuid.UUID(response.json()["job_id"]))
+    assert job.tenant_id == test_tenant.id
+    assert job.kind == "user_sync"
+    assert job.status == "pending"
+
+    retired = await client.post("/api/scheduler/agents/renewal-watcher/run")
+    assert retired.status_code == 410
 
 
 @pytest.mark.asyncio
