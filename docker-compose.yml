@@ -89,6 +89,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-${DATABASE_URL}}
+      APP_VERSION: ${APP_VERSION:-dev}
+      APP_COMMIT: ${APP_COMMIT:-}
+      APP_BUILD_TIME: ${APP_BUILD_TIME:-}
     volumes:
       - uploads:/app/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000

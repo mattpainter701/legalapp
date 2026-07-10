@@ -12,6 +12,9 @@ async def test_health_check():
         response = await client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["version"] == "1.0.0"
+    assert data["version"] == "dev"
+    assert data["short_commit"] == "dev"
+    assert "commit" in data
+    assert "build_time" in data
     assert "status" in data
     assert "database" in data

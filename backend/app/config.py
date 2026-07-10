@@ -179,6 +179,12 @@ class Settings(BaseSettings):
     # Never set True in production — enables /dev/* endpoints
     DEV_MODE: bool = False
 
+    # Build/deploy metadata surfaced through /api/version and /health so testers
+    # can identify exactly which pushed revision is running.
+    APP_VERSION: str = "dev"
+    APP_COMMIT: str = ""
+    APP_BUILD_TIME: str = ""
+
     # ── Cloud Search (Live RAG) ──────────────────────────────────────────────
     CLOUD_SEARCH_ENABLED: bool = True  # Master feature flag
     CLOUD_SEARCH_MAX_HITS: int = 10  # Cap results per source

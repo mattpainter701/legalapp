@@ -58,6 +58,10 @@ ssh -p "$VPS_SSH_PORT" "$VPS_USER@$VPS_HOST" bash << REMOTE
   # .env should already exist on VPS from first deploy
 
   echo "==> Current commit: \$(git log --oneline -1)"
+  export APP_COMMIT="\$(git rev-parse HEAD)"
+  export APP_VERSION="\$(git rev-parse --short HEAD)"
+  export APP_BUILD_TIME="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "==> Build version: \$APP_VERSION"
 
   DATA_GUARD_COUNTS=""
   if [[ -f scripts/prod_data_guard.sh ]]; then

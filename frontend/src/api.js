@@ -193,6 +193,9 @@ api.interceptors.response.use(
 )
 
 // Auth
+export const getAppVersion = () =>
+  api.get('/version', { _suppressAuthRedirect: true }).then((r) => r.data)
+
 export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
 
 export const register = (data) =>

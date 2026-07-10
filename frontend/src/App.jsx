@@ -4,6 +4,7 @@ import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
 import FormLabelAssociator from './components/accessibility/FormLabelAssociator'
+import VersionBadge from './components/VersionBadge'
 import { getMe } from './api'
 import { canAccessModuleList } from './moduleAccess'
 
@@ -191,6 +192,7 @@ export default function App() {
       <ToastProvider>
         <ConfirmProvider>
         <FormLabelAssociator />
+        <VersionBadge />
         <Suspense fallback={<div role="status" className="flex min-h-screen items-center justify-center bg-brand-bg text-brand-ink">Loading workspace…</div>}>
         <Routes>
         <Route path="/" element={<RootRedirect />} />

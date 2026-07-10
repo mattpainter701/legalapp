@@ -79,6 +79,18 @@ logger = logging.getLogger(__name__)
 _litellm_healthy: bool = False
 
 
+def _build_metadata() -> dict[str, str]:
+    version = settings.APP_VERSION or "dev"
+    commit = settings.APP_COMMIT or ""
+    short_commit = commit[:12] if commit else version
+    return {
+        "version": version,
+        "commit": commit,
+        "short_commit": short_commit,
+        "build_time": settings.APP_BUILD_TIME or "",
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle events."""
@@ -371,14 +383,22 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "database": "unavailable",
-                "version": "1.0.0",
+                **_build_metadata(),
             },
         )
 
     return {
         "status": "ok",
         "database": "connected",
-        "version": "1.0.0",
+        **_build_metadata(),
+    }
+
+
+@app.get("/api/version", tags=["health"])
+async def app_version():
+    return {
+        "status": "ok",
+        **_build_metadata(),
     }
 
 
