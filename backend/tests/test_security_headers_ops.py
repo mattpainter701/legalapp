@@ -64,7 +64,10 @@ def test_sse_proxy_policy_preserves_server_security_header_inheritance() -> None
     assert 'assert_status "$spoofed_edge" "spoofed direct edge header" 301' in (
         runtime_gate
     )
-    assert 'assert_header_absent "$plain_http" "plain HTTP"' in runtime_gate
+    assert (
+        'assert_header_absent "$response" "$label" "Strict-Transport-Security"'
+        in runtime_gate
+    )
     assert '"https://headers.test/api/version"' in runtime_gate
     assert "acme-header-proof" in runtime_gate
     for header in (
