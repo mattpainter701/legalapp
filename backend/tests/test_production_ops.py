@@ -1077,3 +1077,23 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "plain=301,edge=200,https=200,frontend=200" in rehearsal
     assert 'plain_headers.get_all("Strict-Transport-Security", []) == []' in rehearsal
     assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
+
+
+def test_fresh_host_refreshes_host_disk_status_after_image_build() -> None:
+    rehearsal = (ROOT / "scripts" / "rehearse_fresh_host.sh").read_text(
+        encoding="utf-8"
+    )
+    probe = 'python3 "$APP_DIR/scripts/update_host_disk_status.py"'
+
+    assert rehearsal.count(probe) == 2
+    initial_probe = rehearsal.find(probe)
+    image_build = rehearsal.find("up -d --build postgres redis")
+    refreshed_probe = rehearsal.find(probe, initial_probe + len(probe))
+    readiness_waiter = rehearsal.find("python -m app.services.readiness_wait")
+
+    assert -1 not in (initial_probe, image_build, refreshed_probe, readiness_waiter)
+    assert initial_probe < image_build < refreshed_probe < readiness_waiter
+    assert (
+        'urllib.request.urlopen("http://127.0.0.1:8000/health/readiness"'
+        not in rehearsal
+    )

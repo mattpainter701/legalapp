@@ -246,12 +246,16 @@ PY
 )"
 [[ "$runtime_role" == "clarity_app|False|False" ]] || { echo "Runtime role assertion failed: $runtime_role" >&2; exit 5; }
 
-readiness="$(${compose[@]} exec -T backend python - <<'PY'
-import json, urllib.request
-with urllib.request.urlopen("http://127.0.0.1:8000/health/readiness", timeout=10) as response:
-    print(json.load(response)["status"])
-PY
-)"
+# Image builds can legitimately outlast the host-status freshness window. Refresh
+# the host-owned artifact after the stack is running so this gate measures the
+# current host rather than build duration. Production keeps it fresh with the
+# persistent systemd timer installed by deploy_prod.sh.
+ENV_FILE="$APP_DIR/.env" COMPOSE_FILES="${compose_files[*]}" \
+  python3 "$APP_DIR/scripts/update_host_disk_status.py"
+if ! readiness="$(${compose[@]} exec -T backend python -m app.services.readiness_wait)"; then
+  "${compose[@]}" logs --tail=100 backend scheduler
+  exit 6
+fi
 [[ "$readiness" == "ok" ]] || { "${compose[@]}" logs --tail=100 backend scheduler; exit 6; }
 
 ingress_proof="$(${compose[@]} exec -T backend python - <<'PY'
