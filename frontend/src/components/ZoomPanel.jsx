@@ -408,9 +408,9 @@ function ZoomPhoneAppSetup({
       <div className="p-4 space-y-4">
         {callbackUrl && (
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+            <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
               Zoom callback URL
-            </label>
+            </p>
             <div className="flex gap-2">
               <code className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line px-3 py-2 text-[11px] text-brand-ink break-all">
                 {callbackUrl}
@@ -428,9 +428,9 @@ function ZoomPhoneAppSetup({
         )}
         {webhookUrl && (
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+            <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
               Zoom webhook URL
-            </label>
+            </p>
             <div className="flex gap-2">
               <code className="flex-1 min-w-0 rounded-lg bg-brand-surface border border-brand-line px-3 py-2 text-[11px] text-brand-ink break-all">
                 {webhookUrl}
@@ -448,9 +448,9 @@ function ZoomPhoneAppSetup({
         )}
         {webhookUrl && (
           <div>
-            <label className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
+            <p className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
               Required Zoom Phone events (v3)
-            </label>
+            </p>
             <div className="flex gap-2">
               <code className="flex-1 min-w-0 whitespace-pre-wrap rounded-lg bg-brand-surface border border-brand-line px-3 py-2 text-[11px] text-brand-ink break-all">
                 {webhookEvents}

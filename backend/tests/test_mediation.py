@@ -292,7 +292,10 @@ async def test_accept_invite_issues_portal_session(client, test_tenant):
     replay = await client.post(
         "/api/portal/mediation/accept", json={"token": raw_token}
     )
-    assert replay.status_code == 409
+    # Public invite failures are deliberately indistinguishable so the opaque
+    # token exchange is not a validity/revocation/tenant-state oracle.
+    assert replay.status_code == 404
+    assert replay.json()["detail"] == "Invite not found or unavailable"
 
     revoked = await client.delete(
         f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}"

@@ -1,4 +1,5 @@
 import time as _time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import Depends, Request, HTTPException
@@ -10,6 +11,7 @@ from jose import JWTError, jwt
 
 from app.database import get_db
 from app.config import get_settings
+from app.services.tenant_state import require_active_tenant
 
 settings = get_settings()
 
@@ -159,6 +161,7 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
+    require_active_tenant(user.tenant)
     if not user.license_active and not _is_license_exempt(request):
         raise HTTPException(status_code=403, detail="Standard license required")
 
@@ -233,6 +236,7 @@ async def get_portal_context(
     """
     from app.database import set_tenant_context
     from app.models.mediation import MediationInvite, MediationParty
+    from app.models.tenant import Tenant
     from app.models.user import User
 
     token = _read_token(request)
@@ -266,12 +270,22 @@ async def get_portal_context(
                         status_code=401, detail="Portal session has been revoked"
                     )
 
-        tenant_id = payload.get("tenant_id")
+        tenant_claim = payload.get("tenant_id")
         invite_id = payload.get("invite_id")
         case_claim = payload.get("case_id")
         party_claim = payload.get("party_id")
-        if not all((tenant_id, invite_id, case_claim, party_claim)):
+        if not all((tenant_claim, invite_id, case_claim, party_claim)):
             raise HTTPException(status_code=401, detail="Invalid portal session")
+        try:
+            tenant_id = uuid.UUID(str(tenant_claim))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="Invalid portal session")
+
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+        if tenant is None:
+            raise HTTPException(status_code=401, detail="Invalid portal session")
+        require_active_tenant(tenant)
+
         await set_tenant_context(db, str(tenant_id))
         invite_result = await db.execute(
             select(MediationInvite).where(
@@ -288,7 +302,7 @@ async def get_portal_context(
                 status_code=401, detail="Portal session has been revoked"
             )
         ctx = PortalContext(
-            tenant_id=tenant_id,
+            tenant_id=str(tenant_id),
             party_id=party_claim,
             party_role=payload.get("party_role"),
             case_id=case_claim,
@@ -298,10 +312,28 @@ async def get_portal_context(
         return ctx
 
     # 2. Firm client login.
-    user_id = payload.get("sub")
-    if not user_id:
+    user_claim = payload.get("sub")
+    tenant_claim = payload.get("tenant_id")
+    if not user_claim or not tenant_claim:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    result = await db.execute(select(User).where(User.id == user_id))
+    try:
+        user_id = uuid.UUID(str(user_claim))
+        tenant_id = uuid.UUID(str(tenant_claim))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    require_active_tenant(tenant)
+
+    # Users are protected by FORCE RLS in production. Establish the signed
+    # tenant boundary before lookup and constrain both identity claims so a
+    # valid user id cannot be paired with another tenant id.
+    await set_tenant_context(db, str(tenant_id))
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+    )
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -310,7 +342,6 @@ async def get_portal_context(
     if not case_id:
         raise HTTPException(status_code=400, detail="case_id required")
 
-    await set_tenant_context(db, str(user.tenant_id))
     party_result = await db.execute(
         select(MediationParty).where(
             MediationParty.case_id == case_id,

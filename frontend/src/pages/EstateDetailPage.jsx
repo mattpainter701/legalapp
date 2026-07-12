@@ -398,14 +398,14 @@ export default function EstateDetailPage() {
                       { key: 'case_number', label: 'Case Number' },
                     ].map(({ key, label, type, options, full }) => (
                       <div key={key} className={full ? 'col-span-2' : ''}>
-                        <label className={labelClasses}>{label}</label>
+                        <label htmlFor={`estate-edit-${key}`} className={labelClasses}>{label}</label>
                         {type === 'select' ? (
-                          <select value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses}>
+                          <select id={`estate-edit-${key}`} value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses}>
                             <option value="">—</option>
                             {options.map((o) => <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1).replace(/_/g, ' ')}</option>)}
                           </select>
                         ) : (
-                          <input type={type || 'text'} value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
+                          <input id={`estate-edit-${key}`} type={type || 'text'} value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
                         )}
                       </div>
                     ))}
@@ -503,18 +503,18 @@ export default function EstateDetailPage() {
               <div className="p-6 bg-brand-bg border-b border-brand-line">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
                   <div>
-                    <label className={labelClasses}>Entry Type</label>
-                    <select value={newEvent.event_type} onChange={(e) => setNewEvent((p) => ({ ...p, event_type: e.target.value }))} className={inputClasses}>
+                    <label htmlFor="estatedetailpage-entry-type" className={labelClasses}>Entry Type</label>
+                    <select id="estatedetailpage-entry-type" value={newEvent.event_type} onChange={(e) => setNewEvent((p) => ({ ...p, event_type: e.target.value }))} className={inputClasses}>
                       {EVENT_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className={labelClasses}>Title</label>
-                    <input type="text" value={newEvent.title} onChange={(e) => setNewEvent((p) => ({ ...p, title: e.target.value }))} placeholder="e.g., Will admitted to probate" className={inputClasses} />
+                    <label htmlFor="estatedetailpage-title" className={labelClasses}>Title</label>
+                    <input id="estatedetailpage-title" type="text" value={newEvent.title} onChange={(e) => setNewEvent((p) => ({ ...p, title: e.target.value }))} placeholder="e.g., Will admitted to probate" className={inputClasses} />
                   </div>
                   <div className="md:col-span-2">
-                    <label className={labelClasses}>Notes & Details</label>
-                    <textarea value={newEvent.content} onChange={(e) => setNewEvent((p) => ({ ...p, content: e.target.value }))} rows={3} className={`${inputClasses} resize-none`} />
+                    <label htmlFor="estatedetailpage-notes-details" className={labelClasses}>Notes & Details</label>
+                    <textarea id="estatedetailpage-notes-details" value={newEvent.content} onChange={(e) => setNewEvent((p) => ({ ...p, content: e.target.value }))} rows={3} className={`${inputClasses} resize-none`} />
                   </div>
                 </div>
                 <div className="flex gap-3 justify-end">

@@ -337,8 +337,8 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                   {renaming && (
                     <div className="p-4 border-t border-brand-line bg-brand-surface flex flex-wrap gap-3 items-end">
                       <div className="flex-1 min-w-[220px]">
-                        <label className={labelCls}>New Folder Name</label>
-                        <input
+                        <label htmlFor={`matter-smb-${key}-new-folder-name`} className={labelCls}>New Folder Name</label>
+                        <input id={`matter-smb-${key}-new-folder-name`}
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
                           className={inputCls}
@@ -365,8 +365,8 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                     <div className="p-4 border-t border-brand-line bg-brand-surface space-y-3">
                       <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-3">
                         <div>
-                          <label className={labelCls}>Remap By</label>
-                          <select
+                          <label htmlFor={`matter-smb-${key}-remap-mode`} className={labelCls}>Remap By</label>
+                          <select id={`matter-smb-${key}-remap-mode`}
                             value={remapForm.mode}
                             onChange={(e) => setRemapForm((f) => ({ ...f, mode: e.target.value, create_if_missing: false }))}
                             className={inputCls}
@@ -377,10 +377,10 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                           </select>
                         </div>
                         <div>
-                          <label className={labelCls}>
+                          <label htmlFor={`matter-smb-${key}-remap-value`} className={labelCls}>
                             {remapForm.mode === 'folder_name' ? 'Folder Name Under Master Folder' : remapForm.mode === 'folder_url' ? 'Folder URL' : 'Folder ID'}
                           </label>
-                          <input
+                          <input id={`matter-smb-${key}-remap-value`}
                             value={remapForm.value}
                             onChange={(e) => setRemapForm((f) => ({ ...f, value: e.target.value }))}
                             className={inputCls}
@@ -446,8 +446,8 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                 <div className="p-4 border-t border-brand-line bg-brand-surface space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className={labelCls}>Provider</label>
-                      <select
+                      <label htmlFor="mattersmbsharestab-provider" className={labelCls}>Provider</label>
+                      <select id="mattersmbsharestab-provider"
                         value={contextForm.provider}
                         onChange={(e) => setContextForm((f) => ({ ...f, provider: e.target.value }))}
                         className={inputCls}
@@ -458,8 +458,8 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                       </select>
                     </div>
                     <div>
-                      <label className={labelCls}>Label</label>
-                      <input
+                      <label htmlFor="mattersmbsharestab-label" className={labelCls}>Label</label>
+                      <input id="mattersmbsharestab-label"
                         value={contextForm.label}
                         onChange={(e) => setContextForm((f) => ({ ...f, label: e.target.value }))}
                         className={inputCls}
@@ -467,8 +467,8 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                       />
                     </div>
                     <div>
-                      <label className={labelCls}>Map By</label>
-                      <select
+                      <label htmlFor="mattersmbsharestab-map-by" className={labelCls}>Map By</label>
+                      <select id="mattersmbsharestab-map-by"
                         value={contextForm.mode}
                         onChange={(e) => setContextForm((f) => ({ ...f, mode: e.target.value, create_if_missing: false }))}
                         className={inputCls}
@@ -479,10 +479,10 @@ function MatterCloudFoldersPanel({ matterId, onCloudFolderChange }) {
                       </select>
                     </div>
                     <div>
-                      <label className={labelCls}>
+                      <label htmlFor="matter-smb-context-remap-value" className={labelCls}>
                         {contextForm.mode === 'folder_name' ? 'Folder Name Under Master Folder' : contextForm.mode === 'folder_url' ? 'Folder URL' : 'Folder ID'}
                       </label>
-                      <input
+                      <input id="matter-smb-context-remap-value"
                         value={contextForm.value}
                         onChange={(e) => setContextForm((f) => ({ ...f, value: e.target.value }))}
                         className={inputCls}
@@ -708,8 +708,8 @@ export default function MatterSmbSharesTab({ matterId, onCloudFolderChange }) {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className={labelCls}>Share</label>
-              <select
+              <label htmlFor="mattersmbsharestab-share" className={labelCls}>Share</label>
+              <select id="mattersmbsharestab-share"
                 value={addForm.share_id}
                 onChange={(e) => setAddForm((f) => ({ ...f, share_id: e.target.value }))}
                 className={inputCls}
@@ -723,8 +723,8 @@ export default function MatterSmbSharesTab({ matterId, onCloudFolderChange }) {
               </select>
             </div>
             <div>
-              <label className={labelCls}>Display Label</label>
-              <input
+              <label htmlFor="mattersmbsharestab-display-label" className={labelCls}>Display Label</label>
+              <input id="mattersmbsharestab-display-label"
                 type="text"
                 value={addForm.display_label}
                 onChange={(e) => setAddForm((f) => ({ ...f, display_label: e.target.value }))}
@@ -733,8 +733,8 @@ export default function MatterSmbSharesTab({ matterId, onCloudFolderChange }) {
               />
             </div>
             <div>
-              <label className={labelCls}>Folder Path</label>
-              <input
+              <label htmlFor="mattersmbsharestab-folder-path" className={labelCls}>Folder Path</label>
+              <input id="mattersmbsharestab-folder-path"
                 type="text"
                 value={addForm.folder_path}
                 onChange={(e) => setAddForm((f) => ({ ...f, folder_path: e.target.value }))}

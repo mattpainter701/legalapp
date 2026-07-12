@@ -31,6 +31,10 @@ AUTH_LIMITS = {
     "/api/auth/register": (5, 600),
     "/api/auth/forgot-password": (5, 900),
     "/api/auth/reset-password": (5, 900),
+    # Public opaque-token exchanges perform bounded, tenant-by-tenant RLS
+    # lookup. Keep them behind the existing source-IP auth limiter.
+    "/api/portal/mediation/accept": (10, 600),
+    "/api/portal/client/accept": (10, 600),
     # SMB agent registration is unauthenticated; rate-limit by IP to slow
     # brute-force of active pairing codes.
     "/api/v1/smb/agents/register": (5, 300),

@@ -149,32 +149,32 @@ function CreateLeadModal({ onClose, onCreate }) {
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">First Name</label>
-              <input value={form.first_name} onChange={e => set('first_name', e.target.value)}
+              <label htmlFor="intakepage-first-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">First Name</label>
+              <input id="intakepage-first-name" value={form.first_name} onChange={e => set('first_name', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Last Name</label>
-              <input value={form.last_name} onChange={e => set('last_name', e.target.value)}
-                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Email</label>
-              <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
-                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Phone</label>
-              <input value={form.phone} onChange={e => set('phone', e.target.value)}
+              <label htmlFor="intakepage-last-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Last Name</label>
+              <input id="intakepage-last-name" value={form.last_name} onChange={e => set('last_name', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Source</label>
-              <select value={form.source} onChange={e => set('source', e.target.value)}
+              <label htmlFor="intakepage-email" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Email</label>
+              <input id="intakepage-email" type="email" value={form.email} onChange={e => set('email', e.target.value)}
+                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+            </div>
+            <div>
+              <label htmlFor="intakepage-phone" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Phone</label>
+              <input id="intakepage-phone" value={form.phone} onChange={e => set('phone', e.target.value)}
+                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="intakepage-source" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Source</label>
+              <select id="intakepage-source" value={form.source} onChange={e => set('source', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 {['referral','website','cold_call','existing_client','bar_referral','other'].map(s => (
                   <option key={s} value={s}>{s.replace('_',' ')}</option>
@@ -182,14 +182,14 @@ function CreateLeadModal({ onClose, onCreate }) {
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Practice Area</label>
-              <input value={form.practice_area} onChange={e => set('practice_area', e.target.value)}
+              <label htmlFor="intakepage-practice-area" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Practice Area</label>
+              <input id="intakepage-practice-area" value={form.practice_area} onChange={e => set('practice_area', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" placeholder="e.g. litigation" />
             </div>
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Description</label>
-            <textarea value={form.description} onChange={e => set('description', e.target.value)} rows={2}
+            <label htmlFor="intakepage-description" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Description</label>
+            <textarea id="intakepage-description" value={form.description} onChange={e => set('description', e.target.value)} rows={2}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
           {error && <p className="text-sm text-brand-rose">{error}</p>}

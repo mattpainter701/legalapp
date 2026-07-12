@@ -45,6 +45,7 @@ from app.utils.oauth_security import (
     verify_google_id_token,
     verify_microsoft_id_token,
 )
+from app.services.tenant_state import require_active_tenant
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -269,6 +270,7 @@ def _create_access_token(
 
 async def _issue_access_token(db: AsyncSession, user: User, tenant: Tenant) -> str:
     """Resolve the tenant's plan + user capabilities and mint an access token."""
+    require_active_tenant(tenant)
     from app.services.module_visibility import resolve_plan_meta
     from app.services.rbac_service import get_user_capabilities
 
@@ -313,7 +315,100 @@ def _refresh_family_key(family: str) -> str:
     return f"refresh_family:{family}"
 
 
+def _refresh_used_key(token: str) -> str:
+    return f"refresh_used:{token}"
+
+
+def _refresh_family_revoked_key(family: str) -> str:
+    return f"refresh_family_revoked:{family}"
+
+
 _REFRESH_TTL = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+
+# Consuming a token and writing its family tombstone must be one Redis operation.
+# Otherwise two simultaneous refreshes can both observe the token as live before
+# either deletes it. The tombstone inherits the token's *remaining* TTL, so replay
+# detection lasts exactly as long as the consumed credential would have remained
+# valid and storage cannot grow without an expiry bound.
+_CONSUME_REFRESH_SCRIPT = """
+local raw = redis.call('GET', KEYS[1])
+if raw then
+  local ttl_ms = redis.call('PTTL', KEYS[1])
+  local payload = cjson.decode(raw)
+  local family = payload['family']
+  redis.call('DEL', KEYS[1])
+  if family then
+    if ttl_ms == -1 then
+      ttl_ms = tonumber(ARGV[1]) * 1000
+    end
+    if ttl_ms < 1 then
+      ttl_ms = 1
+    end
+    redis.call('PSETEX', KEYS[2], ttl_ms, family)
+  end
+  return {'consumed', raw}
+end
+
+local used_family = redis.call('GET', KEYS[2])
+if used_family then
+  return {'replay', used_family}
+end
+return {'missing', ''}
+"""
+
+# Issuance and the revoked-family check are atomic. This closes the race where a
+# replay revokes a family while the winning request is still minting its successor.
+_ISSUE_REFRESH_SCRIPT = """
+if redis.call('EXISTS', KEYS[3]) == 1 then
+  return 0
+end
+redis.call('SETEX', KEYS[1], ARGV[1], ARGV[2])
+redis.call('SADD', KEYS[2], ARGV[3])
+redis.call('EXPIRE', KEYS[2], ARGV[1])
+return 1
+"""
+
+# Marking a family revoked and deleting every currently-live member are atomic
+# with respect to the issuance script above: either issuance wins first and its
+# token is deleted, or revocation wins first and issuance is refused.
+_REVOKE_REFRESH_FAMILY_SCRIPT = """
+redis.call('SETEX', KEYS[2], ARGV[1], '1')
+local members = redis.call('SMEMBERS', KEYS[1])
+for _, token in ipairs(members) do
+  redis.call('DEL', ARGV[2] .. token)
+end
+redis.call('DEL', KEYS[1])
+return #members
+"""
+
+
+def _redis_text(value) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+async def _consume_refresh_token(request: Request, token: str) -> tuple[str, str]:
+    """Atomically consume a live token or recover its family after replay."""
+
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return "missing", ""
+    result = await redis.eval(
+        _CONSUME_REFRESH_SCRIPT,
+        2,
+        _refresh_key(token),
+        _refresh_used_key(token),
+        _REFRESH_TTL,
+    )
+    status = _redis_text(result[0])
+    value = _redis_text(result[1])
+    if status == "consumed":
+        data = _json.loads(value)
+        family = data.get("family")
+        if family:
+            # This set deliberately contains live tokens only. Consumed-token
+            # tombstones expire independently at their original expiry time.
+            await redis.srem(_refresh_family_key(family), token)
+    return status, value
 
 
 async def _create_refresh_token(
@@ -327,8 +422,10 @@ async def _create_refresh_token(
     us revoke the whole chain on token-reuse detection.
 
     Redis layout:
-      ``refresh:{token}``        -> JSON {"user_id", "family"}, TTL = REFRESH_TTL
-      ``refresh_family:{family}``-> SET of live tokens in the chain, TTL = REFRESH_TTL
+      ``refresh:{token}``         -> JSON {"user_id", "family"}, TTL = REFRESH_TTL
+      ``refresh_family:{family}`` -> SET of live tokens in the chain, TTL = REFRESH_TTL
+      ``refresh_used:{token}``    -> family id, TTL = consumed token's remaining TTL
+      ``refresh_family_revoked:*`` prevents a revoked chain from being reissued
 
     If Redis is unavailable we still return a token, but it is NOT persisted, so
     ``/auth/refresh`` will reject it. Refresh is therefore effectively disabled
@@ -347,28 +444,40 @@ async def _create_refresh_token(
         return token
 
     payload = _json.dumps({"user_id": str(user.id), "family": family})
-    await redis.setex(_refresh_key(token), _REFRESH_TTL, payload)
-    await redis.sadd(_refresh_family_key(family), token)
-    # Bump the family-set TTL so it expires with its tokens (sadd doesn't set one).
-    await redis.expire(_refresh_family_key(family), _REFRESH_TTL)
+    issued = await redis.eval(
+        _ISSUE_REFRESH_SCRIPT,
+        3,
+        _refresh_key(token),
+        _refresh_family_key(family),
+        _refresh_family_revoked_key(family),
+        _REFRESH_TTL,
+        payload,
+        token,
+    )
+    if not issued:
+        raise HTTPException(status_code=401, detail="Refresh token family revoked")
     return token
 
 
 async def _revoke_refresh_family(request: Request, family: str) -> None:
-    """Delete every token in a rotation chain plus the chain set itself.
+    """Atomically mark a rotation chain revoked and delete every live token.
 
-    Used both on logout and on reuse-detection (a presented token that is no
-    longer live but whose family set still exists -> someone replayed an old,
-    already-rotated token; nuke the whole chain).
+    Consumed-token tombstones remain only until each token's original expiry;
+    they contain no usable credential and let stale replays identify this family.
+    The family revocation marker lasts one full token lifetime, which prevents a
+    concurrent request from resurrecting the chain after its live set is deleted.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
         return
-    members = await redis.smembers(_refresh_family_key(family))
-    for member in members or []:
-        tok = member.decode("utf-8") if isinstance(member, bytes) else member
-        await redis.delete(_refresh_key(tok))
-    await redis.delete(_refresh_family_key(family))
+    await redis.eval(
+        _REVOKE_REFRESH_FAMILY_SCRIPT,
+        2,
+        _refresh_family_key(family),
+        _refresh_family_revoked_key(family),
+        _REFRESH_TTL,
+        _refresh_key(""),
+    )
 
 
 def _set_auth_cookies(
@@ -556,6 +665,8 @@ async def _resolve_oauth_tenant_and_user(
             )
             raise HTTPException(status_code=403, detail="Account tenant is unavailable")
 
+        require_active_tenant(tenant)
+
         user = await _get_or_create_user(
             db,
             tenant.id,
@@ -595,6 +706,8 @@ async def _resolve_oauth_tenant_and_user(
         )
         db.add(tenant)
         await db.flush()
+    else:
+        require_active_tenant(tenant)
 
     user = await _get_or_create_user(
         db,
@@ -1016,6 +1129,7 @@ async def exchange_oauth_callback(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
+    require_active_tenant(user.tenant)
 
     # Set hardened httpOnly access + refresh cookies.
     refresh_token = await _create_refresh_token(request, user)
@@ -1411,15 +1525,22 @@ async def logout(request: Request, response: Response):
     if refresh_token and redis:
         try:
             raw = await redis.get(_refresh_key(refresh_token))
+            family = None
             if raw:
                 data = _json.loads(
                     raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 )
                 family = data.get("family")
-                if family:
-                    await _revoke_refresh_family(request, family)
-                else:
-                    await redis.delete(_refresh_key(refresh_token))
+            else:
+                used_family = await redis.get(_refresh_used_key(refresh_token))
+                if used_family:
+                    family = _redis_text(used_family)
+            if family:
+                await _revoke_refresh_family(request, family)
+            else:
+                await redis.delete(
+                    _refresh_key(refresh_token), _refresh_used_key(refresh_token)
+                )
         except Exception:
             pass
 
@@ -1440,9 +1561,11 @@ async def refresh(
     JSON body ``{"refresh_token": ...}``). On success the presented token is
     consumed (deleted) and a new token in the SAME rotation family is issued.
 
-    Reuse detection: if a presented token is not live in Redis but its family
-    set still exists, an already-rotated token was replayed — we revoke the
-    entire family and reject. Redis is required; without it refresh is disabled.
+    Reuse detection retains an expiring consumed-token tombstone for the
+    remainder of that token's original lifetime. Replaying it identifies and
+    atomically revokes the live family. Once the original credential would have
+    expired, its tombstone also expires and later submissions are simply invalid.
+    Redis is required; without it refresh is disabled.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
@@ -1460,26 +1583,16 @@ async def refresh(
     if not token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
 
-    raw = await redis.get(_refresh_key(token))
-    if not raw:
-        # Token not live. If we can recover its family from a parallel index it
-        # would mean replay; we don't store a reverse index for an expired token,
-        # so simply reject. (Live-token reuse is caught below by consuming it.)
+    consume_status, raw = await _consume_refresh_token(request, token)
+    if consume_status == "replay":
+        await _revoke_refresh_family(request, raw)
+        raise HTTPException(status_code=401, detail="Refresh token reuse detected")
+    if consume_status != "consumed":
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    data = _json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    data = _json.loads(raw)
     family = data.get("family")
     user_id = data.get("user_id")
-
-    # Consume the presented token (single-use). If it's somehow already gone
-    # between GET and DELETE, treat as reuse and revoke the family.
-    removed = await redis.delete(_refresh_key(token))
-    if not removed:
-        if family:
-            await _revoke_refresh_family(request, family)
-        raise HTTPException(status_code=401, detail="Refresh token reuse detected")
-    if family:
-        await redis.srem(_refresh_family_key(family), token)
 
     # Auth-path cross-tenant lookup by id (no tenant context yet).
     await enable_rls_bypass(db)
@@ -1491,6 +1604,12 @@ async def refresh(
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
     tenant = user.tenant
+    try:
+        require_active_tenant(tenant)
+    except HTTPException:
+        if family:
+            await _revoke_refresh_family(request, family)
+        raise
     access_token = await _issue_access_token(db, user, tenant)
     new_refresh = await _create_refresh_token(request, user, family=family)
     _set_auth_cookies(response, access_token, new_refresh)

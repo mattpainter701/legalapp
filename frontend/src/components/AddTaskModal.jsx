@@ -64,8 +64,8 @@ export default function AddTaskModal({ matterId, teamMembers = [], onCreated, on
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className={labelCls}>Title</label>
-            <input
+            <label htmlFor="addtaskmodal-title" className={labelCls}>Title</label>
+            <input id="addtaskmodal-title"
               autoFocus
               type="text"
               value={form.title}
@@ -78,14 +78,14 @@ export default function AddTaskModal({ matterId, teamMembers = [], onCreated, on
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className={labelCls}>Type</label>
-              <select value={form.task_type} onChange={e => set('task_type', e.target.value)} className={inputCls}>
+              <label htmlFor="addtaskmodal-type" className={labelCls}>Type</label>
+              <select id="addtaskmodal-type" value={form.task_type} onChange={e => set('task_type', e.target.value)} className={inputCls}>
                 {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
             <div>
-              <label className={labelCls}>Priority</label>
-              <select value={form.priority} onChange={e => set('priority', e.target.value)} className={inputCls}>
+              <label htmlFor="addtaskmodal-priority" className={labelCls}>Priority</label>
+              <select id="addtaskmodal-priority" value={form.priority} onChange={e => set('priority', e.target.value)} className={inputCls}>
                 {PRIORITIES.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
               </select>
             </div>
@@ -93,19 +93,19 @@ export default function AddTaskModal({ matterId, teamMembers = [], onCreated, on
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className={labelCls}>Due Date</label>
-              <input type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)} className={inputCls} />
+              <label htmlFor="addtaskmodal-due-date" className={labelCls}>Due Date</label>
+              <input id="addtaskmodal-due-date" type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)} className={inputCls} />
             </div>
             <div>
-              <label className={labelCls}>Due Time</label>
-              <input type="time" value={form.due_time} onChange={e => set('due_time', e.target.value)} className={inputCls} />
+              <label htmlFor="addtaskmodal-due-time" className={labelCls}>Due Time</label>
+              <input id="addtaskmodal-due-time" type="time" value={form.due_time} onChange={e => set('due_time', e.target.value)} className={inputCls} />
             </div>
           </div>
 
           {teamMembers.length > 0 && (
             <div>
-              <label className={labelCls}>Assign To</label>
-              <select value={form.assigned_to_user_id} onChange={e => set('assigned_to_user_id', e.target.value)} className={inputCls}>
+              <label htmlFor="addtaskmodal-assign-to" className={labelCls}>Assign To</label>
+              <select id="addtaskmodal-assign-to" value={form.assigned_to_user_id} onChange={e => set('assigned_to_user_id', e.target.value)} className={inputCls}>
                 <option value="">Unassigned</option>
                 {teamMembers.map(u => (
                   <option key={u.user_id || u.id} value={u.user_id || u.id}>{u.user_name || u.full_name}</option>
@@ -115,8 +115,8 @@ export default function AddTaskModal({ matterId, teamMembers = [], onCreated, on
           )}
 
           <div>
-            <label className={labelCls}>Notes</label>
-            <textarea
+            <label htmlFor="addtaskmodal-notes" className={labelCls}>Notes</label>
+            <textarea id="addtaskmodal-notes"
               value={form.description}
               onChange={e => set('description', e.target.value)}
               rows={2}

@@ -66,7 +66,7 @@ function dueDateLabel(dateStr) {
   return { text: format(d, 'MMM d, yyyy'), color: 'text-brand-muted' }
 }
 
-function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff name or email' }) {
+function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff name or email', inputId }) {
   const [query, setQuery] = useState('')
   const [users, setUsers] = useState([])
   const [searching, setSearching] = useState(false)
@@ -94,6 +94,7 @@ function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff 
     <div>
       <div className="flex gap-2">
         <input
+          id={inputId}
           aria-label={placeholder}
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -232,22 +233,22 @@ function CreateTaskModal({ onClose, onCreate }) {
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Title *</label>
-            <input aria-label="Task title" value={form.title} onChange={e => set('title', e.target.value)}
+            <label htmlFor="taskspage-title" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Title *</label>
+            <input id="taskspage-title" aria-label="Task title" value={form.title} onChange={e => set('title', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm focus:outline-none focus:border-brand-accent"
               placeholder="Task description" required autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Type</label>
-              <select aria-label="Task type" value={form.task_type} onChange={e => set('task_type', e.target.value)}
+              <label htmlFor="taskspage-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Type</label>
+              <select id="taskspage-type" aria-label="Task type" value={form.task_type} onChange={e => set('task_type', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Priority</label>
-              <select aria-label="Task priority" value={form.priority} onChange={e => set('priority', e.target.value)}
+              <label htmlFor="taskspage-priority" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Priority</label>
+              <select id="taskspage-priority" aria-label="Task priority" value={form.priority} onChange={e => set('priority', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -257,20 +258,21 @@ function CreateTaskModal({ onClose, onCreate }) {
             </div>
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Due Date</label>
-            <input aria-label="Task due date" type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)}
+            <label htmlFor="taskspage-due-date" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Due Date</label>
+            <input id="taskspage-due-date" aria-label="Task due date" type="date" value={form.due_date} onChange={e => set('due_date', e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Linked Contact</label>
+            <span className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Linked Contact</span>
             <ContactPicker
+              ariaLabel="Linked contact"
               onChange={c => set('contact_id', c?.id || null)}
               placeholder="Search contacts…"
             />
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign To</label>
-            <UserSearchPicker selectedUser={assignee} onSelect={setAssignee} />
+            <label htmlFor="create-task-assignee-search" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign To</label>
+            <UserSearchPicker inputId="create-task-assignee-search" selectedUser={assignee} onSelect={setAssignee} />
             {assignee && (
               <p className="text-xs text-brand-muted mt-1">
                 Assigning to <span className="font-semibold text-brand-ink">{assignee.full_name || assignee.email}</span>
@@ -281,15 +283,15 @@ function CreateTaskModal({ onClose, onCreate }) {
           </div>
           {assignee && (
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Message to Assignee</label>
-              <textarea aria-label="Message to assignee" value={assignmentNote} onChange={e => setAssignmentNote(e.target.value)} rows={2}
+              <label htmlFor="taskspage-message-to-assignee" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Message to Assignee</label>
+              <textarea id="taskspage-message-to-assignee" aria-label="Message to assignee" value={assignmentNote} onChange={e => setAssignmentNote(e.target.value)} rows={2}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
                 placeholder="Personal note included in the assignment email…" />
             </div>
           )}
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea aria-label="Task notes" value={form.description} onChange={e => set('description', e.target.value)} rows={2}
+            <label htmlFor="taskspage-notes" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
+            <textarea id="taskspage-notes" aria-label="Task notes" value={form.description} onChange={e => set('description', e.target.value)} rows={2}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
           {error && (
@@ -385,9 +387,9 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign Attorney *</label>
+            <label htmlFor="taskspage-assign-attorney" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Assign Attorney *</label>
             <div className="flex gap-2">
-              <input
+              <input id="taskspage-assign-attorney"
                 aria-label="Search attorney"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
@@ -429,8 +431,8 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Partner Notes</label>
-            <textarea
+            <label htmlFor="taskspage-partner-notes" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Partner Notes</label>
+            <textarea id="taskspage-partner-notes"
               aria-label="Partner notes"
               value={partnerNotes}
               onChange={e => setPartnerNotes(e.target.value)}
@@ -441,8 +443,8 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description</label>
-            <textarea
+            <label htmlFor="taskspage-case-description" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description</label>
+            <textarea id="taskspage-case-description"
               aria-label="Case description"
               value={caseDescription}
               onChange={e => setCaseDescription(e.target.value)}
@@ -453,8 +455,8 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Estimated Value</label>
-            <input
+            <label htmlFor="taskspage-estimated-value" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Estimated Value</label>
+            <input id="taskspage-estimated-value"
               aria-label="Estimated value"
               type="number"
               min="0"
@@ -590,52 +592,52 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
             )}
 
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Name *</label>
-              <input aria-label="Matter name" value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
+              <label htmlFor="taskspage-matter-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Name *</label>
+              <input id="taskspage-matter-name" aria-label="Matter name" value={form.matter_name} onChange={e => set('matter_name', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
-                <input aria-label="Matter type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
+                <label htmlFor="taskspage-matter-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
+                <input id="taskspage-matter-type" aria-label="Matter type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
-                <input aria-label="Our role" value={form.role} onChange={e => set('role', e.target.value)}
+                <label htmlFor="taskspage-our-role" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
+                <input id="taskspage-our-role" aria-label="Our role" value={form.role} onChange={e => set('role', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
-                <input aria-label="Jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
+                <label htmlFor="taskspage-jurisdiction" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
+                <input id="taskspage-jurisdiction" aria-label="Jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
-                <input aria-label="Counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
+                <label htmlFor="taskspage-counterparty" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
+                <input id="taskspage-counterparty" aria-label="Counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description / Intake Notes</label>
-              <textarea aria-label="Case description and intake notes" value={form.description} onChange={e => set('description', e.target.value)} rows={4}
+              <label htmlFor="taskspage-case-description-intake-notes" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description / Intake Notes</label>
+              <textarea id="taskspage-case-description-intake-notes" aria-label="Case description and intake notes" value={form.description} onChange={e => set('description', e.target.value)} rows={4}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
             </div>
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Budget</label>
-                <input aria-label="Matter budget" type="number" min="0" step="0.01" value={form.budget_amount} onChange={e => set('budget_amount', e.target.value)}
+                <label htmlFor="taskspage-budget" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Budget</label>
+                <input id="taskspage-budget" aria-label="Matter budget" type="number" min="0" step="0.01" value={form.budget_amount} onChange={e => set('budget_amount', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm font-mono" />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Billing</label>
-                <select aria-label="Billing method" value={form.billing_method} onChange={e => set('billing_method', e.target.value)}
+                <label htmlFor="taskspage-billing" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Billing</label>
+                <select id="taskspage-billing" aria-label="Billing method" value={form.billing_method} onChange={e => set('billing_method', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                   {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(method => (
                     <option key={method} value={method}>{method.replace('_', ' ')}</option>
@@ -643,8 +645,8 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
                 </select>
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Hourly Rate</label>
-                <input aria-label="Hourly rate" type="number" min="0" step="0.01" value={form.hourly_rate} onChange={e => set('hourly_rate', e.target.value)}
+                <label htmlFor="taskspage-hourly-rate" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Hourly Rate</label>
+                <input id="taskspage-hourly-rate" aria-label="Hourly rate" type="number" min="0" step="0.01" value={form.hourly_rate} onChange={e => set('hourly_rate', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm font-mono" />
               </div>
             </div>
@@ -702,8 +704,8 @@ function LogContactModal({ task, onClose, onLogged }) {
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">How were they contacted?</label>
-            <select aria-label="Contact method" value={method} onChange={e => setMethod(e.target.value)}
+            <label htmlFor="taskspage-how-were-they-contacted" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">How were they contacted?</label>
+            <select id="taskspage-how-were-they-contacted" aria-label="Contact method" value={method} onChange={e => setMethod(e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
               <option value="call">Phone call</option>
               <option value="email">Email</option>
@@ -713,8 +715,8 @@ function LogContactModal({ task, onClose, onLogged }) {
             </select>
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea aria-label="Contact notes" value={note} onChange={e => setNote(e.target.value)} rows={3}
+            <label htmlFor="taskspage-notes-2" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
+            <textarea id="taskspage-notes-2" aria-label="Contact notes" value={note} onChange={e => setNote(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="What was discussed, next steps..." />
           </div>
@@ -776,12 +778,12 @@ function ReassignTaskModal({ task, onClose, onReassigned }) {
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">New Assignee *</label>
-            <UserSearchPicker selectedUser={selectedUser} onSelect={setSelectedUser} />
+            <label htmlFor="reassign-task-assignee-search" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">New Assignee *</label>
+            <UserSearchPicker inputId="reassign-task-assignee-search" selectedUser={selectedUser} onSelect={setSelectedUser} />
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason / Message</label>
-            <textarea aria-label="Reassignment reason or message" value={note} onChange={e => setNote(e.target.value)} rows={3}
+            <label htmlFor="taskspage-reason-message" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason / Message</label>
+            <textarea id="taskspage-reason-message" aria-label="Reassignment reason or message" value={note} onChange={e => setNote(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="Why this is being reassigned — included in the assignment email and the customer history." />
           </div>
@@ -840,16 +842,16 @@ function CloseTaskModal({ task, onClose, onClosed }) {
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Outcome</label>
-            <select aria-label="Task outcome" value={outcome} onChange={e => setOutcome(e.target.value)}
+            <label htmlFor="taskspage-outcome" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Outcome</label>
+            <select id="taskspage-outcome" aria-label="Task outcome" value={outcome} onChange={e => setOutcome(e.target.value)}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
               <option value="completed">Completed — work is done</option>
               <option value="cancelled">Cancelled — no longer needed</option>
             </select>
           </div>
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason *</label>
-            <textarea aria-label="Reason for closing task" value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            <label htmlFor="taskspage-reason" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Reason *</label>
+            <textarea id="taskspage-reason" aria-label="Reason for closing task" value={reason} onChange={e => setReason(e.target.value)} rows={3}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none"
               placeholder="Outcome or why it's being closed — recorded on the task and in the customer history."
               required />

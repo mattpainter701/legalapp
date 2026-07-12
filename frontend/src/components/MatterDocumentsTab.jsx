@@ -423,8 +423,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
-              <label className={labelClasses}>File *</label>
-              <input
+              <label htmlFor="matterdocumentstab-file" className={labelClasses}>File *</label>
+              <input id="matterdocumentstab-file"
                 ref={fileInputRef}
                 type="file"
                 onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
@@ -432,8 +432,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
               />
             </div>
             <div>
-              <label className={labelClasses}>Category</label>
-              <select
+              <label htmlFor="matterdocumentstab-category" className={labelClasses}>Category</label>
+              <select id="matterdocumentstab-category"
                 value={uploadCategory}
                 onChange={(e) => setUploadCategory(e.target.value)}
                 className={inputClasses}
@@ -447,8 +447,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
               </select>
             </div>
             <div>
-              <label className={labelClasses}>Description</label>
-              <input
+              <label htmlFor="matterdocumentstab-description" className={labelClasses}>Description</label>
+              <input id="matterdocumentstab-description"
                 type="text"
                 value={uploadDescription}
                 onChange={(e) => setUploadDescription(e.target.value)}

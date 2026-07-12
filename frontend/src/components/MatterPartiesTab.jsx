@@ -139,8 +139,8 @@ export default function MatterPartiesTab({ matterId }) {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
             <div>
-              <label className={labelClasses}>Contact</label>
-              <select
+              <label htmlFor="matterpartiestab-contact" className={labelClasses}>Contact</label>
+              <select id="matterpartiestab-contact"
                 value={form.contact_id}
                 onChange={(e) => setForm((p) => ({ ...p, contact_id: e.target.value }))}
                 className={inputClasses}
@@ -154,8 +154,8 @@ export default function MatterPartiesTab({ matterId }) {
               </select>
             </div>
             <div>
-              <label className={labelClasses}>Role</label>
-              <select
+              <label htmlFor="matterpartiestab-role" className={labelClasses}>Role</label>
+              <select id="matterpartiestab-role"
                 value={form.role}
                 onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
                 className={inputClasses}
@@ -168,8 +168,8 @@ export default function MatterPartiesTab({ matterId }) {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className={labelClasses}>Notes (optional)</label>
-              <input
+              <label htmlFor="matterpartiestab-notes-optional" className={labelClasses}>Notes (optional)</label>
+              <input id="matterpartiestab-notes-optional"
                 type="text"
                 value={form.notes}
                 onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}

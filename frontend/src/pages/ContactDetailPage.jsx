@@ -32,12 +32,13 @@ function StatusBadge({ status }) {
 }
 
 function Field({ label, value, editing, onChange, type = 'text', options }) {
+  const fieldId = React.useId()
   if (editing) {
     if (options) {
       return (
         <div>
-          <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">{label}</label>
-          <select value={value || ''} onChange={e => onChange(e.target.value)}
+          <label htmlFor={fieldId} className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">{label}</label>
+          <select id={fieldId} value={value || ''} onChange={e => onChange(e.target.value)}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
             {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -46,12 +47,12 @@ function Field({ label, value, editing, onChange, type = 'text', options }) {
     }
     return (
       <div>
-        <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">{label}</label>
+        <label htmlFor={fieldId} className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">{label}</label>
         {type === 'textarea' ? (
-          <textarea value={value || ''} onChange={e => onChange(e.target.value)} rows={3}
+          <textarea id={fieldId} value={value || ''} onChange={e => onChange(e.target.value)} rows={3}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
         ) : (
-          <input type={type} value={value || ''} onChange={e => onChange(e.target.value)}
+          <input id={fieldId} type={type} value={value || ''} onChange={e => onChange(e.target.value)}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
         )}
       </div>

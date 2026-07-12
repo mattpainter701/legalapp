@@ -999,18 +999,18 @@ export default function MatterDetailPage() {
               <div className="p-6 bg-brand-bg border-b border-brand-line">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
-                    <label className={labelCls}>Note Type</label>
-                    <select value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-note-type" className={labelCls}>Note Type</label>
+                    <select id="matterdetailpage-note-type" value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
                       {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Title</label>
-                    <input type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
+                    <label htmlFor="matterdetailpage-title" className={labelCls}>Title</label>
+                    <input id="matterdetailpage-title" type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} placeholder="Note title..." className={inputCls} />
                   </div>
                   <div className="md:col-span-2">
-                    <label className={labelCls}>Content</label>
-                    <textarea value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
+                    <label htmlFor="matterdetailpage-content" className={labelCls}>Content</label>
+                    <textarea id="matterdetailpage-content" value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={3} placeholder="Note content..." className={`${inputCls} resize-none`} />
                   </div>
                 </div>
                 <div className="flex gap-3 justify-end">
@@ -1027,27 +1027,27 @@ export default function MatterDetailPage() {
               <div className="p-6 bg-brand-bg border-b border-brand-line">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                   <div>
-                    <label className={labelCls}>Direction</label>
-                    <select value={newComm.direction} onChange={e => setNewComm(p => ({ ...p, direction: e.target.value }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-direction" className={labelCls}>Direction</label>
+                    <select id="matterdetailpage-direction" value={newComm.direction} onChange={e => setNewComm(p => ({ ...p, direction: e.target.value }))} className={inputCls}>
                       <option value="outbound">Outbound</option>
                       <option value="inbound">Inbound</option>
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Channel</label>
-                    <select value={newComm.channel} onChange={e => setNewComm(p => ({ ...p, channel: e.target.value }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-channel" className={labelCls}>Channel</label>
+                    <select id="matterdetailpage-channel" value={newComm.channel} onChange={e => setNewComm(p => ({ ...p, channel: e.target.value }))} className={inputCls}>
                       {['email', 'call', 'letter', 'meeting', 'sms', 'portal', 'other'].map(c => (
                         <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Subject</label>
-                    <input type="text" value={newComm.subject} onChange={e => setNewComm(p => ({ ...p, subject: e.target.value }))} placeholder="Subject…" className={inputCls} />
+                    <label htmlFor="matterdetailpage-subject" className={labelCls}>Subject</label>
+                    <input id="matterdetailpage-subject" type="text" value={newComm.subject} onChange={e => setNewComm(p => ({ ...p, subject: e.target.value }))} placeholder="Subject…" className={inputCls} />
                   </div>
                   <div className="md:col-span-3">
-                    <label className={labelCls}>Notes / Body</label>
-                    <textarea value={newComm.body} onChange={e => setNewComm(p => ({ ...p, body: e.target.value }))} rows={3} placeholder="Optional notes…" className={`${inputCls} resize-none`} />
+                    <label htmlFor="matterdetailpage-notes-body" className={labelCls}>Notes / Body</label>
+                    <textarea id="matterdetailpage-notes-body" value={newComm.body} onChange={e => setNewComm(p => ({ ...p, body: e.target.value }))} rows={3} placeholder="Optional notes…" className={`${inputCls} resize-none`} />
                   </div>
                 </div>
                 <div className="flex gap-3 justify-end">
@@ -1178,8 +1178,8 @@ export default function MatterDetailPage() {
                       <button onClick={() => { setSelectedUserId(''); setSelectedUserName('') }} className="text-brand-muted hover:text-brand-rose transition-colors text-xs">✕</button>
                     </div>
                     <div className="w-40">
-                      <label className={labelCls}>Role</label>
-                      <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
+                      <label htmlFor="matterdetailpage-role" className={labelCls}>Role</label>
+                      <select id="matterdetailpage-role" value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
                         {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
                           <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
                         ))}
@@ -1196,16 +1196,17 @@ export default function MatterDetailPage() {
                 ) : (
                   <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
                     <div className="flex-1">
-                      <label className={labelCls}>Search for User</label>
+                      <label htmlFor="matter-team-user-search" className={labelCls}>Search for User</label>
                       <UserSearchInput
+                        inputId="matter-team-user-search"
                         excludeIds={[...assignedIds]}
                         onSelect={u => { setSelectedUserId(u.id); setSelectedUserName(u.full_name || u.email) }}
                         placeholder="Type a name or email to search…"
                       />
                     </div>
                     <div className="w-40">
-                      <label className={labelCls}>Role</label>
-                      <select value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
+                      <label htmlFor="matterdetailpage-role-2" className={labelCls}>Role</label>
+                      <select id="matterdetailpage-role-2" value={selectedRole} onChange={e => setSelectedRole(e.target.value)} className={inputCls}>
                         {['lead_attorney', 'associate', 'paralegal', 'of_counsel', 'billing'].map(r => (
                           <option key={r} value={r}>{r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>
                         ))}
@@ -1510,39 +1511,39 @@ export default function MatterDetailPage() {
                 </div>
                 <div className="p-6 space-y-4">
                   <div>
-                    <label className={labelCls}>Title</label>
-                    <input type="text" value={editData.matter_name || ''} onChange={e => setEditData(p => ({ ...p, matter_name: e.target.value }))} className={inputCls} />
+                    <label htmlFor="matterdetailpage-title-2" className={labelCls}>Title</label>
+                    <input id="matterdetailpage-title-2" type="text" value={editData.matter_name || ''} onChange={e => setEditData(p => ({ ...p, matter_name: e.target.value }))} className={inputCls} />
                   </div>
                   <div>
-                    <label className={labelCls}>Description</label>
-                    <textarea value={editData.description || ''} onChange={e => setEditData(p => ({ ...p, description: e.target.value }))} rows={3} className={`${inputCls} resize-none`} />
+                    <label htmlFor="matterdetailpage-description" className={labelCls}>Description</label>
+                    <textarea id="matterdetailpage-description" value={editData.description || ''} onChange={e => setEditData(p => ({ ...p, description: e.target.value }))} rows={3} className={`${inputCls} resize-none`} />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className={labelCls}>Status</label>
-                      <select value={editData.status || 'open'} onChange={e => setEditData(p => ({ ...p, status: e.target.value }))} className={inputCls}>
+                      <label htmlFor="matterdetailpage-status" className={labelCls}>Status</label>
+                      <select id="matterdetailpage-status" value={editData.status || 'open'} onChange={e => setEditData(p => ({ ...p, status: e.target.value }))} className={inputCls}>
                         {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className={labelCls}>Risk Level</label>
-                      <select value={editData.risk_level || ''} onChange={e => setEditData(p => ({ ...p, risk_level: e.target.value || null }))} className={inputCls}>
+                      <label htmlFor="matterdetailpage-risk-level" className={labelCls}>Risk Level</label>
+                      <select id="matterdetailpage-risk-level" value={editData.risk_level || ''} onChange={e => setEditData(p => ({ ...p, risk_level: e.target.value || null }))} className={inputCls}>
                         <option value="">None</option>
                         {RISK_OPTIONS.map(r => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
                       </select>
                     </div>
                   </div>
                   <div>
-                    <label className={labelCls}>Practice Area</label>
-                    <input type="text" value={editData.practice_area || ''} onChange={e => setEditData(p => ({ ...p, practice_area: e.target.value }))} className={inputCls} />
+                    <label htmlFor="matterdetailpage-practice-area" className={labelCls}>Practice Area</label>
+                    <input id="matterdetailpage-practice-area" type="text" value={editData.practice_area || ''} onChange={e => setEditData(p => ({ ...p, practice_area: e.target.value }))} className={inputCls} />
                   </div>
                   <div>
-                    <label className={labelCls}>Matter Type</label>
-                    <input type="text" value={editData.matter_type || ''} onChange={e => setEditData(p => ({ ...p, matter_type: e.target.value }))} className={inputCls} />
+                    <label htmlFor="matterdetailpage-matter-type" className={labelCls}>Matter Type</label>
+                    <input id="matterdetailpage-matter-type" type="text" value={editData.matter_type || ''} onChange={e => setEditData(p => ({ ...p, matter_type: e.target.value }))} className={inputCls} />
                   </div>
                   <div>
-                    <label className={labelCls}>Plugin Workflow</label>
-                    <select value={editData.primary_plugin || ''} onChange={e => setEditData(p => ({ ...p, primary_plugin: e.target.value || null }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-plugin-workflow" className={labelCls}>Plugin Workflow</label>
+                    <select id="matterdetailpage-plugin-workflow" value={editData.primary_plugin || ''} onChange={e => setEditData(p => ({ ...p, primary_plugin: e.target.value || null }))} className={inputCls}>
                       <option value="">General matter</option>
                       {pluginOptions.map(p => (
                         <option key={p.plugin_name || p.id} value={p.plugin_name || p.id}>
@@ -1552,8 +1553,8 @@ export default function MatterDetailPage() {
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Case Number</label>
-                    <input type="text" value={editData.case_number || ''} onChange={e => setEditData(p => ({ ...p, case_number: e.target.value }))} className={inputCls} />
+                    <label htmlFor="matterdetailpage-case-number" className={labelCls}>Case Number</label>
+                    <input id="matterdetailpage-case-number" type="text" value={editData.case_number || ''} onChange={e => setEditData(p => ({ ...p, case_number: e.target.value }))} className={inputCls} />
                   </div>
 
                   {/* People */}
@@ -1561,23 +1562,24 @@ export default function MatterDetailPage() {
                   <h3 className="font-serif font-bold text-sm text-brand-ink uppercase tracking-wide">People &amp; Billing</h3>
 
                   <div>
-                    <label className={labelCls}>Client</label>
+                    <span className={labelCls}>Client</span>
                     <ContactPicker
+                      ariaLabel="Client"
                       value={contactsList.find(c => c.id === editData.client_contact_id) || (editData.client_contact_id && matter.client_name ? { id: editData.client_contact_id, display_name: matter.client_name, entity_type: 'person', contact_type: 'client' } : null)}
                       onChange={(contact) => setEditData(p => ({ ...p, client_contact_id: contact?.id || '' }))}
                       placeholder="Search contacts…"
                     />
                   </div>
                   <div>
-                    <label className={labelCls}>Attorney of Record</label>
-                    <select value={editData.attorney_of_record_id || ''} onChange={e => setEditData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-attorney-of-record" className={labelCls}>Attorney of Record</label>
+                    <select id="matterdetailpage-attorney-of-record" value={editData.attorney_of_record_id || ''} onChange={e => setEditData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
                       <option value="">— None —</option>
                       {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>Partner Attorney</label>
-                    <select value={editData.partner_attorney_id || ''} onChange={e => setEditData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
+                    <label htmlFor="matterdetailpage-partner-attorney" className={labelCls}>Partner Attorney</label>
+                    <select id="matterdetailpage-partner-attorney" value={editData.partner_attorney_id || ''} onChange={e => setEditData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
                       <option value="">— None —</option>
                       {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                     </select>
@@ -1585,35 +1587,35 @@ export default function MatterDetailPage() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className={labelCls}>Billing Method</label>
-                      <select value={editData.billing_method || 'hourly'} onChange={e => setEditData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
+                      <label htmlFor="matterdetailpage-billing-method" className={labelCls}>Billing Method</label>
+                      <select id="matterdetailpage-billing-method" value={editData.billing_method || 'hourly'} onChange={e => setEditData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
                         {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(m => <option key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className={labelCls}>Billing Cycle</label>
-                      <select value={editData.billing_cycle || 'monthly'} onChange={e => setEditData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
+                      <label htmlFor="matterdetailpage-billing-cycle" className={labelCls}>Billing Cycle</label>
+                      <select id="matterdetailpage-billing-cycle" value={editData.billing_cycle || 'monthly'} onChange={e => setEditData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
                         {['weekly', 'biweekly', 'monthly', 'quarterly', 'on_completion'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())}</option>)}
                       </select>
                     </div>
                   </div>
                   <div>
-                    <label className={labelCls}>
+                    <label htmlFor="matterdetailpage-hourly-rate" className={labelCls}>
                       Hourly Rate
                       <span className="text-[10px] text-brand-muted normal-case font-normal ml-1">(matter override)</span>
                     </label>
-                    <input type="number" step="0.01" min="0" value={editData.hourly_rate || ''} onChange={e => setEditData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
+                    <input id="matterdetailpage-hourly-rate" type="number" step="0.01" min="0" value={editData.hourly_rate || ''} onChange={e => setEditData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
                   </div>
 
                   <hr className="border-brand-line" />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className={labelCls}>Budget Amount</label>
-                      <input type="number" step="0.01" min="0" value={editData.budget_amount || ''} onChange={e => setEditData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
+                      <label htmlFor="matterdetailpage-budget-amount" className={labelCls}>Budget Amount</label>
+                      <input id="matterdetailpage-budget-amount" type="number" step="0.01" min="0" value={editData.budget_amount || ''} onChange={e => setEditData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
                     </div>
                     <div>
-                      <label className={labelCls}>Currency</label>
-                      <select value={editData.budget_currency || 'USD'} onChange={e => setEditData(p => ({ ...p, budget_currency: e.target.value }))} className={inputCls}>
+                      <label htmlFor="matterdetailpage-currency" className={labelCls}>Currency</label>
+                      <select id="matterdetailpage-currency" value={editData.budget_currency || 'USD'} onChange={e => setEditData(p => ({ ...p, budget_currency: e.target.value }))} className={inputCls}>
                         {['USD', 'EUR', 'GBP', 'CAD'].map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
@@ -1679,8 +1681,9 @@ export default function MatterDetailPage() {
           {editingPeople ? (
             <div className="space-y-4">
               <div>
-                <label className={labelCls}>Client</label>
+                <span className={labelCls}>Client</span>
                 <ContactPicker
+                  ariaLabel="Client"
                   value={contactsList.find(c => c.id === peopleData.client_contact_id) || (peopleData.client_contact_id && matter.client_name ? { id: peopleData.client_contact_id, display_name: matter.client_name, entity_type: 'person', contact_type: 'client' } : null)}
                   onChange={(contact) => setPeopleData(p => ({ ...p, client_contact_id: contact?.id || '' }))}
                   placeholder="Search contacts…"
@@ -1690,21 +1693,21 @@ export default function MatterDetailPage() {
                 )}
               </div>
               <div>
-                <label className={labelCls}>Attorney of Record</label>
-                <select value={peopleData.attorney_of_record_id || ''} onChange={e => setPeopleData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
+                <label htmlFor="matterdetailpage-attorney-of-record-2" className={labelCls}>Attorney of Record</label>
+                <select id="matterdetailpage-attorney-of-record-2" value={peopleData.attorney_of_record_id || ''} onChange={e => setPeopleData(p => ({ ...p, attorney_of_record_id: e.target.value || null }))} className={inputCls}>
                   <option value="">— None —</option>
                   {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                 </select>
               </div>
               <div>
-                <label className={labelCls}>Partner Attorney</label>
-                <select value={peopleData.partner_attorney_id || ''} onChange={e => setPeopleData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
+                <label htmlFor="matterdetailpage-partner-attorney-2" className={labelCls}>Partner Attorney</label>
+                <select id="matterdetailpage-partner-attorney-2" value={peopleData.partner_attorney_id || ''} onChange={e => setPeopleData(p => ({ ...p, partner_attorney_id: e.target.value || null }))} className={inputCls}>
                   <option value="">— None —</option>
                   {usersList.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                 </select>
               </div>
               <div>
-                <label className={labelCls}>Team</label>
+                <p className={labelCls}>Team</p>
                 {matter.assignments?.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5 mt-0.5">
                     {matter.assignments.map(a => (
@@ -1723,36 +1726,36 @@ export default function MatterDetailPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className={labelCls}>Billing Method</label>
-                  <select value={peopleData.billing_method || 'hourly'} onChange={e => setPeopleData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
+                  <label htmlFor="matterdetailpage-billing-method-2" className={labelCls}>Billing Method</label>
+                  <select id="matterdetailpage-billing-method-2" value={peopleData.billing_method || 'hourly'} onChange={e => setPeopleData(p => ({ ...p, billing_method: e.target.value }))} className={inputCls}>
                     {['hourly', 'flat_fee', 'contingency', 'pro_bono'].map(m => <option key={m} value={m}>{m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Billing Cycle</label>
-                  <select value={peopleData.billing_cycle || 'monthly'} onChange={e => setPeopleData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
+                  <label htmlFor="matterdetailpage-billing-cycle-2" className={labelCls}>Billing Cycle</label>
+                  <select id="matterdetailpage-billing-cycle-2" value={peopleData.billing_cycle || 'monthly'} onChange={e => setPeopleData(p => ({ ...p, billing_cycle: e.target.value }))} className={inputCls}>
                     {['weekly', 'biweekly', 'monthly', 'quarterly', 'on_completion'].map(c => <option key={c} value={c}>{c.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())}</option>)}
                   </select>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className={labelCls}>Budget Amount</label>
-                  <input type="number" step="0.01" min="0" value={peopleData.budget_amount || ''} onChange={e => setPeopleData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
+                  <label htmlFor="matterdetailpage-budget-amount-2" className={labelCls}>Budget Amount</label>
+                  <input id="matterdetailpage-budget-amount-2" type="number" step="0.01" min="0" value={peopleData.budget_amount || ''} onChange={e => setPeopleData(p => ({ ...p, budget_amount: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="0.00" />
                 </div>
                 <div>
-                  <label className={labelCls}>Currency</label>
-                  <select value={peopleData.budget_currency || 'USD'} onChange={e => setPeopleData(p => ({ ...p, budget_currency: e.target.value }))} className={inputCls}>
+                  <label htmlFor="matterdetailpage-currency-2" className={labelCls}>Currency</label>
+                  <select id="matterdetailpage-currency-2" value={peopleData.budget_currency || 'USD'} onChange={e => setPeopleData(p => ({ ...p, budget_currency: e.target.value }))} className={inputCls}>
                     {['USD', 'EUR', 'GBP', 'CAD'].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
               </div>
               <div>
-                <label className={labelCls}>
+                <label htmlFor="matterdetailpage-hourly-rate-2" className={labelCls}>
                   Hourly Rate
                   <span className="text-[10px] text-brand-muted normal-case font-normal ml-1">(matter override; user rates set by admin)</span>
                 </label>
-                <input type="number" step="0.01" min="0" value={peopleData.hourly_rate || ''} onChange={e => setPeopleData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
+                <input id="matterdetailpage-hourly-rate-2" type="number" step="0.01" min="0" value={peopleData.hourly_rate || ''} onChange={e => setPeopleData(p => ({ ...p, hourly_rate: e.target.value ? parseFloat(e.target.value) : null }))} className={inputCls} placeholder="Use user default rate" />
               </div>
               {peopleError && <p className="text-brand-rose text-sm font-sans">{peopleError}</p>}
             </div>
@@ -1819,19 +1822,19 @@ export default function MatterDetailPage() {
             <div className="p-6 bg-brand-bg border-b border-brand-line">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className={labelCls}>Note Type</label>
-                  <select value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
+                  <label htmlFor="matterdetailpage-note-type-2" className={labelCls}>Note Type</label>
+                  <select id="matterdetailpage-note-type-2" value={newNote.note_type} onChange={e => setNewNote(p => ({ ...p, note_type: e.target.value }))} className={inputCls}>
                     {NOTE_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Title</label>
-                  <input type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="Note title" />
+                  <label htmlFor="matterdetailpage-title-3" className={labelCls}>Title</label>
+                  <input id="matterdetailpage-title-3" type="text" value={newNote.title} onChange={e => setNewNote(p => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="Note title" />
                 </div>
               </div>
               <div className="mb-4">
-                <label className={labelCls}>Content</label>
-                <textarea value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={4} className={`${inputCls} resize-y`} placeholder="Note content..." />
+                <label htmlFor="matterdetailpage-content-2" className={labelCls}>Content</label>
+                <textarea id="matterdetailpage-content-2" value={newNote.content} onChange={e => setNewNote(p => ({ ...p, content: e.target.value }))} rows={4} className={`${inputCls} resize-y`} placeholder="Note content..." />
               </div>
               <div className="flex gap-3 justify-end">
                 <button onClick={() => { setShowAddNote(false); setNewNote({ note_type: 'note', title: '', content: '' }) }} className="px-4 py-2 bg-brand-surface border border-brand-line text-brand-ink text-sm font-sans font-medium rounded-lg hover:bg-brand-bg-soft">Cancel</button>
@@ -1963,8 +1966,8 @@ function ClientPortalTab({ matterId, matter }) {
       <div className="p-6 space-y-6">
         <form onSubmit={invite} className="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div className="flex-1">
-            <label className="block text-xs font-sans font-semibold text-brand-muted mb-1">Client email</label>
-            <input
+            <label htmlFor="matterdetailpage-client-email" className="block text-xs font-sans font-semibold text-brand-muted mb-1">Client email</label>
+            <input id="matterdetailpage-client-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}

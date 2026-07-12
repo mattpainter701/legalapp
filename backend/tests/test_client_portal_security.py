@@ -25,8 +25,12 @@ class _FakeResult:
 
 
 class _FakeSession:
-    def __init__(self, invite):
+    def __init__(self, invite, *, tenant_active=True):
         self.invite = invite
+        self.tenant_active = tenant_active
+
+    async def scalar(self, stmt):
+        return SimpleNamespace(is_active=True) if self.tenant_active else None
 
     async def execute(self, stmt):
         return _FakeResult(self.invite)
@@ -72,6 +76,42 @@ async def test_client_portal_context_rejects_revoked_invite(monkeypatch):
         )
 
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_client_portal_context_rejects_inactive_tenant(monkeypatch):
+    tenant_id = uuid.uuid4()
+    matter_id = uuid.uuid4()
+    invite_id = uuid.uuid4()
+    token = create_matter_portal_token(
+        tenant_id=str(tenant_id),
+        matter_id=str(matter_id),
+        contact_id=None,
+        email="client@example.com",
+        invite_id=str(invite_id),
+    )
+    invite = ClientPortalInvite(
+        id=invite_id,
+        tenant_id=tenant_id,
+        matter_id=matter_id,
+        token_hash="x" * 64,
+        email="client@example.com",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked=False,
+    )
+
+    async def noop_set_tenant_context(db, tenant):
+        return None
+
+    monkeypatch.setattr(client_portal, "set_tenant_context", noop_set_tenant_context)
+
+    with pytest.raises(HTTPException) as exc:
+        await client_portal.get_client_portal_context(
+            _FakeRequest(token), _FakeSession(invite, tenant_active=False)
+        )
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Portal session unavailable"
 
 
 def test_matter_portal_token_uses_invite_id_and_separate_cookie_name():

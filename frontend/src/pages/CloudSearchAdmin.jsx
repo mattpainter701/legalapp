@@ -141,10 +141,10 @@ function TestPanel() {
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">
+        <label htmlFor="cloudsearchadmin-search-query" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">
           Search Query
         </label>
-        <textarea
+        <textarea id="cloudsearchadmin-search-query"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="w-full h-24 px-4 py-3 border border-brand-line rounded-lg text-sm font-sans text-brand-ink placeholder-brand-muted bg-brand-surface focus:outline-none focus:ring-2 focus:ring-brand-accent/30 focus:border-brand-accent resize-y"
@@ -154,8 +154,8 @@ function TestPanel() {
 
       <div className="flex items-center gap-6">
         <div className="flex items-center gap-2">
-          <label className="text-xs text-brand-muted font-sans">Max hits</label>
-          <input
+          <label htmlFor="cloudsearchadmin-max-hits" className="text-xs text-brand-muted font-sans">Max hits</label>
+          <input id="cloudsearchadmin-max-hits"
             type="number"
             min={1}
             max={50}

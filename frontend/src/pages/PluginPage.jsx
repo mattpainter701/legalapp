@@ -16,8 +16,8 @@ function ExtraFields({ skillId, values, onChange }) {
   if (skillId === 'claim-chart') {
     return (
       <div>
-        <label className={labelClasses}>Chart Mode</label>
-        <select
+        <label htmlFor="pluginpage-chart-mode" className={labelClasses}>Chart Mode</label>
+        <select id="pluginpage-chart-mode"
           value={values.chart_mode || 'infringement'}
           onChange={(e) => onChange({ ...values, chart_mode: e.target.value })}
           className={inputClasses}
@@ -33,8 +33,8 @@ function ExtraFields({ skillId, values, onChange }) {
   if (skillId === 'matter-intake') {
     return (
       <div>
-        <label className={labelClasses}>Conflicts Status</label>
-        <select
+        <label htmlFor="pluginpage-conflicts-status" className={labelClasses}>Conflicts Status</label>
+        <select id="pluginpage-conflicts-status"
           value={values.conflicts_status || 'not_run'}
           onChange={(e) => onChange({ ...values, conflicts_status: e.target.value })}
           className={inputClasses}
@@ -51,8 +51,8 @@ function ExtraFields({ skillId, values, onChange }) {
   if (skillId === 'dsar-response') {
     return (
       <div>
-        <label className={labelClasses}>Jurisdiction</label>
-        <select
+        <label htmlFor="pluginpage-jurisdiction" className={labelClasses}>Jurisdiction</label>
+        <select id="pluginpage-jurisdiction"
           value={values.jurisdiction || 'GDPR'}
           onChange={(e) => onChange({ ...values, jurisdiction: e.target.value })}
           className={inputClasses}
@@ -70,8 +70,8 @@ function ExtraFields({ skillId, values, onChange }) {
   if (skillId === 'termination-review') {
     return (
       <div>
-        <label className={labelClasses}>Jurisdiction</label>
-        <input
+        <label htmlFor="pluginpage-jurisdiction-2" className={labelClasses}>Jurisdiction</label>
+        <input id="pluginpage-jurisdiction-2"
           type="text"
           value={values.jurisdiction || ''}
           onChange={(e) => onChange({ ...values, jurisdiction: e.target.value })}
@@ -170,22 +170,22 @@ function StructuredSetupModal({ pluginName, pluginLabel, setupData, onClose, onS
           )}
 
           <div>
-            <label className={labelClasses}>Jurisdictions</label>
-            <textarea value={jurisdictions} onChange={e => setJurisdictions(e.target.value)} rows={3} className={`${inputClasses} font-sans`} placeholder="One jurisdiction per line" />
+            <label htmlFor="pluginpage-jurisdictions" className={labelClasses}>Jurisdictions</label>
+            <textarea id="pluginpage-jurisdictions" value={jurisdictions} onChange={e => setJurisdictions(e.target.value)} rows={3} className={`${inputClasses} font-sans`} placeholder="One jurisdiction per line" />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div><label className={labelClasses}>Escalation Rules JSON</label><textarea value={escalationRules} onChange={e => setEscalationRules(e.target.value)} rows={7} className={inputClasses} /></div>
-            <div><label className={labelClasses}>Approval Thresholds JSON</label><textarea value={approvalThresholds} onChange={e => setApprovalThresholds(e.target.value)} rows={7} className={inputClasses} /></div>
-            <div><label className={labelClasses}>House Style JSON</label><textarea value={houseStyle} onChange={e => setHouseStyle(e.target.value)} rows={7} className={inputClasses} /></div>
-            <div><label className={labelClasses}>Cloud Bindings JSON</label><textarea value={cloudBindings} onChange={e => setCloudBindings(e.target.value)} rows={7} className={inputClasses} /></div>
-            <div><label className={labelClasses}>Calendar Bindings JSON</label><textarea value={calendarBindings} onChange={e => setCalendarBindings(e.target.value)} rows={7} className={inputClasses} /></div>
-            <div><label className={labelClasses}>Template Preferences JSON</label><textarea value={templatePreferences} onChange={e => setTemplatePreferences(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-escalation-rules-json" className={labelClasses}>Escalation Rules JSON</label><textarea id="pluginpage-escalation-rules-json" value={escalationRules} onChange={e => setEscalationRules(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-approval-thresholds-json" className={labelClasses}>Approval Thresholds JSON</label><textarea id="pluginpage-approval-thresholds-json" value={approvalThresholds} onChange={e => setApprovalThresholds(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-house-style-json" className={labelClasses}>House Style JSON</label><textarea id="pluginpage-house-style-json" value={houseStyle} onChange={e => setHouseStyle(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-cloud-bindings-json" className={labelClasses}>Cloud Bindings JSON</label><textarea id="pluginpage-cloud-bindings-json" value={cloudBindings} onChange={e => setCloudBindings(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-calendar-bindings-json" className={labelClasses}>Calendar Bindings JSON</label><textarea id="pluginpage-calendar-bindings-json" value={calendarBindings} onChange={e => setCalendarBindings(e.target.value)} rows={7} className={inputClasses} /></div>
+            <div><label htmlFor="pluginpage-template-preferences-json" className={labelClasses}>Template Preferences JSON</label><textarea id="pluginpage-template-preferences-json" value={templatePreferences} onChange={e => setTemplatePreferences(e.target.value)} rows={7} className={inputClasses} /></div>
           </div>
 
           <div>
-            <label className={labelClasses}>Custom Config JSON</label>
-            <textarea value={customConfig} onChange={e => setCustomConfig(e.target.value)} rows={5} className={inputClasses} />
+            <label htmlFor="pluginpage-custom-config-json" className={labelClasses}>Custom Config JSON</label>
+            <textarea id="pluginpage-custom-config-json" value={customConfig} onChange={e => setCustomConfig(e.target.value)} rows={5} className={inputClasses} />
           </div>
 
           <label className="flex items-center gap-3 text-sm font-sans text-brand-ink">
@@ -500,11 +500,11 @@ export default function PluginPage() {
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 shadow-sm">
 
                 <div className="flex items-center justify-between mb-4">
-                  <label className="text-[15px] font-semibold text-brand-ink font-sans">
+                  <label htmlFor="pluginpage-input-materials" className="text-[15px] font-semibold text-brand-ink font-sans">
                     Input Materials
                   </label>
                   <div className="flex items-center gap-3">
-                    <input
+                    <input id="pluginpage-input-materials"
                       ref={fileInputRef}
                       type="file"
                       accept=".pdf,.docx,.txt,.doc"
@@ -522,10 +522,10 @@ export default function PluginPage() {
                 </div>
 
                 <div className="mb-5">
-                  <label className="block text-xs font-semibold text-brand-ink uppercase tracking-wide mb-2">
+                  <label htmlFor="pluginpage-matter-context" className="block text-xs font-semibold text-brand-ink uppercase tracking-wide mb-2">
                     Matter Context
                   </label>
-                  <select
+                  <select id="pluginpage-matter-context"
                     value={selectedMatterId}
                     onChange={(e) => setSelectedMatterId(e.target.value)}
                     className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-sm font-sans focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface text-brand-ink transition-all"
@@ -590,11 +590,17 @@ export default function PluginPage() {
                 {/* Action Footer */}
                 <div className="mt-8 pt-6 border-t border-brand-line flex items-center justify-between">
                   <label className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={usePremium}
+                      onChange={(event) => setUsePremium(event.target.checked)}
+                      className="peer sr-only"
+                    />
                     <div
-                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                      className={`relative w-11 h-6 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-brand-accent peer-focus-visible:ring-offset-2 ${
                         usePremium ? 'bg-brand-ink' : 'bg-brand-line'
                       }`}
-                      onClick={() => setUsePremium((v) => !v)}
+                      aria-hidden="true"
                     >
                       <div
                         className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${

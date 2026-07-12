@@ -269,8 +269,8 @@ export default function EstatePortfolioPage() {
             </div>
             <div className="p-6 space-y-5">
               <div>
-                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Estate / Trust Name</label>
-                <input
+                <label htmlFor="estateportfoliopage-estate-trust-name" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Estate / Trust Name</label>
+                <input id="estateportfoliopage-estate-trust-name"
                   type="text"
                   autoFocus
                   value={form.estate_name}
@@ -281,8 +281,8 @@ export default function EstatePortfolioPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Type</label>
-                  <select
+                  <label htmlFor="estateportfoliopage-type" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Type</label>
+                  <select id="estateportfoliopage-type"
                     value={form.estate_type}
                     onChange={(e) => setForm((p) => ({ ...p, estate_type: e.target.value }))}
                     className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface"
@@ -291,8 +291,8 @@ export default function EstatePortfolioPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Jurisdiction</label>
-                  <input
+                  <label htmlFor="estateportfoliopage-jurisdiction" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Jurisdiction</label>
+                  <input id="estateportfoliopage-jurisdiction"
                     type="text"
                     value={form.jurisdiction}
                     onChange={(e) => setForm((p) => ({ ...p, jurisdiction: e.target.value }))}
@@ -302,8 +302,8 @@ export default function EstatePortfolioPage() {
                 </div>
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Gross Estate Value (USD)</label>
-                <input
+                <label htmlFor="estateportfoliopage-gross-estate-value-usd" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Gross Estate Value (USD)</label>
+                <input id="estateportfoliopage-gross-estate-value-usd"
                   type="number"
                   value={form.gross_estate_value}
                   onChange={(e) => setForm((p) => ({ ...p, gross_estate_value: e.target.value }))}

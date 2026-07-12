@@ -185,11 +185,11 @@ function LogFormModal({ initial, onClose, onSaved }) {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+              <label htmlFor="communicationspage-channel" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
                 Channel
               </label>
               <div className="relative">
-                <select
+                <select id="communicationspage-channel"
                   value={form.channel}
                   onChange={set('channel')}
                   disabled={isEdit}
@@ -208,11 +208,11 @@ function LogFormModal({ initial, onClose, onSaved }) {
               </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+              <label htmlFor="communicationspage-direction" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
                 Direction
               </label>
               <div className="relative">
-                <select
+                <select id="communicationspage-direction"
                   value={form.direction}
                   onChange={set('direction')}
                   disabled={isEdit}
@@ -230,10 +230,10 @@ function LogFormModal({ initial, onClose, onSaved }) {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+            <label htmlFor="communicationspage-subject" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
               Subject <span className="text-brand-rose">*</span>
             </label>
-            <input
+            <input id="communicationspage-subject"
               type="text"
               required
               value={form.subject}
@@ -244,10 +244,10 @@ function LogFormModal({ initial, onClose, onSaved }) {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+            <label htmlFor="communicationspage-body" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
               Body
             </label>
-            <textarea
+            <textarea id="communicationspage-body"
               rows={4}
               value={form.body}
               onChange={set('body')}
@@ -257,10 +257,10 @@ function LogFormModal({ initial, onClose, onSaved }) {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+            <label htmlFor="communicationspage-summary" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
               Summary
             </label>
-            <textarea
+            <textarea id="communicationspage-summary"
               rows={2}
               value={form.summary}
               onChange={set('summary')}
@@ -272,10 +272,10 @@ function LogFormModal({ initial, onClose, onSaved }) {
           {!isEdit && (
             <>
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+                <label htmlFor="communicationspage-matter-id-optional" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
                   Matter ID (optional)
                 </label>
-                <input
+                <input id="communicationspage-matter-id-optional"
                   type="text"
                   value={form.matter_id}
                   onChange={set('matter_id')}
@@ -284,10 +284,11 @@ function LogFormModal({ initial, onClose, onSaved }) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+                <span className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
                   Contact (optional)
-                </label>
+                </span>
                 <ContactPicker
+                  ariaLabel="Contact (optional)"
                   value={null}
                   onChange={(contact) => setForm((f) => ({ ...f, contact_id: contact?.id || '' }))}
                   placeholder="Search contacts..."
@@ -295,10 +296,10 @@ function LogFormModal({ initial, onClose, onSaved }) {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
+                <label htmlFor="communicationspage-occurred-at" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1">
                   Occurred At
                 </label>
-                <input
+                <input id="communicationspage-occurred-at"
                   type="datetime-local"
                   value={form.occurred_at}
                   onChange={set('occurred_at')}
@@ -499,9 +500,9 @@ export default function CommunicationsPage() {
 
         <div className="p-4 flex flex-col gap-4 overflow-y-auto flex-1">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
+            <p className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
               Channel
-            </label>
+            </p>
             <div className="flex flex-col gap-1">
               {CHANNELS.map((c) => (
                 <button
@@ -520,9 +521,9 @@ export default function CommunicationsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
+            <p className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
               Direction
-            </label>
+            </p>
             <div className="flex flex-col gap-1">
               {DIRECTIONS.map((d) => (
                 <button
@@ -541,10 +542,10 @@ export default function CommunicationsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
+            <label htmlFor="communicationspage-matter-id" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
               Matter ID
             </label>
-            <input
+            <input id="communicationspage-matter-id"
               type="text"
               value={filterMatterId}
               onChange={(e) => setFilterMatterId(e.target.value)}
@@ -554,10 +555,10 @@ export default function CommunicationsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
+            <label htmlFor="communicationspage-contact-id" className="block text-xs font-semibold uppercase tracking-wider text-brand-muted mb-1.5">
               Contact ID
             </label>
-            <input
+            <input id="communicationspage-contact-id"
               type="text"
               value={filterContactId}
               onChange={(e) => setFilterContactId(e.target.value)}

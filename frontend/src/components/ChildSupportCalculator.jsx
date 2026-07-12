@@ -53,10 +53,11 @@ function cleanParent(p) {
 }
 
 function Field({ label, value, onChange, type = 'number', placeholder, hint }) {
+  const fieldId = React.useId()
   return (
     <div>
-      <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">{label}</label>
-      <input
+      <label htmlFor={fieldId} className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">{label}</label>
+      <input id={fieldId}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -194,21 +195,21 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
           </div>
           <div className="grid grid-cols-3 gap-3 mb-4">
             <div>
-              <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">State</label>
-              <select value={state} onChange={(e) => setState(e.target.value)}
+              <label htmlFor="childsupportcalculator-state" className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">State</label>
+              <select id="childsupportcalculator-state" value={state} onChange={(e) => setState(e.target.value)}
                 className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent">
                 {jurisdictions.length === 0 && <option value={state}>{state}</option>}
                 {jurisdictions.map((j) => <option key={j.state_code} value={j.state_code}>{j.state_code} — {j.state_name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1"># Children</label>
-              <input type="number" min={0} max={12} value={numChildren} onChange={(e) => setNumChildren(e.target.value)}
+              <label htmlFor="childsupportcalculator-children" className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1"># Children</label>
+              <input id="childsupportcalculator-children" type="number" min={0} max={12} value={numChildren} onChange={(e) => setNumChildren(e.target.value)}
                 className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent" />
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Custody</label>
-              <select value={custodyType} onChange={(e) => setCustodyType(e.target.value)}
+              <label htmlFor="childsupportcalculator-custody" className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Custody</label>
+              <select id="childsupportcalculator-custody" value={custodyType} onChange={(e) => setCustodyType(e.target.value)}
                 className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent">
                 {CUSTODY_TYPES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
@@ -251,8 +252,8 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
             <div className="space-y-2 pl-6">
               <Field label="Deviation Amount (monthly)" value={deviationAmount} onChange={setDeviationAmount} placeholder="0.00" />
               <div>
-                <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Reason (required)</label>
-                <textarea value={deviationReason} onChange={(e) => setDeviationReason(e.target.value)} rows={2}
+                <label htmlFor="childsupportcalculator-reason-required" className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Reason (required)</label>
+                <textarea id="childsupportcalculator-reason-required" value={deviationReason} onChange={(e) => setDeviationReason(e.target.value)} rows={2}
                   placeholder="Written basis for departing from the guideline"
                   className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent" />
               </div>
@@ -361,8 +362,8 @@ export default function ChildSupportCalculator({ caseId, jurisdiction = 'ND', on
 
         <div className="bg-brand-surface border border-brand-line rounded-2xl p-4 shadow-sm flex items-end gap-3">
           <div className="flex-1">
-            <label className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Save this run as…</label>
-            <input type="text" value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)}
+            <label htmlFor="childsupportcalculator-save-this-run-as" className="block text-[10px] font-bold text-brand-ink uppercase tracking-widest mb-1">Save this run as…</label>
+            <input id="childsupportcalculator-save-this-run-as" type="text" value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)}
               placeholder="e.g., Initial guideline calc"
               className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent" />
           </div>

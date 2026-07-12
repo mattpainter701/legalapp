@@ -19,7 +19,7 @@ function initials(name, email) {
   return email ? email.slice(0, 2).toUpperCase() : '??'
 }
 
-export default function UserSearchInput({ onSelect, placeholder = 'Search by name or email…', excludeIds = [] }) {
+export default function UserSearchInput({ onSelect, placeholder = 'Search by name or email…', excludeIds = [], inputId }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
@@ -98,6 +98,7 @@ export default function UserSearchInput({ onSelect, placeholder = 'Search by nam
           className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none"
         />
         <input
+          id={inputId}
           ref={inputRef}
           type="text"
           value={query}

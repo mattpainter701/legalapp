@@ -184,9 +184,9 @@ function EditPanel({ detail, plugin, skill, onSaved, onReset }) {
       {/* Default prompt (readonly) */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
+          <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
             Default Prompt (read-only)
-          </label>
+          </span>
           <span className="text-[10px] text-brand-muted font-mono">{plugin}/{skill}</span>
         </div>
         <pre className="bg-brand-bg-soft border border-brand-line rounded-lg p-4 text-xs font-mono text-brand-ink-2 overflow-auto max-h-60 whitespace-pre-wrap">
@@ -197,7 +197,7 @@ function EditPanel({ detail, plugin, skill, onSaved, onReset }) {
       {/* Override textarea */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
+          <label htmlFor="prompt-admin-custom-override" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
             Custom Override
           </label>
           <div className="flex items-center gap-3">
@@ -206,6 +206,7 @@ function EditPanel({ detail, plugin, skill, onSaved, onReset }) {
           </div>
         </div>
         <textarea
+          id="prompt-admin-custom-override"
           ref={textareaRef}
           value={overrideContent}
           onChange={(e) => setOverrideContent(e.target.value)}
@@ -290,10 +291,10 @@ function TestPanel({ plugin, skill, currentContent }) {
   return (
     <div className="space-y-4">
       <div>
-        <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-2 block">
+        <label htmlFor="promptadminpage-sample-input" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-2 block">
           Sample Input
         </label>
-        <textarea
+        <textarea id="promptadminpage-sample-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           className="w-full h-32 px-4 py-3 border border-brand-line rounded-lg text-sm font-sans text-brand-ink placeholder-brand-muted bg-brand-surface focus:outline-none focus:ring-2 focus:ring-brand-accent/30 focus:border-brand-accent resize-y"

@@ -85,8 +85,8 @@ export default function TrustAccountReconcile({ accountId }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Balance *</label>
-              <input
+              <label htmlFor="trustaccountreconcile-bank-balance" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Balance *</label>
+              <input id="trustaccountreconcile-bank-balance"
                 type="number"
                 step="0.01"
                 value={form.bank_balance}
@@ -97,8 +97,8 @@ export default function TrustAccountReconcile({ accountId }) {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">As of Date</label>
-              <input
+              <label htmlFor="trustaccountreconcile-as-of-date" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">As of Date</label>
+              <input id="trustaccountreconcile-as-of-date"
                 type="date"
                 value={form.as_of_date}
                 onChange={e => setForm(f => ({ ...f, as_of_date: e.target.value }))}
@@ -106,8 +106,8 @@ export default function TrustAccountReconcile({ accountId }) {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Outstanding Deposits</label>
-              <input
+              <label htmlFor="trustaccountreconcile-outstanding-deposits" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Outstanding Deposits</label>
+              <input id="trustaccountreconcile-outstanding-deposits"
                 type="number"
                 step="0.01"
                 min="0"
@@ -117,8 +117,8 @@ export default function TrustAccountReconcile({ accountId }) {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Outstanding Disbursements</label>
-              <input
+              <label htmlFor="trustaccountreconcile-outstanding-disbursements" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Outstanding Disbursements</label>
+              <input id="trustaccountreconcile-outstanding-disbursements"
                 type="number"
                 step="0.01"
                 min="0"
@@ -130,8 +130,8 @@ export default function TrustAccountReconcile({ accountId }) {
           </div>
 
           <div>
-            <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
-            <textarea
+            <label htmlFor="trustaccountreconcile-notes" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
+            <textarea id="trustaccountreconcile-notes"
               value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
               rows={2}

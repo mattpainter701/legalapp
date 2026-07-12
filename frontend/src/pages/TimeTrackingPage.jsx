@@ -297,8 +297,8 @@ export default function TimeTrackingPage() {
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'end' }}>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
-            <select
+            <label htmlFor="timetrackingpage-matter" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
+            <select id="timetrackingpage-matter"
               value={form.matter_id}
               onChange={(e) => setForm({ ...form, matter_id: e.target.value })}
               required
@@ -311,8 +311,8 @@ export default function TimeTrackingPage() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Description</label>
-            <input
+            <label htmlFor="timetrackingpage-description" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Description</label>
+            <input id="timetrackingpage-description"
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               required
@@ -321,8 +321,8 @@ export default function TimeTrackingPage() {
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Hours</label>
-            <input
+            <label htmlFor="timetrackingpage-hours" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Hours</label>
+            <input id="timetrackingpage-hours"
               type="number" step="0.25" min="0.25"
               value={form.hours}
               onChange={(e) => setForm({ ...form, hours: e.target.value })}
@@ -331,8 +331,8 @@ export default function TimeTrackingPage() {
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Rate ($)</label>
-            <input
+            <label htmlFor="timetrackingpage-rate" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Rate ($)</label>
+            <input id="timetrackingpage-rate"
               type="number" step="1" min="0"
               value={form.hourly_rate}
               onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}

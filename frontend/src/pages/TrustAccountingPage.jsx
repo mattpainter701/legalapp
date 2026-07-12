@@ -229,8 +229,8 @@ export default function TrustAccountingPage() {
 
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Matter *</label>
-                <select
+                <label htmlFor="trustaccountingpage-matter" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Matter *</label>
+                <select id="trustaccountingpage-matter"
                   value={form.matter_id}
                   onChange={e => setForm(f => ({ ...f, matter_id: e.target.value }))}
                   className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm font-sans text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent/30"
@@ -244,8 +244,8 @@ export default function TrustAccountingPage() {
               </div>
 
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account Name *</label>
-                <input
+                <label htmlFor="trustaccountingpage-account-name" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account Name *</label>
+                <input id="trustaccountingpage-account-name"
                   type="text"
                   value={form.account_name}
                   onChange={e => setForm(f => ({ ...f, account_name: e.target.value }))}
@@ -257,8 +257,8 @@ export default function TrustAccountingPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Name</label>
-                  <input
+                  <label htmlFor="trustaccountingpage-bank-name" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Name</label>
+                  <input id="trustaccountingpage-bank-name"
                     type="text"
                     value={form.bank_name}
                     onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))}
@@ -266,8 +266,8 @@ export default function TrustAccountingPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account # (last 4)</label>
-                  <input
+                  <label htmlFor="trustaccountingpage-account-last-4" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account # (last 4)</label>
+                  <input id="trustaccountingpage-account-last-4"
                     type="text"
                     maxLength={4}
                     value={form.account_number_masked}
@@ -280,8 +280,8 @@ export default function TrustAccountingPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Minimum Balance</label>
-                  <input
+                  <label htmlFor="trustaccountingpage-minimum-balance" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Minimum Balance</label>
+                  <input id="trustaccountingpage-minimum-balance"
                     type="number"
                     step="0.01"
                     min="0"
@@ -292,8 +292,8 @@ export default function TrustAccountingPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Auto-Replenish Amount</label>
-                  <input
+                  <label htmlFor="trustaccountingpage-auto-replenish-amount" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Auto-Replenish Amount</label>
+                  <input id="trustaccountingpage-auto-replenish-amount"
                     type="number"
                     step="0.01"
                     min="0"
@@ -317,8 +317,8 @@ export default function TrustAccountingPage() {
               </label>
 
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
-                <textarea
+                <label htmlFor="trustaccountingpage-notes" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
+                <textarea id="trustaccountingpage-notes"
                   value={form.notes}
                   onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
                   rows={2}

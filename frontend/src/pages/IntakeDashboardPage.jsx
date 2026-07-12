@@ -1101,8 +1101,8 @@ export default function IntakeDashboardPage() {
                 className="mt-4 grid gap-4 lg:grid-cols-2"
               >
                 <div className="lg:col-span-2">
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Caller</label>
-                  <input
+                  <label htmlFor="intakedashboardpage-caller" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Caller</label>
+                  <input id="intakedashboardpage-caller"
                     value={form.caller_name}
                     onChange={(e) => set('caller_name', e.target.value)}
                     placeholder={q || selected?.title || 'Jane Doe'}
@@ -1117,8 +1117,8 @@ export default function IntakeDashboardPage() {
                 )}
 
                 <div>
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Practice Area</label>
-                  <select
+                  <label htmlFor="intakedashboardpage-practice-area" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Practice Area</label>
+                  <select id="intakedashboardpage-practice-area"
                     value={form.practice_area}
                     onChange={(e) => set('practice_area', e.target.value)}
                     className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"
@@ -1153,8 +1153,8 @@ export default function IntakeDashboardPage() {
                 </div>
 
                 <div className="lg:col-span-2">
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Purpose</label>
-                  <textarea
+                  <label htmlFor="intakedashboardpage-purpose" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Purpose</label>
+                  <textarea id="intakedashboardpage-purpose"
                     value={form.purpose}
                     onChange={(e) => set('purpose', e.target.value)}
                     rows={3}
@@ -1164,8 +1164,8 @@ export default function IntakeDashboardPage() {
                 </div>
 
                 <div className="lg:col-span-2">
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Internal Notes</label>
-                  <textarea
+                  <label htmlFor="intakedashboardpage-internal-notes" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Internal Notes</label>
+                  <textarea id="intakedashboardpage-internal-notes"
                     value={form.notes}
                     onChange={(e) => set('notes', e.target.value)}
                     rows={2}
@@ -1174,8 +1174,8 @@ export default function IntakeDashboardPage() {
                 </div>
 
                 <div className="lg:col-span-2">
-                  <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task / Routing</label>
-                  <select
+                  <label htmlFor="intakedashboardpage-task-routing" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task / Routing</label>
+                  <select id="intakedashboardpage-task-routing"
                     value={form.task_mode}
                     onChange={(e) => {
                       const nextMode = e.target.value
@@ -1210,8 +1210,8 @@ export default function IntakeDashboardPage() {
                 {form.task_mode === 'specific_staff' && (
                   <div className="lg:col-span-2 space-y-3 rounded-2xl border border-brand-line bg-brand-bg-soft p-3">
                     <div>
-                      <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Assign To</label>
-                      <input
+                      <label htmlFor="intakedashboardpage-assign-to" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Assign To</label>
+                      <input id="intakedashboardpage-assign-to"
                         value={staffQuery}
                         onChange={(e) => setStaffQuery(e.target.value)}
                         placeholder={selectedStaff ? (selectedStaff.full_name || selectedStaff.email) : 'Search staff by name/email'}
@@ -1264,8 +1264,8 @@ export default function IntakeDashboardPage() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task</label>
-                      <select
+                      <label htmlFor="intakedashboardpage-task" className="mb-1 block text-[11px] font-black uppercase tracking-widest text-brand-muted">Task</label>
+                      <select id="intakedashboardpage-task"
                         value={form.task_title}
                         onChange={(e) => set('task_title', e.target.value)}
                         className="w-full rounded-xl border border-brand-line bg-white px-3 py-2 text-sm"

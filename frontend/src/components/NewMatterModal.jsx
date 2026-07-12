@@ -181,8 +181,8 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
           {/* Title */}
           <div>
-            <label className={labelCls}>Matter Title <span className="text-brand-rose">*</span></label>
-            <input
+            <label htmlFor="newmattermodal-matter-title" className={labelCls}>Matter Title <span className="text-brand-rose">*</span></label>
+            <input id="newmattermodal-matter-title"
               type="text"
               value={form.matter_name}
               onChange={e => set('matter_name', e.target.value)}
@@ -195,8 +195,8 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
 
           {/* Description */}
           <div>
-            <label className={labelCls}>Description</label>
-            <textarea
+            <label htmlFor="newmattermodal-description" className={labelCls}>Description</label>
+            <textarea id="newmattermodal-description"
               value={form.description}
               onChange={e => set('description', e.target.value)}
               placeholder="Brief summary of this matter..."
@@ -208,9 +208,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
           {/* Practice Area + Status */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className={labelCls}>Practice Area</label>
+              <label htmlFor="newmattermodal-practice-area" className={labelCls}>Practice Area</label>
               <div className="relative">
-                <select
+                <select id="newmattermodal-practice-area"
                   value={form.practice_area}
                   onChange={e => setPracticeArea(e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
@@ -222,9 +222,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
               </div>
             </div>
             <div>
-              <label className={labelCls}>Status</label>
+              <label htmlFor="newmattermodal-status" className={labelCls}>Status</label>
               <div className="relative">
-                <select
+                <select id="newmattermodal-status"
                   value={form.status}
                   onChange={e => set('status', e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
@@ -238,9 +238,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
 
           {/* Plugin Workflow */}
           <div>
-            <label className={labelCls}>Plugin Workflow</label>
+            <label htmlFor="newmattermodal-plugin-workflow" className={labelCls}>Plugin Workflow</label>
             <div className="relative">
-              <select
+              <select id="newmattermodal-plugin-workflow"
                 value={form.primary_plugin}
                 onChange={e => set('primary_plugin', e.target.value)}
                 className={`${inputCls} pr-8 appearance-none`}
@@ -264,7 +264,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
           {/* Client */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className={`${labelCls} mb-0`}>Client</label>
+              <span className={`${labelCls} mb-0`}>Client</span>
               <button
                 type="button"
                 onClick={() => { setShowCreateContact(v => !v); setContactError(null) }}
@@ -277,17 +277,17 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
               <div className="border border-brand-line rounded-lg p-4 bg-brand-bg-soft/50 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className={labelCls}>First Name</label>
-                    <input type="text" value={newContact.first_name} onChange={e => setNewContact(p => ({ ...p, first_name: e.target.value }))} placeholder="First" className={inputCls} />
+                    <label htmlFor="newmattermodal-first-name" className={labelCls}>First Name</label>
+                    <input id="newmattermodal-first-name" type="text" value={newContact.first_name} onChange={e => setNewContact(p => ({ ...p, first_name: e.target.value }))} placeholder="First" className={inputCls} />
                   </div>
                   <div>
-                    <label className={labelCls}>Last Name</label>
-                    <input type="text" value={newContact.last_name} onChange={e => setNewContact(p => ({ ...p, last_name: e.target.value }))} placeholder="Last" className={inputCls} />
+                    <label htmlFor="newmattermodal-last-name" className={labelCls}>Last Name</label>
+                    <input id="newmattermodal-last-name" type="text" value={newContact.last_name} onChange={e => setNewContact(p => ({ ...p, last_name: e.target.value }))} placeholder="Last" className={inputCls} />
                   </div>
                 </div>
                 <div>
-                  <label className={labelCls}>Email</label>
-                  <input type="email" value={newContact.email} onChange={e => setNewContact(p => ({ ...p, email: e.target.value }))} placeholder="client@example.com" className={inputCls} />
+                  <label htmlFor="newmattermodal-email" className={labelCls}>Email</label>
+                  <input id="newmattermodal-email" type="email" value={newContact.email} onChange={e => setNewContact(p => ({ ...p, email: e.target.value }))} placeholder="client@example.com" className={inputCls} />
                 </div>
                 {contactError && <p className="text-brand-rose text-[12px] font-sans">{contactError}</p>}
                 <button
@@ -302,6 +302,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
             ) : (
               <div className="relative">
                 <select
+                  aria-label="Client"
                   value={form.client_contact_id}
                   onChange={e => set('client_contact_id', e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
@@ -321,9 +322,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
           {/* Attorney of Record + Partner Attorney */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className={labelCls}>Attorney of Record</label>
+              <label htmlFor="newmattermodal-attorney-of-record" className={labelCls}>Attorney of Record</label>
               <div className="relative">
-                <select
+                <select id="newmattermodal-attorney-of-record"
                   value={form.attorney_of_record_id}
                   onChange={e => set('attorney_of_record_id', e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
@@ -340,9 +341,9 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
               <p className="text-[11px] text-brand-muted mt-1 font-sans">Responsible attorney of record.</p>
             </div>
             <div>
-              <label className={labelCls}>Partner Attorney</label>
+              <label htmlFor="newmattermodal-partner-attorney" className={labelCls}>Partner Attorney</label>
               <div className="relative">
-                <select
+                <select id="newmattermodal-partner-attorney"
                   value={form.partner_attorney_id}
                   onChange={e => set('partner_attorney_id', e.target.value)}
                   className={`${inputCls} pr-8 appearance-none`}
@@ -363,7 +364,7 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
           {/* Additional Assignees */}
           {users.length > 0 && (
             <div>
-              <label className={labelCls}>Additional Team Members</label>
+              <p className={labelCls}>Additional Team Members</p>
               <div className="border border-brand-line rounded-lg overflow-hidden max-h-40 overflow-y-auto">
                 {users.map(u => {
                   const checked = form.assigned_user_ids.includes(u.id)
@@ -399,22 +400,22 @@ export default function NewMatterModal({ open, onClose, onCreated }) {
             </summary>
             <div className="mt-4 space-y-4 pl-1">
               <div>
-                <label className={labelCls}>Counterparty</label>
-                <input type="text" value={form.counterparty} onChange={e => set('counterparty', e.target.value)} placeholder="Opposing party name" className={inputCls} />
+                <label htmlFor="newmattermodal-counterparty" className={labelCls}>Counterparty</label>
+                <input id="newmattermodal-counterparty" type="text" value={form.counterparty} onChange={e => set('counterparty', e.target.value)} placeholder="Opposing party name" className={inputCls} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className={labelCls}>Jurisdiction</label>
-                  <input type="text" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)} placeholder="e.g., California" className={inputCls} />
+                  <label htmlFor="newmattermodal-jurisdiction" className={labelCls}>Jurisdiction</label>
+                  <input id="newmattermodal-jurisdiction" type="text" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)} placeholder="e.g., California" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Case Number</label>
-                  <input type="text" value={form.case_number} onChange={e => set('case_number', e.target.value)} placeholder="e.g., 2026-CV-1234" className={inputCls} />
+                  <label htmlFor="newmattermodal-case-number" className={labelCls}>Case Number</label>
+                  <input id="newmattermodal-case-number" type="text" value={form.case_number} onChange={e => set('case_number', e.target.value)} placeholder="e.g., 2026-CV-1234" className={inputCls} />
                 </div>
               </div>
               <div>
-                <label className={labelCls}>Matter Type</label>
-                <input type="text" value={form.matter_type} onChange={e => set('matter_type', e.target.value)} placeholder="e.g., Contract Dispute, Personal Injury" className={inputCls} />
+                <label htmlFor="newmattermodal-matter-type" className={labelCls}>Matter Type</label>
+                <input id="newmattermodal-matter-type" type="text" value={form.matter_type} onChange={e => set('matter_type', e.target.value)} placeholder="e.g., Contract Dispute, Personal Injury" className={inputCls} />
               </div>
             </div>
           </details>

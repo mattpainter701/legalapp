@@ -3,7 +3,6 @@ import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-route
 import AppShell from './components/AppShell'
 import { ToastProvider } from './components/toast/ToastProvider'
 import { ConfirmProvider } from './components/dialog/ConfirmProvider'
-import FormLabelAssociator from './components/accessibility/FormLabelAssociator'
 import SeoHead from './components/SeoHead'
 import VersionBadge from './components/VersionBadge'
 import AppErrorBoundary from './components/AppErrorBoundary'
@@ -189,7 +188,6 @@ export default function App() {
       <SeoHead />
       <ToastProvider>
         <ConfirmProvider>
-        <FormLabelAssociator />
         <VersionBadge />
         <Suspense fallback={<div role="status" className="flex min-h-screen items-center justify-center bg-brand-bg text-brand-ink">Loading workspace…</div>}>
         <Routes>

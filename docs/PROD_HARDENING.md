@@ -173,7 +173,8 @@ Zoom CRC, public HTTP, and TLS checks.
 ## Related changes in this sprint
 
 - **Auth/session (C):** short-lived access tokens + rotating refresh tokens,
-  Redis-backed revocation, hardened cookie flags.
+  Redis-backed family revocation, expiring consumed-token replay tombstones,
+  atomic rotate/revoke conflict handling, and hardened cookie flags.
 - **Tenant isolation (A):** `FORCE ROW LEVEL SECURITY` everywhere + a non-owner
   runtime DB role (`backend/scripts/provision_app_role.sql`).
 - **Scheduler (B):** single-runner via `RUN_SCHEDULER` + Postgres advisory locks.

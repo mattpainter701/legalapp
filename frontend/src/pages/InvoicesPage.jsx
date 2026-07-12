@@ -120,8 +120,8 @@ export default function InvoicesPage() {
           )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
-              <select
+              <label htmlFor="invoicespage-matter" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
+              <select id="invoicespage-matter"
                 value={generateForm.matter_id}
                 onChange={(e) => setGenerateForm({ matter_id: e.target.value })}
                 required

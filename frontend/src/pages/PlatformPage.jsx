@@ -529,8 +529,9 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
           ['premiumModel', 'Premium alias', defaultAliases.premium],
         ].map(([key, label, fallback]) => (
           <div key={key}>
-            <label className="block text-xs text-brand-muted font-sans mb-1">{label}</label>
+            <label htmlFor={`tenant-${tenant.id}-${key}`} className="block text-xs text-brand-muted font-sans mb-1">{label}</label>
             <input
+              id={`tenant-${tenant.id}-${key}`}
               list={`tenant-aliases-${tenant.id}`}
               value={values[key] || ''}
               onChange={(e) => setValue(key, e.target.value)}
@@ -597,8 +598,8 @@ function TenantPlanOverride({ tenant, tenantDetail, platformKey, onUpdate, onErr
   return (
     <div className="flex items-end gap-3">
       <div className="flex-1">
-        <label className="block text-xs text-brand-muted font-sans mb-1">Plan</label>
-        <select
+        <label htmlFor="platformpage-plan" className="block text-xs text-brand-muted font-sans mb-1">Plan</label>
+        <select id="platformpage-plan"
           value={value}
           onChange={(e) => { setValue(e.target.value); setSaved(false) }}
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans bg-brand-surface focus:outline-none focus:ring-2 focus:ring-brand-accent"
@@ -1045,8 +1046,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   return (
     <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-[1fr_1fr_1.3fr_100px]' : 'lg:grid-cols-[1fr_1fr_1.3fr_110px]'} gap-3`}>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
-        <select
+        <label htmlFor="platformpage-upstream-provider" className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
+        <select id="platformpage-upstream-provider"
           value={value.provider_id || ''}
           onChange={(e) => setField('provider_id', e.target.value)}
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
@@ -1057,8 +1058,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && selectedPreset && <p className="text-[11px] text-brand-muted mt-1 font-sans">{selectedPreset.description}</p>}
       </div>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
-        <select
+        <label htmlFor="platformpage-provider-key" className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
+        <select id="platformpage-provider-key"
           value={value.key_id || ''}
           onChange={(e) => setField('key_id', e.target.value)}
           disabled={!value.provider_id}
@@ -1069,8 +1070,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         </select>
       </div>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Upstream model ID</label>
-        <input
+        <label htmlFor="platformpage-upstream-model-id" className="block text-xs text-brand-muted font-sans mb-1">Upstream model ID</label>
+        <input id="platformpage-upstream-model-id"
           list={modelListId}
           value={value.model || ''}
           onChange={(e) => setField('model', e.target.value)}
@@ -1087,8 +1088,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         )}
       </div>
       <div>
-        <label className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
-        <input
+        <label htmlFor="platformpage-capacity" className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
+        <input id="platformpage-capacity"
           type="number"
           min="1"
           max="1000"
@@ -1488,19 +1489,19 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
           {addError && <p className="text-xs text-brand-rose font-sans">{addError}</p>}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-brand-muted font-sans mb-1">Display name</label>
-              <input required value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. OpenCode Production" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
+              <label htmlFor="platformpage-display-name" className="block text-xs text-brand-muted font-sans mb-1">Display name</label>
+              <input id="platformpage-display-name" required value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. OpenCode Production" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
             </div>
             <div>
-              <label className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
-              <select required value={newProvider} onChange={(e) => setNewProvider(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface">
+              <label htmlFor="platformpage-provider" className="block text-xs text-brand-muted font-sans mb-1">Provider</label>
+              <select id="platformpage-provider" required value={newProvider} onChange={(e) => setNewProvider(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface">
                 <option value="">Select…</option>
                 {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs text-brand-muted font-sans mb-1">API key</label>
-              <input required type="password" value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="sk-…" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
+              <label htmlFor="platformpage-api-key" className="block text-xs text-brand-muted font-sans mb-1">API key</label>
+              <input id="platformpage-api-key" required type="password" value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="sk-…" className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface" />
             </div>
           </div>
           <div className="flex items-center gap-2">

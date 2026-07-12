@@ -81,10 +81,10 @@ export default function FirmBrandingPanel() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-firm-name" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Firm name
             </label>
-            <input
+            <input id="firmbrandingpanel-firm-name"
               type="text"
               value={form.firm_name}
               onChange={(e) => setForm((f) => ({ ...f, firm_name: e.target.value }))}
@@ -93,10 +93,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-logo-url" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Logo URL
             </label>
-            <input
+            <input id="firmbrandingpanel-logo-url"
               type="text"
               value={form.firm_logo_url}
               onChange={(e) => setForm((f) => ({ ...f, firm_logo_url: e.target.value }))}
@@ -105,10 +105,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-phone" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Phone
             </label>
-            <input
+            <input id="firmbrandingpanel-phone"
               type="text"
               value={form.firm_phone}
               onChange={(e) => setForm((f) => ({ ...f, firm_phone: e.target.value }))}
@@ -117,10 +117,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-email" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Email
             </label>
-            <input
+            <input id="firmbrandingpanel-email"
               type="email"
               value={form.firm_email}
               onChange={(e) => setForm((f) => ({ ...f, firm_email: e.target.value }))}
@@ -129,10 +129,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-website" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Website
             </label>
-            <input
+            <input id="firmbrandingpanel-website"
               type="text"
               value={form.firm_website}
               onChange={(e) => setForm((f) => ({ ...f, firm_website: e.target.value }))}
@@ -141,10 +141,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-address" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               Address
             </label>
-            <textarea
+            <textarea id="firmbrandingpanel-address"
               value={form.firm_address}
               onChange={(e) => setForm((f) => ({ ...f, firm_address: e.target.value }))}
               rows={2}
@@ -153,10 +153,10 @@ export default function FirmBrandingPanel() {
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+            <label htmlFor="firmbrandingpanel-pdf-footer-text" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
               PDF footer text
             </label>
-            <textarea
+            <textarea id="firmbrandingpanel-pdf-footer-text"
               value={form.firm_pdf_footer}
               onChange={(e) => setForm((f) => ({ ...f, firm_pdf_footer: e.target.value }))}
               rows={2}

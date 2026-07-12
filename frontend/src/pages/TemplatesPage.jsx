@@ -24,8 +24,6 @@ import {
   Sparkles,
   Check,
   ClipboardList,
-  Clock3,
-  AlertCircle,
   Search,
   Wand2,
   Upload,
@@ -339,9 +337,14 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [analysis, setAnalysis] = useState(null)
   const [draftBody, setDraftBody] = useState('')
   const [mappedFields, setMappedFields] = useState([])
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+
+  useEffect(() => () => {
+    if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl)
+  }, [sourcePreviewUrl])
 
   const reviewedFields = () => mappedFields.map(({ _bodyName, ...field }) => field)
 
@@ -375,8 +378,14 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       setAnalysis(result)
       setDraftBody(result.body || result.extracted_text || '')
       setMappedFields((result.suggested_variable_schema?.fields || []).map((field) => ({ ...field, _bodyName: field.name })))
+      setSourcePreviewUrl(
+        String(result.format || '').toLowerCase() === 'pdf'
+          ? URL.createObjectURL(file)
+          : '',
+      )
       if (!title.trim()) setTitle(result.title || '')
     } catch (err) {
+      setSourcePreviewUrl('')
       setError(getErrorMessage(err, 'Could not analyze that sample.'))
     } finally {
       setAnalyzing(false)
@@ -464,21 +473,28 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           <input
             id="template-sample-file"
             type="file"
+            aria-describedby="template-sample-guidance"
+            disabled={analyzing || saving}
             accept=".docx,.pdf,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
             onChange={(e) => {
               setFile(e.target.files?.[0] || null)
               setAnalysis(null)
               setDraftBody('')
               setMappedFields([])
+              setSourcePreviewUrl('')
             }}
             className="block w-full text-sm text-brand-ink file:mr-3 file:px-3 file:py-2 file:rounded file:border file:border-brand-line file:bg-brand-bg file:text-brand-ink file:text-xs file:font-semibold"
           />
+          <p id="template-sample-guidance" className="mt-2 text-xs text-brand-muted">
+            <span className="font-semibold text-brand-ink">PDF requirement:</span>{' '}
+            PDFs must already contain fillable AcroForm fields. Static PDFs and scans cannot be used for generation until fillable fields are added in a PDF editor. DOCX and TXT samples are imported as reviewed text templates.
+          </p>
         </div>
         <div>
-          <label className="block text-sm font-medium text-brand-ink mb-1">
+          <label htmlFor="templatespage-category" className="block text-sm font-medium text-brand-ink mb-1">
             Category
           </label>
-          <select
+          <select id="templatespage-category"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
@@ -491,10 +507,10 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-brand-ink mb-1">
+        <label htmlFor="templatespage-template-title" className="block text-sm font-medium text-brand-ink mb-1">
           Template title
         </label>
-        <input
+        <input id="templatespage-template-title"
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -551,6 +567,22 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               <p className="mt-1 text-brand-muted">DOCX samples are currently imported as reviewed text. Review the extracted Markdown below before creating this draft.</p>
             </div>
           )}
+          {isPdfAnalysis && sourcePreviewUrl && (
+            <div className="border border-brand-line rounded bg-brand-bg p-4">
+              <div className="mb-3">
+                <p className="text-sm font-semibold text-brand-ink">Validated source PDF</p>
+                <p className="mt-1 text-xs text-brand-muted">Inspect the page layout while reviewing the detected field map below. This preview appears only after the server accepts the PDF as safe to process.</p>
+              </div>
+              <object
+                title={`Source PDF preview: ${file?.name || analysis.title}`}
+                data={sourcePreviewUrl}
+                type="application/pdf"
+                className="h-[55vh] min-h-[420px] w-full rounded border border-brand-line bg-white"
+              >
+                <p className="p-4 text-sm text-brand-muted">This browser cannot display the validated source PDF inline. Review the detected page and field details below, or open the original file locally.</p>
+              </object>
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
           <div className="border border-brand-line rounded bg-brand-bg p-4">
             <div className="flex items-center justify-between gap-3 mb-3">
@@ -569,14 +601,30 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               <p className="text-sm font-semibold text-brand-ink mb-2">Detected fields</p>
               {fields.length > 0 ? (
                 <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-                  {fields.map((field, index) => (
-                    <div key={`${index}-${field.name}`} className="text-xs">
-                      <label htmlFor={`mapped-field-${index}`} className="block text-brand-muted mb-1">{field.label || `Field ${index + 1}`}</label>
-                      <input id={`mapped-field-${index}`} value={field.name || ''} onChange={(event) => renameField(index, event.target.value)} className="w-full rounded border border-brand-line bg-brand-surface-2 px-2 py-1.5 font-mono text-brand-ink" />
-                      {field.pdf_field_name && <p className="mt-1 font-mono text-brand-accent-2">PDF field: {field.pdf_field_name}</p>}
-                      {(field.example || field.source_path) && <p className="mt-1 text-brand-muted break-words">{field.example || field.source_path}</p>}
-                    </div>
-                  ))}
+                  {fields.map((field, index) => {
+                    const optionLabels = (field.options || []).map((option) => (
+                      typeof option === 'object'
+                        ? option.label ?? option.name ?? option.value
+                        : option
+                    )).filter(Boolean)
+                    return (
+                      <div key={`${index}-${field.name}`} className="rounded border border-brand-line bg-brand-surface-2 p-3 text-xs">
+                        <label htmlFor={`mapped-field-${index}`} className="block text-brand-muted mb-1">{field.label || `Field ${index + 1}`}</label>
+                        <input id={`mapped-field-${index}`} value={field.name || ''} onChange={(event) => renameField(index, event.target.value)} className="w-full rounded border border-brand-line bg-brand-bg px-2 py-1.5 font-mono text-brand-ink" />
+                        {field.pdf_field_name && <p className="mt-1 font-mono text-brand-accent-2">PDF field: {field.pdf_field_name}</p>}
+                        {field.pdf_field_name && (
+                          <div className="mt-2 flex flex-wrap gap-1.5" aria-label={`PDF metadata for ${field.label || field.name}`}>
+                            <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 capitalize text-brand-muted">{field.field_type || 'text'}</span>
+                            {field.page && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Page {field.page}</span>}
+                            <span className={`rounded border px-2 py-0.5 ${field.required ? 'border-brand-amber/40 bg-brand-amber/10 text-brand-ink' : 'border-brand-line bg-brand-bg text-brand-muted'}`}>{field.required ? 'Required' : 'Optional'}</span>
+                            {field.multiline && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Multiline</span>}
+                          </div>
+                        )}
+                        {optionLabels.length > 0 && <p className="mt-2 text-brand-muted break-words"><span className="font-semibold text-brand-ink">Options:</span> {optionLabels.join(', ')}</p>}
+                        {(field.example || field.source_path) && <p className="mt-1 text-brand-muted break-words">{field.example || field.source_path}</p>}
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <p className="text-xs text-brand-muted">No fields detected yet.</p>
@@ -626,12 +674,12 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading }) {
 
   return (
     <div className="border border-brand-line rounded bg-brand-bg p-3">
-      <label className="block text-sm font-medium text-brand-ink mb-2">
+      <label htmlFor="templatespage-matter" className="block text-sm font-medium text-brand-ink mb-2">
         Matter
       </label>
       <div className="relative">
         <Search size={15} className="absolute left-3 top-2.5 text-brand-muted" />
-        <input
+        <input id="templatespage-matter"
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -903,10 +951,10 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         />
 
         <div>
-          <label className="block text-xs font-medium text-brand-muted mb-0.5">
+          <label htmlFor="templatespage-matter-uuid-fallback" className="block text-xs font-medium text-brand-muted mb-0.5">
             Matter UUID fallback
           </label>
-          <input
+          <input id="templatespage-matter-uuid-fallback"
             type="text"
             value={matterId}
             onChange={(e) => { setMatterId(e.target.value); setSaved(false) }}
@@ -1388,19 +1436,19 @@ export default function TemplatesPage() {
       </div>
 
       <div className="bg-brand-surface-2 border border-brand-line rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-brand-ink">Integration Hooks</h3>
+        <h3 className="text-sm font-semibold text-brand-ink">PDF template checklist</h3>
         <div className="mt-4 space-y-3">
           <div className="flex gap-3">
             <Check size={16} className="text-brand-green shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">Existing render endpoint remains the source of truth.</p>
+            <p className="text-sm text-brand-muted">Start with a standard fillable AcroForm PDF, not a static page or scanned image.</p>
           </div>
           <div className="flex gap-3">
-            <Clock3 size={16} className="text-brand-amber shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">Optional smart-fill discovery calls are attempted only from the generate modal.</p>
+            <Eye size={16} className="text-brand-amber shrink-0 mt-0.5" />
+            <p className="text-sm text-brand-muted">Preview every page with representative values before activating the template.</p>
           </div>
           <div className="flex gap-3">
-            <AlertCircle size={16} className="text-brand-muted shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">If discovery is unavailable, users keep the manual review fields.</p>
+            <Download size={16} className="text-brand-muted shrink-0 mt-0.5" />
+            <p className="text-sm text-brand-muted">After saving to a matter, download and reopen the final PDF before sending or signing.</p>
           </div>
         </div>
       </div>

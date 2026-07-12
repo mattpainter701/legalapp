@@ -842,10 +842,12 @@ async def preview_template_file(
     tenant_id = uuid.UUID(str(current_user.tenant_id))
     await set_tenant_context(db, str(tenant_id))
     template = await db.scalar(
-        select(DocumentTemplate).where(
+        select(DocumentTemplate)
+        .where(
             DocumentTemplate.id == template_id,
             DocumentTemplate.tenant_id == tenant_id,
         )
+        .with_for_update()
     )
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -865,6 +867,11 @@ async def preview_template_file(
         )
     except TemplatePdfError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A successful binary render is the release gate for source-backed PDFs.
+    # Persist only the timestamp here; preview remains free of matter-document
+    # and storage side effects while giving activation an auditable prerequisite.
+    template.last_test_rendered_at = datetime.now(timezone.utc)
+    await db.commit()
     filename = _safe_generated_filename(template.title, "pdf")
     disposition = f'inline; filename="{filename}"'
     return Response(
@@ -890,10 +897,12 @@ async def update_template(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(DocumentTemplate).where(
+        select(DocumentTemplate)
+        .where(
             DocumentTemplate.id == template_id,
             DocumentTemplate.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     template = result.scalar_one_or_none()
     if not template:
@@ -921,6 +930,8 @@ async def update_template(
     if "format" in updates:
         updates["format"] = requested_format
 
+    pdf_schema_update_requested = "variable_schema" in updates
+    pdf_body_update_requested = "body" in updates
     # A PDF field map is only trustworthy relative to the immutable retained
     # source. Re-discover the AcroForm whenever its map changes or the template
     # is activated, and require a complete, one-to-one reviewed mapping.
@@ -966,6 +977,54 @@ async def update_template(
                     + ", ".join(sorted(unknown_body_variables))
                 ),
             )
+
+    pdf_contract_changed = current_format == "pdf" and (
+        (
+            pdf_schema_update_requested
+            and updates["variable_schema"] != template.variable_schema
+        )
+        or (pdf_body_update_requested and updates["body"] != template.body)
+    )
+    requested_activation = updates.get("is_active") is True
+    if pdf_contract_changed and requested_activation:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview the updated PDF successfully before activating it. "
+                "Save the field-map change, run Preview, then activate the template."
+            ),
+        )
+    if (
+        current_format == "pdf"
+        and requested_activation
+        and not template.is_active
+        and template.last_test_rendered_at is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview this PDF successfully before activating it. "
+                "Open Preview, inspect the rendered pages, then activate the template."
+            ),
+        )
+
+    if pdf_contract_changed:
+        # A field-map/body change invalidates the exact artifact that was tested
+        # and approved. Existing active templates remain usable until edited.
+        updates["is_active"] = False
+        updates["last_test_rendered_at"] = None
+        updates["approved_at"] = None
+        updates["approved_by_user_id"] = None
+    elif current_format == "pdf" and requested_activation and not template.is_active:
+        updates["approved_at"] = datetime.now(timezone.utc)
+        updates["approved_by_user_id"] = current_user.id
+    elif (
+        current_format == "pdf"
+        and updates.get("is_active") is False
+        and template.is_active
+    ):
+        updates["approved_at"] = None
+        updates["approved_by_user_id"] = None
 
     for field, value in updates.items():
         setattr(template, field, value)

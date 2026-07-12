@@ -54,6 +54,7 @@ export default function MediationSubTable({
   listFn, createFn, updateFn, deleteFn,
   actions, onChanged, headerSlot, uploadFn,
 }) {
+  const formId = React.useId()
   const confirmAction = useConfirm()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -178,9 +179,9 @@ export default function MediationSubTable({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
             {fields.map((fld) => (
               <div key={fld.key} className={fld.full ? 'md:col-span-2' : ''}>
-                <label className={labelCls}>{fld.label}</label>
+                <label htmlFor={`${formId}-${fld.key}`} className={labelCls}>{fld.label}</label>
                 {fld.type === 'select' ? (
-                  <select value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls}>
+                  <select id={`${formId}-${fld.key}`} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls}>
                     <option value="">—</option>
                     {(fld.options || []).map((o) => {
                       const val = typeof o === 'string' ? o : o.value
@@ -189,14 +190,14 @@ export default function MediationSubTable({
                     })}
                   </select>
                 ) : fld.type === 'textarea' ? (
-                  <textarea value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} rows={3} className={`${inputCls} resize-none`} />
+                  <textarea id={`${formId}-${fld.key}`} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} rows={3} className={`${inputCls} resize-none`} />
                 ) : fld.type === 'checkbox' ? (
                   <label className="flex items-center gap-2 cursor-pointer pt-1">
-                    <input type="checkbox" checked={!!form[fld.key]} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.checked }))} className="w-4 h-4 rounded border-brand-line text-brand-ink focus:ring-brand-accent" />
+                    <input id={`${formId}-${fld.key}`} type="checkbox" checked={!!form[fld.key]} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.checked }))} className="w-4 h-4 rounded border-brand-line text-brand-ink focus:ring-brand-accent" />
                     <span className="text-[13px] font-sans text-brand-ink-2">{fld.label}</span>
                   </label>
                 ) : (
-                  <input type={fld.type || 'text'} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls} placeholder={fld.placeholder} />
+                  <input id={`${formId}-${fld.key}`} type={fld.type || 'text'} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls} placeholder={fld.placeholder} />
                 )}
               </div>
             ))}

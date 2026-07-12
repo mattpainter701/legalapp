@@ -152,8 +152,8 @@ function CustodyTab({ caseId }) {
         <div className="bg-brand-bg-soft border border-brand-line rounded-xl p-4 mb-4 grid grid-cols-3 gap-3 items-end">
           {[['legal_custody', ['joint', 'sole']], ['physical_custody', ['primary', 'shared', 'split']], ['calc_custody_type', ['primary', 'equal', 'split']]].map(([key, opts]) => (
             <div key={key}>
-              <label className="block text-[10px] font-bold uppercase tracking-widest mb-1">{key.replace(/_/g, ' ')}</label>
-              <select value={form[key]} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+              <label htmlFor={`domestic-custody-${key}`} className="block text-[10px] font-bold uppercase tracking-widest mb-1">{key.replace(/_/g, ' ')}</label>
+              <select id={`domestic-custody-${key}`} value={form[key]} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
                 className="w-full border border-brand-line rounded-lg px-3 py-2 text-[13px] bg-brand-surface focus:outline-none focus:border-brand-accent">
                 {opts.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>

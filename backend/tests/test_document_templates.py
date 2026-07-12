@@ -267,6 +267,8 @@ def test_pdf_fill_and_flatten_preserves_page_and_removes_form_widgets():
     assert len(reader.pages) == 1
     assert reader.get_fields() is None
     text = reader.pages[0].extract_text()
+    for source_label in ("Client:", "Approved:", "Notes:"):
+        assert source_label in text
     assert "Ada Lovelace" in text
     assert "X" in text
 
@@ -801,11 +803,67 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
     assert phantom_body.status_code == 422
     assert "without AcroForm mappings" in phantom_body.json()["detail"]
 
+    blocked_activation = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert blocked_activation.status_code == 409
+    assert "Preview this PDF successfully" in blocked_activation.json()["detail"]
+
+    preview = await client.post(
+        f"/api/templates/{template_id}/render-file", json={"variables": {}}
+    )
+    assert preview.status_code == 200, preview.text
+
     activated = await client.patch(
         f"/api/templates/{template_id}", json={"is_active": True}
     )
     assert activated.status_code == 200, activated.text
     assert activated.json()["is_active"] is True
+    assert activated.json()["last_test_rendered_at"] is not None
+    assert activated.json()["approved_at"] is not None
+    assert activated.json()["approved_by_user_id"] == str(test_user.id)
+
+    combined_edit_activation = await client.patch(
+        f"/api/templates/{template_id}",
+        json={"body": "{{client_name}}", "is_active": True},
+    )
+    assert combined_edit_activation.status_code == 409
+    assert (
+        "Preview the updated PDF successfully"
+        in combined_edit_activation.json()["detail"]
+    )
+
+    metadata_only = await client.patch(
+        f"/api/templates/{template_id}", json={"title": "Mapped PDF v2"}
+    )
+    assert metadata_only.status_code == 200, metadata_only.text
+    assert metadata_only.json()["is_active"] is True
+    assert metadata_only.json()["approved_at"] == activated.json()["approved_at"]
+
+    edited_contract = await client.patch(
+        f"/api/templates/{template_id}", json={"body": "{{client_name}}"}
+    )
+    assert edited_contract.status_code == 200, edited_contract.text
+    assert edited_contract.json()["is_active"] is False
+    assert edited_contract.json()["last_test_rendered_at"] is None
+    assert edited_contract.json()["approved_at"] is None
+    assert edited_contract.json()["approved_by_user_id"] is None
+
+    edited_activation = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert edited_activation.status_code == 409
+    assert "Preview this PDF successfully" in edited_activation.json()["detail"]
+
+    second_preview = await client.post(
+        f"/api/templates/{template_id}/render-file", json={"variables": {}}
+    )
+    assert second_preview.status_code == 200, second_preview.text
+    reactivated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert reactivated.status_code == 200, reactivated.text
+    assert reactivated.json()["is_active"] is True
 
     template = await db_session.scalar(
         select(DocumentTemplate).where(DocumentTemplate.id == uuid.UUID(template_id))

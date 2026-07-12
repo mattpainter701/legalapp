@@ -47,6 +47,7 @@ export function fmtDate(v) {
 }
 
 export default function EstateSubTable({ estateId, resource, title, columns, fields, emptyText, onChanged, headerSlot }) {
+  const formId = React.useId()
   const confirmAction = useConfirm()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -123,9 +124,9 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
     <div className="grid grid-cols-2 gap-4">
       {fields.map((fld) => (
         <div key={fld.key} className={fld.half ? '' : 'col-span-2'}>
-          <label className={labelCls}>{fld.label}{fld.required && ' *'}</label>
+          <label htmlFor={`${formId}-${fld.key}`} className={labelCls}>{fld.label}{fld.required && ' *'}</label>
           {fld.type === 'select' ? (
-            <select value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls}>
+            <select id={`${formId}-${fld.key}`} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls}>
               <option value="">—</option>
               {fld.options.map((o) => {
                 const val = typeof o === 'string' ? o : o.value
@@ -134,11 +135,11 @@ export default function EstateSubTable({ estateId, resource, title, columns, fie
               })}
             </select>
           ) : fld.type === 'textarea' ? (
-            <textarea rows={2} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={`${inputCls} resize-none`} />
+            <textarea id={`${formId}-${fld.key}`} rows={2} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={`${inputCls} resize-none`} />
           ) : fld.type === 'checkbox' ? (
-            <input type="checkbox" checked={!!form[fld.key]} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.checked }))} className="mt-2 h-4 w-4 accent-brand-accent" />
+            <input id={`${formId}-${fld.key}`} type="checkbox" checked={!!form[fld.key]} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.checked }))} className="mt-2 h-4 w-4 accent-brand-accent" />
           ) : (
-            <input type={fld.type === 'number' ? 'number' : fld.type === 'date' ? 'date' : 'text'} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls} />
+            <input id={`${formId}-${fld.key}`} type={fld.type === 'number' ? 'number' : fld.type === 'date' ? 'date' : 'text'} value={form[fld.key] ?? ''} onChange={(e) => setForm((p) => ({ ...p, [fld.key]: e.target.value }))} className={inputCls} />
           )}
         </div>
       ))}

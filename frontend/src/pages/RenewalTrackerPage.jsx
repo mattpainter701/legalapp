@@ -125,8 +125,9 @@ function RenewalModal({ onClose, onSave, initial = null }) {
             { key: 'business_owner', label: 'Business Owner', type: 'text', placeholder: 'e.g. Jane Smith' },
           ].map(({ key, label, type, placeholder }) => (
             <div key={key}>
-              <label className={labelClasses}>{label}</label>
+              <label htmlFor={`renewal-${key}`} className={labelClasses}>{label}</label>
               <input
+                id={`renewal-${key}`}
                 type={type}
                 value={form[key] || ''}
                 onChange={(e) => handleChange(key, e.target.value)}
@@ -137,8 +138,8 @@ function RenewalModal({ onClose, onSave, initial = null }) {
           ))}
           <div className="grid grid-cols-2 gap-5">
             <div>
-              <label className={labelClasses}>Renewal Date</label>
-              <input
+              <label htmlFor="renewaltrackerpage-renewal-date" className={labelClasses}>Renewal Date</label>
+              <input id="renewaltrackerpage-renewal-date"
                 type="date"
                 value={form.renewal_date || ''}
                 onChange={(e) => handleChange('renewal_date', e.target.value)}
@@ -146,8 +147,8 @@ function RenewalModal({ onClose, onSave, initial = null }) {
               />
             </div>
             <div>
-              <label className={labelClasses}>Cancel-By Deadline</label>
-              <input
+              <label htmlFor="renewaltrackerpage-cancel-by-deadline" className={labelClasses}>Cancel-By Deadline</label>
+              <input id="renewaltrackerpage-cancel-by-deadline"
                 type="date"
                 value={form.notice_deadline || ''}
                 onChange={(e) => handleChange('notice_deadline', e.target.value)}
@@ -157,11 +158,17 @@ function RenewalModal({ onClose, onSave, initial = null }) {
           </div>
           <div className="flex items-center gap-3 pt-2">
              <label className="flex items-center gap-3 cursor-pointer group">
+               <input
+                 type="checkbox"
+                 checked={Boolean(form.auto_renewal)}
+                 onChange={(event) => handleChange('auto_renewal', event.target.checked)}
+                 className="peer sr-only"
+               />
                <div
-                 className={`relative w-10 h-5.5 rounded-full transition-colors ${
+                 className={`relative w-10 h-5.5 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-brand-accent peer-focus-visible:ring-offset-2 ${
                    form.auto_renewal ? 'bg-brand-accent' : 'bg-brand-line-2'
                  }`}
-                 onClick={() => handleChange('auto_renewal', !form.auto_renewal)}
+                 aria-hidden="true"
                >
                  <div
                    className={`absolute top-0.5 w-4.5 h-4.5 bg-brand-surface rounded-full shadow-sm transition-transform ${
@@ -173,8 +180,8 @@ function RenewalModal({ onClose, onSave, initial = null }) {
              </label>
           </div>
           <div className="pt-2">
-            <label className={labelClasses}>Status</label>
-            <select
+            <label htmlFor="renewaltrackerpage-status" className={labelClasses}>Status</label>
+            <select id="renewaltrackerpage-status"
               value={form.status || 'pending'}
               onChange={(e) => handleChange('status', e.target.value)}
               className={inputClasses}
@@ -186,8 +193,8 @@ function RenewalModal({ onClose, onSave, initial = null }) {
             </select>
           </div>
           <div>
-            <label className={labelClasses}>Notes</label>
-            <textarea
+            <label htmlFor="renewaltrackerpage-notes" className={labelClasses}>Notes</label>
+            <textarea id="renewaltrackerpage-notes"
               value={form.notes || ''}
               onChange={(e) => handleChange('notes', e.target.value)}
               rows={3}

@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     # Short-lived access token; pair with rotating refresh tokens (see auth router).
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    # Refresh-token lifetime. Refresh tokens are rotating + single-use and are
-    # tracked server-side (Redis) so they can be revoked across all workers.
+    # Refresh-token lifetime. Refresh tokens are rotating + single-use; Redis
+    # retains consumed-token family tombstones only through original expiry so
+    # replay can revoke the live family across every worker.
     REFRESH_TOKEN_EXPIRE_DAYS: int = 14
 
     # ── Auth cookies ─────────────────────────────────────────────────────────

@@ -13,6 +13,9 @@ import {
   updateTemplate,
 } from '../api'
 
+const originalCreateObjectURL = URL.createObjectURL
+const originalRevokeObjectURL = URL.revokeObjectURL
+
 vi.mock('../api', () => ({
   getTemplates: vi.fn().mockResolvedValue({ items: [{ id: 'template-1', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter', is_active: true }] }),
   getMattersV2: vi.fn().mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Smith Matter', client_name: 'Smith' }] }),
@@ -30,7 +33,11 @@ vi.mock('../api', () => ({
 
 describe('document template workflow', () => {
   beforeEach(() => vi.clearAllMocks())
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    URL.createObjectURL = originalCreateObjectURL
+    URL.revokeObjectURL = originalRevokeObjectURL
+  })
 
   it('keeps preview side-effect free and persists only the explicit save render', async () => {
     renderTemplate
@@ -63,7 +70,10 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     expect(await screen.findByRole('button', { name: 'Templates' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Generate / Smart Fill' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Generate / Smart Fill' }))
+    expect(screen.getByRole('heading', { name: 'PDF template checklist' })).toBeInTheDocument()
+    expect(screen.getByText(/standard fillable AcroForm PDF/)).toBeInTheDocument()
+    expect(screen.queryByText('Integration Hooks')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'E-Sign Queue' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approvals' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Branding / Settings' })).not.toBeInTheDocument()
@@ -116,18 +126,32 @@ describe('document template workflow', () => {
       title: 'Court Form',
       format: 'pdf',
       body: 'Name: {{client_name}}',
-      suggested_variable_schema: { fields: [{ name: 'client_name', label: 'Client name', pdf_field_name: 'ClientName' }] },
+      suggested_variable_schema: { fields: [{
+        name: 'client_name', label: 'Client name', pdf_field_name: 'ClientName',
+        field_type: 'choice', page: 2, required: true,
+        options: [{ value: 'state', label: 'State Court' }, { value: 'federal', label: 'Federal Court' }],
+      }] },
       detected_branding_profile: {},
       warnings: [],
     })
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:validated-source')
+    URL.revokeObjectURL = vi.fn()
     const user = userEvent.setup()
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    expect(screen.getByText(/PDFs must already contain fillable AcroForm fields/)).toBeInTheDocument()
     const file = new File(['%PDF-1.7'], 'court-form.pdf', { type: 'application/pdf' })
     fireEvent.change(await screen.findByLabelText('Sample document'), { target: { files: [file] } })
+    expect(screen.queryByTitle('Source PDF preview: court-form.pdf')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
     await screen.findByDisplayValue('Court Form')
+    expect(screen.getByTitle('Source PDF preview: court-form.pdf')).toHaveAttribute('data', 'blob:validated-source')
+    expect(URL.createObjectURL).toHaveBeenCalledWith(file)
+    expect(screen.getByLabelText('PDF metadata for Client name')).toHaveTextContent('choice')
+    expect(screen.getByLabelText('PDF metadata for Client name')).toHaveTextContent('Page 2')
+    expect(screen.getByLabelText('PDF metadata for Client name')).toHaveTextContent('Required')
+    expect(screen.getByText('Options:').closest('p')).toHaveTextContent('Options: State Court, Federal Court')
     const mappedField = screen.getByLabelText('Client name')
     fireEvent.change(mappedField, { target: { value: 'party_name' } })
     await user.click(screen.getByRole('button', { name: 'Create reviewed template' }))
@@ -141,14 +165,47 @@ describe('document template workflow', () => {
     expect(JSON.parse(form.get('variable_schema'))).toEqual(expect.objectContaining({
       fields: [expect.objectContaining({ name: 'party_name', pdf_field_name: 'ClientName' })],
     }))
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:validated-source'))
+  })
+
+  it('replaces and revokes validated source previews when the upload changes', async () => {
+    analyzeTemplateUpload.mockResolvedValue({
+      title: 'Validated Form',
+      format: 'pdf',
+      body: 'Name: {{client_name}}',
+      suggested_variable_schema: { fields: [{ name: 'client_name', label: 'Client name', pdf_field_name: 'ClientName', field_type: 'text', page: 1 }] },
+      detected_branding_profile: {},
+      warnings: [],
+    })
+    URL.createObjectURL = vi.fn()
+      .mockReturnValueOnce('blob:first-validated-source')
+      .mockReturnValueOnce('blob:second-validated-source')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const input = screen.getByLabelText('Sample document')
+    const first = new File(['%PDF-1.7 first'], 'first.pdf', { type: 'application/pdf' })
+    fireEvent.change(input, { target: { files: [first] } })
+    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
+    expect(await screen.findByTitle('Source PDF preview: first.pdf')).toHaveAttribute('data', 'blob:first-validated-source')
+
+    const second = new File(['%PDF-1.7 second'], 'second.pdf', { type: 'application/pdf' })
+    fireEvent.change(input, { target: { files: [second] } })
+    await waitFor(() => expect(screen.queryByTitle('Source PDF preview: first.pdf')).not.toBeInTheDocument())
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first-validated-source')
+
+    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
+    expect(await screen.findByTitle('Source PDF preview: second.pdf')).toHaveAttribute('data', 'blob:second-validated-source')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:second-validated-source'))
   })
 
   it('uses the binary endpoint for a side-effect-free PDF preview', async () => {
     getTemplates.mockResolvedValueOnce({ items: [{ id: 'pdf-template', title: 'Court Form', body: 'Name: {{client_name}}', category: 'other', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true }] })
     const pdfBlob = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
     renderTemplateFile.mockResolvedValue({ blob: pdfBlob, filename: 'Court_Form.pdf', contentType: 'application/pdf' })
-    const originalCreateObjectUrl = URL.createObjectURL
-    const originalRevokeObjectUrl = URL.revokeObjectURL
     URL.createObjectURL = vi.fn().mockReturnValue('blob:pdf-preview')
     URL.revokeObjectURL = vi.fn()
     const user = userEvent.setup()
@@ -167,8 +224,6 @@ describe('document template workflow', () => {
     await waitFor(() => expect(screen.queryByTitle('Preview of Court Form')).not.toBeInTheDocument())
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-preview')
 
-    URL.createObjectURL = originalCreateObjectUrl
-    URL.revokeObjectURL = originalRevokeObjectUrl
   })
 
   it('surfaces an actionable PDF render error', async () => {

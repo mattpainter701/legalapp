@@ -337,8 +337,8 @@ export default function InvoiceDetailPage() {
           }}
         >
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Amount</label>
-            <input
+            <label htmlFor="invoicedetailpage-amount" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Amount</label>
+            <input id="invoicedetailpage-amount"
               type="number" step="0.01"
               value={paymentForm.amount}
               onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
@@ -347,8 +347,8 @@ export default function InvoiceDetailPage() {
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Method</label>
-            <select
+            <label htmlFor="invoicedetailpage-method" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Method</label>
+            <select id="invoicedetailpage-method"
               value={paymentForm.method}
               onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}
               style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
@@ -362,8 +362,8 @@ export default function InvoiceDetailPage() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Date</label>
-            <input
+            <label htmlFor="invoicedetailpage-date" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Date</label>
+            <input id="invoicedetailpage-date"
               type="date"
               value={paymentForm.payment_date}
               onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}

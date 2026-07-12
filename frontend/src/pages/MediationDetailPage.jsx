@@ -389,23 +389,23 @@ export default function MediationDetailPage() {
                       { key: 'scheduled_session', label: 'Next Session', type: 'datetime-local' },
                     ].map(({ key, label, type, full }) => (
                       <div key={key} className={full ? 'col-span-2' : ''}>
-                        <label className={labelClasses}>{label}</label>
+                        <label htmlFor={`mediation-edit-${key}`} className={labelClasses}>{label}</label>
                         {type === 'datetime-local' ? (
-                          <input type="datetime-local" value={(editData[key] || '').slice(0, 16)} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
+                          <input id={`mediation-edit-${key}`} type="datetime-local" value={(editData[key] || '').slice(0, 16)} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
                         ) : (
-                          <input type="text" value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
+                          <input id={`mediation-edit-${key}`} type="text" value={editData[key] ?? ''} onChange={(e) => setEditData((p) => ({ ...p, [key]: e.target.value }))} className={inputClasses} />
                         )}
                       </div>
                     ))}
                     <div>
-                      <label className={labelClasses}>Stage</label>
-                      <select value={editData.mediation_stage || 'Pre-Session'} onChange={(e) => setEditData((p) => ({ ...p, mediation_stage: e.target.value }))} className={inputClasses}>
+                      <label htmlFor="mediationdetailpage-stage" className={labelClasses}>Stage</label>
+                      <select id="mediationdetailpage-stage" value={editData.mediation_stage || 'Pre-Session'} onChange={(e) => setEditData((p) => ({ ...p, mediation_stage: e.target.value }))} className={inputClasses}>
                         {STAGE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className={labelClasses}>Status</label>
-                      <select value={editData.status || 'active'} onChange={(e) => setEditData((p) => ({ ...p, status: e.target.value }))} className={inputClasses}>
+                      <label htmlFor="mediationdetailpage-status" className={labelClasses}>Status</label>
+                      <select id="mediationdetailpage-status" value={editData.status || 'active'} onChange={(e) => setEditData((p) => ({ ...p, status: e.target.value }))} className={inputClasses}>
                         {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                       </select>
                     </div>
@@ -477,18 +477,18 @@ export default function MediationDetailPage() {
                 <h3 className="text-sm font-bold font-sans text-brand-ink uppercase tracking-widest mb-4">Record New Session</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
                   <div>
-                    <label className={labelClasses}>Session Type</label>
-                    <select value={newSession.session_type} onChange={(e) => setNewSession((p) => ({ ...p, session_type: e.target.value }))} className={inputClasses}>
+                    <label htmlFor="mediationdetailpage-session-type" className={labelClasses}>Session Type</label>
+                    <select id="mediationdetailpage-session-type" value={newSession.session_type} onChange={(e) => setNewSession((p) => ({ ...p, session_type: e.target.value }))} className={inputClasses}>
                       {SESSION_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className={labelClasses}>Title</label>
-                    <input type="text" value={newSession.title} onChange={(e) => setNewSession((p) => ({ ...p, title: e.target.value }))} placeholder="e.g., Initial Joint Session" className={inputClasses} />
+                    <label htmlFor="mediationdetailpage-title" className={labelClasses}>Title</label>
+                    <input id="mediationdetailpage-title" type="text" value={newSession.title} onChange={(e) => setNewSession((p) => ({ ...p, title: e.target.value }))} placeholder="e.g., Initial Joint Session" className={inputClasses} />
                   </div>
                   <div className="md:col-span-2">
-                    <label className={labelClasses}>Notes & Outcomes</label>
-                    <textarea value={newSession.content} onChange={(e) => setNewSession((p) => ({ ...p, content: e.target.value }))} rows={3} className={`${inputClasses} resize-none`} placeholder="Discussed items, movement..." />
+                    <label htmlFor="mediationdetailpage-notes-outcomes" className={labelClasses}>Notes & Outcomes</label>
+                    <textarea id="mediationdetailpage-notes-outcomes" value={newSession.content} onChange={(e) => setNewSession((p) => ({ ...p, content: e.target.value }))} rows={3} className={`${inputClasses} resize-none`} placeholder="Discussed items, movement..." />
                   </div>
                 </div>
                 {addSessionError && <p className="text-brand-rose text-sm font-sans mb-4 bg-brand-rose/10 px-3 py-2 rounded border border-brand-rose/20">{addSessionError}</p>}

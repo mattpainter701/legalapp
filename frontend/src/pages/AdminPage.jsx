@@ -122,10 +122,10 @@ function InviteModal({ onClose, onSuccess }) {
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
           {error && <ErrorMsg msg={error} />}
           <div>
-            <label className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
+            <label htmlFor="adminpage-email-address" className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
               Email address <span className="text-brand-rose">*</span>
             </label>
-            <input
+            <input id="adminpage-email-address"
               type="email"
               required
               value={email}
@@ -135,10 +135,10 @@ function InviteModal({ onClose, onSuccess }) {
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
+            <label htmlFor="adminpage-full-name" className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
               Full name <span className="text-brand-muted font-normal">(optional)</span>
             </label>
-            <input
+            <input id="adminpage-full-name"
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -147,10 +147,10 @@ function InviteModal({ onClose, onSuccess }) {
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
+            <label htmlFor="adminpage-role" className="block text-xs font-semibold text-brand-ink font-sans mb-1.5 uppercase tracking-wider">
               Role
             </label>
-            <select
+            <select id="adminpage-role"
               value={role}
               onChange={(e) => setRole(e.target.value)}
               className="w-full px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
@@ -925,13 +925,13 @@ function AlertsSection() {
 
         {/* Monthly threshold */}
         <div>
-          <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+          <label htmlFor="admin-monthly-spend-threshold" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
             Monthly spend alert threshold (USD)
           </label>
           <div className="flex items-center gap-3">
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted text-sm">$</span>
-              <input
+              <input id="admin-monthly-spend-threshold"
                 type="number"
                 min="0"
                 step="10"
@@ -944,6 +944,7 @@ function AlertsSection() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-brand-muted font-sans">Alert at</span>
               <select
+                aria-label="Spend alert percentage"
                 value={cfg.spend_alert_pct}
                 onChange={(e) => setCfg((c) => ({ ...c, spend_alert_pct: Number(e.target.value) }))}
                 className="px-3 py-2.5 border border-brand-line rounded-lg text-sm font-sans bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
@@ -958,10 +959,10 @@ function AlertsSection() {
 
         {/* Alert recipients */}
         <div>
-          <label className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
+          <label htmlFor="adminpage-alert-recipients" className="block text-sm font-sans font-semibold text-brand-ink mb-1.5">
             Alert recipients
           </label>
-          <input
+          <input id="adminpage-alert-recipients"
             type="text"
             value={cfg.alert_emails}
             onChange={(e) => setCfg((c) => ({ ...c, alert_emails: e.target.value }))}
@@ -1057,8 +1058,8 @@ function FeatureFlagsSection({ settings, onUpdate }) {
           <p className="text-sm font-sans font-semibold text-brand-ink">Rate limits</p>
           <div className="flex gap-6">
             <div>
-              <label className="block text-xs text-brand-muted font-sans mb-1">Requests / minute</label>
-              <input
+              <label htmlFor="adminpage-requests-minute" className="block text-xs text-brand-muted font-sans mb-1">Requests / minute</label>
+              <input id="adminpage-requests-minute"
                 type="number"
                 min="0"
                 value={s.max_requests_per_minute ?? ''}
@@ -1068,8 +1069,8 @@ function FeatureFlagsSection({ settings, onUpdate }) {
               />
             </div>
             <div>
-              <label className="block text-xs text-brand-muted font-sans mb-1">Tokens / day</label>
-              <input
+              <label htmlFor="adminpage-tokens-day" className="block text-xs text-brand-muted font-sans mb-1">Tokens / day</label>
+              <input id="adminpage-tokens-day"
                 type="number"
                 min="0"
                 value={s.max_daily_tokens ?? ''}
@@ -1167,10 +1168,10 @@ function SettingsTab() {
         </div>
         <div className="divide-y divide-brand-line px-8 py-5 space-y-5">
           <div>
-            <label className="block text-sm font-sans font-semibold text-brand-ink mb-2">
+            <label htmlFor="adminpage-standard-alias-override" className="block text-sm font-sans font-semibold text-brand-ink mb-2">
               Standard alias override <span className="text-brand-ink-2 font-normal">(optional)</span>
             </label>
-            <input
+            <input id="adminpage-standard-alias-override"
               type="text"
               value={modelOverride}
               onChange={(e) => setModelOverride(e.target.value)}

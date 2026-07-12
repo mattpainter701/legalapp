@@ -75,8 +75,12 @@ failover, Redis failover, and point-in-time recovery are future scaling work.
 ### Application users
 
 Email/password and Microsoft/Google sign-in issue a short-lived access token in
-an HTTP-only cookie. Refresh tokens rotate and are tracked in Redis for replay
-prevention and revocation. A signed plan claim drives navigation, while
+an HTTP-only cookie. Refresh tokens rotate and are tracked in Redis. Successful
+rotation atomically consumes the presented token and retains only a family-id
+tombstone for the remainder of that token's original lifetime. A replay during
+that window atomically revokes the live family; after the original expiry, the
+submission is rejected as expired without claiming family attribution. A signed
+plan claim drives navigation, while
 `ModuleGuardMiddleware` independently blocks API prefixes outside the tenant's
 licensed modules.
 
@@ -84,6 +88,13 @@ Tenant identity is never accepted from request JSON. Authenticated user and
 tenant identity come from the verified session. Public provider callbacks and
 webhooks use provider-bound state, tenant-specific URLs, signatures, or shared
 secrets as appropriate.
+
+Legacy mediation and matter-portal invitation links carry an opaque secret but
+no tenant identifier. Their public, source-IP-rate-limited exchange resolves the
+hash by entering one ordinary active-tenant RLS context at a time. The matching
+invite and tenant rows are locked through acceptance; no cross-tenant bypass is
+used, suspended tenants are excluded, and all unavailable-token states return
+the same generic response.
 
 ### Platform operators
 

@@ -228,19 +228,19 @@ export default function MediationPortfolioPage() {
                   { key: 'claim_value', label: 'Claim Value', placeholder: 'e.g., $250,000' },
                 ].map(({ key, label, placeholder }) => (
                   <div key={key}>
-                    <label className={labelCls}>{label}</label>
-                    <input type="text" value={newCase[key]} onChange={(e) => setNewCase((p) => ({ ...p, [key]: e.target.value }))} className={inputCls} placeholder={placeholder} />
+                    <label htmlFor={`mediation-create-${key}`} className={labelCls}>{label}</label>
+                    <input id={`mediation-create-${key}`} type="text" value={newCase[key]} onChange={(e) => setNewCase((p) => ({ ...p, [key]: e.target.value }))} className={inputCls} placeholder={placeholder} />
                   </div>
                 ))}
                 <div>
-                  <label className={labelCls}>Dispute Type</label>
-                  <select value={newCase.dispute_type} onChange={(e) => setNewCase((p) => ({ ...p, dispute_type: e.target.value }))} className={inputCls}>
+                  <label htmlFor="mediationportfoliopage-dispute-type" className={labelCls}>Dispute Type</label>
+                  <select id="mediationportfoliopage-dispute-type" value={newCase.dispute_type} onChange={(e) => setNewCase((p) => ({ ...p, dispute_type: e.target.value }))} className={inputCls}>
                     {DISPUTE_TYPES.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className={labelCls}>Summary / Notes</label>
-                  <textarea value={newCase.summary} onChange={(e) => setNewCase((p) => ({ ...p, summary: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Brief description of the dispute and mediation goals..." />
+                  <label htmlFor="mediationportfoliopage-summary-notes" className={labelCls}>Summary / Notes</label>
+                  <textarea id="mediationportfoliopage-summary-notes" value={newCase.summary} onChange={(e) => setNewCase((p) => ({ ...p, summary: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Brief description of the dispute and mediation goals..." />
                 </div>
                 {createError && <div className="bg-brand-rose/10 border border-brand-rose/20 rounded-lg px-4 py-3 text-brand-rose text-sm font-sans">{createError}</div>}
               </div>

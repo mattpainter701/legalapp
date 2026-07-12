@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import get_db
 from app.middleware.tenant import PortalContext, get_portal_context
 from app.models.mediation import (
     MediationAsset,
@@ -54,6 +54,11 @@ from app.schemas.mediation import (
     ProposalResponse,
 )
 from app.services import mediation_service as ms
+from app.services.portal_invites import (
+    PORTAL_INVITE_UNAVAILABLE_DETAIL,
+    PORTAL_INVITE_UNAVAILABLE_STATUS,
+    resolve_active_portal_invite,
+)
 from app.services.portal_token import create_portal_token
 
 settings = get_settings()
@@ -88,18 +93,22 @@ async def accept_invite(
     db: AsyncSession = Depends(get_db),
 ):
     token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
-    result = await db.execute(
-        select(MediationInvite).where(MediationInvite.token_hash == token_hash)
+    invite = await resolve_active_portal_invite(
+        db,
+        MediationInvite,
+        token_hash,
     )
-    invite = result.scalar_one_or_none()
-    if invite is None or invite.revoked:
-        raise HTTPException(status_code=404, detail="Invite not found or revoked")
-    if invite.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=410, detail="Invite has expired")
-    if invite.accepted_at is not None:
-        raise HTTPException(status_code=409, detail="Invite has already been used")
+    if (
+        invite is None
+        or invite.revoked
+        or invite.expires_at < datetime.now(timezone.utc)
+        or invite.accepted_at is not None
+    ):
+        raise HTTPException(
+            status_code=PORTAL_INVITE_UNAVAILABLE_STATUS,
+            detail=PORTAL_INVITE_UNAVAILABLE_DETAIL,
+        )
 
-    await set_tenant_context(db, str(invite.tenant_id))
     party = await db.get(MediationParty, invite.party_id)
     if party is None:
         raise HTTPException(status_code=404, detail="Party not found")

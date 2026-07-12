@@ -31,11 +31,16 @@ renderer.
 4. Choose **Create reviewed template**. New upload-based templates are
    intentionally inactive.
 5. Open **Preview**, enter representative values (including long names and
-   addresses), and inspect every page of the binary PDF preview.
+   addresses), and inspect every page of the binary PDF preview. A successful
+   binary preview records the template's test-render timestamp.
 6. Correct the source PDF if a field is too small or has the wrong type. Source
    files and field maps cannot be safely replaced in place; recreate the
    template from the corrected PDF.
-7. Activate the template only after the preview has been reviewed.
+7. Activate the template only after the preview has been reviewed. The API
+   rejects activation until a successful preview exists and records the
+   approving user and time. Changing a PDF body or field map clears that test
+   and approval state and makes the template inactive until it is previewed
+   again.
 8. To create a customer document, choose the active template, select a matter,
    review smart-fill suggestions and their provenance, explicitly review every
    field, and generate the matter document.
@@ -52,6 +57,7 @@ marked for review. It does not make a legal or factual approval decision.
 | Requires active template | No | Yes |
 | Enforces required fields | No | Yes |
 | Requires every mapped field to be reviewed | No | Yes; blank/false must be explicit |
+| Records a successful template test render | Yes | No |
 | Creates a matter document | No | Yes |
 | Default PDF mode | Flattened | Flattened |
 | Signature field | Must remain blank | Must remain blank for the signing workflow |
@@ -88,6 +94,7 @@ approval record.
 | Required field empty/unchecked | Final matter render enforces the source/schema requirement | Supply the reviewed value or correct the requirement in the source and recreate. |
 | Invalid choice/radio option | Value is not one of the source field's allowed export values | Select an advertised option; correct the source field if its options are wrong. |
 | `Source missing - recreate this PDF template` in the UI | Template predates retained-source migration | Recreate from the original source, preview, activate the replacement, then retire the old row. |
+| `Preview this PDF successfully before activating it` | The source-backed template has not passed a binary preview, or its field map/body changed afterward | Open Preview, inspect every rendered page, close the preview, then activate the template. |
 | Storage warning after generation | Cloud write failed and local fallback was used, or provider metadata is incomplete | Confirm the matter document's reported storage backend, repair the cloud integration, and move/regenerate under the firm's records policy. |
 
 ## Operator triage

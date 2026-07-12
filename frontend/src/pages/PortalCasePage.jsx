@@ -211,14 +211,14 @@ export default function PortalCasePage() {
                 <h3 className="font-serif font-bold text-lg text-brand-ink mb-5">{editingAsset ? 'Edit Item' : 'New Asset or Debt'}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
                   <div className="md:col-span-2">
-                    <label className={labelCls}>Description *</label>
-                    <input type="text" value={assetForm.description} onChange={(e) => setAssetForm((p) => ({ ...p, description: e.target.value }))} className={inputCls} placeholder="e.g., 123 Main St residence" />
+                    <label htmlFor="portalcasepage-description" className={labelCls}>Description *</label>
+                    <input id="portalcasepage-description" type="text" value={assetForm.description} onChange={(e) => setAssetForm((p) => ({ ...p, description: e.target.value }))} className={inputCls} placeholder="e.g., 123 Main St residence" />
                   </div>
-                  <div><label className={labelCls}>Type</label><select value={assetForm.kind} onChange={(e) => setAssetForm((p) => ({ ...p, kind: e.target.value }))} className={inputCls}>{ASSET_KINDS.map((k) => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>)}</select></div>
-                  <div><label className={labelCls}>Category</label><select value={assetForm.category} onChange={(e) => setAssetForm((p) => ({ ...p, category: e.target.value }))} className={inputCls}><option value="">--</option>{ASSET_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}</select></div>
-                  <div><label className={labelCls}>Value</label><input type="number" value={assetForm.value} onChange={(e) => setAssetForm((p) => ({ ...p, value: e.target.value }))} className={inputCls} placeholder="0.00" /></div>
-                  <div><label className={labelCls}>Owned By</label><select value={assetForm.owned_by} onChange={(e) => setAssetForm((p) => ({ ...p, owned_by: e.target.value }))} className={inputCls}><option value="">--</option>{OWNERSHIP.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}</select></div>
-                  <div className="md:col-span-2"><label className={labelCls}>Notes</label><textarea value={assetForm.notes} onChange={(e) => setAssetForm((p) => ({ ...p, notes: e.target.value }))} rows={2} className={`${inputCls} resize-none`} /></div>
+                  <div><label htmlFor="portalcasepage-type" className={labelCls}>Type</label><select id="portalcasepage-type" value={assetForm.kind} onChange={(e) => setAssetForm((p) => ({ ...p, kind: e.target.value }))} className={inputCls}>{ASSET_KINDS.map((k) => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>)}</select></div>
+                  <div><label htmlFor="portalcasepage-category" className={labelCls}>Category</label><select id="portalcasepage-category" value={assetForm.category} onChange={(e) => setAssetForm((p) => ({ ...p, category: e.target.value }))} className={inputCls}><option value="">--</option>{ASSET_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}</select></div>
+                  <div><label htmlFor="portalcasepage-value" className={labelCls}>Value</label><input id="portalcasepage-value" type="number" value={assetForm.value} onChange={(e) => setAssetForm((p) => ({ ...p, value: e.target.value }))} className={inputCls} placeholder="0.00" /></div>
+                  <div><label htmlFor="portalcasepage-owned-by" className={labelCls}>Owned By</label><select id="portalcasepage-owned-by" value={assetForm.owned_by} onChange={(e) => setAssetForm((p) => ({ ...p, owned_by: e.target.value }))} className={inputCls}><option value="">--</option>{OWNERSHIP.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}</select></div>
+                  <div className="md:col-span-2"><label htmlFor="portalcasepage-notes" className={labelCls}>Notes</label><textarea id="portalcasepage-notes" value={assetForm.notes} onChange={(e) => setAssetForm((p) => ({ ...p, notes: e.target.value }))} rows={2} className={`${inputCls} resize-none`} /></div>
                 </div>
                 <div className="flex gap-3 justify-end">
                   <button onClick={resetAssetForm} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink transition-colors">Cancel</button>
@@ -354,8 +354,8 @@ export default function PortalCasePage() {
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
                 <h3 className="font-serif font-bold text-lg text-brand-ink mb-5">New Proposal</h3>
                 <div className="space-y-4 mb-5">
-                  <div><label className={labelCls}>Title *</label><input type="text" value={proposalForm.title} onChange={(e) => setProposalForm((p) => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="e.g., Initial Settlement Offer" /></div>
-                  <div><label className={labelCls}>Details</label><textarea value={proposalForm.body} onChange={(e) => setProposalForm((p) => ({ ...p, body: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Describe your proposal terms..." /></div>
+                  <div><label htmlFor="portalcasepage-title" className={labelCls}>Title *</label><input id="portalcasepage-title" type="text" value={proposalForm.title} onChange={(e) => setProposalForm((p) => ({ ...p, title: e.target.value }))} className={inputCls} placeholder="e.g., Initial Settlement Offer" /></div>
+                  <div><label htmlFor="portalcasepage-details" className={labelCls}>Details</label><textarea id="portalcasepage-details" value={proposalForm.body} onChange={(e) => setProposalForm((p) => ({ ...p, body: e.target.value }))} rows={4} className={`${inputCls} resize-none`} placeholder="Describe your proposal terms..." /></div>
                 </div>
                 <div className="flex gap-3 justify-end">
                   <button onClick={() => { setShowProposalForm(false); setProposalForm({ title: '', body: '' }) }} className="px-5 py-2.5 text-brand-ink-2 text-sm font-sans font-medium hover:text-brand-ink">Cancel</button>

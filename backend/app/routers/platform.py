@@ -16,8 +16,9 @@ Endpoints:
 """
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db
+from app.database import clear_tenant_context, get_db, set_tenant_context
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
@@ -56,6 +57,95 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 
 def _require_platform_key(request: Request) -> None:
     require_platform_token(request)
+
+
+@asynccontextmanager
+async def _platform_tenant_scope(
+    db: AsyncSession, tenant_id: uuid.UUID | str
+) -> AsyncIterator[None]:
+    """Expose exactly one tenant to a verified platform route under RLS.
+
+    Production connects as ``clarity_app`` with ``NOBYPASSRLS``. Platform
+    routes therefore enumerate the unscoped tenant registry, then deliberately
+    enter one ordinary tenant context at a time. This keeps Postgres RLS active
+    and avoids turning the broad auth-only ``app.rls_bypass`` GUC into an
+    operator data-access mechanism.
+    """
+
+    await set_tenant_context(db, str(tenant_id))
+    try:
+        yield
+    except BaseException:
+        # A failed statement can leave PostgreSQL's transaction aborted, in
+        # which case a cleanup SELECT would mask the original exception. The
+        # request dependency rolls the failed transaction back (and these GUCs
+        # are transaction-local), so preserve the real error here.
+        try:
+            await clear_tenant_context(db)
+        except Exception:
+            pass
+        raise
+    else:
+        await clear_tenant_context(db)
+
+
+async def _platform_tenant_ids(
+    db: AsyncSession, tenant_id: uuid.UUID | None = None
+) -> list[uuid.UUID]:
+    """Return registry IDs; the tenants table is intentionally not tenant-RLS data."""
+
+    if tenant_id is not None:
+        exists = await db.scalar(select(Tenant.id).where(Tenant.id == tenant_id))
+        return [tenant_id] if exists else []
+    return list((await db.scalars(select(Tenant.id).order_by(Tenant.id))).all())
+
+
+async def _platform_paginated_tenant_rows(
+    db: AsyncSession,
+    model,
+    *,
+    filters: list,
+    page: int,
+    limit: int,
+    tenant_id: uuid.UUID | None = None,
+    include_system_rows: bool = False,
+) -> tuple[list, int]:
+    """Merge one RLS-scoped page without ever opening cross-tenant visibility."""
+
+    fetch_limit = page * limit
+    candidates: list = []
+    total = 0
+
+    async def load_visible_rows(tenant_filter) -> None:
+        nonlocal total
+        scoped_filters = [tenant_filter, *filters]
+        total += int(
+            await db.scalar(select(func.count(model.id)).where(*scoped_filters)) or 0
+        )
+        candidates.extend(
+            list(
+                (
+                    await db.scalars(
+                        select(model)
+                        .where(*scoped_filters)
+                        .order_by(model.created_at.desc())
+                        .limit(fetch_limit)
+                    )
+                ).all()
+            )
+        )
+
+    if include_system_rows and tenant_id is None:
+        await clear_tenant_context(db)
+        await load_visible_rows(model.tenant_id.is_(None))
+
+    for scoped_tenant_id in await _platform_tenant_ids(db, tenant_id):
+        async with _platform_tenant_scope(db, scoped_tenant_id):
+            await load_visible_rows(model.tenant_id == scoped_tenant_id)
+
+    candidates.sort(key=lambda row: row.created_at, reverse=True)
+    start = (page - 1) * limit
+    return candidates[start : start + limit], total
 
 
 # ── Operator integration readiness ────────────────────────────────────────────
@@ -292,32 +382,31 @@ async def list_tenants(
         .limit(limit)
     )
     tenants = tenants_result.scalars().all()
-    tenant_ids = [t.id for t in tenants]
-
-    # User counts per tenant
-    user_counts_result = await db.execute(
-        select(User.tenant_id, func.count(User.id).label("cnt"))
-        .where(User.tenant_id.in_(tenant_ids))
-        .group_by(User.tenant_id)
-    )
-    user_counts = {str(r.tenant_id): r.cnt for r in user_counts_result.fetchall()}
-
-    # 30-day usage per tenant
-    usage_result = await db.execute(
-        select(
-            UsageRecord.tenant_id,
-            func.count(UsageRecord.id).label("requests"),
-            func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
-        )
-        .where(
-            UsageRecord.tenant_id.in_(tenant_ids),
-            UsageRecord.created_at >= period_start,
-        )
-        .group_by(UsageRecord.tenant_id)
-    )
-    usage = {
-        str(r.tenant_id): (r.requests, float(r.cost)) for r in usage_result.fetchall()
-    }
+    user_counts: dict[str, int] = {}
+    usage: dict[str, tuple[int, float]] = {}
+    for tenant in tenants:
+        async with _platform_tenant_scope(db, tenant.id):
+            user_counts[str(tenant.id)] = int(
+                await db.scalar(
+                    select(func.count(User.id)).where(User.tenant_id == tenant.id)
+                )
+                or 0
+            )
+            usage_row = (
+                await db.execute(
+                    select(
+                        func.count(UsageRecord.id).label("requests"),
+                        func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
+                    ).where(
+                        UsageRecord.tenant_id == tenant.id,
+                        UsageRecord.created_at >= period_start,
+                    )
+                )
+            ).one()
+            usage[str(tenant.id)] = (
+                int(usage_row.requests or 0),
+                float(usage_row.cost or 0),
+            )
 
     total_result = await db.execute(select(func.count(Tenant.id)))
     total = total_result.scalar_one()
@@ -363,30 +452,33 @@ async def get_tenant_detail(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    users_result = await db.execute(
-        select(User).where(User.tenant_id == tenant.id).order_by(User.created_at.asc())
-    )
-    users = users_result.scalars().all()
-
     period_start = datetime.now(timezone.utc) - timedelta(days=30)
-    usage_result = await db.execute(
-        select(
-            func.count(UsageRecord.id).label("requests"),
-            func.coalesce(func.sum(UsageRecord.tokens_in), 0).label("tokens_in"),
-            func.coalesce(func.sum(UsageRecord.tokens_out), 0).label("tokens_out"),
-            func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
-        ).where(
-            UsageRecord.tenant_id == tenant.id,
-            UsageRecord.created_at >= period_start,
+    async with _platform_tenant_scope(db, tenant.id):
+        users_result = await db.execute(
+            select(User)
+            .where(User.tenant_id == tenant.id)
+            .order_by(User.created_at.asc())
         )
-    )
-    u = usage_result.one()
+        users = users_result.scalars().all()
 
-    # Fetch tenant settings (LLM provider, etc.)
-    ts_result = await db.execute(
-        select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
-    )
-    ts = ts_result.scalar_one_or_none()
+        usage_result = await db.execute(
+            select(
+                func.count(UsageRecord.id).label("requests"),
+                func.coalesce(func.sum(UsageRecord.tokens_in), 0).label("tokens_in"),
+                func.coalesce(func.sum(UsageRecord.tokens_out), 0).label("tokens_out"),
+                func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
+            ).where(
+                UsageRecord.tenant_id == tenant.id,
+                UsageRecord.created_at >= period_start,
+            )
+        )
+        u = usage_result.one()
+
+        # Fetch tenant settings (LLM provider, etc.)
+        ts_result = await db.execute(
+            select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+        )
+        ts = ts_result.scalar_one_or_none()
 
     return {
         "tenant": TenantSummary(
@@ -476,6 +568,11 @@ async def update_tenant(
     tenant = result.scalar_one_or_none()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # All mutable tenant configuration lives behind ordinary tenant RLS. The
+    # platform token authorizes selecting this one context; it never enables a
+    # cross-tenant bypass.
+    await set_tenant_context(db, str(tenant.id))
 
     audit_changes: dict[str, dict] = {}
 
@@ -675,6 +772,11 @@ async def update_tenant(
             },
         )
 
+    # Flush RLS-protected settings while the selected tenant context is still
+    # active. ``commit()`` flushes pending ORM state, so clearing first without
+    # this explicit flush can make a late TenantSettings INSERT fail closed.
+    await db.flush()
+    await clear_tenant_context(db)
     await db.commit()
     return {"status": "updated", "tenant_id": tenant_id}
 
@@ -697,22 +799,38 @@ async def platform_usage(
     )
     tc = tenant_counts.one()
 
-    user_count = await db.execute(select(func.count(User.id)))
-
-    usage = await db.execute(
-        select(
-            func.count(UsageRecord.id).label("requests"),
-            func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
-        ).where(UsageRecord.created_at >= period_start)
-    )
-    u = usage.one()
+    tenant_ids = list((await db.scalars(select(Tenant.id).order_by(Tenant.id))).all())
+    total_users = 0
+    total_requests = 0
+    total_cost = 0.0
+    for tenant_id in tenant_ids:
+        async with _platform_tenant_scope(db, tenant_id):
+            total_users += int(
+                await db.scalar(
+                    select(func.count(User.id)).where(User.tenant_id == tenant_id)
+                )
+                or 0
+            )
+            usage_row = (
+                await db.execute(
+                    select(
+                        func.count(UsageRecord.id).label("requests"),
+                        func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost"),
+                    ).where(
+                        UsageRecord.tenant_id == tenant_id,
+                        UsageRecord.created_at >= period_start,
+                    )
+                )
+            ).one()
+            total_requests += int(usage_row.requests or 0)
+            total_cost += float(usage_row.cost or 0)
 
     return PlatformUsage(
         total_tenants=int(tc.total),
         active_tenants=int(tc.active),
-        total_users=int(user_count.scalar_one()),
-        requests_30d=int(u.requests),
-        cost_usd_30d=float(u.cost),
+        total_users=total_users,
+        requests_30d=total_requests,
+        cost_usd_30d=total_cost,
         period_start=period_start,
         period_end=period_end,
     )
@@ -728,43 +846,56 @@ async def platform_mcp_overview(
     period_end = datetime.now(timezone.utc)
     period_start = period_end - timedelta(days=30)
 
-    key_rows = await db.execute(
-        select(MCPProductKey, Tenant)
-        .join(Tenant, Tenant.id == MCPProductKey.tenant_id)
-        .order_by(MCPProductKey.created_at.desc())
-    )
-    keys = key_rows.all()
-    key_ids = [key.id for key, _tenant in keys]
-
+    tenants = list((await db.scalars(select(Tenant).order_by(Tenant.id))).all())
+    keys: list[tuple[MCPProductKey, Tenant]] = []
     usage_by_key: dict[str, dict] = {}
-    if key_ids:
-        usage_rows = await db.execute(
-            select(
-                MCPUsageEvent.product_key_id,
-                func.count(MCPUsageEvent.id).label("calls"),
-                func.coalesce(func.sum(MCPUsageEvent.result_count), 0).label("results"),
-                func.count(MCPUsageEvent.id)
-                .filter(MCPUsageEvent.status_code >= 400)
-                .label("errors"),
-                func.max(MCPUsageEvent.created_at).label("last_call_at"),
+    for tenant in tenants:
+        async with _platform_tenant_scope(db, tenant.id):
+            tenant_keys = list(
+                (
+                    await db.scalars(
+                        select(MCPProductKey)
+                        .where(MCPProductKey.tenant_id == tenant.id)
+                        .order_by(MCPProductKey.created_at.desc())
+                    )
+                ).all()
             )
-            .where(
-                MCPUsageEvent.product_key_id.in_(key_ids),
-                MCPUsageEvent.created_at >= period_start,
+            keys.extend((key, tenant) for key in tenant_keys)
+            key_ids = [key.id for key in tenant_keys]
+            if not key_ids:
+                continue
+            usage_rows = await db.execute(
+                select(
+                    MCPUsageEvent.product_key_id,
+                    func.count(MCPUsageEvent.id).label("calls"),
+                    func.coalesce(func.sum(MCPUsageEvent.result_count), 0).label(
+                        "results"
+                    ),
+                    func.count(MCPUsageEvent.id)
+                    .filter(MCPUsageEvent.status_code >= 400)
+                    .label("errors"),
+                    func.max(MCPUsageEvent.created_at).label("last_call_at"),
+                )
+                .where(
+                    MCPUsageEvent.tenant_id == tenant.id,
+                    MCPUsageEvent.product_key_id.in_(key_ids),
+                    MCPUsageEvent.created_at >= period_start,
+                )
+                .group_by(MCPUsageEvent.product_key_id)
             )
-            .group_by(MCPUsageEvent.product_key_id)
-        )
-        usage_by_key = {
-            str(row.product_key_id): {
-                "calls_30d": int(row.calls or 0),
-                "results_30d": int(row.results or 0),
-                "errors_30d": int(row.errors or 0),
-                "last_call_at": row.last_call_at.isoformat()
-                if row.last_call_at
-                else None,
-            }
-            for row in usage_rows.all()
-        }
+            for row in usage_rows.all():
+                usage_by_key[str(row.product_key_id)] = {
+                    "calls_30d": int(row.calls or 0),
+                    "results_30d": int(row.results or 0),
+                    "errors_30d": int(row.errors or 0),
+                    "last_call_at": row.last_call_at.isoformat()
+                    if row.last_call_at
+                    else None,
+                }
+    keys.sort(
+        key=lambda pair: pair[0].created_at.timestamp() if pair[0].created_at else 0,
+        reverse=True,
+    )
 
     tenant_summary: dict[str, dict] = {}
     key_payload = []
@@ -1069,6 +1200,7 @@ async def list_platform_errors(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     filters = [ErrorLog.created_at >= cutoff]
+    tid: uuid.UUID | None = None
     if severity:
         filters.append(ErrorLog.severity == severity)
     if error_type:
@@ -1082,21 +1214,18 @@ async def list_platform_errors(
             )
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
-        filters.append(ErrorLog.tenant_id == tid)
     if unresolved_only:
         filters.append(ErrorLog.is_resolved.is_(False))
 
-    total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
-    total = total_result.scalar_one()
-
-    rows_result = await db.execute(
-        select(ErrorLog)
-        .where(*filters)
-        .order_by(ErrorLog.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
+    errors, total = await _platform_paginated_tenant_rows(
+        db,
+        ErrorLog,
+        filters=filters,
+        page=page,
+        limit=limit,
+        tenant_id=tid,
+        include_system_rows=True,
     )
-    errors = rows_result.scalars().all()
 
     # Resolve tenant names
     tids = {e.tenant_id for e in errors}
@@ -1143,82 +1272,99 @@ async def platform_error_summary(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # All errors in period
-    base_filters = [ErrorLog.created_at >= cutoff]
+    total_errors = 0
+    unresolved = 0
+    by_severity: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    counts_by_tenant: dict[uuid.UUID | None, int] = {}
+    trend_map: dict[str, dict[str, int]] = {}
 
-    total_result = await db.execute(
-        select(func.count(ErrorLog.id)).where(*base_filters)
-    )
-    total_errors = total_result.scalar_one()
+    async def aggregate_visible_errors(tenant_filter, tenant_key) -> None:
+        nonlocal total_errors, unresolved
+        scoped_filters = [tenant_filter, ErrorLog.created_at >= cutoff]
+        totals = (
+            await db.execute(
+                select(
+                    func.count(ErrorLog.id).label("total"),
+                    func.count(ErrorLog.id)
+                    .filter(ErrorLog.is_resolved.is_(False))
+                    .label("unresolved"),
+                ).where(*scoped_filters)
+            )
+        ).one()
+        visible_total = int(totals.total or 0)
+        total_errors += visible_total
+        unresolved += int(totals.unresolved or 0)
+        if visible_total:
+            counts_by_tenant[tenant_key] = visible_total
 
-    unresolved_result = await db.execute(
-        select(func.count(ErrorLog.id)).where(
-            ErrorLog.created_at >= cutoff, ErrorLog.is_resolved.is_(False)
+        severity_rows = await db.execute(
+            select(
+                ErrorLog.severity,
+                func.count(ErrorLog.id).label("cnt"),
+            )
+            .where(*scoped_filters)
+            .group_by(ErrorLog.severity)
         )
-    )
-    unresolved = unresolved_result.scalar_one()
+        for row in severity_rows.all():
+            by_severity[row.severity] = by_severity.get(row.severity, 0) + int(row.cnt)
 
-    # By severity
-    sev_result = await db.execute(
-        select(ErrorLog.severity, func.count(ErrorLog.id))
-        .where(*base_filters)
-        .group_by(ErrorLog.severity)
-    )
-    by_severity = {row.severity: row.count for row in sev_result.all()}
-
-    # By type
-    type_result = await db.execute(
-        select(ErrorLog.error_type, func.count(ErrorLog.id))
-        .where(*base_filters)
-        .group_by(ErrorLog.error_type)
-    )
-    by_type = {row.error_type: row.count for row in type_result.all()}
-
-    # By tenant (top 20)
-    bt_result = await db.execute(
-        select(
-            ErrorLog.tenant_id,
-            func.count(ErrorLog.id).label("cnt"),
+        type_rows = await db.execute(
+            select(
+                ErrorLog.error_type,
+                func.count(ErrorLog.id).label("cnt"),
+            )
+            .where(*scoped_filters)
+            .group_by(ErrorLog.error_type)
         )
-        .where(*base_filters)
-        .group_by(ErrorLog.tenant_id)
-        .order_by(func.count(ErrorLog.id).desc())
-        .limit(20)
-    )
-    bt_rows = bt_result.all()
-    tids = {r.tenant_id for r in bt_rows}
-    tn_map: dict[uuid.UUID, str] = {}
-    if tids:
-        tn_r = await db.execute(
-            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
+        for row in type_rows.all():
+            by_type[row.error_type] = by_type.get(row.error_type, 0) + int(row.cnt)
+
+        trend_rows = await db.execute(
+            select(
+                func.date(ErrorLog.created_at).label("day"),
+                ErrorLog.severity,
+                func.count(ErrorLog.id).label("cnt"),
+            )
+            .where(*scoped_filters)
+            .group_by(func.date(ErrorLog.created_at), ErrorLog.severity)
         )
-        tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
+        for row in trend_rows.all():
+            day = str(row.day)
+            counts = trend_map.setdefault(
+                day, {"critical": 0, "error": 0, "warning": 0, "info": 0}
+            )
+            counts[row.severity] = counts.get(row.severity, 0) + int(row.cnt)
+
+    await clear_tenant_context(db)
+    await aggregate_visible_errors(ErrorLog.tenant_id.is_(None), None)
+    for scoped_tenant_id in await _platform_tenant_ids(db):
+        async with _platform_tenant_scope(db, scoped_tenant_id):
+            await aggregate_visible_errors(
+                ErrorLog.tenant_id == scoped_tenant_id, scoped_tenant_id
+            )
+
+    tenant_ids = [key for key in counts_by_tenant if key is not None]
+    tenant_names = {
+        str(row.id): row.name
+        for row in (
+            await db.execute(
+                select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_ids))
+            )
+        ).all()
+    }
     by_tenant = [
         {
-            "tenant_id": str(r.tenant_id),
-            "tenant_name": tn_map.get(str(r.tenant_id), "—"),
-            "count": r.cnt,
+            "tenant_id": str(tenant_key),
+            "tenant_name": "System"
+            if tenant_key is None
+            else tenant_names.get(str(tenant_key), "—"),
+            "count": count,
         }
-        for r in bt_rows
+        for tenant_key, count in sorted(
+            counts_by_tenant.items(), key=lambda item: item[1], reverse=True
+        )[:20]
     ]
-
-    # Daily trend
-    trend_result = await db.execute(
-        select(
-            func.date(ErrorLog.created_at).label("day"),
-            ErrorLog.severity,
-            func.count(ErrorLog.id).label("cnt"),
-        )
-        .where(*base_filters)
-        .group_by(func.date(ErrorLog.created_at), ErrorLog.severity)
-        .order_by(func.date(ErrorLog.created_at))
-    )
-    trend_map: dict = {}
-    for row in trend_result.all():
-        day_str = str(row.day)
-        if day_str not in trend_map:
-            trend_map[day_str] = {"critical": 0, "error": 0, "warning": 0, "info": 0}
-        trend_map[day_str][row.severity] = row.cnt
 
     trend = [
         {
@@ -1261,13 +1407,12 @@ async def tenant_error_logs(
         tid = uuid.UUID(tenant_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+    if not await _platform_tenant_ids(db, tid):
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    filters = [
-        ErrorLog.tenant_id == tid,
-        ErrorLog.created_at >= cutoff,
-    ]
+    filters = [ErrorLog.created_at >= cutoff]
     if severity:
         filters.append(ErrorLog.severity == severity)
     if error_type:
@@ -1275,17 +1420,14 @@ async def tenant_error_logs(
     if unresolved_only:
         filters.append(ErrorLog.is_resolved.is_(False))
 
-    total_result = await db.execute(select(func.count(ErrorLog.id)).where(*filters))
-    total = total_result.scalar_one()
-
-    rows_result = await db.execute(
-        select(ErrorLog)
-        .where(*filters)
-        .order_by(ErrorLog.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
+    errors, total = await _platform_paginated_tenant_rows(
+        db,
+        ErrorLog,
+        filters=filters,
+        page=page,
+        limit=limit,
+        tenant_id=tid,
     )
-    errors = rows_result.scalars().all()
 
     # Get tenant name
     tn_result = await db.execute(select(Tenant.name).where(Tenant.id == tid))
@@ -1330,6 +1472,9 @@ async def tenant_error_summary(
         tid = uuid.UUID(tenant_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
+    if not await _platform_tenant_ids(db, tid):
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    await set_tenant_context(db, str(tid))
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     base_filters = [ErrorLog.tenant_id == tid, ErrorLog.created_at >= cutoff]
@@ -1389,7 +1534,7 @@ async def tenant_error_summary(
         for day, counts in sorted(trend_map.items())
     ]
 
-    return TenantErrorSummary(
+    result = TenantErrorSummary(
         total_errors=total_errors,
         unresolved=unresolved,
         by_severity=by_severity,
@@ -1397,6 +1542,8 @@ async def tenant_error_summary(
         trend=trend,
         days=days,
     )
+    await clear_tenant_context(db)
+    return result
 
 
 # ── API Access Log Schemas ───────────────────────────────────────────────────
@@ -1448,28 +1595,25 @@ async def list_access_logs(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     filters = [ApiAccessLog.created_at >= cutoff]
+    tid: uuid.UUID | None = None
     if tenant_id:
         try:
             tid = uuid.UUID(tenant_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
-        filters.append(ApiAccessLog.tenant_id == tid)
     if endpoint:
         filters.append(ApiAccessLog.endpoint.ilike(f"%{endpoint}%"))
     if status_code is not None:
         filters.append(ApiAccessLog.status_code == status_code)
 
-    total_result = await db.execute(select(func.count(ApiAccessLog.id)).where(*filters))
-    total = total_result.scalar_one()
-
-    rows_result = await db.execute(
-        select(ApiAccessLog)
-        .where(*filters)
-        .order_by(ApiAccessLog.created_at.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
+    entries, total = await _platform_paginated_tenant_rows(
+        db,
+        ApiAccessLog,
+        filters=filters,
+        page=page,
+        limit=limit,
+        tenant_id=tid,
     )
-    entries = rows_result.scalars().all()
 
     tids = {e.tenant_id for e in entries}
     tn_map: dict[uuid.UUID, str] = {}
@@ -1509,72 +1653,99 @@ async def access_log_summary(
     _require_platform_key(request)
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    filters = [ApiAccessLog.created_at >= cutoff]
+    tid: uuid.UUID | None = None
     if tenant_id:
         try:
             tid = uuid.UUID(tenant_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid tenant_id UUID")
-        filters.append(ApiAccessLog.tenant_id == tid)
+    scoped_tenant_ids = await _platform_tenant_ids(db, tid)
+    if tid is not None and not scoped_tenant_ids:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    total_r = await db.execute(select(func.count(ApiAccessLog.id)).where(*filters))
-    total_requests = total_r.scalar_one()
+    total_requests = 0
+    latency_sum = 0.0
+    latency_count = 0
+    by_status: dict[str, int] = {}
+    endpoint_counts: dict[str, int] = {}
+    tenant_counts: dict[uuid.UUID, int] = {}
 
-    # By status code
-    status_r = await db.execute(
-        select(
-            ApiAccessLog.status_code,
-            func.count(ApiAccessLog.id).label("cnt"),
-        )
-        .where(*filters)
-        .group_by(ApiAccessLog.status_code)
-    )
-    by_status = {str(row.status_code): row.cnt for row in status_r.all()}
+    for scoped_tenant_id in scoped_tenant_ids:
+        async with _platform_tenant_scope(db, scoped_tenant_id):
+            filters = [
+                ApiAccessLog.tenant_id == scoped_tenant_id,
+                ApiAccessLog.created_at >= cutoff,
+            ]
+            totals = (
+                await db.execute(
+                    select(
+                        func.count(ApiAccessLog.id).label("total"),
+                        func.count(ApiAccessLog.latency_ms).label("latency_count"),
+                        func.coalesce(func.sum(ApiAccessLog.latency_ms), 0).label(
+                            "latency_sum"
+                        ),
+                    ).where(*filters)
+                )
+            ).one()
+            visible_total = int(totals.total or 0)
+            total_requests += visible_total
+            latency_count += int(totals.latency_count or 0)
+            latency_sum += float(totals.latency_sum or 0)
+            if visible_total:
+                tenant_counts[scoped_tenant_id] = visible_total
 
-    # Avg latency
-    lat_r = await db.execute(select(func.avg(ApiAccessLog.latency_ms)).where(*filters))
-    avg_latency_ms = lat_r.scalar_one()
+            status_rows = await db.execute(
+                select(
+                    ApiAccessLog.status_code,
+                    func.count(ApiAccessLog.id).label("cnt"),
+                )
+                .where(*filters)
+                .group_by(ApiAccessLog.status_code)
+            )
+            for row in status_rows.all():
+                key = str(row.status_code)
+                by_status[key] = by_status.get(key, 0) + int(row.cnt)
 
-    # By endpoint (top 20)
-    ep_r = await db.execute(
-        select(
-            ApiAccessLog.endpoint,
-            func.count(ApiAccessLog.id).label("cnt"),
-        )
-        .where(*filters)
-        .group_by(ApiAccessLog.endpoint)
-        .order_by(func.count(ApiAccessLog.id).desc())
-        .limit(20)
-    )
-    by_endpoint = [{"endpoint": row.endpoint, "count": row.cnt} for row in ep_r.all()]
+            endpoint_rows = await db.execute(
+                select(
+                    ApiAccessLog.endpoint,
+                    func.count(ApiAccessLog.id).label("cnt"),
+                )
+                .where(*filters)
+                .group_by(ApiAccessLog.endpoint)
+            )
+            for row in endpoint_rows.all():
+                endpoint_counts[row.endpoint] = endpoint_counts.get(
+                    row.endpoint, 0
+                ) + int(row.cnt)
 
-    # By tenant (top 20)
-    bt_r = await db.execute(
-        select(
-            ApiAccessLog.tenant_id,
-            func.count(ApiAccessLog.id).label("cnt"),
-        )
-        .where(*filters)
-        .group_by(ApiAccessLog.tenant_id)
-        .order_by(func.count(ApiAccessLog.id).desc())
-        .limit(20)
-    )
-    bt_rows = bt_r.all()
-    tids = {r.tenant_id for r in bt_rows}
-    tn_map: dict[uuid.UUID, str] = {}
-    if tids:
-        tn_r = await db.execute(
-            select(Tenant.id, Tenant.name).where(Tenant.id.in_(tids))
-        )
-        tn_map = {str(r.id): r.name for r in tn_r.fetchall()}
+    by_endpoint = [
+        {"endpoint": endpoint, "count": count}
+        for endpoint, count in sorted(
+            endpoint_counts.items(), key=lambda item: item[1], reverse=True
+        )[:20]
+    ]
+
+    tenant_names = {
+        str(row.id): row.name
+        for row in (
+            await db.execute(
+                select(Tenant.id, Tenant.name).where(Tenant.id.in_(tenant_counts))
+            )
+        ).all()
+    }
     by_tenant = [
         {
-            "tenant_id": str(r.tenant_id),
-            "tenant_name": tn_map.get(str(r.tenant_id), "—"),
-            "count": r.cnt,
+            "tenant_id": str(scoped_tenant_id),
+            "tenant_name": tenant_names.get(str(scoped_tenant_id), "—"),
+            "count": count,
         }
-        for r in bt_rows
+        for scoped_tenant_id, count in sorted(
+            tenant_counts.items(), key=lambda item: item[1], reverse=True
+        )[:20]
     ]
+
+    avg_latency_ms = latency_sum / latency_count if latency_count else None
 
     return AccessLogSummary(
         total_requests=total_requests,

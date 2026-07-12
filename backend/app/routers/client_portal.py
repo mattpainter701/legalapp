@@ -44,6 +44,7 @@ from app.models.contact import Contact
 from app.models.matter_assignment import MatterAssignment
 from app.models.matter_document import MatterDocument
 from app.models.plugin import Matter
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.client_portal import (
     ClientPortalAcceptRequest,
@@ -74,6 +75,11 @@ from app.services.provider_http import (
     ProviderAuthError,
     ProviderError,
     ProviderNotFound,
+)
+from app.services.portal_invites import (
+    PORTAL_INVITE_UNAVAILABLE_DETAIL,
+    PORTAL_INVITE_UNAVAILABLE_STATUS,
+    resolve_active_portal_invite,
 )
 from app.services.portal_token import (
     PORTAL_TOKEN_EXPIRE_MINUTES,
@@ -161,10 +167,20 @@ async def get_client_portal_context(
                     status_code=401, detail="Portal session has been revoked"
                 )
 
-    tenant_id = payload.get("tenant_id")
+    tenant_claim = payload.get("tenant_id")
     matter_id = payload.get("matter_id")
-    if not tenant_id or not matter_id:
+    if not tenant_claim or not matter_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        tenant_id = uuid.UUID(str(tenant_claim))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    tenant = await db.scalar(
+        select(Tenant).where(Tenant.id == tenant_id, Tenant.is_active.is_(True))
+    )
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Portal session unavailable")
     await set_tenant_context(db, str(tenant_id))
 
     invite_id = payload.get("invite_id")
@@ -228,16 +244,21 @@ async def accept_invite(
     db: AsyncSession = Depends(get_db),
 ):
     token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
-    result = await db.execute(
-        select(ClientPortalInvite).where(ClientPortalInvite.token_hash == token_hash)
+    invite = await resolve_active_portal_invite(
+        db,
+        ClientPortalInvite,
+        token_hash,
     )
-    invite = result.scalar_one_or_none()
-    if invite is None or invite.revoked:
-        raise HTTPException(status_code=404, detail="Invite not found or revoked")
-    if invite.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=410, detail="Invite has expired")
+    if (
+        invite is None
+        or invite.revoked
+        or invite.expires_at < datetime.now(timezone.utc)
+    ):
+        raise HTTPException(
+            status_code=PORTAL_INVITE_UNAVAILABLE_STATUS,
+            detail=PORTAL_INVITE_UNAVAILABLE_DETAIL,
+        )
 
-    await set_tenant_context(db, str(invite.tenant_id))
     matter = await db.get(Matter, invite.matter_id)
     if matter is None:
         raise HTTPException(status_code=404, detail="Matter not found")

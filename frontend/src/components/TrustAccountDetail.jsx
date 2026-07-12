@@ -283,8 +283,8 @@ export default function TrustAccountDetail() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account Name</label>
-              <input
+              <label htmlFor="trustaccountdetail-account-name" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account Name</label>
+              <input id="trustaccountdetail-account-name"
                 type="text"
                 value={editData.account_name || ''}
                 onChange={e => setEditData(d => ({ ...d, account_name: e.target.value }))}
@@ -292,8 +292,8 @@ export default function TrustAccountDetail() {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Name</label>
-              <input
+              <label htmlFor="trustaccountdetail-bank-name" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Bank Name</label>
+              <input id="trustaccountdetail-bank-name"
                 type="text"
                 value={editData.bank_name || ''}
                 onChange={e => setEditData(d => ({ ...d, bank_name: e.target.value }))}
@@ -301,8 +301,8 @@ export default function TrustAccountDetail() {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account # (last 4)</label>
-              <input
+              <label htmlFor="trustaccountdetail-account-last-4" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Account # (last 4)</label>
+              <input id="trustaccountdetail-account-last-4"
                 type="text"
                 maxLength={4}
                 value={editData.account_number_masked || ''}
@@ -311,8 +311,8 @@ export default function TrustAccountDetail() {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Minimum Balance</label>
-              <input
+              <label htmlFor="trustaccountdetail-minimum-balance" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Minimum Balance</label>
+              <input id="trustaccountdetail-minimum-balance"
                 type="number"
                 step="0.01"
                 min="0"
@@ -322,8 +322,8 @@ export default function TrustAccountDetail() {
               />
             </div>
             <div>
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Auto-Replenish Amount</label>
-              <input
+              <label htmlFor="trustaccountdetail-auto-replenish-amount" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Auto-Replenish Amount</label>
+              <input id="trustaccountdetail-auto-replenish-amount"
                 type="number"
                 step="0.01"
                 min="0"
@@ -345,8 +345,8 @@ export default function TrustAccountDetail() {
               </label>
             </div>
             <div className="sm:col-span-2">
-              <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
-              <textarea
+              <label htmlFor="trustaccountdetail-notes" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
+              <textarea id="trustaccountdetail-notes"
                 value={editData.notes || ''}
                 onChange={e => setEditData(d => ({ ...d, notes: e.target.value }))}
                 rows={2}
@@ -511,8 +511,8 @@ export default function TrustAccountDetail() {
 
             <form onSubmit={handlePostTransaction} className="space-y-4">
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Transaction Type</label>
-                <select
+                <label htmlFor="trustaccountdetail-transaction-type" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Transaction Type</label>
+                <select id="trustaccountdetail-transaction-type"
                   value={txForm.transaction_type}
                   onChange={e => setTxForm(f => ({ ...f, transaction_type: e.target.value }))}
                   className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-sm font-sans text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent/30"
@@ -525,8 +525,8 @@ export default function TrustAccountDetail() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Amount *</label>
-                  <input
+                  <label htmlFor="trustaccountdetail-amount" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Amount *</label>
+                  <input id="trustaccountdetail-amount"
                     type="number"
                     step="0.01"
                     min="0.01"
@@ -538,8 +538,8 @@ export default function TrustAccountDetail() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Date</label>
-                  <input
+                  <label htmlFor="trustaccountdetail-date" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Date</label>
+                  <input id="trustaccountdetail-date"
                     type="date"
                     value={txForm.transaction_date}
                     onChange={e => setTxForm(f => ({ ...f, transaction_date: e.target.value }))}
@@ -549,8 +549,8 @@ export default function TrustAccountDetail() {
               </div>
 
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Description *</label>
-                <input
+                <label htmlFor="trustaccountdetail-description" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Description *</label>
+                <input id="trustaccountdetail-description"
                   type="text"
                   value={txForm.description}
                   onChange={e => setTxForm(f => ({ ...f, description: e.target.value }))}
@@ -562,8 +562,8 @@ export default function TrustAccountDetail() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Reference #</label>
-                  <input
+                  <label htmlFor="trustaccountdetail-reference" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Reference #</label>
+                  <input id="trustaccountdetail-reference"
                     type="text"
                     value={txForm.reference_number}
                     onChange={e => setTxForm(f => ({ ...f, reference_number: e.target.value }))}
@@ -571,8 +571,8 @@ export default function TrustAccountDetail() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Check #</label>
-                  <input
+                  <label htmlFor="trustaccountdetail-check" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Check #</label>
+                  <input id="trustaccountdetail-check"
                     type="text"
                     value={txForm.check_number}
                     onChange={e => setTxForm(f => ({ ...f, check_number: e.target.value }))}
@@ -582,8 +582,8 @@ export default function TrustAccountDetail() {
               </div>
 
               <div>
-                <label className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
-                <textarea
+                <label htmlFor="trustaccountdetail-notes-2" className="block text-[12px] font-bold text-brand-muted uppercase tracking-widest mb-1.5">Notes</label>
+                <textarea id="trustaccountdetail-notes-2"
                   value={txForm.notes}
                   onChange={e => setTxForm(f => ({ ...f, notes: e.target.value }))}
                   rows={2}

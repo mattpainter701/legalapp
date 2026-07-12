@@ -240,31 +240,31 @@ export default function DomesticPortfolioPage() {
             </div>
             <div className="p-6 space-y-5">
               <div>
-                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Case Name</label>
-                <input type="text" autoFocus value={form.case_name}
+                <label htmlFor="domesticportfoliopage-case-name" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Case Name</label>
+                <input id="domesticportfoliopage-case-name" type="text" autoFocus value={form.case_name}
                   onChange={(e) => setForm((p) => ({ ...p, case_name: e.target.value }))}
                   placeholder="e.g., Doe v. Doe — Child Support"
                   className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Type</label>
-                  <select value={form.case_type} onChange={(e) => setForm((p) => ({ ...p, case_type: e.target.value }))}
+                  <label htmlFor="domesticportfoliopage-type" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">Type</label>
+                  <select id="domesticportfoliopage-type" value={form.case_type} onChange={(e) => setForm((p) => ({ ...p, case_type: e.target.value }))}
                     className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface">
                     {CASE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">State</label>
-                  <input type="text" maxLength={2} value={form.jurisdiction}
+                  <label htmlFor="domesticportfoliopage-state" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">State</label>
+                  <input id="domesticportfoliopage-state" type="text" maxLength={2} value={form.jurisdiction}
                     onChange={(e) => setForm((p) => ({ ...p, jurisdiction: e.target.value.toUpperCase() }))}
                     placeholder="ND"
                     className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface" />
                 </div>
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">County (optional)</label>
-                <input type="text" value={form.county} onChange={(e) => setForm((p) => ({ ...p, county: e.target.value }))}
+                <label htmlFor="domesticportfoliopage-county-optional" className="block text-[11px] font-bold text-brand-ink uppercase tracking-widest mb-1.5">County (optional)</label>
+                <input id="domesticportfoliopage-county-optional" type="text" value={form.county} onChange={(e) => setForm((p) => ({ ...p, county: e.target.value }))}
                   placeholder="e.g., Cass County"
                   className="w-full border border-brand-line rounded-lg px-4 py-2.5 text-[14px] font-sans text-brand-ink focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent bg-brand-surface" />
               </div>

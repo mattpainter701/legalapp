@@ -337,8 +337,8 @@ function SharesPanel() {
       {showAdd && (
         <form onSubmit={handleAdd} className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm space-y-4">
           <div>
-            <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Share Path</label>
-            <input
+            <label htmlFor="smbadminpage-share-path" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Share Path</label>
+            <input id="smbadminpage-share-path"
               type="text"
               value={addForm.share_path}
               onChange={(e) => setAddForm({ ...addForm, share_path: e.target.value })}
@@ -348,8 +348,8 @@ function SharesPanel() {
             />
           </div>
           <div>
-            <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Display Name</label>
-            <input
+            <label htmlFor="smbadminpage-display-name" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Display Name</label>
+            <input id="smbadminpage-display-name"
               type="text"
               value={addForm.display_name}
               onChange={(e) => setAddForm({ ...addForm, display_name: e.target.value })}
@@ -359,8 +359,8 @@ function SharesPanel() {
             />
           </div>
           <div>
-            <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Agent</label>
-            <select
+            <label htmlFor="smbadminpage-agent" className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-2">Agent</label>
+            <select id="smbadminpage-agent"
               value={addForm.agent_id}
               onChange={(e) => setAddForm({ ...addForm, agent_id: e.target.value })}
               className="w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans text-brand-ink bg-brand-surface"

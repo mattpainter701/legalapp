@@ -72,16 +72,16 @@ function CreateContactModal({ onClose, onCreate }) {
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Type</label>
-              <select value={form.entity_type} onChange={e => set('entity_type', e.target.value)}
+              <label htmlFor="contactspage-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Type</label>
+              <select id="contactspage-type" value={form.entity_type} onChange={e => set('entity_type', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 <option value="person">Person</option>
                 <option value="organization">Organization</option>
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Role</label>
-              <select value={form.contact_type} onChange={e => set('contact_type', e.target.value)}
+              <label htmlFor="contactspage-role" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Role</label>
+              <select id="contactspage-role" value={form.contact_type} onChange={e => set('contact_type', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-white">
                 {CONTACT_TYPES.map(t => (
                   <option key={t} value={t}>{t.replace('_', ' ')}</option>
@@ -93,40 +93,40 @@ function CreateContactModal({ onClose, onCreate }) {
           {form.entity_type === 'person' ? (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">First Name</label>
-                <input value={form.first_name} onChange={e => set('first_name', e.target.value)}
+                <label htmlFor="contactspage-first-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">First Name</label>
+                <input id="contactspage-first-name" value={form.first_name} onChange={e => set('first_name', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Last Name</label>
-                <input value={form.last_name} onChange={e => set('last_name', e.target.value)}
+                <label htmlFor="contactspage-last-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Last Name</label>
+                <input id="contactspage-last-name" value={form.last_name} onChange={e => set('last_name', e.target.value)}
                   className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
               </div>
             </div>
           ) : (
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Organization Name</label>
-              <input value={form.organization_name} onChange={e => set('organization_name', e.target.value)}
+              <label htmlFor="contactspage-organization-name" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Organization Name</label>
+              <input id="contactspage-organization-name" value={form.organization_name} onChange={e => set('organization_name', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Email</label>
-              <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
+              <label htmlFor="contactspage-email" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Email</label>
+              <input id="contactspage-email" type="email" value={form.email} onChange={e => set('email', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
             <div>
-              <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Phone</label>
-              <input value={form.phone} onChange={e => set('phone', e.target.value)}
+              <label htmlFor="contactspage-phone" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Phone</label>
+              <input id="contactspage-phone" value={form.phone} onChange={e => set('phone', e.target.value)}
                 className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
-            <textarea value={form.notes} onChange={e => set('notes', e.target.value)} rows={2}
+            <label htmlFor="contactspage-notes" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Notes</label>
+            <textarea id="contactspage-notes" value={form.notes} onChange={e => set('notes', e.target.value)} rows={2}
               className="w-full px-3 py-2 border border-brand-line rounded text-sm resize-none" />
           </div>
 
