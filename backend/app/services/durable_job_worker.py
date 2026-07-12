@@ -1,6 +1,7 @@
 """Handlers and scheduler poller for durable jobs."""
 
 import hmac
+import re
 import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,18 @@ from app.services.durable_jobs import (
 ZOOM_PHONE_CALL_JOB = "zoom_phone_call_import"
 ZOOM_PHONE_RECONCILE_JOB = "zoom_phone_reconcile"
 ZOOM_PHONE_JOB_KINDS = {ZOOM_PHONE_CALL_JOB, ZOOM_PHONE_RECONCILE_JOB}
+_ZOOM_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,255}$")
+
+
+def _zoom_account_binding(value) -> str | None:
+    normalized = str(value or "").strip()
+    if (
+        not normalized
+        or normalized.isdecimal()
+        or not _ZOOM_ACCOUNT_ID_PATTERN.fullmatch(normalized)
+    ):
+        return None
+    return normalized
 
 
 async def _run_document_ingest(row: DurableJob) -> dict:
@@ -156,14 +169,16 @@ async def _zoom_phone_tenant_ready(session, row: DurableJob) -> bool:
     )
     if not active:
         return False
-    app = await session.scalar(
-        select(TenantOAuthApp).where(
-            TenantOAuthApp.tenant_id == row.tenant_id,
-            TenantOAuthApp.provider == "zoom_phone",
-            TenantOAuthApp.is_active,
-            TenantOAuthApp.encrypted_webhook_secret_token.is_not(None),
-        )
+    app_query = select(TenantOAuthApp).where(
+        TenantOAuthApp.tenant_id == row.tenant_id,
+        TenantOAuthApp.provider == "zoom_phone",
+        TenantOAuthApp.is_active,
     )
+    if row.kind == ZOOM_PHONE_CALL_JOB:
+        app_query = app_query.where(
+            TenantOAuthApp.encrypted_webhook_secret_token.is_not(None)
+        )
+    app = await session.scalar(app_query)
     grant = await session.scalar(
         select(TenantCredential).where(
             TenantCredential.tenant_id == row.tenant_id,
@@ -171,46 +186,49 @@ async def _zoom_phone_tenant_ready(session, row: DurableJob) -> bool:
             TenantCredential.is_active,
         )
     )
-    mapping_matches = bool(
-        app
-        and app.zoom_account_id
-        and grant
-        and grant.service_account_email
-        and hmac.compare_digest(
-            app.zoom_account_id.strip(), grant.service_account_email.strip()
-        )
-    )
-    verification = row.payload.get("account_verification")
-    pending_exact_event = bool(
-        mapping_matches
-        and grant
-        and grant.health == "account_verification_required"
-        and row.kind == ZOOM_PHONE_CALL_JOB
-        and isinstance(verification, dict)
-        and verification.get("proof") == "signed_v3_call_element"
-        and hmac.compare_digest(
-            str(verification.get("account_id") or ""),
-            app.zoom_account_id.strip(),
-        )
-        and row.payload.get("event_name")
-        in {
-            "phone.callee_call_element_completed",
-            "phone.caller_call_element_completed",
-        }
-        and row.payload.get("call_element_id")
-        and row.payload.get("call_history_id")
-    )
     if (
         not app
         or not grant
-        or not app.zoom_account_id
         or not grant.encrypted_refresh_token
-        or not grant.service_account_email
-        or not mapping_matches
-        or (grant.health != "healthy" and not pending_exact_event)
+        or grant.health not in {"healthy", "account_verification_required"}
     ):
         raise ZoomPhoneReauthorizationRequired(
             "Zoom Phone requires a tenant-owned app and refreshable account grant."
+        )
+
+    # Historical reconciliation is an API-only workflow. Webhook account proof
+    # must never suppress it or manual history sync.
+    if row.kind == ZOOM_PHONE_RECONCILE_JOB:
+        return True
+
+    app_binding = _zoom_account_binding(app.zoom_account_id)
+    grant_binding = _zoom_account_binding(grant.service_account_email)
+    if (
+        app_binding
+        and grant_binding
+        and not hmac.compare_digest(app_binding, grant_binding)
+    ):
+        raise ZoomPhoneReauthorizationRequired(
+            "Zoom Phone webhook and grant account bindings conflict."
+        )
+    mapping_verified = bool(app_binding and grant_binding)
+    binding_proof = row.payload.get("account_binding")
+    proof_account = (
+        _zoom_account_binding(binding_proof.get("account_id"))
+        if isinstance(binding_proof, dict)
+        and binding_proof.get("proof") == "signed_event_exact_call_fetch"
+        else None
+    )
+    if not mapping_verified and not proof_account:
+        raise ZoomPhoneReauthorizationRequired(
+            "Zoom Phone webhook account binding requires exact-call proof."
+        )
+    if proof_account and (
+        (app_binding and not hmac.compare_digest(proof_account, app_binding))
+        or (grant_binding and not hmac.compare_digest(proof_account, grant_binding))
+    ):
+        raise ZoomPhoneReauthorizationRequired(
+            "Zoom Phone exact-call proof does not match the existing binding."
         )
     return True
 
@@ -444,7 +462,6 @@ async def enqueue_zoom_phone_reconciliation_jobs() -> None:
                     TenantOAuthApp.tenant_id == tenant_id,
                     TenantOAuthApp.provider == "zoom_phone",
                     TenantOAuthApp.is_active,
-                    TenantOAuthApp.encrypted_webhook_secret_token.is_not(None),
                 )
             )
             grant_ready = await db.scalar(
@@ -453,20 +470,12 @@ async def enqueue_zoom_phone_reconciliation_jobs() -> None:
                     TenantCredential.provider == "zoom_phone",
                     TenantCredential.is_active,
                     TenantCredential.encrypted_refresh_token.is_not(None),
-                    TenantCredential.service_account_email.is_not(None),
-                    TenantCredential.health == "healthy",
+                    TenantCredential.health.in_(
+                        ["healthy", "account_verification_required"]
+                    ),
                 )
             )
-            if (
-                not app_ready
-                or not app_ready.zoom_account_id
-                or not grant_ready
-                or not grant_ready.service_account_email
-                or not hmac.compare_digest(
-                    app_ready.zoom_account_id.strip(),
-                    grant_ready.service_account_email.strip(),
-                )
-            ):
+            if not app_ready or not grant_ready:
                 continue
             outstanding = await db.scalar(
                 select(DurableJob.id).where(

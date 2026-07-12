@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["091_pdf_preview_evidence"]
+    assert heads == ["092_zoom_phone_api_webhook_split"]
 
 
 def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():
@@ -65,6 +65,36 @@ def test_zoom_account_binding_backfill_crosses_force_rls_then_restores_it():
     assert "app.tenant_id = credential.tenant_id" in source
     assert "app.provider = 'zoom_phone'" in source
     assert "credential.provider = 'zoom_phone'" in source
+
+
+def test_zoom_phone_api_webhook_split_repairs_unproven_binding_under_owner_role():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "092_zoom_phone_api_webhook_split.py"
+    ).read_text(encoding="utf-8")
+
+    app_no_force = "ALTER TABLE tenant_oauth_apps NO FORCE ROW LEVEL SECURITY"
+    credential_no_force = "ALTER TABLE tenant_credentials NO FORCE ROW LEVEL SECURITY"
+    app_repair = "UPDATE tenant_oauth_apps"
+    credential_repair = "UPDATE tenant_credentials"
+    credential_force = "ALTER TABLE tenant_credentials FORCE ROW LEVEL SECURITY"
+    app_force = "ALTER TABLE tenant_oauth_apps FORCE ROW LEVEL SECURITY"
+    assert (
+        source.index(app_no_force)
+        < source.index(credential_no_force)
+        < source.index(app_repair)
+        < source.index(credential_repair)
+        < source.index(credential_force)
+        < source.index(app_force)
+    )
+    assert "~ '^[0-9]+$'" in source
+    assert "UPDATE tenant_oauth_apps AS app" in source
+    assert "FROM tenant_credentials AS credential" in source
+    assert "app.tenant_id = credential.tenant_id" in source
+    assert "SET zoom_account_id = NULL" in source
+    assert "SET service_account_email = NULL" in source
+    assert "health = 'account_verification_required'" in source
+    assert "encrypted_refresh_token IS NOT NULL" in source
 
 
 def test_online_migrations_seed_non_customer_rls_context():

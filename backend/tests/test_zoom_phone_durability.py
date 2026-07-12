@@ -147,7 +147,7 @@ def test_v3_element_without_history_uuid_is_left_for_reconciliation():
 
 
 @pytest.mark.asyncio
-async def test_zoom_callback_uses_configured_account_without_user_scope_and_rejects_mismatch(
+async def test_zoom_callback_without_token_account_id_enables_api_test_and_sync(
     client,
     db_session,
     test_redis,
@@ -155,38 +155,56 @@ async def test_zoom_callback_uses_configured_account_without_user_scope_and_reje
     test_user,
     monkeypatch,
 ):
-    _app, credential = await _configure_zoom(
+    app, credential = await _configure_zoom(
         db_session,
         test_tenant,
         test_user,
-        account_id="configured-account-123",
+        # This is the human-facing Account Number saved by the retired UI. It
+        # must never deadlock an otherwise valid OAuth grant.
+        account_id="1234567890",
     )
+    proof_job = zoom_phone_webhook_jobs(
+        _v3_event(account_id="opaque-account-1", direction="inbound")
+    )[0]
+    failed_binding = DurableJob(
+        tenant_id=test_tenant.id,
+        kind="zoom_phone_call_import",
+        idempotency_key=proof_job.idempotency_key,
+        payload={
+            **proof_job.payload,
+            "account_binding": {
+                "account_id": "opaque-account-1",
+                "proof": "signed_event_exact_call_fetch",
+            },
+        },
+        status="failed",
+        attempts=5,
+        max_attempts=5,
+        last_error="Previous OAuth grant could not fetch the signed call.",
+    )
+    unrelated_failure = DurableJob(
+        tenant_id=test_tenant.id,
+        kind="zoom_phone_call_import",
+        idempotency_key="not-a-binding-proof",
+        payload={
+            "event_name": "phone.callee_call_element_completed",
+            "call_history_id": "unrelated-history",
+            "call_element_id": "unrelated-element",
+            "stable_call_id": "unrelated-history",
+        },
+        status="failed",
+        attempts=5,
+        max_attempts=5,
+        last_error="Unrelated import failure.",
+    )
+    db_session.add_all([failed_binding, unrelated_failure])
+    await db_session.commit()
     token_payload = {
         "access_token": "callback-access",
         "refresh_token": "callback-refresh",
         "expires_in": 3600,
         "scope": "phone:read:list_call_logs:admin phone:read:call_log:admin",
     }
-    event = _v3_event(account_id="configured-account-123", direction="inbound")
-    proof_job = zoom_phone_webhook_jobs(event)[0]
-    failed_proof = DurableJob(
-        tenant_id=test_tenant.id,
-        kind="zoom_phone_call_import",
-        idempotency_key=proof_job.idempotency_key,
-        payload={
-            **proof_job.payload,
-            "account_verification": {
-                "account_id": "configured-account-123",
-                "proof": "signed_v3_call_element",
-            },
-        },
-        status="failed",
-        attempts=5,
-        max_attempts=5,
-        last_error="Previous grant could not access the signed call.",
-    )
-    db_session.add(failed_proof)
-    await db_session.commit()
     calls: list[tuple[str, str]] = []
 
     class FakeZoomClient:
@@ -206,7 +224,12 @@ async def test_zoom_callback_uses_configured_account_without_user_scope_and_reje
 
         async def get(self, url, **_kwargs):
             calls.append(("GET", url))
-            raise AssertionError("Zoom callback must not call /v2/users/me")
+            assert url.endswith("/phone/call_history")
+            return httpx.Response(
+                200,
+                json={"call_history": []},
+                request=httpx.Request("GET", url),
+            )
 
     monkeypatch.setattr(
         integrations_router.httpx,
@@ -221,70 +244,43 @@ async def test_zoom_callback_uses_configured_account_without_user_scope_and_reje
     )
 
     assert response.status_code == 302
+    assert "error=" not in response.headers["location"]
     await db_session.refresh(credential)
-    assert credential.service_account_email == "configured-account-123"
+    await db_session.refresh(app)
     assert decrypt_token(credential.encrypted_access_token) == "callback-access"
-    assert credential.health == "account_verification_required"
-    await db_session.refresh(failed_proof)
-    assert failed_proof.status == "pending"
-    assert failed_proof.attempts == 0
-    assert failed_proof.last_error is None
-    assert calls == [("POST", "https://zoom.us/oauth/token")]
+    assert credential.is_active is True
+    assert credential.health == "healthy"
+    assert credential.service_account_email is None
+    await db_session.refresh(failed_binding)
+    await db_session.refresh(unrelated_failure)
+    assert failed_binding.status == "pending"
+    assert failed_binding.attempts == 0
+    assert failed_binding.last_error is None
+    assert unrelated_failure.status == "failed"
 
-    pending_status = await client.get("/api/integrations/zoom-phone/status")
-    assert pending_status.json()["connected"] is False
-    assert pending_status.json()["account_verification_required"] is True
-    assert pending_status.json()["reconnect_required"] is False
+    status = await client.get("/api/integrations/zoom-phone/status")
+    assert status.status_code == 200
+    assert status.json()["connected"] is True
+    assert status.json()["account_verification_required"] is False
+    assert status.json()["reconnect_required"] is False
+    assert status.json()["webhook_verified"] is False
 
-    body = json.dumps(event, separators=(",", ":")).encode()
-    verified = await client.post(
-        f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
-        content=body,
-        headers=_signed_headers("zoom-webhook-secret", body),
-    )
-    assert verified.status_code == 200, verified.text
-    await db_session.refresh(credential)
-    assert credential.health == "account_verification_required"
-    queued = await db_session.scalar(
-        select(DurableJob).where(DurableJob.tenant_id == test_tenant.id)
-    )
-    assert queued.payload["account_verification"] == {
-        "account_id": "configured-account-123",
-        "proof": "signed_v3_call_element",
-    }
-
-    stale_state = await _seed_zoom_phone_oauth_state(
-        test_redis,
-        test_tenant,
-        test_user,
-        account_id="stale-account-000",
-    )
-    stale = await client.get(
-        "/api/integrations/zoom-phone/callback",
-        params={"code": "stale-code", "state": stale_state},
-    )
-    assert stale.status_code == 302
-    assert "error=app_credentials_changed" in stale.headers["location"]
-    assert calls == [("POST", "https://zoom.us/oauth/token")]
-
-    token_payload["access_token"] = "must-not-be-stored"
-    token_payload["account_id"] = "different-account-999"
-    mismatch_state = await _seed_zoom_phone_oauth_state(
-        test_redis, test_tenant, test_user
-    )
-    mismatch = await client.get(
-        "/api/integrations/zoom-phone/callback",
-        params={"code": "mismatched-code", "state": mismatch_state},
-    )
-
-    assert mismatch.status_code == 302
-    assert "error=account_mapping_mismatch" in mismatch.headers["location"]
-    await db_session.refresh(credential)
-    assert decrypt_token(credential.encrypted_access_token) == "callback-access"
+    tested = await client.post("/api/integrations/zoom-phone/test")
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["status"] == "ok"
+    synced = await client.post("/api/intake/dashboard/zoom-phone/sync?days=1")
+    assert synced.status_code == 200, synced.text
+    assert synced.json() == {"imported": 0, "updated": 0, "skipped": 0}
+    assert calls == [
+        ("POST", "https://zoom.us/oauth/token"),
+        ("GET", "https://api.zoom.us/v2/phone/call_history"),
+        ("GET", "https://api.zoom.us/v2/phone/call_history"),
+        ("GET", "https://api.zoom.us/v2/phone/call_history"),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_zoom_app_partial_update_preserves_account_and_change_revokes_grant(
+async def test_zoom_app_partial_update_preserves_provider_binding_and_ignores_manual_id(
     client, db_session, test_tenant, test_user
 ):
     app, credential = await _configure_zoom(
@@ -304,23 +300,26 @@ async def test_zoom_app_partial_update_preserves_account_and_change_revokes_gran
     assert app.zoom_account_id == "original-account-123"
     assert credential.is_active is True
 
-    account_change = await client.put(
+    manual_account_change = await client.put(
         "/api/integrations/zoom-phone/app-credentials",
-        json={"zoom_account_id": "replacement-account-456"},
+        json={
+            "zoom_account_id": "replacement-account-456",
+            "webhook_secret_token": "rotated-again-webhook-secret",
+        },
     )
-    assert account_change.status_code == 200, account_change.text
-    assert account_change.json()["app_credentials"]["zoom_account_id"] == (
-        "replacement-account-456"
+    assert manual_account_change.status_code == 200, manual_account_change.text
+    assert manual_account_change.json()["app_credentials"]["zoom_account_id"] == (
+        "original-account-123"
     )
     await db_session.refresh(app)
     await db_session.refresh(credential)
-    assert app.zoom_account_id == "replacement-account-456"
-    assert credential.is_active is False
-    assert credential.health == "reauthorization_required"
+    assert app.zoom_account_id == "original-account-123"
+    assert credential.is_active is True
+    assert credential.health == "healthy"
 
 
 @pytest.mark.asyncio
-async def test_new_zoom_app_requires_and_persists_explicit_account_id(
+async def test_new_zoom_app_does_not_require_or_trust_manual_account_id(
     client, db_session, test_tenant
 ):
     payload = {
@@ -328,46 +327,29 @@ async def test_new_zoom_app_requires_and_persists_explicit_account_id(
         "client_secret": "new-secret",
         "webhook_secret_token": "new-webhook-secret",
     }
-    missing = await client.put(
+    saved = await client.put(
         "/api/integrations/zoom-phone/app-credentials",
         json=payload,
     )
-    assert missing.status_code == 422
-    assert missing.json()["detail"] == "Zoom Account ID is required."
-
-    saved = await client.put(
-        "/api/integrations/zoom-phone/app-credentials",
-        json={**payload, "zoom_account_id": "explicit-account-123"},
-    )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["app_credentials"]["zoom_account_id"] == (
-        "explicit-account-123"
-    )
+    assert saved.json()["app_credentials"]["zoom_account_id"] is None
     app = await db_session.scalar(
         select(TenantOAuthApp).where(TenantOAuthApp.tenant_id == test_tenant.id)
     )
-    assert app.zoom_account_id == "explicit-account-123"
+    assert app.zoom_account_id is None
 
-
-@pytest.mark.asyncio
-async def test_zoom_app_rejects_malformed_or_too_short_account_id(
-    client, db_session, test_tenant, test_user
-):
-    _app, credential = await _configure_zoom(db_session, test_tenant, test_user)
-
-    malformed = await client.put(
+    # Rolling clients may still submit the retired field. The backend accepts
+    # the request but never promotes administrator input to a trusted binding.
+    second_tenant_app = await client.put(
         "/api/integrations/zoom-phone/app-credentials",
-        json={"zoom_account_id": "bad/account"},
+        json={
+            "webhook_secret_token": "newer-webhook-secret",
+            "zoom_account_id": "1234567890",
+        },
     )
-    too_short = await client.put(
-        "/api/integrations/zoom-phone/app-credentials",
-        json={"zoom_account_id": "short"},
-    )
-
-    assert malformed.status_code == 422
-    assert too_short.status_code == 422
-    await db_session.refresh(credential)
-    assert credential.is_active is True
+    assert second_tenant_app.status_code == 200, second_tenant_app.text
+    await db_session.refresh(app)
+    assert app.zoom_account_id is None
 
 
 @pytest.mark.asyncio
@@ -442,7 +424,7 @@ async def test_webhook_rejects_account_mismatch_and_shared_route(
 
 
 @pytest.mark.asyncio
-async def test_webhook_and_status_reject_app_grant_mapping_mismatch(
+async def test_webhook_binding_mismatch_does_not_disable_phone_api(
     client, db_session, test_tenant, test_user
 ):
     app, _credential = await _configure_zoom(
@@ -456,8 +438,10 @@ async def test_webhook_and_status_reject_app_grant_mapping_mismatch(
 
     status = await client.get("/api/integrations/zoom-phone/status")
     assert status.status_code == 200
-    assert status.json()["connected"] is False
-    assert status.json()["reconnect_required"] is True
+    assert status.json()["connected"] is True
+    assert status.json()["webhook_verified"] is False
+    assert status.json()["webhook_status"] == "pending"
+    assert status.json()["reconnect_required"] is False
 
     event = _v3_event(account_id="credential-account-123", direction="inbound")
     body = json.dumps(event, separators=(",", ":")).encode()
@@ -466,18 +450,22 @@ async def test_webhook_and_status_reject_app_grant_mapping_mismatch(
         content=body,
         headers=_signed_headers("zoom-webhook-secret", body),
     )
-    assert response.status_code == 409
+    assert response.status_code == 403
     assert await db_session.scalar(select(func.count(DurableJob.id))) == 0
 
 
 @pytest.mark.asyncio
-async def test_pending_account_exact_v3_fetch_promotes_and_imports(
+async def test_first_signed_v3_event_exact_fetch_replaces_legacy_numeric_binding(
     client, db_session, test_tenant, test_user, monkeypatch
 ):
-    _app, credential = await _configure_zoom(db_session, test_tenant, test_user)
-    credential.health = "account_verification_required"
+    app, credential = await _configure_zoom(
+        db_session,
+        test_tenant,
+        test_user,
+        account_id="1234567890",
+    )
     await db_session.commit()
-    event = _v3_event(direction="inbound")
+    event = _v3_event(account_id="opaque-account-1", direction="inbound")
     body = json.dumps(event, separators=(",", ":")).encode()
     accepted = await client.post(
         f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
@@ -488,7 +476,12 @@ async def test_pending_account_exact_v3_fetch_promotes_and_imports(
     job = await db_session.scalar(select(DurableJob))
     job_id = job.id
     credential_id = credential.id
-    assert credential.health == "account_verification_required"
+    app_id = app.id
+    tenant_id = test_tenant.id
+    assert job.payload["account_binding"] == {
+        "account_id": "opaque-account-1",
+        "proof": "signed_event_exact_call_fetch",
+    }
 
     async def exact_detail(self, url, *args, **kwargs):
         assert url.endswith("/phone/call_element/element-1")
@@ -508,18 +501,37 @@ async def test_pending_account_exact_v3_fetch_promotes_and_imports(
     await db_session.rollback()
     db_session.expire_all()
     saved_credential = await db_session.get(TenantCredential, credential_id)
+    saved_app = await db_session.get(TenantOAuthApp, app_id)
     assert saved_credential.health == "healthy"
+    assert saved_credential.service_account_email == "opaque-account-1"
+    assert saved_app.zoom_account_id == "opaque-account-1"
     assert await db_session.scalar(select(func.count(CommunicationLog.id))) == 1
+
+    # Once provider proof establishes the opaque binding, a signed event for
+    # another account must fail before it can create durable work.
+    mismatch = _v3_event(account_id="another-opaque-account", direction="inbound")
+    mismatch_body = json.dumps(mismatch, separators=(",", ":")).encode()
+    rejected = await client.post(
+        f"/api/integrations/zoom-phone/webhook/{tenant_id}",
+        content=mismatch_body,
+        headers=_signed_headers("zoom-webhook-secret", mismatch_body),
+    )
+    assert rejected.status_code == 403
+    assert await db_session.scalar(select(func.count(DurableJob.id))) == 1
 
 
 @pytest.mark.asyncio
-async def test_wrong_account_exact_fetch_never_promotes_or_imports(
+async def test_unbound_event_provider_fetch_failure_never_binds_or_imports(
     client, db_session, test_tenant, test_user, monkeypatch
 ):
-    _app, credential = await _configure_zoom(db_session, test_tenant, test_user)
-    credential.health = "account_verification_required"
+    app, credential = await _configure_zoom(
+        db_session,
+        test_tenant,
+        test_user,
+        account_id="1234567890",
+    )
     await db_session.commit()
-    event = _v3_event(direction="inbound")
+    event = _v3_event(account_id="unproven-opaque-account", direction="inbound")
     body = json.dumps(event, separators=(",", ":")).encode()
     accepted = await client.post(
         f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
@@ -530,6 +542,7 @@ async def test_wrong_account_exact_fetch_never_promotes_or_imports(
     job = await db_session.scalar(select(DurableJob))
     job_id = job.id
     credential_id = credential.id
+    app_id = app.id
 
     async def wrong_account(self, url, *args, **kwargs):
         return httpx.Response(
@@ -543,34 +556,68 @@ async def test_wrong_account_exact_fetch_never_promotes_or_imports(
     await db_session.rollback()
     db_session.expire_all()
     saved_credential = await db_session.get(TenantCredential, credential_id)
+    saved_app = await db_session.get(TenantOAuthApp, app_id)
     saved_job = await db_session.get(DurableJob, job_id)
-    assert saved_credential.health == "account_verification_required"
+    assert saved_credential.service_account_email == "1234567890"
+    assert saved_app.zoom_account_id == "1234567890"
     assert saved_job.status == "failed"
     assert await db_session.scalar(select(func.count(CommunicationLog.id))) == 0
 
 
 @pytest.mark.asyncio
-async def test_pending_account_rejects_v2_proof_and_oversize_body(
-    client, db_session, test_tenant, test_user
+@pytest.mark.parametrize(
+    ("event_name", "object_key", "call"),
+    [
+        (
+            "phone.callee_call_history_completed",
+            "call_logs",
+            {"id": "history-v2", "direction": "inbound"},
+        ),
+        (
+            "phone.callee_call_element_completed",
+            "call_elements",
+            {
+                "call_element_id": "element-v3",
+                "call_history_uuid": "history-v3",
+                "direction": "inbound",
+            },
+        ),
+    ],
+)
+async def test_verified_webhook_accepts_v2_and_v3_events(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    event_name,
+    object_key,
+    call,
 ):
-    _app, credential = await _configure_zoom(db_session, test_tenant, test_user)
-    credential.health = "account_verification_required"
-    await db_session.commit()
-    v2_event = {
-        "event": "phone.callee_call_history_completed",
+    await _configure_zoom(db_session, test_tenant, test_user)
+    event = {
+        "event": event_name,
         "payload": {
             "account_id": "zoom-account-1",
-            "object": {"call_logs": [{"id": "history-1", "direction": "inbound"}]},
+            "object": {object_key: [call]},
         },
     }
-    v2_body = json.dumps(v2_event, separators=(",", ":")).encode()
-    rejected = await client.post(
+    body = json.dumps(event, separators=(",", ":")).encode()
+    accepted = await client.post(
         f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
-        content=v2_body,
-        headers=_signed_headers("zoom-webhook-secret", v2_body),
+        content=body,
+        headers=_signed_headers("zoom-webhook-secret", body),
     )
-    assert rejected.status_code == 409
-    assert await db_session.scalar(select(func.count(DurableJob.id))) == 0
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json() == {"status": "accepted", "queued": 1}
+    job = await db_session.scalar(select(DurableJob))
+    assert job.payload["event_name"] == event_name
+
+
+@pytest.mark.asyncio
+async def test_zoom_webhook_rejects_oversize_body(
+    client, db_session, test_tenant, test_user
+):
+    await _configure_zoom(db_session, test_tenant, test_user)
 
     oversized = await client.post(
         f"/api/integrations/zoom-phone/webhook/{test_tenant.id}",
@@ -759,6 +806,126 @@ async def test_worker_retries_transient_failure_then_completes(
     assert saved.status == "completed"
     assert saved.attempts == 2
     assert saved.result["imported"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_admits_exact_fetch_binding_job_before_webhook_is_bound(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    await _configure_zoom(
+        db_session,
+        test_tenant,
+        test_user,
+        account_id=None,
+    )
+    job = await enqueue_job(
+        db_session,
+        tenant_id=test_tenant.id,
+        kind="zoom_phone_call_import",
+        idempotency_key="unbound-exact-fetch",
+        payload={
+            "event_name": "phone.callee_call_element_completed",
+            "call_history_id": "history-unbound",
+            "call_element_id": "element-unbound",
+            "stable_call_id": "history-unbound",
+            "account_binding": {
+                "account_id": "provider-opaque-account",
+                "proof": "signed_event_exact_call_fetch",
+            },
+        },
+    )
+    await db_session.commit()
+    job_id = job.id
+
+    async def imported(*_args, **_kwargs):
+        return ZoomPhoneImportResult(imported=1)
+
+    monkeypatch.setattr(
+        "app.services.zoom_phone.import_zoom_phone_webhook_job",
+        imported,
+    )
+    assert await process_job(job_id, test_tenant.id)
+    await db_session.rollback()
+    db_session.expire_all()
+    saved = await db_session.get(DurableJob, job_id)
+    assert saved.status == "completed"
+    assert saved.result["imported"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_conflicting_opaque_bindings_before_provider_call(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    app, _credential = await _configure_zoom(
+        db_session,
+        test_tenant,
+        test_user,
+        account_id="provider-account-one",
+    )
+    app.zoom_account_id = "provider-account-two"
+    job = await enqueue_job(
+        db_session,
+        tenant_id=test_tenant.id,
+        kind="zoom_phone_call_import",
+        idempotency_key="conflicting-bindings",
+        payload={
+            "event_name": "phone.callee_call_element_completed",
+            "call_history_id": "history-conflict",
+            "call_element_id": "element-conflict",
+            "stable_call_id": "history-conflict",
+        },
+    )
+    await db_session.commit()
+    job_id = job.id
+
+    async def provider_must_not_run(*_args, **_kwargs):
+        raise AssertionError("conflicting bindings must fail before provider egress")
+
+    monkeypatch.setattr(
+        "app.services.zoom_phone.import_zoom_phone_webhook_job",
+        provider_must_not_run,
+    )
+    assert await process_job(job_id, test_tenant.id)
+    await db_session.rollback()
+    db_session.expire_all()
+    saved = await db_session.get(DurableJob, job_id)
+    assert saved.status == "failed"
+    assert "bindings conflict" in saved.last_error
+
+
+@pytest.mark.asyncio
+async def test_worker_reconciliation_requires_api_grant_not_webhook_binding(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    await _configure_zoom(
+        db_session,
+        test_tenant,
+        test_user,
+        account_id=None,
+    )
+    job = await enqueue_job(
+        db_session,
+        tenant_id=test_tenant.id,
+        kind="zoom_phone_reconcile",
+        idempotency_key="unbound-reconcile",
+        payload={"days": 1},
+    )
+    await db_session.commit()
+    job_id = job.id
+
+    async def synced(*_args, **_kwargs):
+        return ZoomPhoneImportResult(skipped=1)
+
+    monkeypatch.setattr(
+        "app.services.zoom_phone.sync_zoom_phone_call_history",
+        synced,
+    )
+    assert await process_job(job_id, test_tenant.id)
+    await db_session.rollback()
+    db_session.expire_all()
+    saved = await db_session.get(DurableJob, job_id)
+    assert saved.status == "completed"
+    assert saved.result["skipped"] == 1
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1318,7 @@ async def test_invalid_client_deactivates_grant_and_later_calls_fail_fast(
 
 
 @pytest.mark.asyncio
-async def test_cached_token_fails_closed_when_app_and_grant_accounts_diverge(
+async def test_cached_api_token_remains_usable_when_webhook_metadata_diverges(
     db_session, test_tenant, test_user, monkeypatch
 ):
     app, credential = await _configure_zoom(db_session, test_tenant, test_user)
@@ -1163,34 +1330,40 @@ async def test_cached_token_fails_closed_when_app_and_grant_accounts_diverge(
         raise AssertionError("mismatched account mapping must not call Zoom")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", unexpected_provider_call)
-    with pytest.raises(ZoomPhoneReauthorizationRequired, match="configured Zoom"):
-        await get_zoom_phone_token(db_session, str(test_tenant.id))
+    token = await get_zoom_phone_token(db_session, str(test_tenant.id))
+    assert token == "old-access"
 
     await db_session.rollback()
     db_session.expire_all()
     saved = await db_session.get(TenantCredential, credential_id)
-    assert saved.is_active is False
-    assert saved.health == "reauthorization_required"
+    assert saved.is_active is True
+    assert saved.health == "healthy"
 
 
 @pytest.mark.asyncio
-async def test_unverified_account_grant_cannot_call_zoom_until_signed_webhook(
+async def test_legacy_verification_health_no_longer_blocks_cached_api_grant(
     db_session, test_tenant, test_user, monkeypatch
 ):
-    _app, credential = await _configure_zoom(db_session, test_tenant, test_user)
+    _app, credential = await _configure_zoom(
+        db_session, test_tenant, test_user, account_id="1234567890"
+    )
     credential.health = "account_verification_required"
+    credential.last_refresh_error = (
+        "Awaiting a signed Zoom webhook to verify the configured Account ID."
+    )
     await db_session.commit()
 
     async def unexpected_provider_call(*_args, **_kwargs):
-        raise AssertionError("unverified account mapping must not call Zoom")
+        raise AssertionError("a fresh cached grant must not need a network refresh")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", unexpected_provider_call)
-    with pytest.raises(ZoomPhoneReauthorizationRequired, match="signed webhook"):
-        await get_zoom_phone_token(db_session, str(test_tenant.id))
+    token = await get_zoom_phone_token(db_session, str(test_tenant.id))
+    assert token == "old-access"
 
     await db_session.refresh(credential)
     assert credential.is_active is True
-    assert credential.health == "account_verification_required"
+    assert credential.health == "healthy"
+    assert credential.last_refresh_error is None
 
 
 @pytest.mark.asyncio
@@ -1562,7 +1735,7 @@ async def test_reconciliation_ticks_leave_one_outstanding_bucket(
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_skips_app_grant_account_mismatch(
+async def test_reconciliation_uses_api_grant_independent_of_webhook_binding(
     db_session, test_tenant, test_user
 ):
     app, _credential = await _configure_zoom(db_session, test_tenant, test_user)
@@ -1581,7 +1754,8 @@ async def test_reconciliation_skips_app_grant_account_mismatch(
             )
         ).all()
     )
-    assert jobs == []
+    assert len(jobs) == 1
+    assert jobs[0].kind == "zoom_phone_reconcile"
 
 
 @pytest.mark.asyncio

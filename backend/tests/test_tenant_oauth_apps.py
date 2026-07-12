@@ -68,11 +68,20 @@ async def test_zoom_phone_oauth_client_never_uses_platform_app(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_zoom_phone_oauth_client_requires_explicit_account_mapping():
+async def test_zoom_phone_oauth_client_does_not_require_webhook_account_binding(
+    monkeypatch,
+):
     app = SimpleNamespace(
         encrypted_client_id="encrypted-client-id",
         encrypted_client_secret="encrypted-client-secret",
         zoom_account_id=None,
+    )
+    secrets = {
+        "encrypted-client-id": "tenant-client",
+        "encrypted-client-secret": "tenant-secret",
+    }
+    monkeypatch.setattr(
+        tenant_oauth_apps, "decrypt_token", lambda value: secrets[value]
     )
 
     client = await tenant_oauth_apps.get_zoom_phone_oauth_client(
@@ -80,4 +89,8 @@ async def test_zoom_phone_oauth_client_requires_explicit_account_mapping():
         tenant_id=uuid4(),
     )
 
-    assert client is None
+    assert client is not None
+    assert client.source == "tenant"
+    assert client.client_id == "tenant-client"
+    assert client.client_secret == "tenant-secret"
+    assert client.account_id is None

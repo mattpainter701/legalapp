@@ -72,31 +72,38 @@ class ZoomPhoneAppCredentialRequest(BaseModel):
 _ZOOM_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,255}$")
 
 
-def _validate_zoom_account_id(account_id: str) -> str:
-    normalized = account_id.strip()
-    if not _ZOOM_ACCOUNT_ID_PATTERN.fullmatch(normalized):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Zoom Account ID must be 8 to 255 characters and contain only "
-                "letters, numbers, hyphens, or underscores."
-            ),
-        )
+def _verified_zoom_account_binding(account_id: str | None) -> str | None:
+    """Return a provider-issued webhook account id, ignoring legacy numbers.
+
+    An earlier UI mislabeled Zoom's human-facing numeric Account Number as the
+    API ``account_id``.  Numeric-only values already stored by that workflow are
+    deliberately treated as unbound so existing grants keep syncing and the
+    next signed, provider-fetched event can replace them safely.
+    """
+
+    normalized = str(account_id or "").strip()
+    if (
+        not normalized
+        or normalized.isdecimal()
+        or not _ZOOM_ACCOUNT_ID_PATTERN.fullmatch(normalized)
+    ):
+        return None
     return normalized
 
 
-async def _reset_failed_zoom_account_verification_jobs(
+async def _reset_failed_zoom_account_binding_jobs(
     db: AsyncSession,
     *,
     tenant_id: str,
-    account_id: str,
+    account_id: str | None,
 ) -> int:
-    """Retry signed exact-call proofs after an administrator reauthorizes.
+    """Retry narrowly tagged signed exact-call proofs after reauthorization.
 
     A wrong-account grant fails its proof job permanently so it cannot hammer
-    Zoom. Once the administrator installs a new grant, the original signed v3
-    event is still valid evidence; reset only those narrowly tagged jobs so the
-    new grant can prove itself without waiting for another customer call.
+    Zoom. Once the administrator installs a new grant, the original signed event
+    is still valid evidence. Zoom often omits ``account_id`` from token responses,
+    so an absent filter retries all valid binding-proof jobs for this tenant; an
+    available provider binding narrows retries to that account.
     """
 
     rows = list(
@@ -111,16 +118,55 @@ async def _reset_failed_zoom_account_verification_jobs(
         ).all()
     )
     reset = 0
+    expected_account_id = _verified_zoom_account_binding(account_id)
     for row in rows:
-        verification = (row.payload or {}).get("account_verification")
+        payload = dict(row.payload or {})
+        binding = payload.get("account_binding")
+        binding_account_id = (
+            _verified_zoom_account_binding(binding.get("account_id"))
+            if isinstance(binding, dict)
+            and binding.get("proof") == "signed_event_exact_call_fetch"
+            else None
+        )
+
+        # Jobs created by the short-lived blocking workflow still represent a
+        # signed v3 exact-call attempt. Convert them in place so a reauthorization
+        # can recover them through the current binding lifecycle.
+        if not binding_account_id:
+            legacy = payload.get("account_verification")
+            if (
+                isinstance(legacy, dict)
+                and legacy.get("proof") == "signed_v3_call_element"
+                and payload.get("event_name")
+                in {
+                    "phone.callee_call_element_completed",
+                    "phone.caller_call_element_completed",
+                }
+                and payload.get("call_element_id")
+                and payload.get("call_history_id")
+            ):
+                binding_account_id = _verified_zoom_account_binding(
+                    legacy.get("account_id")
+                )
+                if binding_account_id:
+                    payload.pop("account_verification", None)
+                    payload["account_binding"] = {
+                        "account_id": binding_account_id,
+                        "proof": "signed_event_exact_call_fetch",
+                    }
+
         if (
-            not isinstance(verification, dict)
-            or verification.get("proof") != "signed_v3_call_element"
-            or not secrets.compare_digest(
-                str(verification.get("account_id") or ""), account_id
+            not binding_account_id
+            or payload.get("event_name") not in ZOOM_PHONE_HISTORY_COMPLETED_EVENTS
+            or not payload.get("stable_call_id")
+            or not (payload.get("call_element_id") or payload.get("call_history_id"))
+            or (
+                expected_account_id
+                and not secrets.compare_digest(binding_account_id, expected_account_id)
             )
         ):
             continue
+        row.payload = payload
         row.status = "pending"
         row.progress = 0
         row.attempts = 0
@@ -283,14 +329,15 @@ def _app_credentials_payload(app, *, source: str | None, platform_ready: bool) -
             client_id_hint = mask_client_id(decrypt_token(app.encrypted_client_id))
         except Exception:
             logger.warning("Zoom Phone tenant app client ID decrypt failed")
+    account_binding = _verified_zoom_account_binding(
+        getattr(app, "zoom_account_id", None) if app else None
+    )
     return {
         "configured": bool(app),
         "source": source,
         "client_id_hint": client_id_hint,
-        "zoom_account_id": getattr(app, "zoom_account_id", None) if app else None,
-        "zoom_account_id_configured": bool(
-            app and getattr(app, "zoom_account_id", None)
-        ),
+        "zoom_account_id": account_binding,
+        "zoom_account_id_configured": bool(account_binding),
         "platform_app_configured": platform_ready,
         "redirect_uri": _zoom_phone_redirect_uri(),
         "webhook_url": _zoom_phone_webhook_uri(str(app.tenant_id) if app else None),
@@ -870,8 +917,8 @@ async def zoom_phone_connect(
         raise HTTPException(
             status_code=409,
             detail=(
-                "Zoom Phone OAuth app credentials and Account ID are not "
-                "configured. Complete your firm's Zoom app setup first."
+                "Zoom Phone OAuth app credentials are not configured. Complete "
+                "your firm's Zoom app setup first."
             ),
         )
 
@@ -886,7 +933,6 @@ async def zoom_phone_connect(
             "tenant_id": tenant_id,
             "role": user.role,
             "oauth_app_source": oauth_client.source,
-            "zoom_account_id": oauth_client.account_id,
             "oauth_client_id_fingerprint": hashlib.sha256(
                 oauth_client.client_id.encode("utf-8")
             ).hexdigest(),
@@ -934,18 +980,12 @@ async def zoom_phone_callback(
     oauth_client = await get_zoom_phone_oauth_client(db, tenant_id=tenant_id)
     if not oauth_client:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "app_credentials_missing")
-    expected_account_id = str(meta.get("zoom_account_id") or "")
     expected_client_fingerprint = str(meta.get("oauth_client_id_fingerprint") or "")
     current_client_fingerprint = hashlib.sha256(
         oauth_client.client_id.encode("utf-8")
     ).hexdigest()
-    if (
-        not expected_account_id
-        or not expected_client_fingerprint
-        or not secrets.compare_digest(expected_account_id, oauth_client.account_id)
-        or not secrets.compare_digest(
-            expected_client_fingerprint, current_client_fingerprint
-        )
+    if not expected_client_fingerprint or not secrets.compare_digest(
+        expected_client_fingerprint, current_client_fingerprint
     ):
         return _error_redirect(ZOOM_PHONE_PROVIDER, "app_credentials_changed")
 
@@ -976,10 +1016,12 @@ async def zoom_phone_callback(
         return _error_redirect(ZOOM_PHONE_PROVIDER, "no_access_token")
     if not refresh_token:
         return _error_redirect(ZOOM_PHONE_PROVIDER, "refresh_token_missing")
-    zoom_account_id = oauth_client.account_id
-    returned_account_id = str(token_data.get("account_id") or "").strip()
-    if returned_account_id and not secrets.compare_digest(
-        returned_account_id, zoom_account_id
+    returned_account_id = _verified_zoom_account_binding(token_data.get("account_id"))
+    existing_binding = _verified_zoom_account_binding(oauth_client.account_id)
+    if (
+        returned_account_id
+        and existing_binding
+        and not secrets.compare_digest(returned_account_id, existing_binding)
     ):
         logger.warning(
             "Zoom Phone token account does not match the tenant app mapping "
@@ -987,15 +1029,15 @@ async def zoom_phone_callback(
             tenant_id,
         )
         return _error_redirect(ZOOM_PHONE_PROVIDER, "account_mapping_mismatch")
-    account_verified = bool(returned_account_id)
-    credential_health = (
-        "healthy" if account_verified else "account_verification_required"
-    )
-    verification_message = (
-        None
-        if account_verified
-        else "Awaiting a signed Zoom webhook to verify the configured Account ID."
-    )
+    # API connectivity and webhook account binding are intentionally separate.
+    # A refreshable grant becomes usable immediately; when Zoom supplies its
+    # opaque account id we also bind real-time webhook delivery automatically.
+    if returned_account_id:
+        app = await get_tenant_oauth_app(
+            db, tenant_id=tenant_id, provider=ZOOM_PHONE_PROVIDER
+        )
+        if app:
+            app.zoom_account_id = returned_account_id
 
     result = await db.execute(
         select(TenantCredential).where(
@@ -1010,10 +1052,10 @@ async def zoom_phone_callback(
         row.token_expires_at = _expires_at(expires_in)
         row.scopes = scope_str
         row.is_active = True
-        row.health = credential_health
-        row.last_refresh_error = verification_message
+        row.health = "healthy"
+        row.last_refresh_error = None
         row.granted_by_user_id = uuid.UUID(user_id)
-        row.service_account_email = zoom_account_id
+        row.service_account_email = returned_account_id or existing_binding
     else:
         db.add(
             TenantCredential(
@@ -1026,17 +1068,24 @@ async def zoom_phone_callback(
                 token_expires_at=_expires_at(expires_in),
                 scopes=scope_str,
                 granted_by_user_id=uuid.UUID(user_id),
-                service_account_email=zoom_account_id,
-                health=credential_health,
-                last_refresh_error=verification_message,
+                service_account_email=returned_account_id or existing_binding,
+                health="healthy",
+                last_refresh_error=None,
             )
         )
-    await _reset_failed_zoom_account_verification_jobs(
+    await _reset_failed_zoom_account_binding_jobs(
         db,
         tenant_id=tenant_id,
-        account_id=zoom_account_id,
+        account_id=returned_account_id or existing_binding,
     )
     await db.commit()
+    try:
+        # Prove the exact account-scoped API used by intake before presenting
+        # the callback as connected. This does not depend on a future webhook.
+        await probe_zoom_phone_connection(db, tenant_id=tenant_id)
+    except ZoomPhoneIntegrationError as exc:
+        logger.warning("Zoom Phone post-OAuth API probe failed: %s", exc)
+        return _error_redirect(ZOOM_PHONE_PROVIDER, "phone_api_probe_failed")
     return await _post_connect_redirect(db, tenant_id, ZOOM_PHONE_PROVIDER)
 
 
@@ -1177,53 +1226,50 @@ async def _handle_zoom_phone_webhook(
         tenant_id=resolved_tenant_id,
         provider=ZOOM_PHONE_PROVIDER,
     )
-    credential_account_id = (
-        credential.service_account_email.strip()
-        if credential and credential.service_account_email
-        else None
+    app_account_id = _verified_zoom_account_binding(
+        oauth_app.zoom_account_id if oauth_app else None
     )
-    app_account_id = (
-        oauth_app.zoom_account_id.strip()
-        if oauth_app and oauth_app.zoom_account_id
-        else None
+    credential_account_id = _verified_zoom_account_binding(
+        credential.service_account_email if credential else None
     )
     event_account_id = (
         str((event.get("payload") or {}).get("account_id") or "").strip()
         if isinstance(event.get("payload"), dict)
         else ""
     )
-    if (
-        not credential
-        or not credential_account_id
-        or not app_account_id
-        or not secrets.compare_digest(credential_account_id, app_account_id)
-    ):
+    if not credential or not oauth_app or not credential.encrypted_refresh_token:
         raise HTTPException(
             status_code=409,
             detail="Zoom Phone must be reconnected before webhook delivery.",
         )
-    if not event_account_id or not secrets.compare_digest(
-        event_account_id, app_account_id
+    if (
+        not event_account_id
+        or event_account_id.isdecimal()
+        or not _ZOOM_ACCOUNT_ID_PATTERN.fullmatch(event_account_id)
     ):
         raise HTTPException(status_code=403, detail="Zoom webhook account mismatch")
+    if (
+        app_account_id
+        and credential_account_id
+        and not secrets.compare_digest(app_account_id, credential_account_id)
+    ):
+        raise HTTPException(status_code=403, detail="Zoom webhook account mismatch")
+    if (
+        app_account_id and not secrets.compare_digest(event_account_id, app_account_id)
+    ) or (
+        credential_account_id
+        and not secrets.compare_digest(event_account_id, credential_account_id)
+    ):
+        # A known provider binding must match before any event can enter this
+        # tenant's durable queue. API history sync remains independently usable.
+        raise HTTPException(status_code=403, detail="Zoom webhook account mismatch")
 
-    account_verification_pending = credential.health == "account_verification_required"
+    webhook_verified = bool(app_account_id and credential_account_id)
+
     if credential.health not in {"healthy", "account_verification_required"}:
         raise HTTPException(
             status_code=409,
             detail="Zoom Phone must be reconnected before webhook delivery.",
-        )
-
-    if account_verification_pending and event.get("event") not in {
-        "phone.callee_call_element_completed",
-        "phone.caller_call_element_completed",
-    }:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "A current Zoom Phone call-element event is required to verify "
-                "the connected account."
-            ),
         )
 
     if event.get("event") not in ZOOM_PHONE_HISTORY_COMPLETED_EVENTS:
@@ -1236,10 +1282,13 @@ async def _handle_zoom_phone_webhook(
     terminal_jobs = 0
     for job in jobs:
         job_payload = dict(job.payload)
-        if account_verification_pending:
-            job_payload["account_verification"] = {
-                "account_id": app_account_id,
-                "proof": "signed_v3_call_element",
+        if not webhook_verified:
+            # Do not persist a webhook binding at receipt time. The durable
+            # worker must first fetch this exact call through this tenant's OAuth
+            # grant, proving the signed event and grant belong to one account.
+            job_payload["account_binding"] = {
+                "account_id": event_account_id,
+                "proof": "signed_event_exact_call_fetch",
             }
         queued_job = await enqueue_job(
             db,
@@ -1296,9 +1345,6 @@ async def save_zoom_phone_app_credentials(
     client_id = payload.client_id.strip()
     client_secret = payload.client_secret.strip()
     webhook_secret_token = payload.webhook_secret_token.strip()
-    submitted_account_id = payload.zoom_account_id.strip()
-    if submitted_account_id:
-        submitted_account_id = _validate_zoom_account_id(submitted_account_id)
     existing_app = await get_tenant_oauth_app(
         db,
         tenant_id=tenant_id,
@@ -1309,38 +1355,31 @@ async def save_zoom_phone_app_credentials(
             status_code=422,
             detail="Zoom OAuth client ID and client secret are required.",
         )
-    existing_account_id = str(
-        getattr(existing_app, "zoom_account_id", None) or ""
-    ).strip()
-    zoom_account_id = submitted_account_id or existing_account_id
-    if not zoom_account_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Zoom Account ID is required.",
-        )
-    zoom_account_id = _validate_zoom_account_id(zoom_account_id)
+    # ``zoom_account_id`` remains accepted in the request for rolling frontend
+    # compatibility, but it is never trusted as an administrator-entered
+    # binding. Zoom's human-facing numeric Account Number is not the opaque API
+    # account id. Preserve only an existing provider-proven binding.
+    zoom_account_id = _verified_zoom_account_binding(
+        getattr(existing_app, "zoom_account_id", None)
+    )
     if bool(client_id) != bool(client_secret):
         raise HTTPException(
             status_code=422,
             detail="Enter both Zoom OAuth client ID and client secret to replace the saved app.",
         )
-    app_changed = existing_app is None or (
-        bool(submitted_account_id)
-        and not secrets.compare_digest(submitted_account_id, existing_account_id)
-    )
+    app_changed = existing_app is None
     if existing_app and not client_id and not client_secret:
-        if not webhook_secret_token and not submitted_account_id:
+        if not webhook_secret_token:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    "Enter a Zoom Account ID, webhook secret token, or both OAuth "
-                    "fields to update Zoom Phone setup."
-                ),
+                detail="Enter a Zoom webhook secret token to update Zoom Phone setup.",
             )
         if webhook_secret_token:
             existing_app.encrypted_webhook_secret_token = encrypt_token(
                 webhook_secret_token
             )
+        # Opportunistically remove legacy numeric Account Number values without
+        # touching the still-valid OAuth grant.
         existing_app.zoom_account_id = zoom_account_id
         existing_app.configured_by_user_id = user.id
         existing_app.is_active = True
@@ -1373,7 +1412,7 @@ async def save_zoom_phone_app_credentials(
             user_id=str(user.id),
             client_id=client_id,
             client_secret=client_secret,
-            zoom_account_id=zoom_account_id,
+            zoom_account_id=None if app_changed else zoom_account_id,
             webhook_secret_token=webhook_secret_token or None,
             redirect_uri=_zoom_phone_redirect_uri(),
             scopes=settings.ZOOM_PHONE_SCOPES,
@@ -1873,32 +1912,43 @@ async def zoom_phone_status(
         # requested scope. Surface the actual provider verdict to the admin.
         missing = settings.ZOOM_PHONE_SCOPES.split()
     platform_ready = False
-    app_account_id = (
-        app.zoom_account_id.strip() if app and app.zoom_account_id else None
+    app_account_id = _verified_zoom_account_binding(
+        app.zoom_account_id if app else None
     )
-    credential_account_id = (
-        row.service_account_email.strip() if row and row.service_account_email else None
+    credential_account_id = _verified_zoom_account_binding(
+        row.service_account_email if row else None
     )
-    account_mapping_matches = bool(
-        app_account_id
-        and credential_account_id
-        and secrets.compare_digest(app_account_id, credential_account_id)
-    )
-    account_verification_required = bool(
-        row
-        and row.health == "account_verification_required"
-        and account_mapping_matches
-    )
-    tenant_app_ready = bool(app and app_account_id)
+    tenant_app_ready = bool(app)
     configured = tenant_app_ready
+    api_health = (
+        "healthy"
+        if row and row.health == "account_verification_required"
+        else row.health
+        if row
+        else "disconnected"
+    )
     connected = bool(
         row
         and row.is_active
         and row.encrypted_refresh_token
-        and account_mapping_matches
-        and row.health == "healthy"
+        and api_health == "healthy"
     )
     app_source = "tenant" if tenant_app_ready else None
+    webhook_secret_configured = bool(
+        getattr(app, "encrypted_webhook_secret_token", None)
+    )
+    webhook_verified = bool(
+        app_account_id
+        and credential_account_id
+        and secrets.compare_digest(app_account_id, credential_account_id)
+    )
+    webhook_status = (
+        "verified"
+        if webhook_verified
+        else "pending"
+        if webhook_secret_configured
+        else "not_configured"
+    )
     status_payload = {
         "configured": configured,
         "connected": connected,
@@ -1906,13 +1956,15 @@ async def zoom_phone_status(
         "app_source": app_source,
         "tenant_app_configured": tenant_app_ready,
         "zoom_account_id_configured": bool(app_account_id),
-        "account_verification_required": account_verification_required,
+        # Compatibility field for older clients. Webhook binding is no longer
+        # permitted to block API sync or Test Connection.
+        "account_verification_required": False,
+        "webhook_verified": webhook_verified,
+        "webhook_status": webhook_status,
         "platform_app_configured": platform_ready,
         "redirect_uri": _zoom_phone_redirect_uri(),
         "webhook_url": _zoom_phone_webhook_uri(tenant_id),
-        "webhook_secret_configured": bool(
-            getattr(app, "encrypted_webhook_secret_token", None)
-        ),
+        "webhook_secret_configured": webhook_secret_configured,
         "app_credentials": _app_credentials_payload(
             app,
             source=app_source,
@@ -1924,19 +1976,15 @@ async def zoom_phone_status(
         "expires_at": row.token_expires_at.isoformat()
         if row and row.token_expires_at
         else None,
-        "health": row.health if row else "disconnected",
+        "health": api_health,
         "reconnect_required": bool(
-            row
-            and not account_verification_required
-            and (not connected or provider_missing_scopes or bool(missing))
+            row and (not connected or provider_missing_scopes or bool(missing))
         ),
         "status": (
             "not_configured"
             if not configured
             else "missing_scopes"
             if provider_missing_scopes or missing
-            else "account_verification_required"
-            if account_verification_required
             else "reauthorization_required"
             if row and not connected
             else "not_connected"

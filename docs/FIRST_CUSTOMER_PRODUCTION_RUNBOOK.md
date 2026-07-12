@@ -65,7 +65,7 @@ Set these non-secret relationships in `.env`:
   remain durable even when an alert cannot be sent. For customer go-live, set
   it to `true` and provide `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`,
   `EMAIL_PASS`, and a provider-authorized `EMAIL_FROM` address.
-- Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Copy the firm's exact Zoom Account ID from Zoom Account Management > Account Profile; this explicit binding avoids an extra Zoom user-profile scope. A token account is compared when Zoom supplies one, but every new grant remains `account_verification_required` until a correctly signed v3 call event matches `payload.account_id` and the pending grant successfully fetches that exact call from Zoom. The event proves the app account; the fetch proves grant access. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, exact app-to-grant account match, `healthy` verification state, required read scopes, and public CRC. Remove unused scopes in the Zoom Marketplace app and reauthorize the tenant before go-live; the application cannot revoke provider-side grants.
+- Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Save its client ID, client secret, and webhook secret; do not copy the numeric Account Number from Zoom Account Profile. OAuth plus an account call-history probe establishes API readiness immediately. A correctly signed completion event and exact provider fetch then learn or confirm Zoom's opaque `payload.account_id` for real-time delivery without blocking Test Connection or history sync. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, healthy API grant, required read scopes, public CRC, and live webhook/provider proof. Remove unused scopes in the Zoom Marketplace app and reauthorize only when the grant or scopes are invalid; the application cannot revoke provider-side grants.
 
 For a single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
 The supported Lightsail starting size is the general-purpose
@@ -167,12 +167,15 @@ account mapping backfilled, both source tables returned to FORCE RLS, and zero
 rows visible without tenant context. Downgrade to 089 and re-upgrade to 090
 preserved the source rows and reproduced the binding.
 
-The current head is `091_pdf_preview_evidence`. It adds a FORCE-RLS,
+Migration `091_pdf_preview_evidence` adds a FORCE-RLS,
 tenant-scoped evidence table for representative PDF activation previews and
 exact matter/value-bound generation previews. Generation evidence is consumed
 with its saved document, and ambiguous storage/database outcomes become
-operator-reconcilable retry blocks; a fresh deployment/restore proof must
-therefore report 091 before this newer revision is released.
+operator-reconcilable retry blocks. The current head is
+`092_zoom_phone_api_webhook_split`; it repairs numeric Zoom Account Number
+bindings from the retired UI and separates usable Phone API grants from
+provider-proven real-time webhook binding. A fresh deployment/restore proof
+must report 092 before this revision is released.
 
 ## 3. Back up and rehearse restore
 
@@ -370,18 +373,18 @@ Register these exact HTTPS URLs in the Zoom app:
 - OAuth callback: `https://<DOMAIN>/api/integrations/zoom-phone/callback`
 - Event subscription: use the tenant-specific webhook URL shown in Admin > Zoom: `https://<DOMAIN>/api/integrations/zoom-phone/webhook/<tenant-id>`
 - Required events: `phone.callee_call_element_completed` and
-  `phone.caller_call_element_completed`. The older call-history-completed
-  events remain compatibility inputs only and are not valid production proof.
+  `phone.caller_call_element_completed`. Existing call-history-completed v2
+  subscriptions remain compatible, while v3 is preferred for new apps.
 
-In Admin > Zoom, enter the firm's Zoom Account ID exactly as shown under Zoom
-Account Management > Account Profile. It is an identifier, not a credential,
-and may be displayed after save. Do not add a user-profile scope to discover it.
+Do not enter the numeric Account Number from Zoom Account Profile. Zoom's API
+and webhook `account_id` is a different opaque identifier and is learned
+automatically.
 
 Then:
 
-1. Connect/reconnect the tenant from Admin > Zoom. The new grant must show **Account proof pending**. Re-authorize only to recover a wrong or revoked grant.
-2. Place a real inbound test call so a correctly signed v3 call-element event reaches the tenant-specific webhook. Confirm its `payload.account_id` matches the saved app account and the worker uses the pending grant to fetch that exact call history/detail. Only their combined proof may atomically mark the grant healthy and import the call.
-3. Run **Test connection**, then run `scripts/production_check.sh`; listing, synchronization, import, and the strict gate intentionally remain blocked until the signed event and matching provider fetch both succeed. The gate's CRC request must return an `encryptedToken` through nginx/TLS.
+1. Connect the tenant from Admin > Zoom. Run **Test connection** and a manual history sync; both must work before webhook delivery is proven. Re-authorize only to recover a wrong, revoked, or under-scoped grant.
+2. Place a real inbound test call so a correctly signed completion event reaches the tenant-specific webhook. Confirm the worker uses the same grant to fetch that exact call. The first event learns the opaque account binding atomically; later events must match it.
+3. Run `scripts/production_check.sh`. The gate's CRC request must return an `encryptedToken` through nginx/TLS and its live provider proof must pass.
 4. Confirm the call appears once in Call Intake.
 5. Send one assignment to a controlled firm test mailbox and confirm receipt,
    sender alignment, links, text/HTML rendering, and reply handling. The safe

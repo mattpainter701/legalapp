@@ -104,32 +104,29 @@ Marketplace configure:
 - required production events (current v3):
   `phone.callee_call_element_completed` and
   `phone.caller_call_element_completed`
-- legacy compatibility only:
+- compatible call-history events:
   `phone.callee_call_history_completed` and
-  `phone.caller_call_history_completed`; do not use these deprecated v2 events
-  as the first-customer production proof
+  `phone.caller_call_history_completed`; v3 call-element events are preferred
+  for new configurations, but existing v2 call-history subscriptions remain
+  supported
 
-The admin copies the firm's Zoom Account ID from **Zoom Account Management >
-Account Profile**, then enters that ID, the app client ID, client secret, and
-webhook secret in **Administration > Zoom**. The Account ID is not a secret and
-remains visible so the tenant binding can be reviewed. Client and webhook
-secrets are stored encrypted and raw values are not returned after save. The
-administrator then connects the Zoom account through OAuth. A new grant is not
-yet allowed to call Zoom's API or import call history.
+The admin enters the app client ID, client secret, and webhook secret in
+**Administration > Zoom**. Client and webhook secrets are stored encrypted and
+raw values are not returned after save. Do not enter the numeric **Account
+Number** shown in Zoom Account Profile: it is not Zoom's opaque API/webhook
+`account_id`.
 
-Zoom token responses do not always contain an account ID. When present, the
-token account is compared to the configured ID and a mismatch is rejected. In
-all cases the grant remains `account_verification_required` until a correctly
-signed v3 call-element event supplies the same `payload.account_id` and the
-pending grant successfully fetches that event's exact call history/detail. The
-signed event proves the app account; the provider fetch proves the OAuth grant
-can access that same account. The worker marks the grant healthy and imports the
-call atomically only after both checks. Until then **Test connection**, list
-synchronization, and call-history import remain blocked; **Re-authorize Phone**
-remains available to recover a wrong or revoked grant.
-Recording the ID explicitly avoids adding a Zoom user-profile scope, keeps the
-requested scopes limited to the two Phone read scopes above, and prevents a
-grant for another Zoom account from being attached to this tenant.
+The administrator then connects the Zoom account through OAuth. A refreshable
+grant with the required Phone scopes becomes usable after the account call-
+history probe succeeds, so **Test connection** and manual history sync do not
+depend on webhook delivery. If Zoom includes `account_id` in an OAuth response,
+Clarity records it automatically. Otherwise the first correctly signed
+supported completion event supplies an automatic candidate. The worker uses
+the tenant grant to fetch that exact provider call before atomically persisting
+the opaque account binding and importing the call. Every later event must match
+that learned binding. This keeps the requested scopes limited to the two Phone
+read scopes without asking an administrator for an identifier Zoom does not
+display.
 
 The integration imports inbound call-history facts into tenant-scoped
 communication records. This release does **not** fetch Zoom recording or
@@ -138,7 +135,7 @@ transcript content, so do not grant or market recording/transcript access.
 ### No shared platform fallback
 
 Zoom Phone requires a tenant-owned account-level OAuth app, tenant-specific
-webhook secret, refreshable OAuth grant, and mapped Zoom account ID. Shared
+webhook secret, and refreshable OAuth grant. Shared
 platform/S2S Zoom Phone credentials are intentionally rejected because an
 unbound account credential could expose one customer's call history to another
 tenant. `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET` remain for the separate Zoom
@@ -151,16 +148,14 @@ provider delivery without blocking document jobs.
 
 ### Required production proof
 
-1. Save the exact tenant Zoom Account ID and app credentials. Confirm the
-   Account ID remains reviewable while secrets return only masked/configured
-   state.
-2. Connect/reconnect through the public callback and confirm the grant shows
-   **Account proof pending**. A token account mismatch must fail when Zoom
-   supplies that optional field.
-3. Place a real inbound call and receive a correctly signed v3 event whose
-   `payload.account_id` matches the configured ID. Confirm the pending grant
-   fetches that exact call history/detail and the same transaction marks the
-   grant healthy and imports the call, then run **Test connection**.
+1. Save the tenant app credentials. Confirm secrets return only masked or
+   configured state; no manual Account ID is requested.
+2. Connect through the public callback. Run **Test connection** and a manual
+   history sync to prove the refreshable OAuth grant and Phone scopes.
+3. Place a real inbound call and receive a correctly signed supported event.
+   For an unbound app, confirm the worker fetches that exact call before
+   learning the opaque `payload.account_id`; for a bound app, confirm the
+   account IDs match. Confirm the call is imported once.
 4. Run the production gate; its Zoom URL-validation CRC request must return an
    `encryptedToken` through public nginx and TLS.
 5. Place one real answered inbound call and one missed inbound call.

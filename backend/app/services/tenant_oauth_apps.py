@@ -20,7 +20,10 @@ ZOOM_PHONE_APP_PROVIDER = "zoom_phone"
 class OAuthClientConfig:
     client_id: str
     client_secret: str
-    account_id: str
+    # Zoom's OAuth token response may include the opaque API account id, but
+    # administrators are not expected to discover or enter it.  This value is
+    # therefore an optional webhook binding, not an OAuth prerequisite.
+    account_id: str | None
     source: str
 
 
@@ -59,7 +62,7 @@ async def get_zoom_phone_oauth_client(
         tenant_id=tenant_id,
         provider=ZOOM_PHONE_APP_PROVIDER,
     )
-    if app and app.zoom_account_id:
+    if app:
         return OAuthClientConfig(
             client_id=decrypt_token(app.encrypted_client_id),
             client_secret=decrypt_token(app.encrypted_client_secret),
@@ -96,7 +99,7 @@ async def upsert_zoom_phone_oauth_app(
     user_id: str | uuid.UUID,
     client_id: str,
     client_secret: str,
-    zoom_account_id: str,
+    zoom_account_id: str | None,
     webhook_secret_token: str | None = None,
     redirect_uri: str,
     scopes: str,

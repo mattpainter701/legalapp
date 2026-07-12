@@ -42,7 +42,6 @@ export default function ZoomPanel() {
     client_id: '',
     client_secret: '',
     webhook_secret_token: '',
-    zoom_account_id: '',
   })
 
   const showFlash = (text, type = 'success') => {
@@ -57,11 +56,6 @@ export default function ZoomPanel() {
     ])
     setStatus(zoomData)
     setPhoneStatus(zoomPhoneData)
-    const savedAccountId = zoomPhoneData?.app_credentials?.zoom_account_id || ''
-    setAppForm((current) => ({
-      ...current,
-      zoom_account_id: current.zoom_account_id || savedAccountId,
-    }))
   }
 
   useEffect(() => {
@@ -113,11 +107,8 @@ export default function ZoomPanel() {
     event.preventDefault()
     setPhoneBusy(true)
     try {
-      await saveZoomPhoneAppCredentials({
-        ...appForm,
-        zoom_account_id: appForm.zoom_account_id.trim(),
-      })
-      setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '', zoom_account_id: '' })
+      await saveZoomPhoneAppCredentials(appForm)
+      setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '' })
       await loadPanel()
       showFlash('Zoom Phone app credentials saved.')
     } catch (err) {
@@ -131,7 +122,7 @@ export default function ZoomPanel() {
     setPhoneBusy(true)
     try {
       await clearZoomPhoneAppCredentials()
-      setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '', zoom_account_id: '' })
+      setAppForm({ client_id: '', client_secret: '', webhook_secret_token: '' })
       await loadPanel()
       showFlash('Zoom Phone app credentials cleared.')
     } catch (err) {
@@ -166,7 +157,8 @@ export default function ZoomPanel() {
   const phoneMissingScopes = phoneStatus?.missing_scopes || []
   const tenantPhoneAppConfigured = Boolean(phoneStatus?.tenant_app_configured)
   const tenantPhoneAppSaved = Boolean(phoneStatus?.app_credentials?.configured)
-  const phoneVerificationPending = phoneStatus?.status === 'account_verification_required'
+  const phoneWebhookVerified = isPhoneWebhookVerified(phoneStatus)
+  const phoneWebhookPending = phoneConnected && !phoneWebhookVerified
 
   return (
     <div className="space-y-6">
@@ -183,18 +175,22 @@ export default function ZoomPanel() {
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge
-              status={phoneVerificationPending
-                ? 'attention'
-                : phoneConnected && phoneMissingScopes.length === 0 ? 'healthy' : phoneConfigured ? 'attention' : 'missing'}
+              status={phoneConnected && phoneMissingScopes.length === 0 ? 'healthy' : phoneConfigured ? 'attention' : 'missing'}
               label={phoneStatus?.status === 'missing_scopes' || phoneStatus?.status === 'reauthorization_required'
                 ? 'Phone needs re-authorization'
-                : phoneVerificationPending
-                  ? 'Phone account proof pending'
                 : phoneConnected
-                  ? 'Phone grant connected'
+                  ? 'Phone API connected'
                   : phoneConfigured
                     ? 'Phone ready to connect'
-                    : tenantPhoneAppSaved ? 'Add Phone Account ID' : 'Add Phone app'}
+                    : 'Add Phone app'}
+            />
+            <StatusBadge
+              status={phoneWebhookVerified ? 'healthy' : phoneWebhookPending ? 'attention' : 'neutral'}
+              label={phoneWebhookVerified
+                ? 'Real-time calls verified'
+                : phoneWebhookPending
+                  ? 'Real-time webhook pending'
+                  : 'Real-time calls not connected'}
             />
             <StatusBadge
               status={connected ? 'healthy' : configured ? 'attention' : 'neutral'}
@@ -212,12 +208,12 @@ export default function ZoomPanel() {
           status={phoneStatusLabel(phoneStatus, phoneConfigured, phoneConnected)}
           statusTone={phoneStatusTone(phoneStatus, phoneConfigured, phoneConnected)}
           primaryAction={{
-            label: phoneVerificationPending || phoneConnected ? 'Re-authorize Phone' : 'Connect Zoom Phone',
+            label: phoneConnected ? 'Re-authorize Phone' : 'Connect Zoom Phone',
             onClick: connectZoomPhoneIntegration,
             disabled: phoneBusy || !phoneConfigured,
             icon: PlugZap,
           }}
-          secondaryActions={phoneConnected && !phoneVerificationPending ? [
+          secondaryActions={phoneConnected ? [
             {
               label: phoneBusy ? 'Testing...' : 'Test connection',
               onClick: handlePhoneTest,
@@ -231,17 +227,13 @@ export default function ZoomPanel() {
               icon: Unplug,
             },
           ] : []}
-          footer={phoneVerificationPending
-            ? 'OAuth is saved; signed-event and provider-fetch proof is still required.'
-            : phoneConnected ? 'Access refreshes automatically during sync and connection tests.' : null}
+          footer={phoneConnected ? 'Phone API access refreshes automatically during history sync and connection tests.' : null}
         >
           {!phoneConfigured && (
             <SetupNotice
               tone="info"
-              title={tenantPhoneAppSaved ? 'Add this firm’s Zoom Account ID' : 'Add your firm’s Zoom OAuth app'}
-              body={tenantPhoneAppSaved
-                ? 'The app secrets are saved. Add the exact Account ID from Zoom Account Profile to finish the tenant binding, then connect Zoom Phone.'
-                : 'Create a Zoom OAuth app for this tenant, add the callback URL below, save the Account ID and app credentials, then connect Zoom Phone.'}
+              title="Add your firm’s Zoom OAuth app"
+              body="Create a Zoom OAuth app for this tenant, add the callback and webhook URLs below, save its app credentials, then connect Zoom Phone."
             />
           )}
           <ZoomPhoneAppSetup
@@ -255,11 +247,11 @@ export default function ZoomPanel() {
             tenantConfigured={tenantPhoneAppConfigured}
             appSaved={tenantPhoneAppSaved}
           />
-          {phoneVerificationPending && (
+          {phoneWebhookPending && (
             <SetupNotice
               tone="warning"
-              title="Place a Zoom Phone test call"
-              body="OAuth is saved, but call import and Test connection stay blocked. A correctly signed v3 call-element event must match the saved Account ID, then the pending grant must successfully fetch that exact call from Zoom before verification completes. Re-authorize if the grant is wrong or revoked."
+              title="Real-time call delivery is not verified yet"
+              body="Test connection and call-history import are available now. Place a Zoom Phone test call to verify real-time delivery; the first correctly signed event is checked against that exact call in Zoom and binds the account automatically."
             />
           )}
           {phoneConnected && phoneMissingScopes.length > 0 && (
@@ -324,23 +316,29 @@ export default function ZoomPanel() {
 }
 
 function phoneStatusLabel(phoneStatus, phoneConfigured, phoneConnected) {
-  if (!phoneConfigured) return phoneStatus?.app_credentials?.configured ? 'Add Account ID' : 'Add Zoom app'
+  if (!phoneConfigured) return 'Add Zoom app'
   if (phoneStatus?.status === 'missing_scopes') return 'Missing permissions'
   if (phoneStatus?.status === 'reauthorization_required') return 'Re-authorization required'
-  if (phoneStatus?.status === 'account_verification_required') return 'Account proof pending'
   if (!phoneConnected) return 'Ready to connect'
   if (phoneStatus?.missing_scopes?.length > 0) return 'Missing permissions'
-  return 'Connected'
+  return 'Phone API connected'
 }
 
 function phoneStatusTone(phoneStatus, phoneConfigured, phoneConnected) {
-  if (!phoneConfigured) return phoneStatus?.app_credentials?.configured ? 'attention' : 'neutral'
+  if (!phoneConfigured) return 'neutral'
   if (phoneStatus?.status === 'missing_scopes') return 'warning'
   if (phoneStatus?.status === 'reauthorization_required') return 'attention'
-  if (phoneStatus?.status === 'account_verification_required') return 'attention'
   if (!phoneConnected) return 'attention'
   if (phoneStatus?.missing_scopes?.length > 0) return 'warning'
   return 'healthy'
+}
+
+function isPhoneWebhookVerified(phoneStatus) {
+  if (typeof phoneStatus?.webhook_verified === 'boolean') return phoneStatus.webhook_verified
+  if (phoneStatus?.webhook_status) return phoneStatus.webhook_status === 'verified'
+  // Compatibility with status responses from before webhook state was split
+  // from Phone API connectivity.
+  return phoneStatus?.status === 'connected' && !phoneStatus?.account_verification_required
 }
 
 function FlashMessage({ flash }) {
@@ -370,16 +368,13 @@ function ZoomPhoneAppSetup({
   const webhookUrl = status?.webhook_url || status?.app_credentials?.webhook_url
   const webhookEvents = 'phone.callee_call_element_completed\nphone.caller_call_element_completed'
   const clientIdHint = status?.app_credentials?.client_id_hint
-  const savedAccountId = status?.app_credentials?.zoom_account_id || ''
   const hasOAuthPair = form.client_id.trim() && form.client_secret.trim()
   const hasPartialOAuth = Boolean(form.client_id.trim()) !== Boolean(form.client_secret.trim())
   const hasWebhookSecret = Boolean(form.webhook_secret_token.trim())
-  const hasAccountId = Boolean(form.zoom_account_id.trim())
-  const accountIdChanged = form.zoom_account_id.trim() !== savedAccountId
   const hasUpdate = appSaved
-    ? hasOAuthPair || hasWebhookSecret || accountIdChanged
+    ? hasOAuthPair || hasWebhookSecret
     : hasOAuthPair && hasWebhookSecret
-  const canSave = !busy && hasAccountId && !hasPartialOAuth && hasUpdate
+  const canSave = !busy && !hasPartialOAuth && hasUpdate
 
   return (
     <div className="rounded-lg border border-brand-line bg-brand-bg overflow-hidden">
@@ -392,16 +387,16 @@ function ZoomPhoneAppSetup({
             <div className="text-sm font-bold text-brand-ink">Customer Zoom app</div>
             <div className="text-xs text-brand-ink-2 mt-0.5">
               {tenantConfigured
-                ? `Saved${clientIdHint ? ` as ${clientIdHint}` : ''}. The non-secret Account ID below binds this tenant to exactly one Zoom account.`
+                ? `Saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Zoom account binding is discovered and verified automatically.`
                 : appSaved
-                  ? `App secrets saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Add the Account ID to complete its tenant binding.`
-                  : 'Save the Zoom Account ID, OAuth client ID, client secret, and webhook token from this firm-owned app.'}
+                  ? `App secrets saved${clientIdHint ? ` as ${clientIdHint}` : ''}. Connect Zoom Phone to authorize the firm.`
+                  : 'Save the OAuth client ID, client secret, and webhook token from this firm-owned app.'}
             </div>
           </div>
         </div>
         <StatusBadge
           status={tenantConfigured ? 'healthy' : appSaved ? 'attention' : 'missing'}
-          label={tenantConfigured ? 'Tenant app bound' : appSaved ? 'Account ID required' : 'Tenant app required'}
+          label={tenantConfigured ? 'Tenant app saved' : appSaved ? 'Connect Phone' : 'Tenant app required'}
         />
       </div>
 
@@ -465,43 +460,12 @@ function ZoomPhoneAppSetup({
               </button>
             </div>
             <p className="mt-1 text-[11px] text-brand-muted">
-              Select both call-element events in Zoom. Call-history-completed events are legacy compatibility only.
+              Select both v3 call-element events for current real-time delivery. Existing v2 call-history-completed events remain compatible.
             </p>
           </div>
         )}
 
         <form onSubmit={onSave} className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <label className="block lg:col-span-2">
-            <span className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
-              Zoom Account ID <span aria-hidden="true">*</span>
-            </span>
-            <input
-              required
-              autoComplete="off"
-              minLength={8}
-              maxLength={255}
-              pattern="[A-Za-z0-9_-]+"
-              title="Use 8–255 letters, numbers, hyphens, or underscores."
-              value={form.zoom_account_id}
-              onChange={(event) => setForm((current) => ({ ...current, zoom_account_id: event.target.value }))}
-              placeholder="Account ID from Zoom Account Profile"
-              aria-describedby="zoom-phone-account-id-help zoom-phone-account-id-status"
-              className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
-            />
-            <span id="zoom-phone-account-id-help" className="mt-1 block text-[11px] text-brand-muted">
-              In Zoom, open Account Management → Account Profile and copy the Account ID. It is not a secret. Entering it explicitly avoids requesting a Zoom user-profile scope.
-            </span>
-            <span
-              id="zoom-phone-account-id-status"
-              className={`mt-1 block text-[11px] font-semibold ${savedAccountId && form.zoom_account_id.trim() === savedAccountId ? 'text-green-700' : 'text-amber-700'}`}
-            >
-              {savedAccountId && form.zoom_account_id.trim() === savedAccountId
-                ? 'Account binding saved. A signed v3 event plus a successful provider fetch of that exact call must prove this Account ID before imports are enabled.'
-                : savedAccountId
-                  ? 'New Account ID is not saved. Saving it disconnects the current grant and requires re-authorization.'
-                  : 'Required before this tenant can connect Zoom Phone.'}
-            </span>
-          </label>
           <label className="block">
             <span className="block text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-1">
               Zoom OAuth client ID

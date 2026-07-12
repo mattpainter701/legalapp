@@ -177,12 +177,12 @@ sequenceDiagram
 
     Z->>N: signed event / tenant webhook URL
     N->>A: POST /api/integrations/zoom-phone/webhook/{tenant_id}
-    A->>A: validate CRC or webhook signature + account mapping
+    A->>A: validate CRC or tenant webhook signature
     A->>D: commit one idempotent call job under tenant RLS
     A-->>Z: 2xx only after durable commit
     W->>D: claim tenant call job
-    W->>Z: fetch authoritative call detail
-    W->>D: atomic insert/update inbound communication record
+    W->>Z: fetch authoritative exact call detail
+    W->>D: bind first opaque account ID if needed + import call atomically
     U->>A: review caller, contact/history matches, notes
     A->>D: create/update contact or lead and assignment task
     A-->>T: in-app task; optional configured notification
@@ -192,28 +192,29 @@ sequenceDiagram
 
 The tenant must own the Zoom account-level OAuth app configured through
 Administration > Zoom; shared platform/S2S Phone credentials are not accepted.
-The administrator records the firm's non-secret Zoom Account ID with the app.
-If Zoom includes an account ID in the token response, OAuth rejects a mismatch,
-but Zoom does not guarantee that field. Every new grant therefore remains in
-`account_verification_required`: API probes and imports are blocked until a
-correctly signed v3 call-element event supplies a matching `payload.account_id`
-**and** the pending grant successfully fetches that event's exact call
-history/detail from Zoom. The signed event proves the app account; the matching
-provider fetch proves the grant can access that same account. Only then does one
-transaction mark the grant healthy and import the call.
-This explicit mapping avoids requesting a broader Zoom user-profile scope merely
-to discover the account after authorization.
+The administrator does not enter Zoom's numeric Account Number. OAuth state is
+bound to the tenant and tenant-owned client, and a successful account call-
+history probe makes the refreshable grant usable for tests and manual sync. If
+Zoom supplies its opaque `account_id` in an OAuth response, it is bound
+automatically. Otherwise, the first correctly signed completion event becomes
+the candidate only after the worker proves the same grant can fetch that exact
+call. The binding and call import commit atomically; later event mismatches are
+rejected. Webhook delivery readiness is tracked separately from Phone API
+readiness, avoiding a broader Zoom user-profile scope without blocking history
+imports.
 The shipped intake integration requests call-history/call-detail scopes; it
 does not fetch Zoom recording or transcript content. A dedicated queue lane
 retries transient failures and hourly reconciliation covers missed delivery.
 Production acceptance requires all of the following through the real public
 hostname:
 
-1. OAuth connect/reconnect saves a grant pending provider account proof.
+1. OAuth connect/reconnect saves a refreshable grant and its account call-
+   history probe passes.
 2. Zoom URL-validation CRC response succeeds through nginx/TLS.
-3. A correctly signed v3 event for a real inbound call proves the app account.
-4. The pending grant fetches that exact call, becomes healthy atomically with
-   import, and the call appears once in Call Intake.
+3. A correctly signed supported event for a real inbound call reaches the
+   tenant-specific endpoint.
+4. The grant fetches that exact call, learns or confirms the opaque account
+   binding atomically with import, and the call appears once in Call Intake.
 5. The API connection test passes.
 6. Intake creates a specifically assigned task.
 7. The assignee can view and update that task without cross-tenant leakage.

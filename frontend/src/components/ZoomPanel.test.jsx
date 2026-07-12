@@ -7,7 +7,7 @@ import {
   getZoomPhoneStatus,
   getZoomStatus,
   saveZoomPhoneAppCredentials,
-  connectZoomPhoneIntegration,
+  testZoomPhoneIntegration,
 } from '../api'
 
 vi.mock('../api', () => ({
@@ -26,32 +26,33 @@ const emptyPhoneStatus = {
   configured: false,
   connected: false,
   status: 'not_configured',
+  webhook_status: 'not_configured',
+  webhook_verified: false,
   tenant_app_configured: false,
   required_scopes: [],
   missing_scopes: [],
   app_credentials: {},
 }
 
-describe('Zoom Phone tenant account setup', () => {
+describe('Zoom Phone tenant app setup', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getZoomStatus.mockResolvedValue({ configured: false, connected: false })
     getZoomPhoneStatus.mockResolvedValue(emptyPhoneStatus)
     saveZoomPhoneAppCredentials.mockResolvedValue({ configured: true })
+    testZoomPhoneIntegration.mockResolvedValue({ sample_count: 2 })
   })
   afterEach(() => cleanup())
 
-  it('requires and submits an explicit Zoom Account ID with new app credentials', async () => {
+  it('saves tenant app credentials without asking for a manual Zoom Account ID', async () => {
     const user = userEvent.setup()
     render(<ZoomPanel />)
 
-    const accountId = await screen.findByLabelText(/Zoom Account ID/)
+    expect(await screen.findByText('Customer Zoom app')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Zoom Account ID/i)).not.toBeInTheDocument()
     const saveButton = screen.getByRole('button', { name: 'Save Zoom app' })
     expect(saveButton).toBeDisabled()
-    expect(accountId).toHaveAttribute('minlength', '8')
-    expect(screen.getByText('Required before this tenant can connect Zoom Phone.')).toBeInTheDocument()
 
-    await user.type(accountId, 'zoom-account-123')
     await user.type(screen.getByLabelText('Zoom OAuth client ID'), 'client-123')
     await user.type(screen.getByLabelText('Zoom OAuth client secret'), 'secret-123')
     expect(saveButton).toBeDisabled()
@@ -63,77 +64,98 @@ describe('Zoom Phone tenant account setup', () => {
       client_id: 'client-123',
       client_secret: 'secret-123',
       webhook_secret_token: 'webhook-123',
-      zoom_account_id: 'zoom-account-123',
     }))
   })
 
-  it('shows the saved non-secret account binding without repopulating secrets', async () => {
+  it('does not repopulate saved secrets and permits rotating only the webhook secret', async () => {
     getZoomPhoneStatus.mockResolvedValue({
       ...emptyPhoneStatus,
       configured: true,
       tenant_app_configured: true,
-      app_credentials: {
-        client_id_hint: 'clie…123',
-        zoom_account_id: 'zoom-account-456',
-        zoom_account_id_configured: true,
-      },
-    })
-    render(<ZoomPanel />)
-
-    expect(await screen.findByLabelText(/Zoom Account ID/)).toHaveValue('zoom-account-456')
-    expect(screen.getByLabelText('Zoom OAuth client secret')).toHaveValue('')
-    expect(screen.getByLabelText('Zoom webhook secret token')).toHaveValue('')
-    expect(screen.getByText('Account binding saved. A signed v3 event plus a successful provider fetch of that exact call must prove this Account ID before imports are enabled.')).toBeInTheDocument()
-  })
-
-  it('blocks provider tests but keeps re-authorization available while a grant awaits end-to-end proof', async () => {
-    getZoomPhoneStatus.mockResolvedValue({
-      ...emptyPhoneStatus,
-      configured: true,
-      status: 'account_verification_required',
-      health: 'account_verification_required',
-      tenant_app_configured: true,
-      app_credentials: {
-        configured: true,
-        zoom_account_id: 'zoom-account-456',
-      },
-    })
-    const user = userEvent.setup()
-    render(<ZoomPanel />)
-
-    expect(await screen.findByText('Phone account proof pending')).toBeInTheDocument()
-    expect(screen.getByText('Place a Zoom Phone test call')).toBeInTheDocument()
-    const reauthorize = screen.getByRole('button', { name: 'Re-authorize Phone' })
-    expect(reauthorize).toBeEnabled()
-    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
-    expect(screen.getByText(/call import and Test connection stay blocked/i)).toBeInTheDocument()
-    expect(screen.getByText(/pending grant must successfully fetch that exact call/i)).toBeInTheDocument()
-    await user.click(reauthorize)
-    expect(connectZoomPhoneIntegration).toHaveBeenCalledTimes(1)
-  })
-
-  it('lets an existing app add its missing account binding without exposing or re-entering secrets', async () => {
-    getZoomPhoneStatus.mockResolvedValue({
-      ...emptyPhoneStatus,
-      app_credentials: {
-        configured: true,
-        client_id_hint: 'clie…123',
-      },
       webhook_secret_configured: true,
+      app_credentials: {
+        configured: true,
+        client_id_hint: 'clie…123',
+      },
     })
     const user = userEvent.setup()
     render(<ZoomPanel />)
 
-    expect(await screen.findByText('Account ID required')).toBeInTheDocument()
-    const accountId = screen.getByLabelText(/Zoom Account ID/)
-    await user.type(accountId, 'zoom-account-789')
+    expect(await screen.findByText('Tenant app saved')).toBeInTheDocument()
+    expect(screen.getByLabelText('Zoom OAuth client secret')).toHaveValue('')
+    const webhookSecret = screen.getByPlaceholderText('Enter to replace saved webhook secret token')
+    expect(webhookSecret).toHaveValue('')
+    expect(screen.getByText('Webhook signing is configured.')).toBeInTheDocument()
+
+    await user.type(webhookSecret, 'replacement-webhook')
     await user.click(screen.getByRole('button', { name: 'Save Zoom app' }))
 
     await waitFor(() => expect(saveZoomPhoneAppCredentials).toHaveBeenCalledWith({
       client_id: '',
       client_secret: '',
-      webhook_secret_token: '',
-      zoom_account_id: 'zoom-account-789',
+      webhook_secret_token: 'replacement-webhook',
     }))
+  })
+
+  it('keeps Phone API tests available while real-time webhook proof is pending', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      connected: true,
+      status: 'connected',
+      health: 'healthy',
+      webhook_status: 'pending',
+      webhook_verified: false,
+      tenant_app_configured: true,
+      app_credentials: { configured: true },
+    })
+    const user = userEvent.setup()
+    render(<ZoomPanel />)
+
+    expect(await screen.findAllByText('Phone API connected')).toHaveLength(2)
+    expect(screen.getByText('Real-time webhook pending')).toBeInTheDocument()
+    expect(screen.getByText('Real-time call delivery is not verified yet')).toBeInTheDocument()
+    expect(screen.getByText(/Test connection and call-history import are available now/i)).toBeInTheDocument()
+    const testButton = screen.getByRole('button', { name: 'Test connection' })
+    expect(testButton).toBeEnabled()
+
+    await user.click(testButton)
+    await waitFor(() => expect(testZoomPhoneIntegration).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/Sample calls found: 2/i)).toBeInTheDocument()
+  })
+
+  it('shows Phone API and verified real-time delivery as independent healthy states', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      connected: true,
+      status: 'connected',
+      webhook_status: 'verified',
+      webhook_verified: true,
+      tenant_app_configured: true,
+      app_credentials: { configured: true },
+    })
+    render(<ZoomPanel />)
+
+    expect(await screen.findByText('Real-time calls verified')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled()
+    expect(screen.queryByText('Real-time call delivery is not verified yet')).not.toBeInTheDocument()
+  })
+
+  it('keeps older connected status responses compatible', async () => {
+    getZoomPhoneStatus.mockResolvedValue({
+      ...emptyPhoneStatus,
+      configured: true,
+      connected: true,
+      status: 'connected',
+      webhook_status: undefined,
+      webhook_verified: undefined,
+      tenant_app_configured: true,
+      app_credentials: { configured: true },
+    })
+    render(<ZoomPanel />)
+
+    expect(await screen.findByText('Real-time calls verified')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled()
   })
 })
