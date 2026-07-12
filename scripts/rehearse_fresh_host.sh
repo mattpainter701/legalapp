@@ -248,26 +248,52 @@ PY
 [[ "$readiness" == "ok" ]] || { "${compose[@]}" logs --tail=100 backend scheduler; exit 6; }
 
 ingress_proof="$(${compose[@]} exec -T backend python - <<'PY'
+import http.client
 import json
 import ssl
-import urllib.request
 
-def fetch(url, *, tls=False):
-    request = urllib.request.Request(url, headers={"Host": "rehearsal.invalid"})
-    context = ssl._create_unverified_context() if tls else None
-    with urllib.request.urlopen(request, timeout=10, context=context) as response:
-        return response.status, response.read()
+def fetch(scheme, path, *, extra_headers=None):
+    headers = {"Host": "rehearsal.invalid"}
+    headers.update(extra_headers or {})
+    if scheme == "https":
+        connection = http.client.HTTPSConnection(
+            "nginx", 443, timeout=10, context=ssl._create_unverified_context()
+        )
+    else:
+        connection = http.client.HTTPConnection("nginx", 80, timeout=10)
+    try:
+        connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        return response.status, response.read(), response.headers
+    finally:
+        connection.close()
 
-http_status, http_health = fetch("http://nginx/health/readiness")
-https_status, https_health = fetch("https://nginx/health/readiness", tls=True)
-frontend_status, frontend_html = fetch("https://nginx/", tls=True)
-assert json.loads(http_health)["status"] == "ok"
+plain_status, plain_body, plain_headers = fetch("http", "/health/readiness")
+edge_status, edge_health, edge_headers = fetch(
+    "http", "/health/readiness", extra_headers={"X-Forwarded-Proto": "https"}
+)
+https_status, https_health, https_headers = fetch("https", "/health/readiness")
+frontend_status, frontend_html, _ = fetch("https", "/")
+assert plain_status == 301
+assert plain_headers.get("Location") == "https://rehearsal.invalid/health/readiness"
+assert plain_headers.get_all("Strict-Transport-Security", []) == []
+assert b'"status"' not in plain_body
+assert json.loads(edge_health)["status"] == "ok"
 assert json.loads(https_health)["status"] == "ok"
+assert edge_headers.get_all("Strict-Transport-Security", []) == [
+    "max-age=63072000; includeSubDomains"
+]
+assert https_headers.get_all("Strict-Transport-Security", []) == [
+    "max-age=63072000; includeSubDomains"
+]
 assert b"<html" in frontend_html.lower()
-print(f"http={http_status},https={https_status},frontend={frontend_status}")
+print(
+    f"plain={plain_status},edge={edge_status},https={https_status},"
+    f"frontend={frontend_status}"
+)
 PY
 )"
-[[ "$ingress_proof" == "http=200,https=200,frontend=200" ]] || {
+[[ "$ingress_proof" == "plain=301,edge=200,https=200,frontend=200" ]] || {
   echo "Ingress assertion failed: $ingress_proof" >&2
   "${compose[@]}" logs --tail=100 nginx backend frontend
   exit 7
@@ -280,14 +306,20 @@ https_binding="$(${compose[@]} port nginx 443)"
   exit 8
 }
 https_port="${https_binding##*:}"
-host_http_health="$(curl -fsS --max-time 10 -H 'Host: rehearsal.invalid' "http://${http_binding}/health/readiness")"
+host_http_headers="$(curl -sS --max-time 10 -H 'Host: rehearsal.invalid' -D - -o /dev/null "http://${http_binding}/health/readiness" | tr -d '\r')"
 host_https_health="$(curl -kfsS --max-time 10 --resolve "rehearsal.invalid:${https_port}:127.0.0.1" "https://rehearsal.invalid:${https_port}/health/readiness")"
 host_frontend="$(curl -kfsS --max-time 10 --resolve "rehearsal.invalid:${https_port}:127.0.0.1" "https://rehearsal.invalid:${https_port}/")"
-grep -q '"status":"ok"' <<< "$host_http_health" || { echo "Host HTTP readiness failed" >&2; exit 9; }
+host_http_status="$(awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }' <<< "$host_http_headers")"
+host_http_location="$(awk 'tolower($0) ~ /^location:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }' <<< "$host_http_headers")"
+host_http_hsts_count="$(awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }' <<< "$host_http_headers")"
+[[ "$host_http_status" == 301 \
+  && "$host_http_location" == "https://rehearsal.invalid/health/readiness" \
+  && "$host_http_hsts_count" == 0 ]] \
+  || { echo "Host HTTP redirect gate failed" >&2; exit 9; }
 grep -q '"status":"ok"' <<< "$host_https_health" || { echo "Host HTTPS readiness failed" >&2; exit 9; }
 grep -qi '<html' <<< "$host_frontend" || { echo "Host HTTPS frontend failed" >&2; exit 9; }
 
 head_revision="$(${compose[@]} exec -T postgres psql -U legalapp -d legalapp -Atq -c 'SELECT version_num FROM alembic_version')"
 [[ -n "$head_revision" ]] || { echo "Alembic head was not recorded" >&2; exit 10; }
 
-echo "Fresh-host rehearsal passed: topology=$FRESH_HOST_TOPOLOGY, migration=$head_revision, runtime=clarity_app/NOBYPASSRLS, upload-bind UID/write/read/delete, tenant heartbeat=1, nginx internal+loopback HTTP/TLS/frontend verified."
+echo "Fresh-host rehearsal passed: topology=$FRESH_HOST_TOPOLOGY, migration=$head_revision, runtime=clarity_app/NOBYPASSRLS, upload-bind UID/write/read/delete, tenant heartbeat=1, nginx trusted-edge HTTP/direct-TLS plus direct-HTTP redirect and frontend verified."

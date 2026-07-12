@@ -895,3 +895,7 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert 'compose_files=("${production_compose_files[@]}"' in rehearsal
     assert 'COMPOSE_FILES="$preflight_compose_files_value"' in rehearsal
     assert 'COMPOSE_FILES="$compose_files_value"' not in rehearsal
+    assert 'extra_headers={"X-Forwarded-Proto": "https"}' in rehearsal
+    assert "plain=301,edge=200,https=200,frontend=200" in rehearsal
+    assert 'plain_headers.get_all("Strict-Transport-Security", []) == []' in rehearsal
+    assert '"https://rehearsal.invalid/health/readiness"' in rehearsal
