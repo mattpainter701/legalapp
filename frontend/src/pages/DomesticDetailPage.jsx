@@ -93,6 +93,7 @@ function PartiesTab({ caseId }) {
       )}
       <DataTable loading={loading} items={items} columns={['Name', 'Role', 'Gross Monthly', 'Overnights']}
         row={(p) => [p.name, <span className="capitalize">{p.role}</span>, money(p.gross_monthly_income), p.annual_overnights ?? '—']}
+        deleteLabel={(p) => `Delete party ${p.name || ''}`.trim()}
         onDelete={(p) => deleteDomesticChild(caseId, 'parties', p.id).then(reload)} empty="No parties yet." />
     </div>
   )
@@ -127,6 +128,7 @@ function ChildrenTab({ caseId }) {
       )}
       <DataTable loading={loading} items={items} columns={['Name', 'Date of Birth', 'Special Needs']}
         row={(c) => [c.name, fmtDate(c.date_of_birth), c.has_special_needs ? 'Yes' : 'No']}
+        deleteLabel={(c) => `Delete child ${c.name || ''}`.trim()}
         onDelete={(c) => deleteDomesticChild(caseId, 'children', c.id).then(reload)} empty="No children yet." />
     </div>
   )
@@ -162,6 +164,7 @@ function CustodyTab({ caseId }) {
       )}
       <DataTable loading={loading} items={items} columns={['Legal', 'Physical', 'Calc Type', 'Effective']}
         row={(c) => [c.legal_custody, c.physical_custody, c.calc_custody_type, fmtDate(c.effective_date)]}
+        deleteLabel={() => 'Delete custody arrangement'}
         onDelete={(c) => deleteDomesticChild(caseId, 'custody', c.id).then(reload)} empty="No custody arrangements yet." />
     </div>
   )
@@ -197,12 +200,13 @@ function DeadlinesTab({ caseId }) {
       )}
       <DataTable loading={loading} items={items} columns={['Title', 'Type', 'Due', 'Status']}
         row={(d) => [d.title, d.deadline_type, fmtDate(d.due_date), <StatusBadge status={d.status} />]}
+        deleteLabel={(d) => `Delete deadline ${d.title || ''}`.trim()}
         onDelete={(d) => deleteDomesticChild(caseId, 'deadlines', d.id).then(reload)} empty="No deadlines yet." />
     </div>
   )
 }
 
-function OrdersTab({ caseId }) {
+export function OrdersTab({ caseId }) {
   const { items, loading, reload } = useResource(caseId, 'orders')
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ monthly_amount: '', order_type: 'child_support', status: 'proposed', effective_date: '' })
@@ -241,20 +245,37 @@ function OrdersTab({ caseId }) {
         <div className="space-y-3">
           {items.map((o) => (
             <div key={o.id} className="bg-brand-surface border border-brand-line rounded-xl shadow-sm">
-              <div className="flex items-center justify-between px-4 py-3 cursor-pointer" onClick={() => setExpanded(expanded === o.id ? null : o.id)}>
-                <div className="flex items-center gap-4">
-                  <span className="font-serif font-bold text-brand-ink text-lg">{money(o.monthly_amount)}/mo</span>
-                  <span className="text-[12px] text-brand-muted capitalize">{o.order_type?.replace(/_/g, ' ')}</span>
-                  <StatusBadge status={o.status} />
-                </div>
-                <div className="flex items-center gap-3 text-[12px] text-brand-ink-2">
-                  <span>Paid {money(o.total_paid)}</span>
-                  <span>Arrears {money(o.arrears_balance)}</span>
-                  <Trash2 size={14} className="text-brand-muted hover:text-brand-rose"
-                    onClick={(e) => { e.stopPropagation(); deleteDomesticChild(caseId, 'orders', o.id).then(reload) }} />
-                </div>
+              <div className="flex items-center px-4 py-3">
+                <button
+                  type="button"
+                  aria-expanded={expanded === o.id}
+                  aria-controls={`order-payments-${o.id}`}
+                  aria-label={`${expanded === o.id ? 'Hide' : 'Show'} payments for ${money(o.monthly_amount)} per month ${o.order_type?.replace(/_/g, ' ') || 'support'} order`}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-4 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  onClick={() => setExpanded(expanded === o.id ? null : o.id)}
+                >
+                  <span className="flex min-w-0 items-center gap-4">
+                    <span className="font-serif font-bold text-brand-ink text-lg">{money(o.monthly_amount)}/mo</span>
+                    <span className="text-[12px] text-brand-muted capitalize">{o.order_type?.replace(/_/g, ' ')}</span>
+                    <StatusBadge status={o.status} />
+                  </span>
+                  <span className="flex items-center gap-3 text-[12px] text-brand-ink-2">
+                    <span>Paid {money(o.total_paid)}</span>
+                    <span>Arrears {money(o.arrears_balance)}</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Delete ${o.order_type?.replace(/_/g, ' ') || 'support'} order`}
+                  className="ml-3 rounded p-2 text-brand-muted hover:bg-brand-bg-soft hover:text-brand-rose focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  onClick={() => deleteDomesticChild(caseId, 'orders', o.id).then(reload)}
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-              {expanded === o.id && <PaymentLedger caseId={caseId} order={o} onChange={reload} />}
+              <div id={`order-payments-${o.id}`} hidden={expanded !== o.id}>
+                {expanded === o.id && <PaymentLedger caseId={caseId} order={o} onChange={reload} />}
+              </div>
             </div>
           ))}
         </div>
@@ -296,8 +317,16 @@ function PaymentLedger({ caseId, order, onChange }) {
                 <td className="font-medium text-brand-ink">{money(p.amount)}</td>
                 <td>{money(p.applied_to_current)}</td>
                 <td>{money(p.applied_to_arrears)}</td>
-                <td className="text-right"><Trash2 size={13} className="text-brand-muted hover:text-brand-rose cursor-pointer"
-                  onClick={() => deleteOrderPayment(caseId, order.id, p.id).then(() => { reload(); onChange && onChange() })} /></td>
+                <td className="text-right">
+                  <button
+                    type="button"
+                    aria-label={`Delete payment from ${fmtDate(p.payment_date)}`}
+                    className="rounded p-1 text-brand-muted hover:text-brand-rose focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    onClick={() => deleteOrderPayment(caseId, order.id, p.id).then(() => { reload(); onChange && onChange() })}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -354,7 +383,7 @@ function Loading() {
 function Empty({ msg }) {
   return <div className="bg-brand-surface border border-brand-line rounded-xl p-10 text-center text-brand-ink-2 font-sans text-sm">{msg}</div>
 }
-function DataTable({ loading, items, columns, row, onDelete, empty }) {
+export function DataTable({ loading, items, columns, row, onDelete, deleteLabel, empty }) {
   if (loading) return <Loading />
   if (!items || items.length === 0) return <Empty msg={empty} />
   return (
@@ -368,7 +397,16 @@ function DataTable({ loading, items, columns, row, onDelete, empty }) {
             <tr key={it.id} className="hover:bg-brand-bg-soft">
               {row(it).map((cell, i) => <td key={i} className="px-4 py-3 text-[13px] text-brand-ink-2 font-sans">{cell}</td>)}
               <td className="px-4 py-3 text-right">
-                {onDelete && <Trash2 size={14} className="text-brand-muted hover:text-brand-rose cursor-pointer" onClick={() => onDelete(it)} />}
+                {onDelete && (
+                  <button
+                    type="button"
+                    aria-label={typeof deleteLabel === 'function' ? deleteLabel(it) : (deleteLabel || 'Delete row')}
+                    className="rounded p-1 text-brand-muted hover:text-brand-rose focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    onClick={() => onDelete(it)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </td>
             </tr>
           ))}

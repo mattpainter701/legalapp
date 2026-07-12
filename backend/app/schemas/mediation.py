@@ -140,6 +140,8 @@ class InviteResponse(BaseModel):
     kind: str
     email: Optional[str] = None
     invite_url: str
+    email_sent: Optional[bool] = None
+    delivery_error: Optional[str] = None
     expires_at: datetime
 
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run LegalApp encrypted off-host backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=2h
+Persistent=true
+Unit=legalapp-backup.service
+
+[Install]
+WantedBy=timers.target

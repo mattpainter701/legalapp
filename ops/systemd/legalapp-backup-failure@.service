@@ -1,0 +1,6 @@
+[Unit]
+Description=Report failed LegalApp backup unit %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p user.err -t legalapp-backup "LegalApp backup unit %i failed; inspect: journalctl --user -u legalapp-backup.service"

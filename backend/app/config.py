@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # When unset (None), Secure/SameSite are derived from BACKEND_URL scheme.
     COOKIE_SECURE: bool | None = None
     COOKIE_SAMESITE: str = "lax"  # lax | strict | none
+    # New tenant creation is operator/invite-only for the first-customer
+    # release. Do not enable until trial expiry and paid conversion are enforced.
+    PUBLIC_SIGNUP_ENABLED: bool = False
 
     # ── Background scheduler ─────────────────────────────────────────────────
     # APScheduler must run in EXACTLY ONE process. In prod, API workers set this
@@ -194,7 +197,8 @@ class Settings(BaseSettings):
     PREMIUM_LLM: str = "claude-opus-4-8"
 
     # ── Email / Notifications ─────────────────────────────────────────────────
-    EMAIL_ENABLED: bool = False  # Set True in prod; logs emails in dev
+    # Disabled delivery is a typed non-success; it never simulates a sent email.
+    EMAIL_ENABLED: bool = False
     EMAIL_HOST: str = "smtp.gmail.com"
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""

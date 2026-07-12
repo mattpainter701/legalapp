@@ -56,8 +56,20 @@
       "source": "docker-compose.yml"
     },
     {
-      "image": "legalapp-litellm:main-v1.72.6",
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
       "line": 44,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
+      "line": 56,
+      "pinned_by_digest": false,
+      "source": "docker-compose.yml"
+    },
+    {
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
+      "line": 72,
       "pinned_by_digest": false,
       "source": "docker-compose.yml"
     },
@@ -81,19 +93,31 @@
     },
     {
       "image": "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
-      "line": 20,
+      "line": 21,
       "pinned_by_digest": true,
       "source": "docker-compose.hypervisor.yml"
     },
     {
       "image": "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
-      "line": 34,
+      "line": 36,
       "pinned_by_digest": true,
       "source": "docker-compose.hypervisor.yml"
     },
     {
-      "image": "legalapp-litellm:main-v1.72.6",
-      "line": 51,
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
+      "line": 53,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
+      "line": 65,
+      "pinned_by_digest": false,
+      "source": "docker-compose.hypervisor.yml"
+    },
+    {
+      "image": "legalapp-litellm:${APP_COMMIT:-dev}",
+      "line": 81,
       "pinned_by_digest": false,
       "source": "docker-compose.hypervisor.yml"
     },
@@ -141,7 +165,7 @@
     },
     {
       "image": "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
-      "line": 14,
+      "line": 16,
       "pinned_by_digest": true,
       "source": "frontend/Dockerfile",
       "stage_reference": false
@@ -154,8 +178,8 @@
       "stage_reference": false
     },
     {
-      "image": "docker.litellm.ai/berriai/litellm:main-v1.72.6-stable@sha256:2c3f50ed1ea59ec9e175711c808c3bf15f023643fe50fb1ba1d0f9dc827a356d",
-      "line": 1,
+      "image": "docker.litellm.ai/berriai/litellm:main-latest@sha256:60f548df23a82b7f83444e2f01d2ccafe00f9f5808c4110a32e397083d09fb17",
+      "line": 3,
       "pinned_by_digest": true,
       "source": "litellm/Dockerfile",
       "stage_reference": false

@@ -46,6 +46,7 @@ export default function LoginPage() {
   const [error, setError] = useState(null)
   const { login: authLogin } = useAuth()
   const navigate = useNavigate()
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
 
   const handleEmailLogin = async (e) => {
     e.preventDefault()
@@ -209,9 +210,9 @@ export default function LoginPage() {
       <div className="relative z-10 mt-10 text-center">
         <p className="text-brand-muted text-sm font-sans">
           Don't have an account?{' '}
-          <Link to="/signup" className="text-brand-accent hover:text-brand-accent-2 font-medium">
-            Create one
-          </Link>
+          <a href={contactUrl} className="text-brand-accent hover:text-brand-accent-2 font-medium">
+            Request access
+          </a>
         </p>
       </div>
     </div>

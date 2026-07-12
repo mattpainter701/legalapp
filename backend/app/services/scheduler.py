@@ -43,7 +43,7 @@ from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
 from app.services.cloud_sync import CloudSyncService
-from app.services.email import email_service
+from app.services.email import EmailDeliveryResult, email_service
 from app.services.integration_observability import (
     capture_integration_error,
     record_integration_sync_run,
@@ -1223,6 +1223,8 @@ class LegalScheduler:
 
                 emails_sent = 0
                 skipped_no_assignee = 0
+                delivery_failures = 0
+                unavailable_deliveries = 0
 
                 for task in tasks:
                     if not task.assigned_to_user_id:
@@ -1253,17 +1255,26 @@ class LegalScheduler:
                             emails_sent += 1
                             task.reminder_sent_at = now_utc
                             await _commit_and_restore_scheduler_context(session)
+                        else:
+                            delivery_failures += 1
+                            if (
+                                isinstance(sent, EmailDeliveryResult)
+                                and sent.is_configuration_error
+                            ):
+                                unavailable_deliveries += 1
                     except Exception as exc:
+                        delivery_failures += 1
                         logger.error(
-                            "[task-reminder] Failed to send reminder for task %s to %s: %s",
+                            "[task-reminder] Delivery raised for task %s (error_type=%s)",
                             task.id,
-                            assignee.email,
-                            exc,
+                            type(exc).__name__,
                         )
 
                 summary = (
                     f"Found {len(tasks)} task(s) due within 24 hours. "
                     f"Sent {emails_sent} reminder(s). "
+                    f"Not sent {delivery_failures} "
+                    f"({unavailable_deliveries} SMTP unavailable). "
                     f"Skipped {skipped_no_assignee} (no assignee/email)."
                 )
                 await _log_complete(session, log, summary)

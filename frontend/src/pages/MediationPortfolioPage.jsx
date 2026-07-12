@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getMediationCases, createMediationCase } from '../api'
 import { useAuth } from '../App'
@@ -47,6 +47,37 @@ function DateCell({ dateStr }) {
   } catch {
     return <span className="text-brand-muted text-[13px] font-sans">{dateStr}</span>
   }
+}
+
+export function MediationCaseRow({ caseRecord: c, onNavigate }) {
+  return (
+    <tr className="group cursor-pointer transition-colors hover:bg-brand-bg-soft" onClick={() => onNavigate?.(c.id)}>
+      <td className="whitespace-nowrap px-5 py-4 pl-6 font-sans text-[14px] font-semibold text-brand-ink">
+        <Link
+          to={`/plugins/mediation/cases/${c.id}`}
+          onClick={(event) => event.stopPropagation()}
+          className="rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+        >
+          {c.case_name || '—'}
+        </Link>
+      </td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.party_a || '—'} <span className="mx-1 text-brand-muted">v.</span> {c.party_b || '—'}</td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-muted">{c.dispute_type || '—'}</td>
+      <td className="px-5 py-4"><StageBadge stage={c.mediation_stage} /></td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.mediator || '—'}</td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.claim_value || '—'}</td>
+      <td className="px-5 py-4"><StatusBadge status={c.status} /></td>
+      <td className="px-5 py-4">
+        {c.confidentiality_signed
+          ? <span className="inline-flex items-center gap-1.5 font-sans text-xs font-semibold text-brand-green"><span className="h-1.5 w-1.5 rounded-full bg-brand-green" /> Signed</span>
+          : <span className="inline-flex items-center gap-1.5 font-sans text-xs font-semibold text-brand-amber"><span className="h-1.5 w-1.5 rounded-full bg-brand-amber" /> Pending</span>}
+      </td>
+      <td className="px-5 py-4"><DateCell dateStr={c.scheduled_session} /></td>
+      <td className="px-5 py-4 pr-6 text-right">
+        <span className="font-sans text-sm font-semibold text-brand-accent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">View →</span>
+      </td>
+    </tr>
+  )
 }
 
 export default function MediationPortfolioPage() {
@@ -245,18 +276,11 @@ export default function MediationPortfolioPage() {
                 </thead>
                 <tbody className="divide-y divide-brand-line">
                   {filtered.map((c) => (
-                    <tr key={c.id} className="hover:bg-brand-bg-soft cursor-pointer transition-colors group" onClick={() => navigate(`/plugins/mediation/cases/${c.id}`)}>
-                      <td className="px-5 py-4 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">{c.case_name || '—'}</td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.party_a || '—'} <span className="text-brand-muted mx-1">v.</span> {c.party_b || '—'}</td>
-                      <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">{c.dispute_type || '—'}</td>
-                      <td className="px-5 py-4"><StageBadge stage={c.mediation_stage} /></td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.mediator || '—'}</td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.claim_value || '—'}</td>
-                      <td className="px-5 py-4"><StatusBadge status={c.status} /></td>
-                      <td className="px-5 py-4">{c.confidentiality_signed ? <span className="inline-flex items-center gap-1.5 text-brand-green font-sans text-xs font-semibold"><div className="w-1.5 h-1.5 rounded-full bg-brand-green"></div> Signed</span> : <span className="inline-flex items-center gap-1.5 text-brand-amber font-sans text-xs font-semibold"><div className="w-1.5 h-1.5 rounded-full bg-brand-amber"></div> Pending</span>}</td>
-                      <td className="px-5 py-4"><DateCell dateStr={c.scheduled_session} /></td>
-                      <td className="px-5 py-4 pr-6 text-right"><span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span></td>
-                    </tr>
+                    <MediationCaseRow
+                      key={c.id}
+                      caseRecord={c}
+                      onNavigate={(id) => navigate(`/plugins/mediation/cases/${id}`)}
+                    />
                   ))}
                 </tbody>
               </table>

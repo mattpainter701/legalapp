@@ -1620,7 +1620,8 @@ def test_production_gate_runs_backend_zoom_api_probe():
     assert "secrets.compare_digest" in probe
     assert "print(tenant_id" not in probe
     assert 'print(f"{tenant_id}' not in probe
-    assert "Zoom Phone API probe passed for {checked} configured tenant(s)." in probe
+    assert "Zoom Phone API probe passed for the required tenant." in probe
+    assert '--tenant-id "$ZOOM_REQUIRED_TENANT_ID"' in production_check
 
 
 def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():

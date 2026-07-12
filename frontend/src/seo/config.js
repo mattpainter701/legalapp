@@ -46,7 +46,7 @@ const WORKSPACE_ROUTE_TITLES = [
   ['/time-tracking', 'Time tracking'],
   ['/teams/config', 'Teams configuration'],
   ['/login', 'Sign in'],
-  ['/signup', 'Start your trial'],
+  ['/signup', 'Request access'],
   ['/chat', 'Legal workspace'],
   ['/matters', 'Matters'],
   ['/calendar', 'Calendar'],

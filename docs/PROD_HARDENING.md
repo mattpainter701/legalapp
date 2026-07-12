@@ -9,11 +9,10 @@ the production-readiness sprint. Pair this with `docs/SPRINT_PROD_READINESS.md`.
 
 - Fixed **UID/GID `10001`** (`appuser`). A fixed id lets you chown host-mounted
   volumes to a known owner.
-- The production uploads bind-mount (`/data/legalapp/uploads` → `/app/uploads`)
-  must be writable by that UID. On the host, once:
-  ```bash
-  sudo chown -R 10001:10001 /data/legalapp/uploads
-  ```
+- The absolute `UPLOADS_HOST_DIR` bind mounted at `/app/uploads` must be writable
+  by that UID. `deploy_prod.sh` changes only the directory root to UID/GID 10001
+  and mode 0750, then proves a backend write/read/delete. Do not recursively
+  `chown` existing customer files as a generic deployment step.
 - Python deps install to `/usr/local` (world-readable), so the non-root user can
   still import them.
 - A stdlib `HEALTHCHECK` hits `/health` (the slim image has no `curl`).

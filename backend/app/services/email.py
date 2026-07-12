@@ -6,6 +6,7 @@ Optional fallback: Slack webhook via SLACK_WEBHOOK_URL
 """
 
 import logging
+from enum import Enum
 from html import escape
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
@@ -19,6 +20,56 @@ from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+class EmailDeliveryResult(str, Enum):
+    """Machine-readable result for every attempted email delivery.
+
+    This deliberately is not a plain boolean.  In particular, a disabled or
+    incomplete SMTP configuration must never be mistaken for a successful
+    send.  ``__bool__`` keeps existing scheduler counters concise while API
+    callers can still distinguish configuration failures from provider
+    failures.
+    """
+
+    SENT = "sent"
+    NOT_REQUIRED = "not_required"
+    DISABLED = "disabled"
+    UNCONFIGURED = "unconfigured"
+    INVALID_RECIPIENT = "invalid_recipient"
+    FAILED = "failed"
+
+    def __bool__(self) -> bool:
+        return self in {self.SENT, self.NOT_REQUIRED}
+
+    @property
+    def is_configuration_error(self) -> bool:
+        return self in {self.DISABLED, self.UNCONFIGURED}
+
+
+def email_delivery_http_error(
+    result: EmailDeliveryResult | bool,
+    *,
+    action: str,
+) -> tuple[int, str]:
+    """Map an unsuccessful delivery outcome to a safe, actionable API error."""
+
+    if result in {
+        EmailDeliveryResult.DISABLED,
+        EmailDeliveryResult.UNCONFIGURED,
+    }:
+        return (
+            503,
+            f"{action} was not completed because outbound email is unavailable. "
+            "Ask an administrator to enable and verify the SMTP configuration.",
+        )
+    if result == EmailDeliveryResult.INVALID_RECIPIENT:
+        return 422, f"{action} requires a valid email recipient."
+    return (
+        502,
+        f"{action} was not completed because the email provider did not accept "
+        "the message. Try again or contact an administrator.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,31 +394,58 @@ def _inline_md(text: str) -> str:
 class EmailService:
     """Async email notification service with SMTP + optional Slack webhook."""
 
+    @staticmethod
+    def configuration_status() -> EmailDeliveryResult | None:
+        """Return ``None`` when SMTP can be attempted, otherwise why it cannot.
+
+        Authentication is optional for trusted local relays, but a username and
+        password must be supplied together. The first-customer production
+        preflight is intentionally stricter and requires authenticated SMTP.
+        """
+
+        if not settings.EMAIL_ENABLED:
+            return EmailDeliveryResult.DISABLED
+
+        host = (settings.EMAIL_HOST or "").strip()
+        sender = (settings.EMAIL_FROM or "").strip()
+        username = (settings.EMAIL_USER or "").strip()
+        password = settings.EMAIL_PASS or ""
+        if (
+            not host
+            or not sender
+            or "@" not in sender
+            or not (1 <= settings.EMAIL_PORT <= 65535)
+            or bool(username) != bool(password)
+        ):
+            return EmailDeliveryResult.UNCONFIGURED
+        return None
+
     async def send_email(
         self,
         to: List[str],
         subject: str,
         html_body: str,
         text_body: str = "",
-    ) -> bool:
+    ) -> EmailDeliveryResult:
         """
         Send an email to one or more recipients.
-        If EMAIL_ENABLED=False, log the email content (dev mode) and return True.
-        Returns True on success, False on failure.
+
+        Returns a typed result so disabled/unconfigured delivery can never be
+        reported as success. Message content is not logged when delivery is
+        unavailable.
         """
         if not to:
             logger.warning("send_email called with empty recipient list — skipping")
-            return False
+            return EmailDeliveryResult.INVALID_RECIPIENT
 
-        if not settings.EMAIL_ENABLED:
-            logger.info(
-                "EMAIL_ENABLED=False (dev mode) — would send email:\n"
-                "  To: %s\n  Subject: %s\n  Body (first 300 chars): %.300s",
-                ", ".join(to),
-                subject,
-                text_body or html_body,
+        configuration_status = self.configuration_status()
+        if configuration_status is not None:
+            logger.warning(
+                "Email delivery unavailable (status=%s, recipients=%d)",
+                configuration_status.value,
+                len(to),
             )
-            return True
+            return configuration_status
 
         try:
             msg = MIMEMultipart("alternative")
@@ -388,19 +466,20 @@ class EmailService:
                 use_tls=False,  # STARTTLS on port 587
                 start_tls=settings.EMAIL_PORT == 587,
             )
-            logger.info("Email sent to %s — Subject: %s", ", ".join(to), subject)
-            return True
+            logger.info("Email sent successfully (recipients=%d)", len(to))
+            return EmailDeliveryResult.SENT
 
         except Exception as exc:
             logger.error(
-                "Failed to send email to %s (subject=%s): %s",
-                ", ".join(to),
-                subject,
-                exc,
+                "Email provider rejected delivery (recipients=%d, error_type=%s)",
+                len(to),
+                type(exc).__name__,
             )
-            return False
+            return EmailDeliveryResult.FAILED
 
-    async def send_renewal_alert(self, recipient: str, alerts: List[dict]) -> bool:
+    async def send_renewal_alert(
+        self, recipient: str, alerts: List[dict]
+    ) -> EmailDeliveryResult:
         """
         Send a renewal alert email with a table of upcoming renewals.
 
@@ -409,7 +488,7 @@ class EmailService:
         """
         if not alerts:
             logger.info("send_renewal_alert: no alerts to send to %s", recipient)
-            return True
+            return EmailDeliveryResult.NOT_REQUIRED
 
         subject = f"Clarity Legal — {len(alerts)} Contract Renewal Alert(s)"
         html_body = _build_renewal_alert_html(alerts)
@@ -419,7 +498,7 @@ class EmailService:
 
     async def send_agent_digest(
         self, recipient: str, agent_name: str, digest_html: str
-    ) -> bool:
+    ) -> EmailDeliveryResult:
         """
         Send an agent digest email.
         digest_html may be markdown text — it will be rendered to HTML.
@@ -439,7 +518,7 @@ class EmailService:
         by_type: dict,
         upcoming_deadlines: List[dict],
         stale_matters: List[dict],
-    ) -> bool:
+    ) -> EmailDeliveryResult:
         """Send weekly OC portfolio status email."""
         subject = f"Clarity Legal — Weekly Portfolio Status: {tenant_name}"
         html_body = _build_oc_status_html(
@@ -466,7 +545,7 @@ class EmailService:
         due_date: str,
         matter_name: Optional[str] = None,
         assignee_name: Optional[str] = None,
-    ) -> bool:
+    ) -> EmailDeliveryResult:
         """Send a task due date reminder email."""
         subject = f"Reminder: '{task_title}' is due {due_date}"
 
@@ -536,7 +615,7 @@ class EmailService:
         source: Optional[str] = None,
         assigner_note: Optional[str] = None,
         task_url: Optional[str] = None,
-    ) -> bool:
+    ) -> EmailDeliveryResult:
         """Send an immediate alert when a task is assigned."""
         subject = f"New task assigned: {task_title}"
         now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
@@ -665,7 +744,9 @@ class EmailService:
 email_service = EmailService()
 
 
-async def send_portal_invite(to_email: str, case_name: str, invite_url: str) -> bool:
+async def send_portal_invite(
+    to_email: str, case_name: str, invite_url: str
+) -> EmailDeliveryResult:
     """Email a mediation-portal invite link to a party (client or opposing)."""
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     content = f"""
@@ -706,7 +787,7 @@ async def send_portal_invite(to_email: str, case_name: str, invite_url: str) -> 
 
 async def send_client_portal_invite(
     to_email: str, matter_name: str, invite_url: str
-) -> bool:
+) -> EmailDeliveryResult:
     """Email a client-portal invite link to a firm client for a matter."""
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     content = f"""

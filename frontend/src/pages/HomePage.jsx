@@ -125,8 +125,10 @@ function Pill({ label, classes }) {
 export default function HomePage() {
   const navigate = useNavigate()
   const goLogin = () => navigate('/login')
-  const startIntake = () => navigate('/signup?plan=intake-only')
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const intakeStartUrl = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
+    ? '/signup?plan=intake-only'
+    : contactUrl
   const scrollTo = (id) => (e) => {
     e.preventDefault()
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -160,9 +162,12 @@ export default function HomePage() {
             <button onClick={goLogin} className="text-[14px] font-sans font-semibold text-brand-ink hover:text-brand-accent-2 transition-colors">
               Sign in
             </button>
-            <button onClick={startIntake} className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
+            <a href={intakeStartUrl} className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
               Start with Call Intake
-            </button>
+            </a>
+            <a href={intakeStartUrl} className="inline-flex sm:hidden items-center px-3 py-2 bg-brand-ink text-white text-[13px] font-sans font-semibold rounded-xl">
+              Call Intake
+            </a>
           </div>
         </div>
       </header>
@@ -186,9 +191,9 @@ export default function HomePage() {
               mobile, desktop, and the web.
             </p>
             <div className="flex flex-wrap items-center gap-3 mt-8">
-              <button onClick={startIntake} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
+              <a href={intakeStartUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
                 Start with Call Intake <ArrowRight size={18} />
-              </button>
+              </a>
               <a href="#features" onClick={scrollTo('features')} className="inline-flex items-center gap-2 px-6 py-3.5 bg-brand-surface border border-brand-line text-brand-ink font-sans font-semibold rounded-xl hover:border-brand-ink hover:bg-brand-bg-soft transition-all shadow-sm">
                 Tour the platform
               </a>
@@ -524,9 +529,9 @@ export default function HomePage() {
                   the broader workflows their tenant has licensed.
                 </p>
               </div>
-              <button onClick={startIntake} className="w-full mt-7 py-3 rounded-xl font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
-                Create a Call Intake workspace
-              </button>
+              <a href={intakeStartUrl} className="block w-full mt-7 py-3 rounded-xl text-center font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
+                Request a Call Intake workspace
+              </a>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
                 Questions about onboarding or commercial terms?{' '}
                 <a href={contactUrl} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</a>.
@@ -554,11 +559,11 @@ export default function HomePage() {
               broader matter platform when the workflow is right for your firm.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
-              <button onClick={startIntake} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-xl hover:bg-brand-bg transition-all shadow-sm">
+              <a href={intakeStartUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-xl hover:bg-brand-bg transition-all shadow-sm">
                 Start with Call Intake <ArrowRight size={18} />
-              </button>
+              </a>
               <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
-                Book a 20-min walkthrough
+                Request a 20-min walkthrough
               </a>
             </div>
           </div>

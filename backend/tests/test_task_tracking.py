@@ -4,12 +4,13 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
 from app.models.task import Task
 from app.models.user import User
+from app.services import email as email_module
 
 
 async def _make_contact(db_session, test_tenant, test_user):
@@ -253,3 +254,43 @@ async def test_task_without_contact_writes_no_history(
         db_session, test_tenant.id, f"task:{resp.json()['id']}:assigned"
     )
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_email_preserves_task_assignment_as_durable_work(
+    client, db_session, test_tenant, monkeypatch
+):
+    assignee = await _make_assignee(db_session, test_tenant)
+    monkeypatch.setattr(email_module.settings, "EMAIL_ENABLED", False)
+
+    resp = await client.post(
+        "/api/tasks",
+        json={
+            "title": "Assignment must notify",
+            "assigned_to_user_id": str(assignee.id),
+        },
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["assigned_to_user_id"] == str(assignee.id)
+    assert await db_session.scalar(select(func.count()).select_from(Task)) == 1
+
+
+@pytest.mark.asyncio
+async def test_disabled_email_maps_manual_reminder_to_503(
+    client, db_session, test_tenant, monkeypatch
+):
+    assignee = await _make_assignee(db_session, test_tenant)
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Call the client",
+        assigned_to_user_id=assignee.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+    monkeypatch.setattr(email_module.settings, "EMAIL_ENABLED", False)
+
+    resp = await client.post(f"/api/tasks/{task.id}/remind")
+
+    assert resp.status_code == 503
+    assert "outbound email is unavailable" in resp.json()["detail"]

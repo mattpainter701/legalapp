@@ -29,7 +29,11 @@ MODULES: dict[str, Module] = {
     "billing": Module("billing", "/billing", ("/api/billing",)),
     "trust": Module("trust", "/trust", ("/api/trust",)),
     "reports": Module("reports", "/reports", ("/api/reports",)),
-    "plugins": Module("plugins", "/plugins"),
+    # Every plugin surface, including the specialized estate/domestic/mediation
+    # routers and the dynamic LLM skill endpoint, is mounted below
+    # ``/api/plugins``.  Keep that whole namespace behind the plan claim; a
+    # hidden navigation item is not an authorization boundary.
+    "plugins": Module("plugins", "/plugins", ("/api/plugins",)),
     "admin": Module("admin", "/admin"),
     "mcp": Module("mcp", "/mcp", ("/api/mcp",)),
     "onboarding": Module("onboarding", "/onboarding"),

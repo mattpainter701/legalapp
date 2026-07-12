@@ -24,7 +24,7 @@ from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
 from app.models.task import Task
 from app.models.user import User
-from app.services.email import email_service
+from app.services.email import email_delivery_http_error, email_service
 from app.services.task_history import record_customer_contact, record_task_event
 from app.services.task_notifications import (
     notify_task_created,
@@ -260,7 +260,9 @@ async def create_task(
     await db.commit()
     await db.refresh(task)
 
-    # Fire-and-forget: push calendars and alert assignee.
+    # The task is the durable source of truth. Email is a best-effort alert and
+    # its typed result is logged by the sender; an SMTP outage must not discard
+    # the receptionist's or attorney's work.
     await notify_task_created(db, task, tenant_id, assignment_note)
 
     return TaskResponse.model_validate(task)
@@ -628,7 +630,7 @@ async def update_task(
         task,
         tenant_id,
         calendar_changed=calendar_changed,
-        assignment_changed=assignment_changed,
+        assignment_changed=reassigned,
         previous_calendar_user_id=previous_calendar_user_id,
         assignment_note=assignment_note,
     )
@@ -704,6 +706,10 @@ async def send_task_reminder(
     )
 
     if not sent:
-        raise HTTPException(status_code=502, detail="Failed to send reminder email")
+        status_code, detail = email_delivery_http_error(
+            sent,
+            action="Task reminder",
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
 
     return {"sent": True, "to": assignee.email}

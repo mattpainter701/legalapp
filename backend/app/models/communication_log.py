@@ -52,7 +52,7 @@ class CommunicationLog(Base):
     channel: Mapped[str] = mapped_column(
         String(30), default="email", server_default="email"
     )
-    # "logged" | "draft" | "sent" | "received"
+    # "logged" | "draft" | "sent" | "received" | "failed"
     status: Mapped[str] = mapped_column(
         String(30), default="logged", server_default="logged"
     )

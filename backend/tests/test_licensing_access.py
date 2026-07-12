@@ -15,7 +15,12 @@ from app.models.user import User
 settings = get_settings()
 
 
-async def _client_for(db_session: AsyncSession, user: User, billing_tier: str = "flat"):
+async def _client_for(
+    db_session: AsyncSession,
+    user: User,
+    billing_tier: str = "flat",
+    plan: str | None = None,
+):
     payload = {
         "sub": str(user.id),
         "tenant_id": str(user.tenant_id),
@@ -24,6 +29,8 @@ async def _client_for(db_session: AsyncSession, user: User, billing_tier: str = 
         "billing_tier": billing_tier,
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
     }
+    if plan is not None:
+        payload["plan"] = plan
     token = jose_jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     async def override_get_db():
@@ -60,6 +67,50 @@ async def test_unlicensed_user_gets_basic_addon_portal_only(db_session, test_ten
     assert body["license_active"] is False
     assert body["enabled_modules"] == ["plugins"]
     assert body["default_route"] == "/plugins"
+
+
+@pytest.mark.asyncio
+async def test_unlicensed_intake_user_can_read_only_addon_catalog(
+    db_session, test_tenant
+):
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="unlicensed-intake@testfirm.com",
+        full_name="Unlicensed Intake User",
+        role="user",
+        is_active=True,
+        license_active=False,
+    )
+    settings_row = TenantSettings(
+        tenant_id=test_tenant.id,
+        custom_config={"plan": "intake-only"},
+    )
+    db_session.add_all([user, settings_row])
+    await db_session.commit()
+
+    async with await _client_for(
+        db_session,
+        user,
+        test_tenant.billing_tier,
+        plan="intake-only",
+    ) as client:
+        me_response = await client.get("/api/auth/me")
+        catalog_response = await client.get("/api/plugins")
+        nested_response = await client.get("/api/plugins/trust-estate/estates")
+        execution_response = await client.post(
+            "/api/plugins/commercial-legal/nda-review",
+            json={"skill": "nda-review", "input_text": "Confidential agreement"},
+        )
+
+    app.dependency_overrides.clear()
+    assert me_response.status_code == 200
+    assert me_response.json()["enabled_modules"] == ["plugins"]
+    assert me_response.json()["default_route"] == "/plugins"
+    assert catalog_response.status_code == 200
+    assert catalog_response.json()["plugins"]
+    assert nested_response.status_code == 403
+    assert execution_response.status_code == 403
 
 
 @pytest.mark.asyncio

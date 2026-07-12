@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 from app.models.user import User
+from app.services import email as email_module
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -103,14 +104,17 @@ async def test_case_crud_and_sessions(client):
     assert resp.status_code == 404
 
 
-async def test_parties_and_invite_creates_client_user(client, db_session):
+async def test_parties_and_invite_creates_client_user(client, db_session, monkeypatch):
     case = await _make_case(client)
     case_id = case["id"]
     party = await _add_party(
         client, case_id, "our_client", "Jane Doe", "jane@example.com"
     )
 
-    # Inviting a firm client provisions a role="client" User and returns a link.
+    monkeypatch.setattr(email_module.settings, "EMAIL_ENABLED", False)
+
+    # Inviting a firm client provisions a role="client" User and returns a link,
+    # while reporting that disabled email did not deliver it.
     resp = await client.post(
         f"/api/plugins/mediation/cases/{case_id}/parties/{party['id']}/invite"
     )
@@ -118,6 +122,8 @@ async def test_parties_and_invite_creates_client_user(client, db_session):
     invite = resp.json()
     assert invite["kind"] == "client_account"
     assert "/portal/accept?token=" in invite["invite_url"]
+    assert invite["email_sent"] is False
+    assert "outbound email is unavailable" in invite["delivery_error"]
 
     result = await db_session.execute(
         User.__table__.select().where(User.email == "jane@example.com")

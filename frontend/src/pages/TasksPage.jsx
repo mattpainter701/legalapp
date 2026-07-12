@@ -274,7 +274,7 @@ function CreateTaskModal({ onClose, onCreate }) {
             {assignee && (
               <p className="text-xs text-brand-muted mt-1">
                 Assigning to <span className="font-semibold text-brand-ink">{assignee.full_name || assignee.email}</span>
-                {' — '}they get an email alert.
+                {' — '}an email alert is attempted when outbound email is configured.
                 <button type="button" onClick={() => setAssignee(null)} className="ml-2 text-brand-rose hover:underline">Clear</button>
               </p>
             )}
@@ -1012,14 +1012,14 @@ function TaskRow({
             <button
               onClick={() => onReassign(task)}
               title="Reassign this task to another staff member"
-              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-accent hover:text-brand-accent transition-all"
+              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-accent hover:text-brand-accent transition-all"
             >
               Reassign
             </button>
             <button
               onClick={() => onCloseTask(task)}
               title="Close this task with a reason"
-              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-ink hover:text-brand-ink transition-all"
+              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus:opacity-100 text-[11px] font-semibold text-brand-muted border border-brand-line rounded px-2 py-1 hover:border-brand-ink hover:text-brand-ink transition-all"
             >
               Close
             </button>
@@ -1035,7 +1035,7 @@ function TaskRow({
             disabled={reminding || task.status === 'completed'}
             title="Send reminder email"
             aria-label={`Send reminder for ${task.title}`}
-            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-accent transition-all disabled:opacity-30"
+            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-accent transition-all disabled:opacity-30"
           >
             <Bell size={13} />
           </button>
@@ -1065,7 +1065,7 @@ function TaskRow({
           <button
             onClick={() => onDeleteRequest(task.id)}
             aria-label={`Delete task: ${task.title}`}
-            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
+            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus:opacity-100 text-brand-muted hover:text-brand-rose transition-all"
           >
             <Trash2 size={13} />
           </button>

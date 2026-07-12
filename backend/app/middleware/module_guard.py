@@ -16,11 +16,22 @@ from app.services.plans import DEFAULT_PLAN_ID, MODULES, get_plan
 settings = get_settings()
 
 # Module-scoped API prefixes. Anything not listed (auth, me, users,
-# notifications, intake, admin, plugins listing, health, portal) is shared
-# infrastructure and passes. New module routers MUST be added here.
+# notifications, health, portal) is shared infrastructure and passes. New
+# module routers MUST be added here.
 API_MODULE_MAP = {
     prefix: module.id for module in MODULES.values() for prefix in module.api_prefixes
 }
+
+
+def _is_read_only_plugin_catalog(request) -> bool:
+    """Allow the add-on catalog/upgrade surface without granting plugin APIs.
+
+    Unlicensed users are deliberately routed to ``/plugins`` as their basic
+    portal.  That page needs exactly the catalog GET; every nested read,
+    execution, setup, entitlement, and mutation endpoint remains plan-gated.
+    """
+
+    return request.method == "GET" and request.url.path.rstrip("/") == "/api/plugins"
 
 
 def _required_module(path: str) -> str | None:
@@ -32,6 +43,9 @@ def _required_module(path: str) -> str | None:
 
 class ModuleGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        if _is_read_only_plugin_catalog(request):
+            return await call_next(request)
+
         module = _required_module(request.url.path)
         if module is None:
             return await call_next(request)

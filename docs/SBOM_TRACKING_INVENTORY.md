@@ -125,9 +125,9 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |base|backend/Dockerfile|15|no|yes|
 |base|backend/Dockerfile|21|no|yes|
 |node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|1|yes|no|
-|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|14|yes|no|
+|node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293|frontend/Dockerfile|16|yes|no|
 |nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa|nginx/Dockerfile|1|yes|no|
-|docker.litellm.ai/berriai/litellm:main-v1.72.6-stable@sha256:2c3f50ed1ea59ec9e175711c808c3bf15f023643fe50fb1ba1d0f9dc827a356d|litellm/Dockerfile|1|yes|no|
+|docker.litellm.ai/berriai/litellm:main-latest@sha256:60f548df23a82b7f83444e2f01d2ccafe00f9f5808c4110a32e397083d09fb17|litellm/Dockerfile|3|yes|no|
 |python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf|mcp-server/Dockerfile|1|yes|no|
 
 ## Compose/runtime images
@@ -137,13 +137,17 @@ This inventory gathers the repository inputs that need SBOM, AI BOM, DLP, vulner
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.yml|3|yes|
 |redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99|docker-compose.yml|17|yes|
 |postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777|docker-compose.yml|27|yes|
-|legalapp-litellm:main-v1.72.6|docker-compose.yml|44|no|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|44|no|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|56|no|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.yml|72|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|27|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.local.yml|44|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.hypervisor.yml|3|yes|
-|redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99|docker-compose.hypervisor.yml|20|yes|
-|postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777|docker-compose.hypervisor.yml|34|yes|
-|legalapp-litellm:main-v1.72.6|docker-compose.hypervisor.yml|51|no|
+|redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99|docker-compose.hypervisor.yml|21|yes|
+|postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777|docker-compose.hypervisor.yml|36|yes|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|53|no|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|65|no|
+|legalapp-litellm:${APP_COMMIT:-dev}|docker-compose.hypervisor.yml|81|no|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|24|yes|
 |pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb|docker-compose.override.yml|33|yes|
 

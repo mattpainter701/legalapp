@@ -20,8 +20,16 @@ LE_DIR="$SCRIPT_DIR/letsencrypt"
 WEBROOT_DIR="$SCRIPT_DIR/webroot"
 
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
-COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}"
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+[[ "$ENV_FILE" == /* ]] || ENV_FILE="$REPO_ROOT/$ENV_FILE"
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}}"
+read -r -a COMPOSE_FILE_LIST <<< "$COMPOSE_FILES"
+(( ${#COMPOSE_FILE_LIST[@]} > 0 )) || { echo "ERROR: no Compose files configured" >&2; exit 1; }
+COMPOSE=(docker compose --env-file "$ENV_FILE")
+for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
+    [[ "$compose_file" == /* ]] || compose_file="$REPO_ROOT/$compose_file"
+    [[ -f "$compose_file" ]] || { echo "ERROR: Compose file not found: $compose_file" >&2; exit 1; }
+    COMPOSE+=( -f "$compose_file" )
+done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 

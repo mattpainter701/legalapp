@@ -15,7 +15,7 @@ from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.user import User
 from app.services import google_calendar, microsoft_calendar
-from app.services.email import email_service
+from app.services.email import EmailDeliveryResult, email_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -187,10 +187,10 @@ def remove_task_from_calendars(
 
 async def send_task_assignment_alert(
     db: AsyncSession, task: Task, assignment_note: str | None = None
-) -> bool:
+) -> EmailDeliveryResult | bool:
     """Send an immediate email alert when a task is assigned to a user."""
     if not task.assigned_to_user_id:
-        return False
+        return EmailDeliveryResult.NOT_REQUIRED
     assignee = (
         await db.execute(
             select(User).where(
@@ -201,7 +201,7 @@ async def send_task_assignment_alert(
     ).scalar_one_or_none()
     if not assignee or not assignee.email:
         logger.info("Task %s assignment alert skipped: assignee has no email", task.id)
-        return False
+        return EmailDeliveryResult.INVALID_RECIPIENT
     creator = None
     if task.created_by_user_id:
         creator = (
@@ -256,7 +256,7 @@ async def notify_task_created(
     task: Task,
     tenant_id: str,
     assignment_note: str | None = None,
-) -> bool:
+) -> EmailDeliveryResult | bool:
     """Notify external systems and assignee after a new task is created."""
     creator, contact, _matter = await _load_task_context(db, task)
     push_task_to_calendars(
@@ -268,7 +268,7 @@ async def notify_task_created(
     )
     if task.assigned_to_user_id:
         return await send_task_assignment_alert(db, task, assignment_note)
-    return False
+    return EmailDeliveryResult.NOT_REQUIRED
 
 
 async def notify_task_updated(
@@ -280,7 +280,7 @@ async def notify_task_updated(
     assignment_changed: bool,
     previous_calendar_user_id: str | None = None,
     assignment_note: str | None = None,
-) -> None:
+) -> EmailDeliveryResult | bool:
     """Notify external systems after a task update."""
     if calendar_changed:
         if assignment_changed and previous_calendar_user_id:
@@ -295,4 +295,4 @@ async def notify_task_updated(
             push_task_to_calendars(task, tenant_id)
     if assignment_changed and task.assigned_to_user_id:
         return await send_task_assignment_alert(db, task, assignment_note)
-    return False
+    return EmailDeliveryResult.NOT_REQUIRED

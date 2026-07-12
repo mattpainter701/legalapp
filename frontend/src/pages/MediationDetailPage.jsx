@@ -190,7 +190,34 @@ export default function MediationDetailPage() {
       label: 'Invite', icon: Send,
       onClick: async (row) => {
         if (!await confirmAction({ title: 'Send portal invitation?', message: `Send an invitation to ${row.name}?`, confirmLabel: 'Send invitation' })) return
-        try { await inviteMediationParty(id, row.id); toast.success('Portal invitation sent'); loadCase() } catch (error) { toast.error('Invitation was not sent', { message: error?.response?.data?.detail || 'Please try again.' }) }
+        try {
+          const result = await inviteMediationParty(id, row.id)
+          if (result.email_sent === true) {
+            toast.success('Portal invitation sent')
+          } else {
+            const copyInviteLink = () => {
+              if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(result.invite_url)
+              const copyTarget = document.createElement('textarea')
+              copyTarget.value = result.invite_url
+              copyTarget.setAttribute('readonly', '')
+              copyTarget.style.position = 'fixed'
+              copyTarget.style.opacity = '0'
+              document.body.appendChild(copyTarget)
+              copyTarget.select()
+              document.execCommand('copy')
+              copyTarget.remove()
+            }
+            toast.error('Invitation created, email not sent', {
+              message: result.delivery_error || 'Copy and share the invite link manually.',
+              actionLabel: 'Copy invite link',
+              onAction: copyInviteLink,
+              persistent: true,
+            })
+          }
+          loadCase()
+        } catch (error) {
+          toast.error('Invitation was not created', { message: error?.response?.data?.detail || 'Please try again.' })
+        }
       },
       condition: (row) => row.email && !row.invited,
     }],

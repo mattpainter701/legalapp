@@ -6,6 +6,7 @@ import { ConfirmProvider } from './components/dialog/ConfirmProvider'
 import FormLabelAssociator from './components/accessibility/FormLabelAssociator'
 import SeoHead from './components/SeoHead'
 import VersionBadge from './components/VersionBadge'
+import AppErrorBoundary from './components/AppErrorBoundary'
 import { getMe } from './api'
 import { canAccessModuleList } from './moduleAccess'
 
@@ -161,13 +162,7 @@ function ShellRoute({ children, title, adminOnly = false, financeOnly = false, m
 function RootRedirect() {
   const { user, loading } = useAuth()
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-brand-bg">
-        <div className="text-brand-ink text-lg font-serif">Loading...</div>
-      </div>
-    )
-  }
+  if (loading) return <HomePage />
 
   return user ? <Navigate to={user.default_route || '/matters'} replace /> : <HomePage />
 }
@@ -189,6 +184,7 @@ function LegacyBillingRedirect() {
 
 export default function App() {
   return (
+    <AppErrorBoundary>
     <AuthProvider>
       <SeoHead />
       <ToastProvider>
@@ -371,5 +367,6 @@ export default function App() {
         </ConfirmProvider>
       </ToastProvider>
     </AuthProvider>
+    </AppErrorBoundary>
   )
 }

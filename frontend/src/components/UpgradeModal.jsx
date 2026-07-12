@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { X, Sparkles, Check } from 'lucide-react'
 import { requestPlanUpgrade } from '../api'
 
@@ -13,6 +13,52 @@ const FULL_PLATFORM_FEATURES = [
 export default function UpgradeModal({ open, onClose }) {
   const [note, setNote] = useState('')
   const [status, setStatus] = useState('idle') // idle | sending | sent | error
+  const dialogRef = useRef(null)
+  const closeRef = useRef(null)
+  const previousFocusRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    closeRef.current?.focus()
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current?.()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = Array.from(dialogRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ) || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previousFocusRef.current?.focus()
+    }
+  }, [open])
 
   if (!open) return null
 
@@ -29,20 +75,25 @@ export default function UpgradeModal({ open, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upgrade-dialog-title"
+        aria-describedby="upgrade-dialog-description"
         className="w-full max-w-md rounded-3xl border border-brand-line bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-brand-accent" />
-            <h2 className="font-serif text-lg font-bold text-brand-ink">Upgrade to the full platform</h2>
+            <h2 id="upgrade-dialog-title" className="font-serif text-lg font-bold text-brand-ink">Upgrade to the full platform</h2>
           </div>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink" aria-label="Close">
+          <button ref={closeRef} type="button" onClick={onClose} className="text-brand-muted hover:text-brand-ink" aria-label="Close upgrade dialog">
             <X size={18} />
           </button>
         </div>
 
-        <p className="mt-2 text-sm text-brand-muted">
+        <p id="upgrade-dialog-description" className="mt-2 text-sm text-brand-muted">
           Your plan includes Call Intake. Unlock the full practice-management suite:
         </p>
         <ul className="mt-3 space-y-1.5">

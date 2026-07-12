@@ -7,10 +7,13 @@ from app.database import get_db
 from app.main import app
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
+from app.routers import auth as auth_router
 
 
 @pytest_asyncio.fixture
-async def public_client(db_session):
+async def public_client(db_session, monkeypatch):
+    monkeypatch.setattr(auth_router.settings, "PUBLIC_SIGNUP_ENABLED", True)
+
     async def override_get_db():
         yield db_session
 
@@ -90,3 +93,41 @@ async def test_signup_rejects_non_public_plan(public_client):
         },
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_launch_mode_rejects_public_email_and_oauth_signup(
+    public_client, db_session, monkeypatch
+):
+    monkeypatch.setattr(auth_router.settings, "PUBLIC_SIGNUP_ENABLED", False)
+
+    plan_response = await public_client.post(
+        "/api/auth/signup/plan",
+        json={
+            "plan": "intake-only",
+            "firm_name": "Unapproved Firm",
+            "email": "owner@unapproved.example",
+            "password": "longenoughpw123",
+            "full_name": "Unapproved Owner",
+        },
+    )
+    register_response = await public_client.post(
+        "/api/auth/register",
+        json={
+            "email": "owner2@unapproved.example",
+            "password": "longenoughpw123",
+            "full_name": "Unapproved Owner Two",
+            "company_name": "Unapproved Firm Two",
+        },
+    )
+    oauth_response = await public_client.get("/api/auth/google/login?signup=true")
+
+    assert plan_response.status_code == 403
+    assert register_response.status_code == 403
+    assert oauth_response.status_code == 403
+    assert "request access" in plan_response.json()["detail"].lower()
+    assert (
+        await db_session.execute(
+            select(User).where(User.email.like("%@unapproved.example"))
+        )
+    ).scalars().all() == []

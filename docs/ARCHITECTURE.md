@@ -36,6 +36,10 @@ The production Compose invariants are:
 - PostgreSQL, Redis, backend, frontend, LiteLLM, scheduler, and optional
   CourtListener services have no public listener.
 - `migrator` must finish successfully before API or scheduler startup.
+- `litellm-migrator` and the exact-diff `litellm-schema-migrator` must finish
+  before LiteLLM during deployment. A read-only schema guard runs again on
+  every proxy process start, including Docker/host restart recovery; LiteLLM
+  runtime schema mutation remains disabled.
 - API processes set `RUN_SCHEDULER=false`; one scheduler process sets it to
   `true`. PostgreSQL advisory locks remain a duplicate-run backstop.
 - Backend and scheduler use `APP_DATABASE_URL`, which must identify the
@@ -55,9 +59,9 @@ the same nginx-only public boundary.
 | Data | Persistence | Backup requirement |
 |---|---|---|
 | Application PostgreSQL | Named volume on the hypervisor; `/data/legalapp/postgres` bind mount in base+prod | Custom-format `pg_dump`, checksum, count manifest, encrypted off-host Restic snapshot, isolated restore proof |
-| Uploaded and generated files | `./uploads` on the hypervisor; `/data/legalapp/uploads` in base+prod; mounted at `/app/uploads` in the container | Included in the off-host snapshot and compared during restore rehearsal |
+| Uploaded and generated files | Absolute `UPLOADS_HOST_DIR` bind-mounted at `/app/uploads` in either topology; directory root owned by UID/GID 10001 | Immutable tar artifact plus sorted path/size/SHA-256 manifest, encrypted off-host snapshot, and safe extraction/hash verification |
 | Redis | Persistent Compose volume with AOF enabled in production | Operational state only; PostgreSQL remains the durable business record |
-| LiteLLM PostgreSQL | Dedicated volume/bind mount | Back up when gateway spend/config history is a recovery requirement |
+| LiteLLM PostgreSQL | Dedicated volume/bind mount | Custom-format dump, checksum/count manifest, encrypted off-host snapshot, permanent-salt escrow, separately escrowed Restic credentials, and isolated restore proof |
 | CourtListener corpus | Separate Compose volumes | Rebuildable corpus, but operational backup policy depends on ingest cost and local modifications |
 
 This is not a highly available design. One host, one application database, one

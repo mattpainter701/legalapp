@@ -1,5 +1,5 @@
 import React from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TemplatesPage from './TemplatesPage'
@@ -67,6 +67,48 @@ describe('document template workflow', () => {
     expect(screen.queryByRole('button', { name: 'E-Sign Queue' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approvals' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Branding / Settings' })).not.toBeInTheDocument()
+  })
+
+  it('traps create-modal focus, closes on Escape, and restores the trigger', async () => {
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    const trigger = await screen.findByRole('button', { name: 'New Template' })
+    await user.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: 'Create Template' })
+    const title = within(dialog).getByRole('textbox', { name: 'Title' })
+    await waitFor(() => expect(title).toHaveFocus())
+
+    const close = within(dialog).getByRole('button', { name: 'Close' })
+    close.focus()
+    await user.tab({ shift: true })
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toHaveFocus()
+    await user.tab()
+    expect(close).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create Template' })).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('gives delete confirmation alert semantics and complete keyboard behavior', async () => {
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    const trigger = await screen.findByRole('button', { name: 'Delete' })
+    await user.click(trigger)
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete template?' })
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toHaveFocus())
+
+    await user.tab({ shift: true })
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveFocus()
+    await user.tab()
+    expect(cancel).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
   it('analyzes a PDF before creation and sends the original source through multipart upload', async () => {
@@ -217,9 +259,11 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const editDialog = screen.getByRole('dialog', { name: 'Edit Template' })
     expect(screen.queryByRole('textbox', { name: 'Body' })).not.toBeInTheDocument()
     expect(screen.getByText(/PDF layout and field mappings come from the source file/)).toBeInTheDocument()
-    const title = screen.getByRole('textbox', { name: 'Title' })
+    const title = within(editDialog).getByRole('textbox', { name: 'Title' })
+    await waitFor(() => expect(title).toHaveFocus())
     await user.clear(title)
     await user.type(title, 'Verified Court Form')
     await user.click(screen.getByRole('button', { name: 'Update' }))

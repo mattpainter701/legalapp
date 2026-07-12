@@ -2,9 +2,11 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.models.rbac import Role, UserRole
 from app.models.user import User
+from app.services import email as email_module
 
 
 async def _assign_role(db_session, tenant_id, user_id, name, capabilities):
@@ -154,3 +156,31 @@ async def test_invite_rejects_invalid_role(client):
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "role must be 'admin', 'accountant', or 'user'"
+
+
+@pytest.mark.asyncio
+async def test_invite_user_reports_email_failure_but_preserves_inactive_record(
+    client, db_session, test_tenant, monkeypatch
+):
+    monkeypatch.setattr(email_module.settings, "EMAIL_ENABLED", False)
+
+    response = await client.post(
+        "/api/admin/users/invite",
+        json={
+            "email": "new-colleague@testfirm.com",
+            "full_name": "New Colleague",
+            "role": "user",
+        },
+    )
+
+    assert response.status_code == 503
+    assert "outbound email is unavailable" in response.json()["detail"]
+    invited_user = await db_session.scalar(
+        select(User).where(
+            User.tenant_id == test_tenant.id,
+            User.email == "new-colleague@testfirm.com",
+        )
+    )
+    assert invited_user is not None
+    assert invited_user.is_active is False
+    assert invited_user.password_hash.startswith("invite:")

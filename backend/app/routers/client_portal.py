@@ -65,7 +65,11 @@ from app.services.matter_file_store import (
     MatterFileStore,
     MatterFileTooLarge,
 )
-from app.services.email import send_client_portal_invite
+from app.services.email import (
+    EmailDeliveryResult,
+    email_delivery_http_error,
+    send_client_portal_invite,
+)
 from app.services.provider_http import (
     ProviderAuthError,
     ProviderError,
@@ -614,19 +618,24 @@ async def create_portal_invite(
     invite_url = (
         f"{settings.FRONTEND_URL.rstrip('/')}/portal/client/accept?token={raw_token}"
     )
-    email_sent = True
-    delivery_error = None
+    delivery_result = EmailDeliveryResult.FAILED
     try:
-        await send_client_portal_invite(
+        delivery_result = await send_client_portal_invite(
             to_email=email,
             matter_name=matter.matter_name,
             invite_url=invite_url,
         )
     except Exception:  # pragma: no cover - email best-effort
-        email_sent = False
-        delivery_error = (
-            "Email delivery was not confirmed. Copy and share the invite link manually."
+        delivery_result = EmailDeliveryResult.FAILED
+
+    email_sent = bool(delivery_result)
+    delivery_error = None
+    if not email_sent:
+        _status_code, delivery_error = email_delivery_http_error(
+            delivery_result,
+            action="Client portal invitation",
         )
+        delivery_error += " The invite remains valid; copy and share its link manually."
 
     return FirmInviteResponse(
         id=str(invite.id),

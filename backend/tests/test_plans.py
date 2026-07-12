@@ -63,6 +63,12 @@ def test_every_plan_module_has_a_catalog_entry_and_valid_default():
         assert all(module_id in MODULES for module_id in plan.modules)
 
 
+def test_plugin_api_namespace_is_plan_gated():
+    assert MODULES["plugins"].api_prefixes == ("/api/plugins",)
+    assert "plugins" not in get_plan("intake-only").modules
+    assert "plugins" not in get_plan("intake-only").api_dependencies
+
+
 import pytest  # noqa: E402
 
 from app.models.tenant import TenantSettings  # noqa: E402

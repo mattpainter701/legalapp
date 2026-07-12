@@ -35,9 +35,16 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
+      PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
+      EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in .env}
+      EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in .env}
+      EMAIL_USER: ${EMAIL_USER:-}
+      EMAIL_PASS: ${EMAIL_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
       RUN_SCHEDULER: "false"
     volumes:
-      - /data/legalapp/uploads:/app/uploads   # host-mounted encrypted volume
+      - ${UPLOADS_HOST_DIR:?Set an absolute UPLOADS_HOST_DIR in .env}:/app/uploads
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000
       --workers 4 --log-level info
@@ -59,6 +66,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      litellm:
+        condition: service_healthy
       migrator:
         condition: service_completed_successfully
     env_file: ${APP_ENV_FILE:-.env}
@@ -69,12 +78,25 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-}
       MCP_UPSTREAM_API_KEY: ${MCP_UPSTREAM_API_KEY:-}
       MCP_PRODUCT_ENABLED: ${MCP_PRODUCT_ENABLED:-false}
+      PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
+      EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in .env}
+      EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in .env}
+      EMAIL_USER: ${EMAIL_USER:-}
+      EMAIL_PASS: ${EMAIL_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
       RUN_SCHEDULER: "true"
     volumes:
-      - /data/legalapp/uploads:/app/uploads
+      - ${UPLOADS_HOST_DIR:?Set an absolute UPLOADS_HOST_DIR in .env}:/app/uploads
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000
       --workers 1 --log-level info
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -84,6 +106,8 @@ services:
   litellm:
     restart: unless-stopped
     environment:
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?Set LITELLM_API_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set the permanent LITELLM_SALT_KEY in .env}
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
       STORE_MODEL_IN_DB: "True"
     deploy:
@@ -111,6 +135,7 @@ services:
       args:
         VITE_PUBLIC_SITE_URL: https://${DOMAIN}
         VITE_CONTACT_URL: ${VITE_CONTACT_URL:?Set VITE_CONTACT_URL in .env}
+        VITE_PUBLIC_SIGNUP_ENABLED: ${VITE_PUBLIC_SIGNUP_ENABLED:-false}
     restart: unless-stopped
     environment:
       - VITE_API_URL=/api

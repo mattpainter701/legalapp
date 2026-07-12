@@ -1,0 +1,19 @@
+[Unit]
+Description=LegalApp encrypted off-host backup
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=legalapp-backup-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@LEGALAPP_ROOT@
+Environment="ENV_FILE=@ENV_FILE@"
+Environment="COMPOSE_FILES=@COMPOSE_FILES@"
+Environment="OFFSITE_BACKUP_REQUIRED=true"
+Environment="PRUNE_OLD_BACKUPS=false"
+Environment="PATH=@EXEC_PATH@"
+UMask=0077
+ExecStart=@BASH_BIN@ @LEGALAPP_ROOT@/scripts/backup_db.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

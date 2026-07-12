@@ -23,7 +23,7 @@ from app.models.retainer import Retainer, RetainerTransaction
 from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
-from app.services.email import EmailService
+from app.services.email import EmailService, email_delivery_http_error
 from app.services.cloud_init import (
     ROOT_FOLDER_NAME,
     initialize_cloud_root_folder,
@@ -2103,7 +2103,7 @@ async def email_matter_client(
         tenant_id=user.tenant_id,
         direction="outbound",
         channel="email",
-        status="sent" if sent else "logged",
+        status="sent" if sent else "failed",
         subject=subject,
         body=email_body,
         matter_id=matter.id,
@@ -2114,9 +2114,16 @@ async def email_matter_client(
     await db.commit()
     await db.refresh(log)
 
+    if not sent:
+        status_code, detail = email_delivery_http_error(sent, action="Client email")
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"{detail} The failed outbound attempt was recorded on the matter.",
+        )
+
     return {
         "id": str(log.id),
-        "sent": sent,
+        "sent": bool(sent),
         "to": to_email,
         "subject": subject,
         "matter_id": str(matter.id),

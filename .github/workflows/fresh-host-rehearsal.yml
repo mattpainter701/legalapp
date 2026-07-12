@@ -10,7 +10,13 @@ jobs:
   rehearse:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        topology: [hypervisor, base-prod]
     steps:
       - uses: actions/checkout@v4
       - name: Build and prove a clean isolated deployment
+        env:
+          FRESH_HOST_TOPOLOGY: ${{ matrix.topology }}
         run: bash scripts/rehearse_fresh_host.sh

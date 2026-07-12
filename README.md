@@ -75,7 +75,11 @@ The detailed trust boundaries and data flows are in
 
 Yes, as a **single-host first-customer deployment** on an x86-64 Linux VPS with
 Docker Engine, Compose v2, persistent SSD storage, a static public address, DNS,
-and inbound TCP 80/443 only. Use the base plus production topology:
+and inbound TCP 80/443 only. The checked-in service limits total roughly 17.5
+GiB of memory and 9 vCPU; provision at least a 32 GiB RAM / 8 vCPU instance for
+the current single-host topology and verify sustained headroom before adding
+customers. Smaller Lightsail plans are not a supported production target. Use
+the base plus production topology:
 
 ```bash
 COMPOSE_FILES="docker-compose.yml docker-compose.prod.yml" \

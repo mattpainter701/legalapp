@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
@@ -62,6 +62,62 @@ export default function Sidebar({
   const { pathname } = useLocation()
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const isLimited = Boolean(user?.upsell_target)
+  const panelRef = useRef(null)
+  const closeRef = useRef(null)
+  const previousFocusRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+  const upgradeOpenRef = useRef(upgradeOpen)
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia?.('(max-width: 767px)').matches || false)
+  upgradeOpenRef.current = upgradeOpen
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 767px)')
+    const update = () => setIsMobile(Boolean(media?.matches))
+    update()
+    media?.addEventListener?.('change', update)
+    return () => media?.removeEventListener?.('change', update)
+  }, [])
+
+  useEffect(() => {
+    if (!isMobile || !isOpen) return undefined
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    queueMicrotask(() => closeRef.current?.focus())
+
+    const handleKeyDown = (event) => {
+      // UpgradeModal owns focus and Escape while it is layered over the drawer.
+      if (upgradeOpenRef.current) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current?.()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(panelRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      ) || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      queueMicrotask(() => previousFocusRef.current?.focus())
+    }
+  }, [isMobile, isOpen])
+
 
   const isActive = (path) => {
     if (path === '/intake') return pathname === '/intake'
@@ -97,7 +153,13 @@ export default function Sidebar({
       />
 
       {/* Sidebar panel */}
-      <div className={`
+      <div
+        ref={panelRef}
+        role={isMobile && isOpen && !upgradeOpen ? 'dialog' : undefined}
+        aria-modal={isMobile && isOpen && !upgradeOpen ? 'true' : undefined}
+        aria-label={isMobile && isOpen && !upgradeOpen ? 'Workspace navigation' : undefined}
+        {...(isMobile && (!isOpen || upgradeOpen) ? { inert: '', 'aria-hidden': true } : {})}
+        className={`
         fixed md:relative inset-y-0 left-0 z-40
         w-[300px] flex-shrink-0 border-r border-brand-line flex flex-col h-full bg-brand-surface-2
         transition-transform duration-300 ease-in-out
@@ -109,6 +171,7 @@ export default function Sidebar({
           <span className="font-serif font-semibold text-lg tracking-tight text-brand-ink flex-1">Clarity Legal</span>
           <button
             className="md:hidden p-1.5 text-brand-muted hover:text-brand-ink transition-colors tap-target"
+            ref={closeRef}
             onClick={onClose}
             aria-label="Close sidebar"
           >

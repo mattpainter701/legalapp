@@ -56,6 +56,45 @@ async def test_general_plan_blocked_from_specialized_templates(intake_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/api/plugins/trust-estate/estates", None),
+        ("GET", "/api/plugins/domestic/cases", None),
+        ("GET", "/api/plugins/mediation/cases", None),
+        (
+            "POST",
+            "/api/plugins/commercial-legal/nda-review",
+            {"skill": "nda-review", "input_text": "Confidential agreement"},
+        ),
+    ],
+)
+async def test_intake_plan_blocks_every_plugin_api_shape(
+    intake_client, method, path, payload
+):
+    """UI hiding cannot grant intake-only tenants paid plugin APIs."""
+    resp = await intake_client.request(method, path, json=payload)
+
+    assert resp.status_code == 403
+    assert resp.json() == {"detail": "Module not available on your plan"}
+
+
+@pytest.mark.asyncio
+async def test_intake_plan_catalog_read_does_not_grant_plugin_apis(intake_client):
+    catalog = await intake_client.get("/api/plugins")
+    nested_read = await intake_client.get("/api/plugins/trust-estate/estates")
+    execution = await intake_client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Confidential agreement"},
+    )
+
+    assert catalog.status_code == 200
+    assert catalog.json()["plugins"]
+    assert nested_read.status_code == 403
+    assert execution.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_intake_only_allowed_on_intake(intake_client):
     resp = await intake_client.get(
         "/api/intake/dashboard/recent-callers", params={"limit": 10}
@@ -93,3 +132,11 @@ async def test_full_platform_token_not_blocked(client):
     # default conftest token has no plan claim -> full-platform -> allowed
     resp = await client.get("/api/matters")
     assert resp.status_code != 403
+
+
+@pytest.mark.asyncio
+async def test_full_platform_token_keeps_plugin_catalog_access(client):
+    resp = await client.get("/api/plugins")
+
+    assert resp.status_code == 200
+    assert resp.json()["plugins"]

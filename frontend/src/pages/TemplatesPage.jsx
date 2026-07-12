@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
 import {
   getTemplates,
   analyzeTemplateUpload,
@@ -76,14 +76,76 @@ const formatMatterLabel = (matter) => {
   return [name, matter.client_name, matter.practice_area, matter.status].filter(Boolean).join(' - ')
 }
 
+const DIALOG_FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+function useDialogKeyboard({ dialogRef, initialFocusRef, onDismiss }) {
+  const previousFocusRef = useRef(null)
+  const onDismissRef = useRef(onDismiss)
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss
+  }, [onDismiss])
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    const initialRoot = initialFocusRef.current
+    const initialTarget = initialRoot?.matches?.(DIALOG_FOCUSABLE)
+      ? initialRoot
+      : initialRoot?.querySelector?.(DIALOG_FOCUSABLE)
+    ;(initialTarget || dialogRef.current?.querySelector(DIALOG_FOCUSABLE) || dialogRef.current)?.focus()
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onDismissRef.current?.()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = Array.from(dialogRef.current?.querySelectorAll(DIALOG_FOCUSABLE) || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previousFocusRef.current?.focus()
+    }
+  }, [dialogRef, initialFocusRef])
+}
+
 function Modal({ title, children, onClose }) {
+  const titleId = useId()
+  const dialogRef = useRef(null)
+  const bodyRef = useRef(null)
+  useDialogKeyboard({ dialogRef, initialFocusRef: bodyRef, onDismiss: onClose })
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-12">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col"
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-brand-line">
-          <h2 className="text-lg font-semibold text-brand-ink">{title}</h2>
+          <h2 id={titleId} className="text-lg font-semibold text-brand-ink">{title}</h2>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 text-brand-muted hover:text-brand-ink"
             aria-label="Close"
@@ -91,26 +153,44 @@ function Modal({ title, children, onClose }) {
             <X size={20} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+        <div ref={bodyRef} className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
       </div>
     </div>
   )
 }
 
 function ConfirmDialog({ message, onConfirm, onCancel }) {
+  const titleId = useId()
+  const messageId = useId()
+  const dialogRef = useRef(null)
+  const cancelRef = useRef(null)
+  useDialogKeyboard({ dialogRef, initialFocusRef: cancelRef, onDismiss: onCancel })
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
-      <div className="relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
-        <p className="text-brand-ink mb-6">{message}</p>
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} aria-hidden="true" />
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        tabIndex={-1}
+        className="relative bg-brand-surface-2 border border-brand-line rounded-lg shadow-xl p-6 max-w-sm w-full mx-4"
+      >
+        <h2 id={titleId} className="text-lg font-semibold text-brand-ink">Delete template?</h2>
+        <p id={messageId} className="mt-2 text-brand-ink mb-6">{message}</p>
         <div className="flex justify-end gap-3">
           <button
+            ref={cancelRef}
+            type="button"
             onClick={onCancel}
             className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink border border-brand-line rounded"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={onConfirm}
             className="px-4 py-2 text-sm text-white bg-brand-rose hover:bg-red-700 rounded"
           >

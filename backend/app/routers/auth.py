@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from jose import jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -57,6 +57,14 @@ CALENDAR_REQUIRED_SCOPES = {
 
 # OAuth state TTL in seconds
 _STATE_TTL = 600
+
+
+def _require_public_signup_enabled() -> None:
+    if not settings.PUBLIC_SIGNUP_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Public signup is not enabled; request access from the operator",
+        )
 
 
 def _state_key(state: str) -> str:
@@ -389,26 +397,6 @@ def _set_auth_cookies(
 # ── Tenant / user upsert helpers ───────────────────────────────────────────────
 
 
-async def _get_or_create_tenant(
-    db: AsyncSession, domain: str, tenant_name: str
-) -> Tenant:
-    result = await db.execute(select(Tenant).where(Tenant.domain == domain))
-    tenant = result.scalar_one_or_none()
-
-    if tenant is None:
-        tenant = Tenant(
-            id=uuid.uuid4(),
-            name=tenant_name,
-            domain=domain,
-            billing_tier="payg",
-            is_active=True,
-        )
-        db.add(tenant)
-        await db.flush()
-
-    return tenant
-
-
 async def _get_or_create_user(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -433,7 +421,7 @@ async def _get_or_create_user(
         result = await db.execute(
             select(User).where(
                 User.tenant_id == tenant_id,
-                User.email == email,
+                func.lower(User.email) == email.lower(),
             )
         )
         user = result.scalar_one_or_none()
@@ -470,6 +458,156 @@ async def _get_or_create_user(
     return user
 
 
+async def _resolve_existing_oauth_user(
+    db: AsyncSession,
+    *,
+    email: str,
+    provider: str,
+    subject: str,
+    allow_verified_email_match: bool,
+) -> User | None:
+    """Resolve an already-provisioned OAuth identity without guessing a tenant.
+
+    Provider subject is the strongest mapping and therefore wins when it is
+    uniquely linked. Google may additionally use a unique, case-insensitive
+    email after its ``email_verified`` claim has been enforced by the callback.
+    Microsoft email/UPN claims are not an authorization boundary, so Microsoft
+    callers always set ``allow_verified_email_match=False``. Ambiguous mappings
+    fail closed instead of selecting an arbitrary tenant.
+    """
+
+    async def _unique_match(statement, mapping: str) -> User | None:
+        result = await db.execute(statement.limit(2))
+        matches = list(result.scalars().all())
+        if len(matches) > 1:
+            logger.error(
+                "Ambiguous OAuth %s mapping rejected for provider=%s",
+                mapping,
+                provider,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This sign-in identity matches multiple accounts; "
+                    "contact the operator to resolve the account mapping"
+                ),
+            )
+        return matches[0] if matches else None
+
+    if subject:
+        subject_match = await _unique_match(
+            select(User).where(
+                User.oauth_provider == provider,
+                User.oauth_subject == subject,
+            ),
+            "provider-subject",
+        )
+        if subject_match is not None:
+            return subject_match
+
+    if not allow_verified_email_match:
+        return None
+
+    return await _unique_match(
+        select(User).where(func.lower(User.email) == email.lower()),
+        "email",
+    )
+
+
+async def _resolve_oauth_tenant_and_user(
+    db: AsyncSession,
+    *,
+    email: str,
+    full_name: str | None,
+    provider: str,
+    subject: str,
+    domain: str,
+    tenant_name: str,
+    company_name: str | None = None,
+    address: str | None = None,
+    phone: str | None = None,
+    staff_size: int | None = None,
+) -> tuple[Tenant, User, bool]:
+    """Map a verified OAuth identity, provisioning only when explicitly enabled.
+
+    Returns ``(tenant, user, tenant_existed)``.  Existing identities are
+    resolved before any domain-based tenant lookup so login remains functional
+    for synthetic tenant domains, established subject links, and verified
+    Google-email invitees.
+    """
+
+    existing_user = await _resolve_existing_oauth_user(
+        db,
+        email=email,
+        provider=provider,
+        subject=subject,
+        allow_verified_email_match=provider == "google",
+    )
+    if existing_user is not None:
+        tenant_result = await db.execute(
+            select(Tenant).where(Tenant.id == existing_user.tenant_id)
+        )
+        tenant = tenant_result.scalar_one_or_none()
+        if tenant is None:
+            logger.error(
+                "OAuth user references a missing tenant: provider=%s user_id=%s",
+                provider,
+                existing_user.id,
+            )
+            raise HTTPException(status_code=403, detail="Account tenant is unavailable")
+
+        user = await _get_or_create_user(
+            db,
+            tenant.id,
+            email,
+            full_name,
+            provider,
+            subject,
+            allow_create=False,
+        )
+        return tenant, user, True
+
+    if provider == "microsoft":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This Microsoft account is not linked to an existing user; "
+                "sign in with your established method and ask the operator to "
+                "link the Microsoft account"
+            ),
+        )
+
+    tenant_result = await db.execute(select(Tenant).where(Tenant.domain == domain))
+    tenant = tenant_result.scalar_one_or_none()
+    tenant_existed = tenant is not None
+    if tenant is None:
+        _require_public_signup_enabled()
+        tenant = Tenant(
+            id=uuid.uuid4(),
+            name=tenant_name,
+            domain=domain,
+            company_name=company_name,
+            address=address,
+            phone=phone,
+            staff_size=staff_size,
+            billing_tier="payg",
+            is_active=True,
+        )
+        db.add(tenant)
+        await db.flush()
+
+    user = await _get_or_create_user(
+        db,
+        tenant.id,
+        email,
+        full_name,
+        provider,
+        subject,
+        allow_create=not tenant_existed,
+    )
+    return tenant, user, tenant_existed
+
+
 # ── Microsoft OAuth ────────────────────────────────────────────────────────────
 
 
@@ -485,6 +623,8 @@ async def microsoft_login(
     phone: str = "",
     staff_size: str = "",
 ):
+    if signup == "true":
+        _require_public_signup_enabled()
     if not _oauth_configured(
         settings.MICROSOFT_CLIENT_ID, settings.MICROSOFT_CLIENT_SECRET
     ):
@@ -639,53 +779,22 @@ async def microsoft_callback(
         staff_size = None
 
     async with db.begin():
-        # Cross-tenant lookups (tenant-by-domain and the user-by-email/subject
-        # search inside _get_or_create_user) run without a tenant context here,
-        # so allow the RLS bypass for this auth transaction.
+        # OAuth identity matching is intentionally cross-tenant: resolve an
+        # already-provisioned user before considering domain-based provisioning.
         await enable_rls_bypass(db)
-        tenant_exists = False
-        if signup_data and signup_data.get("company_name"):
-            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
-            tenant = result.scalar_one_or_none()
-            tenant_exists = tenant is not None
-            if tenant is None:
-                tenant = Tenant(
-                    id=uuid.uuid4(),
-                    name=tenant_name,
-                    domain=domain,
-                    company_name=company_name,
-                    address=address,
-                    phone=phone,
-                    staff_size=staff_size,
-                    billing_tier="payg",
-                    is_active=True,
-                )
-                db.add(tenant)
-                await db.flush()
-            user = await _get_or_create_user(
-                db,
-                tenant.id,
-                email,
-                full_name,
-                "microsoft",
-                ms_sub,
-                allow_create=not tenant_exists,
-            )
-        else:
-            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
-            tenant = result.scalar_one_or_none()
-            tenant_exists = tenant is not None
-            if tenant is None:
-                tenant = await _get_or_create_tenant(db, domain, tenant_name)
-            user = await _get_or_create_user(
-                db,
-                tenant.id,
-                email,
-                full_name,
-                "microsoft",
-                ms_sub,
-                allow_create=not tenant_exists,
-            )
+        tenant, user, tenant_exists = await _resolve_oauth_tenant_and_user(
+            db,
+            email=email,
+            full_name=full_name,
+            provider="microsoft",
+            subject=ms_sub,
+            domain=domain,
+            tenant_name=tenant_name,
+            company_name=company_name,
+            address=address,
+            phone=phone,
+            staff_size=staff_size,
+        )
         await ensure_stripe_customer(tenant, db)
 
         # New firm: the first user of a brand-new tenant is created as admin by
@@ -715,6 +824,8 @@ async def google_login(
     phone: str = "",
     staff_size: str = "",
 ):
+    if signup == "true":
+        _require_public_signup_enabled()
     if not _oauth_configured(settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET):
         raise HTTPException(status_code=501, detail="Google OAuth not configured")
 
@@ -846,53 +957,22 @@ async def google_callback(
         staff_size = None
 
     async with db.begin():
-        # Cross-tenant lookups (tenant-by-domain and the user-by-email/subject
-        # search inside _get_or_create_user) run without a tenant context here,
-        # so allow the RLS bypass for this auth transaction.
+        # OAuth identity matching is intentionally cross-tenant: resolve an
+        # already-provisioned user before considering domain-based provisioning.
         await enable_rls_bypass(db)
-        tenant_exists = False
-        if signup_data and signup_data.get("company_name"):
-            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
-            tenant = result.scalar_one_or_none()
-            tenant_exists = tenant is not None
-            if tenant is None:
-                tenant = Tenant(
-                    id=uuid.uuid4(),
-                    name=tenant_name,
-                    domain=domain,
-                    company_name=company_name,
-                    address=address,
-                    phone=phone,
-                    staff_size=staff_size,
-                    billing_tier="payg",
-                    is_active=True,
-                )
-                db.add(tenant)
-                await db.flush()
-            user = await _get_or_create_user(
-                db,
-                tenant.id,
-                email,
-                full_name,
-                "google",
-                google_sub,
-                allow_create=not tenant_exists,
-            )
-        else:
-            result = await db.execute(select(Tenant).where(Tenant.domain == domain))
-            tenant = result.scalar_one_or_none()
-            tenant_exists = tenant is not None
-            if tenant is None:
-                tenant = await _get_or_create_tenant(db, domain, tenant_name)
-            user = await _get_or_create_user(
-                db,
-                tenant.id,
-                email,
-                full_name,
-                "google",
-                google_sub,
-                allow_create=not tenant_exists,
-            )
+        tenant, user, tenant_exists = await _resolve_oauth_tenant_and_user(
+            db,
+            email=email,
+            full_name=full_name,
+            provider="google",
+            subject=google_sub,
+            domain=domain,
+            tenant_name=tenant_name,
+            company_name=company_name,
+            address=address,
+            phone=phone,
+            staff_size=staff_size,
+        )
         await ensure_stripe_customer(tenant, db)
 
         # New firm: the first user of a brand-new tenant is created as admin by
@@ -960,6 +1040,7 @@ async def register(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
+    _require_public_signup_enabled()
     body.email = body.email.lower().strip()
 
     # Cross-tenant email-exists check with no tenant context: allow RLS bypass.
@@ -1044,6 +1125,8 @@ async def signup_with_plan(
     Creates a tenant on the plan's billing tier, an admin user, and a trial
     window. Only plans flagged ``public_signup`` may be requested here.
     """
+    _require_public_signup_enabled()
+
     import re
     from datetime import timedelta as _timedelta
 

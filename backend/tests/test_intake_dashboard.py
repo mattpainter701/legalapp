@@ -29,6 +29,7 @@ from app.models.user import User
 from app.models.plugin import Matter
 from app.routers import intake_dashboard as intake_dashboard_router
 from app.schemas.intake_dashboard import IntakeDashboardCallCreate
+from app.services import email as email_module
 from app.services.intake_archive_import import (
     import_legacy_call_csv,
     normalize_phone,
@@ -89,7 +90,7 @@ def test_zoom_webhook_crc_and_signature_helpers():
 
     body = b'{"event":"phone.callee_call_history_completed"}'
     timestamp = "1710000000"
-    signature = "v0=" "ec914a6f28f9db2fdf91b4993df12354403b78ea150c45531c540726289afb4e"
+    signature = "v0=ec914a6f28f9db2fdf91b4993df12354403b78ea150c45531c540726289afb4e"
     assert verify_zoom_webhook_signature(
         body,
         timestamp,
@@ -323,9 +324,54 @@ def test_parse_legacy_call_csv_validates_duplicates_and_dates():
     assert preview.sample[0].normalized_phone == "7015551212"
 
 
+@pytest.mark.asyncio
+async def test_disabled_email_preserves_intake_task_assignment(
+    client, db_session, test_tenant, monkeypatch
+):
+    staff = User(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        email="reception-staff@testfirm.com",
+        full_name="Reception Staff",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(staff)
+    await db_session.commit()
+    monkeypatch.setattr(email_module.settings, "EMAIL_ENABLED", False)
+
+    response = await client.post(
+        "/api/intake/dashboard/calls",
+        json={
+            "caller_name": "Email Gate Caller",
+            "phone": "701-555-0101",
+            "purpose": "Needs a callback",
+            "outcome": "log_only",
+            "task_mode": "specific_staff",
+            "task_assigned_to_user_id": str(staff.id),
+            "task_title": "Return intake call",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["task_id"]
+    assert await db_session.scalar(select(func.count()).select_from(Task)) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(CommunicationLog)
+            .where(
+                CommunicationLog.channel == "call",
+                CommunicationLog.direction == "inbound",
+            )
+        )
+        == 1
+    )
+
+
 def test_parse_legacy_call_csv_preserves_nameless_archive_rows():
     preview = parse_legacy_call_csv(
-        "id,name,phone,date,reason\n" "1,,,2024-01-02 09:30:00,Transferred to queue\n"
+        "id,name,phone,date,reason\n1,,,2024-01-02 09:30:00,Transferred to queue\n"
     )
 
     assert preview.total_rows == 1

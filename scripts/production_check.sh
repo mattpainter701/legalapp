@@ -43,6 +43,15 @@ SCHEDULER_MAX_AGE_MINUTES="${SCHEDULER_MAX_AGE_MINUTES:-$(get_env SCHEDULER_MAX_
 QUEUE_MAX_AGE_MINUTES="${QUEUE_MAX_AGE_MINUTES:-$(get_env QUEUE_MAX_AGE_MINUTES)}"
 TLS_MIN_VALID_DAYS="${TLS_MIN_VALID_DAYS:-$(get_env TLS_MIN_VALID_DAYS)}"
 ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(get_env ALERT_WEBHOOK_URL)}"
+MCP_PRODUCT_ENABLED="${MCP_PRODUCT_ENABLED:-$(get_env MCP_PRODUCT_ENABLED)}"
+ZOOM_REQUIRED_TENANT_ID="${ZOOM_REQUIRED_TENANT_ID:-$(get_env ZOOM_REQUIRED_TENANT_ID)}"
+ZOOM_REQUIRED_TENANT_PLAN="${ZOOM_REQUIRED_TENANT_PLAN:-$(get_env ZOOM_REQUIRED_TENANT_PLAN)}"
+email_enabled_from_file="$(get_env EMAIL_ENABLED)"
+if [[ -n "${EMAIL_ENABLED+x}" && "$EMAIL_ENABLED" != "$email_enabled_from_file" ]]; then
+  echo "FAIL: inherited EMAIL_ENABLED conflicts with the deployed production environment" >&2
+  exit 1
+fi
+EMAIL_ENABLED="$email_enabled_from_file"
 
 : "${DOMAIN:?DOMAIN is required}"
 : "${POSTGRES_USER:=legalapp}"
@@ -61,6 +70,18 @@ for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MIN
   }
 done
 (( DISK_MAX_PERCENT <= 100 )) || { echo "FAIL: DISK_MAX_PERCENT must be at most 100" >&2; exit 1; }
+[[ "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must remain false" >&2; exit 1; }
+[[ "$EMAIL_ENABLED" == "true" || "$EMAIL_ENABLED" == "false" ]] || { echo "FAIL: EMAIL_ENABLED must be true or false" >&2; exit 1; }
+if [[ "$ZOOM_REQUIRED" == true ]]; then
+  [[ "$ZOOM_REQUIRED_TENANT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || {
+    echo "FAIL: ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID" >&2
+    exit 1
+  }
+  [[ "$ZOOM_REQUIRED_TENANT_PLAN" == "intake-only" ]] || {
+    echo "FAIL: ZOOM_REQUIRED_TENANT_PLAN must be intake-only for this launch" >&2
+    exit 1
+  }
+fi
 
 read -r -a compose_file_list <<< "$COMPOSE_FILES"
 compose=(docker compose --env-file "$ENV_FILE")
@@ -79,7 +100,7 @@ if [[ "$disk_used" =~ ^[0-9]+$ ]] && (( disk_used >= DISK_MAX_PERCENT )); then
   fail "disk usage is ${disk_used}% (threshold ${DISK_MAX_PERCENT}%)"
 fi
 
-for service in postgres redis backend scheduler frontend nginx; do
+for service in postgres redis litellm-postgres litellm backend scheduler frontend nginx; do
   container_id="$("${compose[@]}" ps -q "$service" 2>/dev/null || true)"
   if [[ -z "$container_id" ]]; then
     fail "$service container is missing"
@@ -93,6 +114,29 @@ done
 
 "${compose[@]}" exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 || fail "PostgreSQL readiness failed"
 "${compose[@]}" exec -T redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping' 2>/dev/null | grep -q PONG || fail "Redis authenticated ping failed"
+"${compose[@]}" exec -T litellm-postgres pg_isready -U litellm -d litellm >/dev/null 2>&1 || fail "LiteLLM PostgreSQL readiness failed"
+
+# LiteLLM can report liveliness while its Prisma schema or encrypted model
+# configuration is broken. Require a zero schema diff and authenticated model
+# discovery through the exact runtime container.
+"${compose[@]}" exec -T litellm sh -c \
+  'prisma migrate diff --exit-code --from-url "$LITELLM_DATABASE_URL" --to-schema-datamodel /app/schema.prisma >/dev/null 2>&1' \
+  || fail "LiteLLM schema differs from the pinned image"
+"${compose[@]}" exec -T litellm python - <<'PY' >/dev/null 2>&1 || fail "LiteLLM authenticated model discovery failed"
+import json
+import os
+import urllib.request
+
+request = urllib.request.Request(
+    "http://127.0.0.1:4000/v1/models",
+    headers={"Authorization": f"Bearer {os.environ['LITELLM_API_KEY']}"},
+)
+with urllib.request.urlopen(request, timeout=15) as response:
+    models = {item["id"] for item in json.load(response).get("data", [])}
+required = {"clarity-standard", "clarity-premium"}
+if not required.issubset(models):
+    raise SystemExit(f"missing required model aliases: {sorted(required - models)}")
+PY
 
 sql() {
   "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null
@@ -112,25 +156,81 @@ if [[ "$stale_queue" =~ ^[0-9]+$ ]] && (( stale_queue > 0 )); then fail "durable
 
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   zoom_predicate="t.is_active AND a.encrypted_webhook_secret_token IS NOT NULL AND NULLIF(a.zoom_account_id, '') IS NOT NULL AND c.encrypted_refresh_token IS NOT NULL AND c.service_account_email = a.zoom_account_id AND c.health = 'healthy' AND c.scopes LIKE '%phone:read:list_call_logs:admin%' AND c.scopes LIKE '%phone:read:call_log:admin%'"
-  zoom_configured="$(sql "SELECT count(DISTINCT t.id) FROM tenants t LEFT JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active LEFT JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.is_active AND (a.id IS NOT NULL OR c.id IS NOT NULL)" || echo error)"
-  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE ${zoom_predicate}" || echo error)"
-  [[ "$zoom_configured" =~ ^[0-9]+$ && "$zoom_ready" =~ ^[0-9]+$ ]] || fail "Zoom Phone readiness query failed"
-  if [[ "$zoom_configured" == "0" ]]; then fail "no active tenant has Zoom Phone configured"; fi
-  if [[ "$zoom_configured" =~ ^[0-9]+$ && "$zoom_ready" =~ ^[0-9]+$ ]] && (( zoom_ready != zoom_configured )); then
-    fail "Zoom Phone configuration is incomplete for one or more active configured tenants"
-  fi
+  tenant_contract="$(sql "SELECT count(*) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND t.is_active AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}'" || echo error)"
+  zoom_ready="$(sql "SELECT count(DISTINCT t.id) FROM tenants t JOIN tenant_settings s ON s.tenant_id=t.id JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE t.id='${ZOOM_REQUIRED_TENANT_ID}'::uuid AND COALESCE(s.custom_config->>'plan','')='${ZOOM_REQUIRED_TENANT_PLAN}' AND ${zoom_predicate}" || echo error)"
+  [[ "$tenant_contract" == "1" ]] || fail "required Zoom tenant is inactive, missing, or not on the intake-only launch plan"
+  [[ "$zoom_ready" == "1" ]] || fail "required Zoom tenant configuration is incomplete"
 
-  zoom_tenant_ids="$(sql "SELECT t.id FROM tenants t JOIN tenant_oauth_apps a ON a.tenant_id=t.id AND a.provider='zoom_phone' AND a.is_active JOIN tenant_credentials c ON c.tenant_id=t.id AND c.provider='zoom_phone' AND c.is_active WHERE ${zoom_predicate} ORDER BY t.id" || true)"
-  while IFS= read -r zoom_tenant_id; do
-    [[ -n "$zoom_tenant_id" ]] || continue
-    zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
-      --data '{"event":"endpoint.url_validation","payload":{"plainToken":"clarity-production-probe"}}' \
-      "https://${DOMAIN}/api/integrations/zoom-phone/webhook/${zoom_tenant_id}" || true)"
-    [[ "$zoom_crc" == *'"plainToken":"clarity-production-probe"'* && "$zoom_crc" == *'"encryptedToken"'* ]] || fail "Zoom Phone production-ingress CRC handshake failed for a configured tenant"
-  done <<< "$zoom_tenant_ids"
-  "${compose[@]}" exec -T backend python scripts/check_zoom_phone.py >/dev/null 2>&1 || fail "Zoom Phone live API probe failed"
+  zoom_crc="$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
+    --data '{"event":"endpoint.url_validation","payload":{"plainToken":"clarity-production-probe"}}' \
+    "https://${DOMAIN}/api/integrations/zoom-phone/webhook/${ZOOM_REQUIRED_TENANT_ID}" || true)"
+  [[ "$zoom_crc" == *'"plainToken":"clarity-production-probe"'* && "$zoom_crc" == *'"encryptedToken"'* ]] || fail "Zoom Phone production-ingress CRC handshake failed for the required tenant"
+  "${compose[@]}" exec -T backend python scripts/check_zoom_phone.py \
+    --tenant-id "$ZOOM_REQUIRED_TENANT_ID" >/dev/null 2>&1 || fail "Zoom Phone live API probe failed for the required tenant"
 else
   echo "WARNING: NOT GO-LIVE — Zoom Phone launch gates were skipped for fresh-host bootstrap." >&2
+fi
+
+if [[ "$EMAIL_ENABLED" == "true" ]]; then
+  runtime_email_fingerprint() {
+    local service="$1"
+    "${compose[@]}" exec -T "$service" python - <<'PY' 2>/dev/null
+import hashlib
+import json
+import os
+
+keys = ("EMAIL_ENABLED", "EMAIL_HOST", "EMAIL_PORT", "EMAIL_USER", "EMAIL_PASS", "EMAIL_FROM")
+values = {key: os.environ.get(key, "") for key in keys}
+if values["EMAIL_ENABLED"] != "true" or any(not values[key] for key in keys[1:]):
+    raise SystemExit(1)
+print(hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest())
+PY
+  }
+  backend_email_fingerprint="$(runtime_email_fingerprint backend || true)"
+  scheduler_email_fingerprint="$(runtime_email_fingerprint scheduler || true)"
+  if [[ -z "$backend_email_fingerprint" ]]; then
+    fail "backend runtime SMTP configuration is disabled or incomplete"
+  elif [[ -z "$scheduler_email_fingerprint" ]]; then
+    fail "scheduler runtime SMTP configuration is disabled or incomplete"
+  elif [[ "$backend_email_fingerprint" != "$scheduler_email_fingerprint" ]]; then
+    fail "backend and scheduler runtime SMTP configurations differ"
+  else
+    "${compose[@]}" exec -T backend python - <<'PY' >/dev/null 2>&1 || fail "SMTP no-delivery capability probe failed"
+import os
+import smtplib
+import ssl
+
+host = os.environ["EMAIL_HOST"]
+port = int(os.environ["EMAIL_PORT"])
+user = os.environ.get("EMAIL_USER", "")
+password = os.environ.get("EMAIL_PASS", "")
+if port == 465:
+    client = smtplib.SMTP_SSL(host, port, timeout=15, context=ssl.create_default_context())
+else:
+    client = smtplib.SMTP(host, port, timeout=15)
+try:
+    code, _ = client.ehlo()
+    if code >= 400:
+        raise RuntimeError(f"SMTP EHLO failed with status {code}")
+    if port == 587:
+        client.starttls(context=ssl.create_default_context())
+        code, _ = client.ehlo()
+        if code >= 400:
+            raise RuntimeError(f"SMTP EHLO after STARTTLS failed with status {code}")
+    if user or password:
+        if not (user and password):
+            raise RuntimeError("SMTP username/password must be configured together")
+        client.login(user, password)
+finally:
+    client.quit()
+PY
+  fi
+else
+  if [[ "$ZOOM_REQUIRED" == true ]]; then
+    fail "EMAIL_ENABLED must be true for first-customer task assignment and reminder delivery"
+  else
+    echo "WARNING: EMAIL_ENABLED=false; bootstrap is infrastructure-only until SMTP delivery is proven." >&2
+  fi
 fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
@@ -163,7 +263,7 @@ if [[ "$state" == "failed" ]]; then
   exit 1
 fi
 if [[ "$ZOOM_REQUIRED" == true ]]; then
-  echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, HTTP, and TLS."
+  echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, authenticated SMTP, HTTP, and TLS."
 else
   echo "Bootstrap infrastructure check passed. NOT GO-LIVE until strict Zoom production_check passes." >&2
 fi

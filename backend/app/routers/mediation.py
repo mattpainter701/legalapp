@@ -62,7 +62,11 @@ from app.schemas.mediation import (
     SessionResponse,
 )
 from app.services import mediation_service as ms
-from app.services.email import send_portal_invite
+from app.services.email import (
+    EmailDeliveryResult,
+    email_delivery_http_error,
+    send_portal_invite,
+)
 
 settings = get_settings()
 
@@ -472,15 +476,27 @@ async def invite_party(
     await db.refresh(invite)
 
     invite_url = f"{settings.FRONTEND_URL.rstrip('/')}/portal/accept?token={raw_token}"
+    email_sent = None
+    delivery_error = None
     if party.email:
+        delivery_result = EmailDeliveryResult.FAILED
         try:
-            await send_portal_invite(
+            delivery_result = await send_portal_invite(
                 to_email=party.email,
                 case_name=case.case_name or case.title,
                 invite_url=invite_url,
             )
         except Exception:  # pragma: no cover - email best-effort
-            pass
+            delivery_result = EmailDeliveryResult.FAILED
+        email_sent = bool(delivery_result)
+        if not email_sent:
+            _status_code, delivery_error = email_delivery_http_error(
+                delivery_result,
+                action="Mediation portal invitation",
+            )
+            delivery_error += (
+                " The invite remains valid; copy and share its link manually."
+            )
 
     return InviteResponse(
         id=str(invite.id),
@@ -488,6 +504,8 @@ async def invite_party(
         kind=kind,
         email=party.email,
         invite_url=invite_url,
+        email_sent=email_sent,
+        delivery_error=delivery_error,
         expires_at=invite.expires_at,
     )
 

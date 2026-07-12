@@ -33,8 +33,19 @@ LE_DIR="$SCRIPT_DIR/letsencrypt"   # full Let's Encrypt data dir (renewal config
 WEBROOT_DIR="$SCRIPT_DIR/webroot"  # served by nginx for ACME http-01 challenge
 
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/.env}"
-COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}"
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+[[ "$ENV_FILE" == /* ]] || ENV_FILE="$REPO_ROOT/$ENV_FILE"
+COMPOSE_FILES="${COMPOSE_FILES:-${COMPOSE_FILE:-$REPO_ROOT/docker-compose.hypervisor.yml}}"
+read -r -a COMPOSE_FILE_LIST <<< "$COMPOSE_FILES"
+(( ${#COMPOSE_FILE_LIST[@]} > 0 )) || { echo "ERROR: no Compose files configured" >&2; exit 1; }
+COMPOSE=(docker compose --env-file "$ENV_FILE")
+RESOLVED_COMPOSE_FILES=()
+for compose_file in "${COMPOSE_FILE_LIST[@]}"; do
+    [[ "$compose_file" == /* ]] || compose_file="$REPO_ROOT/$compose_file"
+    [[ -f "$compose_file" ]] || { echo "ERROR: Compose file not found: $compose_file" >&2; exit 1; }
+    COMPOSE+=( -f "$compose_file" )
+    RESOLVED_COMPOSE_FILES+=("$compose_file")
+done
+COMPOSE_FILES="${RESOLVED_COMPOSE_FILES[*]}"
 
 echo ""
 echo "  Domain : $DOMAIN"
@@ -139,7 +150,11 @@ echo "    Done."
 echo ""
 echo "==> Installing renewal cron (every Monday 03:00) ..."
 RENEW_SCRIPT="$SCRIPT_DIR/renew-cert.sh"
-CRON_LINE="0 3 * * 1 bash $RENEW_SCRIPT $DOMAIN >> /var/log/letsencrypt-renew.log 2>&1"
+printf -v cron_env_file '%q' "$ENV_FILE"
+printf -v cron_compose_files '%q' "$COMPOSE_FILES"
+printf -v cron_script '%q' "$RENEW_SCRIPT"
+printf -v cron_domain '%q' "$DOMAIN"
+CRON_LINE="0 3 * * 1 ENV_FILE=$cron_env_file COMPOSE_FILES=$cron_compose_files bash $cron_script $cron_domain >> /var/log/letsencrypt-renew.log 2>&1"
 (crontab -l 2>/dev/null | grep -v "renew-cert.sh"; echo "$CRON_LINE") | crontab -
 echo "    Cron installed."
 
@@ -154,7 +169,9 @@ echo "  Renewal : every Monday 03:00 via cron"
 echo "================================================================="
 echo ""
 echo "Start the full prod stack:"
-echo "  docker compose --env-file $ENV_FILE -f $COMPOSE_FILE up -d"
+printf '  '
+printf '%q ' "${COMPOSE[@]}"
+echo "up -d"
 echo ""
 echo "Verify:"
 echo "  curl -I https://$DOMAIN/health"

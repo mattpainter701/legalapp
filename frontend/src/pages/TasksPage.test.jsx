@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { axe } from 'jest-axe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TasksPage from './TasksPage'
-import { getOverdueTasks, getTasks } from '../api'
+import { getOverdueTasks, getTasks, sendTaskReminder } from '../api'
 
 vi.mock('../App', () => ({
   useAuth: () => ({
@@ -69,7 +69,8 @@ describe('TasksPage accessibility', () => {
     expect(screen.getByRole('button', { name: 'Delete task: Return intake call' })).toBeInTheDocument()
 
     const reassign = screen.getByRole('button', { name: 'Reassign' })
-    expect(reassign.className).toContain('group-focus-within:opacity-100')
+    expect(reassign.className).toContain('opacity-100')
+    expect(reassign.className).toContain('sm:group-focus-within:opacity-100')
     expect(reassign.className).toContain('focus:opacity-100')
     reassign.focus()
     expect(reassign).toHaveFocus()
@@ -115,5 +116,25 @@ describe('TasksPage accessibility', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Reassign Task' })).not.toBeInTheDocument()
     await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('shows the API email-readiness error instead of claiming a reminder was sent', async () => {
+    const user = userEvent.setup()
+    sendTaskReminder.mockRejectedValueOnce({
+      response: {
+        status: 503,
+        data: {
+          detail: 'Task reminder was not completed because outbound email is unavailable. Ask an administrator to enable and verify the SMTP configuration.',
+        },
+      },
+    })
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+
+    await user.click(screen.getByRole('button', { name: 'Send reminder for Return intake call' }))
+
+    expect(await screen.findByText('Not sent')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('outbound email is unavailable')
+    expect(screen.queryByText('Sent!')).not.toBeInTheDocument()
   })
 })

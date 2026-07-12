@@ -37,17 +37,47 @@ services:
       timeout: 5s
       retries: 5
 
-  litellm:
-    build:
-      context: .
-      dockerfile: litellm/Dockerfile
-    image: legalapp-litellm:main-v1.72.6
+  # LiteLLM owns a separate Prisma schema. Run upstream migrations first, then
+  # an exact-diff reconciler that accepts only the reviewed 1.93 production
+  # repair. The proxy cannot start when either step fails.
+  litellm-migrator:
+    image: legalapp-litellm:${APP_COMMIT:-dev}
+    pull_policy: never
     depends_on:
       litellm-postgres:
         condition: service_healthy
     environment:
+      DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://litellm:litellm@litellm-postgres:5432/litellm}
+    entrypoint: ["prisma"]
+    command: ["migrate", "deploy", "--schema", "/app/schema.prisma"]
+    restart: "no"
+
+  litellm-schema-migrator:
+    image: legalapp-litellm:${APP_COMMIT:-dev}
+    pull_policy: never
+    depends_on:
+      litellm-migrator:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://litellm:litellm@litellm-postgres:5432/litellm}
+      LITELLM_SCHEMA_REPAIR_ALLOWED: "true"
+    entrypoint: ["/bin/sh"]
+    command: ["/app/legalapp/reconcile_schema.sh"]
+    restart: "no"
+
+  litellm:
+    build:
+      context: .
+      dockerfile: litellm/Dockerfile
+    image: legalapp-litellm:${APP_COMMIT:-dev}
+    depends_on:
+      litellm-schema-migrator:
+        condition: service_completed_successfully
+    environment:
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-local-litellm}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-local-litellm-salt-key-not-for-production}
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://litellm:litellm@litellm-postgres:5432/litellm}
+      DISABLE_SCHEMA_UPDATE: "true"
       STORE_MODEL_IN_DB: "True"
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
@@ -57,11 +87,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4000/health/liveliness > /dev/null"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
       interval: 15s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 90s
 
   # Init service: runs migrations once, exits when complete.
   migrator:
@@ -92,8 +122,15 @@ services:
       APP_VERSION: ${APP_VERSION:-dev}
       APP_COMMIT: ${APP_COMMIT:-}
       APP_BUILD_TIME: ${APP_BUILD_TIME:-}
+      PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USER: ${EMAIL_USER:-}
+      EMAIL_PASS: ${EMAIL_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
     volumes:
-      - uploads:/app/uploads
+      - ${UPLOADS_HOST_DIR:-./uploads}:/app/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
@@ -108,6 +145,7 @@ services:
       args:
         VITE_PUBLIC_SITE_URL: ${VITE_PUBLIC_SITE_URL:-}
         VITE_CONTACT_URL: ${VITE_CONTACT_URL:-}
+        VITE_PUBLIC_SIGNUP_ENABLED: ${VITE_PUBLIC_SIGNUP_ENABLED:-false}
     depends_on:
       backend:
         condition: service_started
@@ -138,4 +176,3 @@ volumes:
   postgres_data:
   redis_data:
   litellm_postgres_data:
-  uploads:

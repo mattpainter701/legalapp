@@ -1,8 +1,8 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import SignupPage from './SignupPage'
 import { register, signupWithPlan } from '../api'
 
@@ -15,7 +15,13 @@ vi.mock('../api', () => ({
 }))
 
 describe('plan signup', () => {
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllEnvs()
+  })
+
   it('provisions the selected intake plan and does not offer generic OAuth signup', async () => {
+    vi.stubEnv('VITE_PUBLIC_SIGNUP_ENABLED', 'true')
     const user = userEvent.setup()
     render(
       <MemoryRouter initialEntries={['/signup?plan=intake-only']}>
@@ -39,5 +45,21 @@ describe('plan signup', () => {
     }))
     expect(register).not.toHaveBeenCalled()
     expect(authLogin).toHaveBeenCalled()
+  })
+
+  it('routes launch visitors to operator-assisted provisioning', () => {
+    vi.stubEnv('VITE_PUBLIC_SIGNUP_ENABLED', 'false')
+    render(
+      <MemoryRouter initialEntries={['/signup?plan=intake-only']}>
+        <SignupPage />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByRole('heading', { name: 'Request access' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Contact the Clarity team' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(/^(https:\/\/|mailto:)/),
+    )
+    expect(screen.queryByRole('button', { name: 'Create Account with Email' })).not.toBeInTheDocument()
   })
 })

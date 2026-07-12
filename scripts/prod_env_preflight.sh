@@ -24,10 +24,11 @@ get_env() {
 errors=()
 warnings=()
 required=(
-  DOMAIN BACKEND_URL FRONTEND_URL VITE_CONTACT_URL DEV_MODE SECRET_KEY MCP_PRODUCT_ENABLED
+  DOMAIN BACKEND_URL FRONTEND_URL VITE_CONTACT_URL DEV_MODE PUBLIC_SIGNUP_ENABLED VITE_PUBLIC_SIGNUP_ENABLED SECRET_KEY MCP_PRODUCT_ENABLED
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
-  MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_DB_PASSWORD
-  LITELLM_DATABASE_URL
+  MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD
+  LITELLM_DATABASE_URL UPLOADS_HOST_DIR OFFSITE_BACKUP_REQUIRED
+  EMAIL_ENABLED EMAIL_HOST EMAIL_PORT EMAIL_FROM
 )
 
 for key in "${required[@]}"; do
@@ -54,10 +55,42 @@ check_secret POSTGRES_PASSWORD 20
 check_secret CLARITY_APP_PASSWORD 20
 check_secret REDIS_PASSWORD 20
 check_secret LITELLM_API_KEY 24
+check_secret LITELLM_SALT_KEY 32
 check_secret LITELLM_DB_PASSWORD 20
 
+check_nonplaceholder() {
+  local key="$1" value lowered
+  value="$(get_env "$key")"
+  lowered="${value,,}"
+  if [[ -z "$value" || "$lowered" == *change_me* || "$lowered" == *changeme* ||
+        "$lowered" == *example.com* || "$lowered" == *example.invalid* ||
+        "$lowered" == *placeholder* ]]; then
+    errors+=("$key must be configured with a non-placeholder value")
+  fi
+}
+
+check_nonplaceholder EMAIL_HOST
+check_nonplaceholder EMAIL_FROM
+
+if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
+  errors+=("LITELLM_SALT_KEY must be permanent and distinct from the rotatable LITELLM_API_KEY")
+fi
+
+public_signup_enabled="$(get_env PUBLIC_SIGNUP_ENABLED)"
+vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
+
 [[ "$(get_env DEV_MODE)" == "false" ]] || errors+=("DEV_MODE must be false")
+[[ "$public_signup_enabled" == "false" ]] || errors+=("PUBLIC_SIGNUP_ENABLED must remain false until paid conversion and expiry enforcement are proven")
+[[ "$vite_public_signup_enabled" == "false" ]] || errors+=("VITE_PUBLIC_SIGNUP_ENABLED must remain false until public signup is enabled end to end")
+[[ "$public_signup_enabled" == "$vite_public_signup_enabled" ]] || errors+=("PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match")
 [[ "$(get_env MCP_PRODUCT_ENABLED)" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must remain false for this launch")
+[[ "$(get_env OFFSITE_BACKUP_REQUIRED)" == "true" ]] || errors+=("OFFSITE_BACKUP_REQUIRED must be true for production deploys")
+email_enabled="$(get_env EMAIL_ENABLED)"
+[[ "$email_enabled" == "true" || "$email_enabled" == "false" ]] || errors+=("EMAIL_ENABLED must be explicitly true or false")
+if [[ "$email_enabled" == "true" ]]; then
+  check_nonplaceholder EMAIL_USER
+  check_nonplaceholder EMAIL_PASS
+fi
 [[ "$(get_env BACKEND_URL)" == https://* ]] || errors+=("BACKEND_URL must use https")
 [[ "$(get_env FRONTEND_URL)" == https://* ]] || errors+=("FRONTEND_URL must use https")
 [[ "$(get_env VITE_CONTACT_URL)" == https://* || "$(get_env VITE_CONTACT_URL)" == mailto:* ]] || errors+=("VITE_CONTACT_URL must be an https or mailto destination")
@@ -65,6 +98,37 @@ check_secret LITELLM_DB_PASSWORD 20
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
 [[ "$(get_env MIGRATOR_DATABASE_URL)" != *://clarity_app:* ]] || errors+=("MIGRATOR_DATABASE_URL must use the owner/migrator role")
 [[ "$(get_env REDIS_URL)" == redis://:*@redis:* || "$(get_env REDIS_URL)" == rediss://:*@* ]] || errors+=("REDIS_URL must authenticate to Redis")
+
+uploads_host_dir="$(get_env UPLOADS_HOST_DIR)"
+[[ "$uploads_host_dir" == /* && "$uploads_host_dir" != "/" ]] || errors+=("UPLOADS_HOST_DIR must be an absolute non-root host path")
+if [[ -e "$uploads_host_dir" ]]; then
+  [[ -d "$uploads_host_dir" && ! -L "$uploads_host_dir" ]] || errors+=("UPLOADS_HOST_DIR must be a non-symlink directory")
+fi
+
+email_port="$(get_env EMAIL_PORT)"
+[[ "$email_port" =~ ^[0-9]+$ ]] && (( email_port >= 1 && email_port <= 65535 )) || errors+=("EMAIL_PORT must be an integer from 1 to 65535")
+[[ "$(get_env EMAIL_FROM)" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || errors+=("EMAIL_FROM must be a valid email address")
+
+zoom_required_tenant_id="$(get_env ZOOM_REQUIRED_TENANT_ID)"
+zoom_required_tenant_plan="$(get_env ZOOM_REQUIRED_TENANT_PLAN)"
+if [[ "${BOOTSTRAP_MODE:-false}" == "true" && -z "$zoom_required_tenant_id" ]]; then
+  warnings+=("ZOOM_REQUIRED_TENANT_ID is omitted for bootstrap; strict go-live checks remain blocked")
+elif [[ ! "$zoom_required_tenant_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+  errors+=("ZOOM_REQUIRED_TENANT_ID must be the sold tenant UUID outside bootstrap mode")
+fi
+if [[ "${BOOTSTRAP_MODE:-false}" == "true" && -z "$zoom_required_tenant_plan" ]]; then
+  warnings+=("ZOOM_REQUIRED_TENANT_PLAN is omitted for bootstrap; strict go-live checks remain blocked")
+elif [[ "$zoom_required_tenant_plan" != "intake-only" ]]; then
+  errors+=("ZOOM_REQUIRED_TENANT_PLAN must be intake-only for the first-customer launch")
+fi
+if [[ "$email_enabled" == "false" ]]; then
+  if [[ "${BOOTSTRAP_MODE:-false}" == "true" ]]; then
+    warnings+=("EMAIL_ENABLED=false; bootstrap is infrastructure-only until SMTP credentials and delivery acceptance pass")
+  else
+    errors+=("EMAIL_ENABLED must be true for the sold-tenant launch")
+  fi
+fi
+[[ -z "$(get_env OFFSITE_BACKUP_ATTESTATION_FILE)" ]] || errors+=("OFFSITE_BACKUP_ATTESTATION_FILE must never be persisted in .env; pass one short-lived file in the deploy process")
 
 legacy_encryption_key="$(get_env TOKEN_ENCRYPTION_KEY)"
 staged_encryption_keys="$(get_env TOKEN_ENCRYPTION_KEYS)"
@@ -116,6 +180,8 @@ restic_password_file="$(get_env RESTIC_PASSWORD_FILE)"
 if [[ -n "$(get_env RESTIC_REPOSITORY)" ]]; then
   [[ -n "$restic_password_file" && -r "$restic_password_file" ]] || errors+=("RESTIC_PASSWORD_FILE must be readable when RESTIC_REPOSITORY is set")
 else
+  restore_public_key_file="$(get_env OFFSITE_RESTORE_PUBLIC_KEY_FILE)"
+  [[ -n "$restore_public_key_file" && -f "$restore_public_key_file" && ! -L "$restore_public_key_file" ]] || errors+=("OFFSITE_RESTORE_PUBLIC_KEY_FILE must name the pinned regular public key when Restic is unavailable")
   warnings+=("Recurring encrypted Restic backups are not configured; retain the proven manual off-host procedure until they are")
 fi
 
@@ -129,6 +195,31 @@ if [[ -z "$(get_env ALERT_WEBHOOK_URL)" ]]; then
   warnings+=("ALERT_WEBHOOK_URL is not set; GitHub production-health issues remain the primary alert channel")
 fi
 
+# Docker Compose interpolation gives the inherited process environment higher
+# precedence than --env-file. Reject any conflicting inherited value before the
+# validated file can be silently bypassed. Only release metadata generated by
+# deploy_prod.sh is intentionally allowed to differ.
+read -r -a compose_file_list <<< "$COMPOSE_FILES"
+(( ${#compose_file_list[@]} > 0 )) || { echo "FAIL: no production Compose files configured" >&2; exit 1; }
+declare -A guarded_compose_vars=()
+for key in "${required[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE; do
+  guarded_compose_vars["$key"]=1
+done
+for compose_file in "${compose_file_list[@]}"; do
+  [[ -f "$compose_file" ]] || { echo "FAIL: production Compose file not found: $compose_file" >&2; exit 1; }
+  while IFS= read -r key; do
+    [[ -n "$key" ]] && guarded_compose_vars["$key"]=1
+  done < <(grep -Eho '\$\{[A-Za-z_][A-Za-z0-9_]*' "$compose_file" | sed 's/^${//' | sort -u)
+done
+for key in "${!guarded_compose_vars[@]}"; do
+  case "$key" in
+    APP_COMMIT|APP_VERSION|APP_BUILD_TIME) continue ;;
+  esac
+  if [[ -v "$key" && "${!key}" != "$(get_env "$key")" ]]; then
+    errors+=("inherited $key conflicts with the validated production environment")
+  fi
+done
+
 if ((${#errors[@]})); then
   echo "Production preflight FAILED (${#errors[@]} issue(s)):" >&2
   for issue in "${errors[@]}"; do echo " - $issue" >&2; done
@@ -136,12 +227,9 @@ if ((${#errors[@]})); then
 fi
 
 for warning in "${warnings[@]}"; do echo "WARN: $warning"; done
-read -r -a compose_file_list <<< "$COMPOSE_FILES"
 compose=(docker compose --env-file "$ENV_FILE")
 for compose_file in "${compose_file_list[@]}"; do
-  [[ -f "$compose_file" ]] || { echo "FAIL: production Compose file not found: $compose_file" >&2; exit 1; }
   compose+=( -f "$compose_file" )
 done
-(( ${#compose_file_list[@]} > 0 )) || { echo "FAIL: no production Compose files configured" >&2; exit 1; }
 "${compose[@]}" config --quiet
 echo "Production preflight passed: required secrets are non-placeholder and Compose resolves."

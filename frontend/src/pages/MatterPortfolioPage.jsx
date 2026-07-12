@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
 import NewMatterModal from '../components/NewMatterModal'
@@ -164,7 +164,7 @@ function dueTomorrow(m) {
 }
 
 // ── Matter Card (board view) ──────────────────────────────────────────────────
-function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
+export function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
@@ -175,9 +175,13 @@ function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0 flex-1">
-          <div className="font-semibold text-brand-ink font-sans text-[14px] leading-snug truncate group-hover:text-brand-accent transition-colors">
+          <Link
+            to={`/matters/${m.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="block truncate rounded-sm font-sans text-[14px] font-semibold leading-snug text-brand-ink transition-colors hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          >
             {m.matter_name}
-          </div>
+          </Link>
           {m.client_name && (
             <div className="text-[12px] text-brand-muted font-sans mt-0.5 truncate">{m.client_name}</div>
           )}
@@ -231,7 +235,7 @@ function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
 }
 
 // ── My Matters list row ───────────────────────────────────────────────────────
-function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
+export function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
@@ -240,7 +244,13 @@ function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
     >
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2 mb-1">
-          <span className="font-semibold text-brand-ink font-sans text-[14px] truncate">{m.matter_name}</span>
+          <Link
+            to={`/matters/${m.id}`}
+            onClick={(event) => event.stopPropagation()}
+            className="truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          >
+            {m.matter_name}
+          </Link>
           <StatusBadge status={m.status} />
           <RiskBadge level={m.risk_level} />
           <DeadlineBadge label={m.overdue_deadline_label} />
@@ -279,6 +289,53 @@ function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
         <span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
       </div>
     </div>
+  )
+}
+
+export function MatterPortfolioRow({ matter: m, onNavigate }) {
+  return (
+    <tr
+      className="group cursor-pointer transition-colors hover:bg-brand-bg-soft"
+      onClick={(event) => {
+        if (event.target.closest('a, button')) return
+        onNavigate?.(m.id)
+      }}
+    >
+      <td className="max-w-xs px-5 py-4 pl-6">
+        <Link
+          to={`/matters/${m.id}`}
+          className="block truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+        >
+          {m.matter_name || '—'}
+        </Link>
+        {m.description && (
+          <div className="mt-0.5 truncate font-sans text-[12px] text-brand-muted">{m.description}</div>
+        )}
+      </td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-ink-2">
+        {m.client_name || <span className="text-brand-muted">—</span>}
+      </td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-ink-2">
+        {m.attorney_of_record_name || <span className="text-brand-muted">—</span>}
+      </td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-ink-2">
+        {m.practice_area || <span className="text-brand-muted">—</span>}
+      </td>
+      <td className="min-w-[180px] px-5 py-4">
+        <CloudFolderLinks cloudFolder={m.cloud_folder} compact />
+        {!hasCloudFolderLinks(m.cloud_folder) && (
+          <span className="font-sans text-[13px] text-brand-muted">—</span>
+        )}
+      </td>
+      <td className="px-5 py-4"><RiskBadge level={m.risk_level} /></td>
+      <td className="px-5 py-4"><StatusBadge status={m.status} /></td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-muted">
+        {m.created_at ? (() => { try { return format(parseISO(m.created_at), 'MMM d, yyyy') } catch { return '—' } })() : '—'}
+      </td>
+      <td className="px-5 py-4 pr-6 text-right">
+        <span className="font-sans text-sm font-semibold text-brand-accent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">View →</span>
+      </td>
+    </tr>
   )
 }
 
@@ -653,45 +710,11 @@ export default function MatterPortfolioPage() {
                 </thead>
                 <tbody className="divide-y divide-brand-line">
                   {filtered.map(m => (
-                    <tr
+                    <MatterPortfolioRow
                       key={m.id}
-                      className="hover:bg-brand-bg-soft cursor-pointer transition-colors group"
-                      onClick={() => navigate(`/matters/${m.id}`)}
-                    >
-                      <td className="px-5 py-4 pl-6 max-w-xs">
-                        <div className="font-semibold text-brand-ink font-sans text-[14px] truncate">{m.matter_name || '—'}</div>
-                        {m.description && (
-                          <div className="text-[12px] text-brand-muted font-sans truncate mt-0.5">{m.description}</div>
-                        )}
-                      </td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans text-[13px] whitespace-nowrap">
-                        {m.client_name || <span className="text-brand-muted">—</span>}
-                      </td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans text-[13px] whitespace-nowrap">
-                        {m.attorney_of_record_name || <span className="text-brand-muted">—</span>}
-                      </td>
-                      <td className="px-5 py-4 text-brand-ink-2 font-sans text-[13px] whitespace-nowrap">
-                        {m.practice_area || <span className="text-brand-muted">—</span>}
-                      </td>
-                      <td className="px-5 py-4 min-w-[180px]">
-                        <CloudFolderLinks cloudFolder={m.cloud_folder} compact />
-                        {!hasCloudFolderLinks(m.cloud_folder) && (
-                          <span className="text-brand-muted text-[13px] font-sans">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-4">
-                        <RiskBadge level={m.risk_level} />
-                      </td>
-                      <td className="px-5 py-4">
-                        <StatusBadge status={m.status} />
-                      </td>
-                      <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">
-                        {m.created_at ? (() => { try { return format(parseISO(m.created_at), 'MMM d, yyyy') } catch { return '—' } })() : '—'}
-                      </td>
-                      <td className="px-5 py-4 pr-6 text-right">
-                        <span className="text-brand-accent font-sans text-sm font-semibold opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
-                      </td>
-                    </tr>
+                      matter={m}
+                      onNavigate={(id) => navigate(`/matters/${id}`)}
+                    />
                   ))}
                 </tbody>
               </table>

@@ -9,6 +9,9 @@ guardrails, usage records, and operator decisions.
 Set these in the deployment environment. Do not commit real values.
 
 - `LITELLM_API_KEY`: LiteLLM master key used by LegalApp to call the gateway.
+- `LITELLM_SALT_KEY`: dedicated permanent encryption key for secrets stored in
+  the LiteLLM database. Generate it once, back it up, and do not change it when
+  rotating `LITELLM_API_KEY`.
 - `LITELLM_DB_PASSWORD`: password for the dedicated `litellm-postgres` container.
 - `LITELLM_DATABASE_URL`: synchronous Postgres URL for LiteLLM spend/log tables.
 - `STORE_MODEL_IN_DB=True`: required for operator-console route saves and
@@ -93,6 +96,14 @@ LiteLLM database on localhost port `5435`.
 
 Production should run LiteLLM behind the internal Docker network only. Do not
 expose port 4000 publicly. Nginx should not route public traffic to LiteLLM.
+The image is digest-pinned. `litellm-migrator` applies upstream Prisma
+migrations; `litellm-schema-migrator` then accepts either a zero diff or the
+single reviewed 1.93 production repair. Any other drift blocks the proxy and
+therefore the backend. The runtime uses `DISABLE_SCHEMA_UPDATE=true`, while the
+proxy entrypoint repeats a read-only exact schema check on every process start,
+including host reboot recovery. The production monitor independently requires
+a zero diff and authenticated model discovery. Rehearse upgrades against a
+restored database copy and never downgrade the image over a newer schema.
 
 CourtListener MCP resale is handled by the LegalApp backend MCP product gateway,
 not public LiteLLM exposure. See `docs/mcp_product_gateway.md` for the
@@ -100,10 +111,17 @@ not public LiteLLM exposure. See `docs/mcp_product_gateway.md` for the
 
 ### Docker Image Pinning
 
-The Dockerfile pins `ghcr.io/berriai/litellm:main-v1.72.6`. To upgrade:
-1. Check the [LiteLLM releases page](https://github.com/BerriAI/litellm/releases) for a newer tag.
-2. Update the `FROM` line in `litellm/Dockerfile` and the `image:` tag in `docker-compose.yml`.
-3. Test locally before pushing to main.
+The Dockerfile pins the official LiteLLM registry image by immutable multi-arch
+digest (currently version 1.93.0). To upgrade:
+
+1. Check the [LiteLLM releases page](https://github.com/BerriAI/litellm/releases) and avoid versions covered by an active security advisory.
+2. Back up the LiteLLM database and restore it into an isolated rehearsal instance.
+3. Update the `FROM` digest in `litellm/Dockerfile` and the descriptive `image:` tag in both Compose roots.
+4. Update the reviewed schema hash/diff repair only when an isolated restore proves the exact SQL, unchanged row counts, and a zero post-repair diff.
+5. Prove authenticated model discovery and a real synthetic completion, then deploy.
+
+Never point an older Prisma schema at the production database and never use a
+mutable tag without a digest.
 
 ### Backend Startup Dependency
 

@@ -1,23 +1,15 @@
 import React from 'react'
 import { cleanup, render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import HomePage from './HomePage'
-
-function LocationProbe() {
-  const location = useLocation()
-  return <output data-testid="location">{location.pathname}{location.search}</output>
-}
 
 describe('HomePage launch routing and claims', () => {
   afterEach(() => cleanup())
 
-  it('routes the public CTA to the available intake plan and avoids unsupported trial claims', async () => {
-    const user = userEvent.setup()
+  it('routes the launch CTA to verified contact and avoids unsupported trial claims', () => {
     render(
       <MemoryRouter initialEntries={['/']}>
-        <LocationProbe />
         <HomePage />
       </MemoryRouter>,
     )
@@ -36,8 +28,10 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.queryByText(/\$5|\$20/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\bSSO\b|\bSLA\b/)).not.toBeInTheDocument()
 
-    await user.click(screen.getAllByRole('button', { name: 'Start with Call Intake' })[0])
-    expect(screen.getByTestId('location')).toHaveTextContent('/signup?plan=intake-only')
+    for (const link of screen.getAllByRole('link', { name: 'Start with Call Intake' })) {
+      expect(link).toHaveAttribute('href', expect.stringMatching(/^(https:\/\/|mailto:)/))
+      expect(link).not.toHaveAttribute('href', '/signup?plan=intake-only')
+    }
   })
 
   it('uses a real contact destination for sales actions', () => {
@@ -51,7 +45,7 @@ describe('HomePage launch routing and claims', () => {
       'href',
       expect.stringMatching(/^(https:\/\/|mailto:)/),
     )
-    expect(screen.getByRole('link', { name: 'Book a 20-min walkthrough' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Request a 20-min walkthrough' })).toHaveAttribute(
       'href',
       expect.stringMatching(/^(https:\/\/|mailto:)/),
     )

@@ -1606,6 +1606,8 @@ async def invite_user(
 ):
     """Invite a new user by email. Creates an inactive account and sends an invite link."""
     import secrets
+
+    from app.services.email import email_delivery_http_error
     from app.services.email_admin import send_admin_notification
 
     admin = await _require_admin(request, db)
@@ -1650,7 +1652,7 @@ async def invite_user(
         <h1 style="color:#fff;margin:0;font-size:20px;">You've been invited to Clarity Legal</h1>
       </div>
       <div style="padding:24px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
-        <p>Hi{' ' + body.full_name if body.full_name else ''},</p>
+        <p>Hi{" " + body.full_name if body.full_name else ""},</p>
         <p><strong>{admin.full_name or admin.email}</strong> has invited you to join their firm on Clarity Legal.</p>
         <p style="margin:24px 0;">
           <a href="{invite_url}" style="background:#14253B;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;">
@@ -1662,13 +1664,25 @@ async def invite_user(
     </div>
     """
 
-    await send_admin_notification(
+    delivery_result = await send_admin_notification(
         db=db,
         tenant_id=tenant_id,
         to_emails=[body.email],
         subject="You've been invited to Clarity Legal",
         html_body=html_body,
     )
+    if not delivery_result:
+        status_code, detail = email_delivery_http_error(
+            delivery_result,
+            action="User invitation",
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=(
+                f"{detail} The inactive user record was created, but the invitation "
+                "was not delivered."
+            ),
+        )
 
     return InviteUserResponse(
         status="invited", user_id=str(new_user.id), email=new_user.email

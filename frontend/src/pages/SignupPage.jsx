@@ -30,6 +30,8 @@ export default function SignupPage() {
   const [searchParams] = useSearchParams()
   const { login: authLogin } = useAuth()
   const plan = searchParams.get('plan')
+  const publicSignupEnabled = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
   const isPlanSignup = plan === 'intake-only'
   const planLabel = plan === 'intake-only' ? 'Call Intake + Tasks' : null
   const [form, setForm] = useState({
@@ -46,6 +48,27 @@ export default function SignupPage() {
 
   const inputClasses = "w-full px-3 py-2 border border-brand-line rounded-lg text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent focus:border-brand-accent bg-brand-surface"
   const labelClasses = "block text-sm font-sans font-medium text-brand-ink mb-1"
+
+  if (!publicSignupEnabled) {
+    return (
+      <div className="min-h-screen bg-brand-bg flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-brand-line bg-brand-surface p-8 text-center shadow-xl">
+          <h1 className="font-serif text-2xl text-brand-ink">Request access</h1>
+          <p className="mt-3 text-sm leading-relaxed text-brand-muted">
+            New workspaces are provisioned with your team so Call Intake, Tasks,
+            and Zoom Phone are configured before launch.
+          </p>
+          <a href={contactUrl} className="mt-6 inline-flex rounded-lg bg-brand-accent px-5 py-3 text-sm font-medium text-white hover:bg-brand-accent-2">
+            Contact the Clarity team
+          </a>
+          <p className="mt-5 text-sm text-brand-muted">
+            Already have an account?{' '}
+            <Link to="/login" className="font-medium text-brand-accent hover:text-brand-accent-2">Sign in</Link>
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value })

@@ -27,6 +27,13 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
         subject: form.subject.trim(),
         body: form.body.trim(),
       })
+      if (result?.sent !== true) {
+        setError(
+          result?.delivery_error
+          || 'The email was not sent. The outbound attempt was recorded on the matter.'
+        )
+        return
+      }
       onSent(result)
     } catch (err) {
       const msg = err?.response?.data?.detail || 'Failed to send email.'
@@ -38,17 +45,18 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-brand-surface rounded-2xl shadow-2xl border border-brand-line w-full max-w-lg">
+      <div className="bg-brand-surface rounded-2xl shadow-2xl border border-brand-line w-full max-w-lg" role="dialog" aria-modal="true" aria-labelledby="compose-email-title">
         <div className="px-6 py-5 border-b border-brand-line flex items-center justify-between">
-          <h2 className="font-serif font-bold text-xl text-brand-ink">Email Client</h2>
-          <button onClick={onClose} className="text-brand-muted hover:text-brand-ink transition-colors p-1 rounded">
+          <h2 id="compose-email-title" className="font-serif font-bold text-xl text-brand-ink">Email Client</h2>
+          <button type="button" onClick={onClose} aria-label="Close email composer" className="text-brand-muted hover:text-brand-ink transition-colors p-1 rounded">
             <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
         <form onSubmit={handleSend} className="p-6 space-y-4">
           <div>
-            <label className={labelCls}>To</label>
+            <label htmlFor="compose-email-to" className={labelCls}>To</label>
             <input
+              id="compose-email-to"
               type="email"
               value={form.to_email}
               onChange={e => set('to_email', e.target.value)}
@@ -60,8 +68,9 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
             )}
           </div>
           <div>
-            <label className={labelCls}>Subject</label>
+            <label htmlFor="compose-email-subject" className={labelCls}>Subject</label>
             <input
+              id="compose-email-subject"
               type="text"
               value={form.subject}
               onChange={e => set('subject', e.target.value)}
@@ -70,8 +79,9 @@ export default function ComposeEmailModal({ matterId, matterName, caseNumber, cl
             />
           </div>
           <div>
-            <label className={labelCls}>Message</label>
+            <label htmlFor="compose-email-body" className={labelCls}>Message</label>
             <textarea
+              id="compose-email-body"
               autoFocus
               value={form.body}
               onChange={e => set('body', e.target.value)}

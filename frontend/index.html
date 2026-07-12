@@ -30,17 +30,32 @@
     <meta name="twitter:image" content="/social-card.jpg" />
     <meta name="twitter:image:alt" content="Clarity Legal law firm operations and legal AI workspace" />
     <link rel="manifest" href="/manifest.json" />
+    <style data-server-marketing>
+      .server-marketing{min-height:100vh;background:#f7f3ec;color:#14253b;font-family:Arial,sans-serif;padding:3rem 1.5rem}.server-marketing__inner{max-width:72rem;margin:0 auto}.server-marketing__nav{display:flex;align-items:center;justify-content:space-between}.server-marketing__brand{font-family:Georgia,serif;font-size:1.2rem;font-weight:700}.server-marketing__hero{max-width:48rem;padding:7rem 0 4rem}.server-marketing h1{font-family:Georgia,serif;font-size:clamp(2.6rem,7vw,4.5rem);line-height:1.02;margin:.8rem 0 1.5rem}.server-marketing p{font-size:1.1rem;line-height:1.7;color:#42556b}.server-marketing__eyebrow{font-size:.75rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#526e62}.server-marketing__actions{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem}.server-marketing a{color:inherit}.server-marketing__primary{background:#14253b;color:white!important;text-decoration:none;padding:.85rem 1.1rem;border-radius:.7rem;font-weight:700}.server-marketing__secondary{padding:.85rem 1.1rem;font-weight:700}
+    </style>
     <title>Clarity Legal | Law Firm Operations &amp; Legal AI</title>
   </head>
   <body>
-    <div id="root"></div>
-    <noscript>
-      <main>
-        <h1>Clarity Legal</h1>
-        <p>Law firm operations and source-aware AI-assisted work, built for attorney review.</p>
-        <p><a href="/login">Sign in</a> · <a href="/privacy">Privacy summary</a> · <a href="/terms">Service summary</a></p>
+    <div id="root">
+      <main class="server-marketing">
+        <div class="server-marketing__inner">
+          <nav class="server-marketing__nav" aria-label="Primary">
+            <span class="server-marketing__brand">Clarity Legal</span>
+            <a href="/login">Sign in</a>
+          </nav>
+          <section class="server-marketing__hero">
+            <span class="server-marketing__eyebrow">Call Intake, Tasks, and law firm operations</span>
+            <h1>Start focused with a dependable intake workflow.</h1>
+            <p>Capture caller details, Zoom Phone call records, outcomes, and staff follow-up tasks. Add matter, document, billing, integration, and source-aware AI workflows only when your firm is ready.</p>
+            <div class="server-marketing__actions">
+              <a class="server-marketing__primary" href="mailto:contact@perevagagroup.com?subject=Clarity%20Call%20Intake">Request a Call Intake workspace</a>
+              <a class="server-marketing__secondary" href="/privacy">Privacy summary</a>
+              <a class="server-marketing__secondary" href="/terms">Service summary</a>
+            </div>
+          </section>
+        </div>
       </main>
-    </noscript>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

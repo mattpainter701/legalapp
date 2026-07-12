@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tenant_credential import TenantCredential
-from app.services.email import email_service
+from app.services.email import EmailDeliveryResult, email_service
 from app.services.token_vault import get_fresh_token
 
 logger = logging.getLogger(__name__)
@@ -88,10 +88,10 @@ async def send_admin_notification(
     to_emails: list[str],
     subject: str,
     html_body: str,
-) -> None:
+) -> EmailDeliveryResult:
     """Send an admin notification, routing via connected cloud if available."""
     if not to_emails:
-        return
+        return EmailDeliveryResult.INVALID_RECIPIENT
 
     tid = uuid.UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id
 
@@ -110,10 +110,8 @@ async def send_admin_notification(
                 token, ms_cred.service_account_email, to_emails, subject, html_body
             )
             if sent:
-                logger.info(
-                    "Admin notification sent via Microsoft Graph to %s", to_emails
-                )
-                return
+                logger.info("Admin notification sent via Microsoft Graph")
+                return EmailDeliveryResult.SENT
 
     # Try Google
     google_cred = await db.scalar(
@@ -128,14 +126,13 @@ async def send_admin_notification(
         if token:
             sent = await _send_via_google(token, to_emails, subject, html_body)
             if sent:
-                logger.info("Admin notification sent via Gmail to %s", to_emails)
-                return
+                logger.info("Admin notification sent via Gmail")
+                return EmailDeliveryResult.SENT
 
     # SMTP fallback
-    try:
-        await email_service.send_email(
-            to=to_emails, subject=subject, html_body=html_body
-        )
-        logger.info("Admin notification sent via SMTP to %s", to_emails)
-    except Exception as exc:
-        logger.error("Failed to send admin notification: %s", exc)
+    result = await email_service.send_email(
+        to=to_emails, subject=subject, html_body=html_body
+    )
+    if result:
+        logger.info("Admin notification sent via SMTP")
+    return result

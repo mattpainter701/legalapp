@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   buildMarketingStructuredData,
@@ -8,6 +9,14 @@ import {
 } from './config'
 
 describe('SEO configuration', () => {
+  it('ships useful Call Intake content in the server-delivered HTML', () => {
+    const html = readFileSync('index.html', 'utf8')
+
+    expect(html).toContain('Start focused with a dependable intake workflow.')
+    expect(html).toContain('Request a Call Intake workspace')
+    expect(html).not.toContain('<div id="root"></div>')
+  })
+
   it('indexes only the substantiated public marketing and legal-summary routes', () => {
     expect(getRouteMeta('/').indexable).toBe(true)
     expect(getRouteMeta('/privacy/').canonicalPath).toBe('/privacy')
