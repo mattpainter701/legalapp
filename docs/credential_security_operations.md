@@ -20,7 +20,7 @@ Rotation sequence:
 
    ```bash
    docker compose --env-file .env -f docker-compose.hypervisor.yml \
-     exec -T backend python scripts/rotate_token_encryption.py --dry-run
+     exec -T backend python -m scripts.rotate_token_encryption --dry-run
    ```
 
 4. Run the same command without `--dry-run`. It rewrites OAuth, QBO, tenant
@@ -36,7 +36,7 @@ Rotation sequence:
    docker compose --env-file .env -f docker-compose.hypervisor.yml \
      exec -T -e TOKEN_ENCRYPTION_KEYS="$NEW_FERNET_KEY" \
      -e TOKEN_ENCRYPTION_KEY="$NEW_FERNET_KEY" \
-     backend python scripts/rotate_token_encryption.py --dry-run
+     backend python -m scripts.rotate_token_encryption --dry-run
    ```
 
 7. Only after that single-key proof may every process be deployed with the new

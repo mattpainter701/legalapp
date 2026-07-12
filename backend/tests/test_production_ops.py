@@ -46,6 +46,8 @@ def _production_env(**overrides: str) -> str:
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
         "MCP_UPSTREAM_API_KEY": "mcp-upstream-key-0123456789-abcdef",
         "UPLOADS_HOST_DIR": "/srv/legalapp/uploads",
+        "DISK_PATH": "/",
+        "DISK_MAX_PERCENT": "85",
         "OFFSITE_BACKUP_REQUIRED": "true",
         "OFFSITE_RESTORE_PUBLIC_KEY_FILE": "__TEST_OFFSITE_PUBLIC_KEY__",
         "EMAIL_ENABLED": "true",
@@ -169,12 +171,18 @@ def _validate_capacity(
     memory_gib: int,
     disk_total_gib: int,
     disk_free_gib: int,
+    disk_used_gib: int | None = None,
+    disk_max_percent: int = 85,
 ) -> subprocess.CompletedProcess[str]:
     kib_per_gib = 1024 * 1024
+    if disk_used_gib is None:
+        disk_used_gib = disk_total_gib - disk_free_gib
     command = (
         f"source {shlex.quote(CAPACITY_CHECK.as_posix())}; "
-        f"validate_capacity {shlex.quote(profile)} {cpus} {memory_gib * kib_per_gib} "
-        f"{disk_total_gib * kib_per_gib} {disk_free_gib * kib_per_gib} /data"
+        f"DISK_MAX_PERCENT={disk_max_percent} validate_capacity "
+        f"{shlex.quote(profile)} {cpus} {memory_gib * kib_per_gib} "
+        f"{disk_total_gib * kib_per_gib} {disk_used_gib * kib_per_gib} "
+        f"{disk_free_gib * kib_per_gib} /data"
     )
     return subprocess.run(
         [BASH_BIN, "-c", command],
@@ -221,11 +229,23 @@ def test_host_capacity_gate_accepts_supported_floor() -> None:
         cpus=8,
         memory_gib=24,
         disk_total_gib=160,
-        disk_free_gib=25,
+        disk_free_gib=31,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Host capacity passed" in result.stdout
+    assert "DISK_MAX_PERCENT=85" in result.stdout
+    assert "5.0 GiB build headroom" in result.stdout
+
+    profile_floor = _validate_capacity(
+        cpus=8,
+        memory_gib=24,
+        disk_total_gib=160,
+        disk_free_gib=25,
+        disk_max_percent=95,
+    )
+    assert profile_floor.returncode == 0, profile_floor.stdout + profile_floor.stderr
+    assert "required 25.0 GiB" in profile_floor.stdout
 
 
 def test_host_capacity_gate_rejects_16_gib_and_low_disk_headroom() -> None:
@@ -250,7 +270,8 @@ def test_host_capacity_gate_uses_realistic_hypervisor_disk_profile() -> None:
         cpus=16,
         memory_gib=62,
         disk_total_gib=98,
-        disk_free_gib=17,
+        disk_used_gib=77,
+        disk_free_gib=21,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -261,11 +282,61 @@ def test_host_capacity_gate_uses_realistic_hypervisor_disk_profile() -> None:
         cpus=16,
         memory_gib=62,
         disk_total_gib=98,
-        disk_free_gib=14,
+        disk_used_gib=79,
+        disk_free_gib=19,
     )
     assert low_headroom.returncode != 0
-    assert "at least 15.0 GiB is required" in (
-        low_headroom.stdout + low_headroom.stderr
+    output = low_headroom.stdout + low_headroom.stderr
+    assert "at least 20.7 GiB is required" in output
+    assert "profile floor 15.0 GiB" in output
+    assert "DISK_MAX_PERCENT=85 reserve plus 5.0 GiB build headroom" in output
+
+
+def test_host_capacity_gate_uses_configured_runtime_disk_threshold() -> None:
+    default_threshold = _validate_capacity(
+        profile="hypervisor",
+        cpus=16,
+        memory_gib=62,
+        disk_total_gib=98,
+        disk_used_gib=78,
+        disk_free_gib=20,
+    )
+    assert default_threshold.returncode != 0
+
+    relaxed_threshold = _validate_capacity(
+        profile="hypervisor",
+        cpus=16,
+        memory_gib=62,
+        disk_total_gib=98,
+        disk_used_gib=78,
+        disk_free_gib=20,
+        disk_max_percent=90,
+    )
+    assert relaxed_threshold.returncode == 0, (
+        relaxed_threshold.stdout + relaxed_threshold.stderr
+    )
+    assert "DISK_MAX_PERCENT=90" in relaxed_threshold.stdout
+
+
+def test_production_preflight_rejects_invalid_disk_gate_configuration(
+    tmp_path: Path,
+) -> None:
+    invalid_threshold = _run_preflight(
+        tmp_path,
+        _production_env(DISK_MAX_PERCENT="101"),
+    )
+    assert invalid_threshold.returncode != 0
+    assert "DISK_MAX_PERCENT must be an integer from 1 to 100" in (
+        invalid_threshold.stdout + invalid_threshold.stderr
+    )
+
+    relative_path = _run_preflight(
+        tmp_path,
+        _production_env(DISK_PATH="relative/path"),
+    )
+    assert relative_path.returncode != 0
+    assert "DISK_PATH must be an absolute single-line host path" in (
+        relative_path.stdout + relative_path.stderr
     )
 
 
@@ -317,7 +388,7 @@ def test_capacity_gate_checks_all_resolved_bind_and_docker_filesystems() -> None
 
     assert "docker info --format '{{.DockerRootDir}}'" in preflight
     assert (
-        'capacity_paths=("$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")'
+        'capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")'
         in preflight
     )
     assert 'capacity_paths+=("${compose_bind_sources[@]}")' in preflight
@@ -327,6 +398,8 @@ def test_capacity_gate_checks_all_resolved_bind_and_docker_filesystems() -> None
     assert "extract_compose_bind_sources" in capacity_check
     assert 'for requested_path in "$@"' in capacity_check
     assert "checked_devices" in capacity_check
+    assert "DEPLOY_BUILD_HEADROOM_KIB" in capacity_check
+    assert "runtime_free_percent=$((101 - disk_max_percent))" in capacity_check
 
 
 def test_compose_bind_extractor_covers_future_absolute_sources() -> None:

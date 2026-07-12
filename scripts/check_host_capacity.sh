@@ -13,6 +13,11 @@ readonly VPS_MIN_DISK_TOTAL_KIB=$((160 * 1024 * 1024))
 readonly VPS_MIN_DISK_AVAILABLE_KIB=$((25 * 1024 * 1024))
 readonly HYPERVISOR_MIN_DISK_TOTAL_KIB=$((80 * 1024 * 1024))
 readonly HYPERVISOR_MIN_DISK_AVAILABLE_KIB=$((15 * 1024 * 1024))
+# Builds and pre-deploy recovery artifacts consume transient space after this
+# check runs. Reserve a fixed amount in addition to the free space needed for
+# `df` to remain strictly below the runtime DISK_MAX_PERCENT gate.
+readonly DEFAULT_DISK_MAX_PERCENT=85
+readonly DEPLOY_BUILD_HEADROOM_KIB=$((5 * 1024 * 1024))
 
 format_gib() {
   awk -v kib="$1" 'BEGIN { printf "%.1f", kib / 1024 / 1024 }'
@@ -20,8 +25,11 @@ format_gib() {
 
 validate_capacity() {
   local profile="$1" cpus="$2" memory_kib="$3" disk_total_kib="$4"
-  local disk_available_kib="$5" disk_path="$6"
-  local min_disk_total_kib min_disk_available_kib
+  local disk_used_kib="$5" disk_available_kib="$6" disk_path="$7"
+  local disk_max_percent="${DISK_MAX_PERCENT:-$DEFAULT_DISK_MAX_PERCENT}"
+  local min_disk_total_kib min_disk_available_kib disk_usable_kib
+  local runtime_free_percent runtime_free_kib threshold_required_kib
+  local effective_required_kib
   local failures=()
 
   case "$profile" in
@@ -42,7 +50,11 @@ validate_capacity() {
   [[ "$cpus" =~ ^[0-9]+$ ]] || failures+=("online CPU count could not be determined")
   [[ "$memory_kib" =~ ^[0-9]+$ ]] || failures+=("total memory could not be determined")
   [[ "$disk_total_kib" =~ ^[0-9]+$ ]] || failures+=("filesystem size could not be determined for $disk_path")
+  [[ "$disk_used_kib" =~ ^[0-9]+$ ]] || failures+=("used disk space could not be determined for $disk_path")
   [[ "$disk_available_kib" =~ ^[0-9]+$ ]] || failures+=("free disk space could not be determined for $disk_path")
+  [[ "$disk_max_percent" =~ ^[0-9]+$ ]] \
+    && (( disk_max_percent >= 1 && disk_max_percent <= 100 )) \
+    || failures+=("DISK_MAX_PERCENT must be an integer from 1 to 100")
 
   if [[ "$cpus" =~ ^[0-9]+$ ]] && (( cpus < MIN_HOST_CPUS )); then
     failures+=("$cpus online CPU(s); at least $MIN_HOST_CPUS are required")
@@ -53,8 +65,32 @@ validate_capacity() {
   if [[ "$disk_total_kib" =~ ^[0-9]+$ ]] && (( disk_total_kib < min_disk_total_kib )); then
     failures+=("$(format_gib "$disk_total_kib") GiB total on $disk_path; at least $(format_gib "$min_disk_total_kib") GiB is required for the $profile profile")
   fi
-  if [[ "$disk_available_kib" =~ ^[0-9]+$ ]] && (( disk_available_kib < min_disk_available_kib )); then
-    failures+=("$(format_gib "$disk_available_kib") GiB free on $disk_path; at least $(format_gib "$min_disk_available_kib") GiB is required before deployment for the $profile profile")
+  if [[ "$disk_total_kib" =~ ^[0-9]+$ && "$disk_used_kib" =~ ^[0-9]+$ \
+        && "$disk_available_kib" =~ ^[0-9]+$ ]]; then
+    if (( disk_used_kib > disk_total_kib \
+          || disk_available_kib > disk_total_kib \
+          || disk_used_kib + disk_available_kib > disk_total_kib )); then
+      failures+=("filesystem usage values are inconsistent for $disk_path")
+    elif [[ "$disk_max_percent" =~ ^[0-9]+$ ]] \
+      && (( disk_max_percent >= 1 && disk_max_percent <= 100 )); then
+      # POSIX df rounds capacity upward and production_check rejects capacity
+      # equal to the threshold. Keeping the exact used/(used+available) ratio
+      # at or below threshold-1 guarantees the post-build df value remains
+      # strictly below DISK_MAX_PERCENT.
+      disk_usable_kib=$((disk_used_kib + disk_available_kib))
+      runtime_free_percent=$((101 - disk_max_percent))
+      runtime_free_kib=$(((disk_usable_kib * runtime_free_percent + 99) / 100))
+      threshold_required_kib=$((runtime_free_kib + DEPLOY_BUILD_HEADROOM_KIB))
+      effective_required_kib="$min_disk_available_kib"
+      if (( threshold_required_kib > effective_required_kib )); then
+        effective_required_kib="$threshold_required_kib"
+      fi
+      if (( disk_available_kib < effective_required_kib )); then
+        failures+=("$(format_gib "$disk_available_kib") GiB free on $disk_path; at least $(format_gib "$effective_required_kib") GiB is required before deployment for the $profile profile (profile floor $(format_gib "$min_disk_available_kib") GiB; DISK_MAX_PERCENT=$disk_max_percent reserve plus $(format_gib "$DEPLOY_BUILD_HEADROOM_KIB") GiB build headroom)")
+      fi
+    elif (( disk_available_kib < min_disk_available_kib )); then
+      failures+=("$(format_gib "$disk_available_kib") GiB free on $disk_path; at least $(format_gib "$min_disk_available_kib") GiB is required before deployment for the $profile profile")
+    fi
   fi
 
   if (( ${#failures[@]} )); then
@@ -64,7 +100,7 @@ validate_capacity() {
     return 1
   fi
 
-  echo "Host capacity passed ($profile): ${cpus} CPU(s), $(format_gib "$memory_kib") GiB RAM, $(format_gib "$disk_total_kib") GiB total / $(format_gib "$disk_available_kib") GiB free on $disk_path."
+  echo "Host capacity passed ($profile): ${cpus} CPU(s), $(format_gib "$memory_kib") GiB RAM, $(format_gib "$disk_total_kib") GiB total / $(format_gib "$disk_available_kib") GiB free on $disk_path (required $(format_gib "$effective_required_kib") GiB with DISK_MAX_PERCENT=$disk_max_percent and $(format_gib "$DEPLOY_BUILD_HEADROOM_KIB") GiB build headroom)."
 }
 
 nearest_existing_path() {
@@ -171,20 +207,21 @@ main() {
   shift
 
   local requested_path disk_path disk_device cpus memory_kib
-  local disk_total_kib disk_available_kib failed=0
+  local disk_total_kib disk_used_kib disk_available_kib failed=0
   cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || true)"
   memory_kib="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)"
   declare -A checked_devices=()
   for requested_path in "$@"; do
     disk_path="$(nearest_existing_path "$requested_path")"
-    read -r disk_device disk_total_kib disk_available_kib < <(
-      df -Pk "$disk_path" 2>/dev/null | awk 'NR == 2 { print $1, $2, $4; exit }'
+    read -r disk_device disk_total_kib disk_used_kib disk_available_kib < <(
+      df -Pk "$disk_path" 2>/dev/null | awk 'NR == 2 { print $1, $2, $3, $4; exit }'
     ) || true
     disk_device="${disk_device:-unresolved:$disk_path}"
     [[ -z "${checked_devices[$disk_device]:-}" ]] || continue
     checked_devices["$disk_device"]=1
     if ! validate_capacity "$profile" "$cpus" "$memory_kib" \
-      "${disk_total_kib:-}" "${disk_available_kib:-}" "$disk_path"; then
+      "${disk_total_kib:-}" "${disk_used_kib:-}" \
+      "${disk_available_kib:-}" "$disk_path"; then
       failed=1
     fi
   done

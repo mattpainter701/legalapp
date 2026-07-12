@@ -64,6 +64,13 @@ requires 8 online CPUs and 24 GiB guest-visible RAM. Every distinct filesystem
 used by `UPLOADS_HOST_DIR`, the checkout/release backups, Docker's root, the
 application/LiteLLM database binds, or any other bind in the exact resolved
 production Compose model must provide at least 160 GiB total and 25 GiB free.
+The 25 GiB value is the VPS profile floor, not always the effective minimum:
+preflight reserves another 5 GiB for transient build and recovery artifacts and
+requires enough free space for `df` to remain strictly below
+`DISK_MAX_PERCENT` after that headroom is consumed. The larger requirement
+wins. At the default 85% threshold, a 160 GiB usable filesystem requires about
+30.6 GiB free before deployment: 16% of `df`'s used-plus-available capacity,
+plus the 5 GiB headroom.
 For the VPS topology, preflight additionally requires the reviewed database
 sources `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`; do not
 relocate them without updating and re-proving the topology and capacity gate.
@@ -79,10 +86,13 @@ The capacity gate accepts only the repository's exact production Compose profile
 and inspects every resolved host bind source before deployment.
 Base-plus-production uses the VPS disk floor above. The Skynet hypervisor keeps
 the same 8 CPU / 24 GiB RAM floor and uses its established 80 GiB total /
-15 GiB free floor on every distinct checked filesystem. Its separate disk-usage
-readiness and alert threshold
-still applies, so passing the preflight floor is not permission to let usage
-grow. A reviewed exception for another partitioned/nonstandard host is
+15 GiB free profile floor on every distinct checked filesystem. The runtime
+threshold reserve plus 5 GiB build headroom is layered on top. At the default
+85% threshold, the computed requirement is 16% of `df`'s used-plus-available
+capacity plus 5 GiB; preflight prints the exact effective requirement for each
+filesystem. This deliberately prevents a host from passing preflight and then
+crossing the runtime disk gate during the build. A reviewed exception for
+another partitioned/nonstandard host is
 process-only, requires a specific operational reason, and is not go-live
 capacity evidence:
 

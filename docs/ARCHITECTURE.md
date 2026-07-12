@@ -64,12 +64,17 @@ deployment can reach the data guard or build. It requires 8 online CPUs and
 24 GiB guest-visible RAM. Every distinct filesystem backing `UPLOADS_HOST_DIR`,
 the checkout/release backups, Docker's root, the application and LiteLLM
 database binds, or any other bind in the exact resolved Compose model must have
-160 GiB total and 25 GiB free. The VPS gate also requires its reviewed database
+160 GiB total and keeps a 25 GiB free profile floor. On every checked
+filesystem, the gate additionally preserves 5 GiB for transient build/recovery
+artifacts and computes the free-space reserve needed for `df` to remain
+strictly below the configured `DISK_MAX_PERCENT` after that headroom is used;
+the larger requirement wins. The VPS gate also requires its reviewed database
 sources, `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`, to
 remain present; an unreviewed relocation fails closed. Named volumes remain
-covered by Docker's root filesystem. The Skynet hypervisor profile keeps the same CPU/memory floor but
-accepts its separately monitored 80 GiB total / 15 GiB free floor on each of
-those filesystems; it is selected only by the repository's exact
+covered by Docker's root filesystem. The Skynet hypervisor profile keeps the
+same CPU/memory floor and its separately monitored 80 GiB total / 15 GiB free
+profile floor on each of those filesystems, with the same threshold-derived
+reserve and 5 GiB build headroom layered above it. It is selected only by the repository's exact
 `docker-compose.hypervisor.yml` path. The supported
 AWS Lightsail bundle is the general-purpose 2Xlarge-32GB Linux plan
 (8 vCPU, 32 GB memory, 640 GB SSD); smaller bundles are not production targets.

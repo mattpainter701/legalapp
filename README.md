@@ -87,7 +87,13 @@ Production preflight enforces a conservative hard floor of 8 online CPUs and
 24 GiB guest-visible RAM. Every distinct filesystem used by uploads,
 application/LiteLLM database binds, release backups/source, Docker, or any other
 bind in the exact resolved production Compose model must provide at least 160
-GiB total and 25 GiB free. The reviewed VPS database paths are
+GiB total and retain the 25 GiB profile floor. Preflight also reserves 5 GiB
+for transient build/recovery artifacts and requires enough additional free
+space for `df` to remain strictly below `DISK_MAX_PERCENT` after that reserve
+is consumed. At the default 85% threshold, a 160 GiB usable filesystem needs
+about 30.6 GiB free before deployment: 16% of `df`'s used-plus-available
+capacity, plus the 5 GiB headroom. The threshold-derived requirement wins when
+it is higher than the profile floor. The reviewed VPS database paths are
 `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`; changing or
 removing either fails preflight until the topology and gate are reviewed together.
 The 24 GiB gate accounts for provider/guest reporting while still requiring the

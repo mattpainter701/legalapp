@@ -105,6 +105,19 @@ if [[ -e "$uploads_host_dir" ]]; then
   [[ -d "$uploads_host_dir" && ! -L "$uploads_host_dir" ]] || errors+=("UPLOADS_HOST_DIR must be a non-symlink directory")
 fi
 
+monitor_disk_path="$(get_env DISK_PATH)"
+monitor_disk_path="${monitor_disk_path:-/}"
+disk_max_percent="$(get_env DISK_MAX_PERCENT)"
+disk_max_percent="${disk_max_percent:-85}"
+[[ "$monitor_disk_path" == /* && "$monitor_disk_path" != *$'\n'* \
+  && "$monitor_disk_path" != *$'\r'* ]] \
+  || errors+=("DISK_PATH must be an absolute single-line host path")
+[[ -e "$monitor_disk_path" ]] \
+  || errors+=("DISK_PATH must name an existing host path")
+[[ "$disk_max_percent" =~ ^[0-9]+$ ]] \
+  && (( disk_max_percent >= 1 && disk_max_percent <= 100 )) \
+  || errors+=("DISK_MAX_PERCENT must be an integer from 1 to 100")
+
 email_port="$(get_env EMAIL_PORT)"
 [[ "$email_port" =~ ^[0-9]+$ ]] && (( email_port >= 1 && email_port <= 65535 )) || errors+=("EMAIL_PORT must be an integer from 1 to 65535")
 [[ "$(get_env EMAIL_FROM)" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || errors+=("EMAIL_FROM must be a valid email address")
@@ -205,7 +218,7 @@ read -r -a compose_file_list <<< "$COMPOSE_FILES"
 (( ${#compose_file_list[@]} > 0 )) || { echo "FAIL: no production Compose files configured" >&2; exit 1; }
 declare -A guarded_compose_vars=()
 compose_file_paths=()
-for key in "${required[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE; do
+for key in "${required[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE DISK_PATH DISK_MAX_PERCENT; do
   guarded_compose_vars["$key"]=1
 done
 for compose_file in "${compose_file_list[@]}"; do
@@ -295,7 +308,7 @@ docker_root_dir="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true
   echo "FAIL: DockerRootDir could not be resolved to a non-root absolute path" >&2
   exit 1
 }
-capacity_paths=("$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")
+capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")
 capacity_paths+=("${compose_bind_sources[@]}")
-main "$capacity_profile" "${capacity_paths[@]}"
+DISK_MAX_PERCENT="$disk_max_percent" main "$capacity_profile" "${capacity_paths[@]}"
 echo "Production preflight passed: required secrets are non-placeholder, Compose resolves, and host capacity is safe."

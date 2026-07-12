@@ -25,14 +25,30 @@ jobs:
         id: http
         continue-on-error: true
         run: |
+          require_single_hsts() {
+            local url="$1" headers count value
+            headers="$(curl --fail --silent --show-error --max-time 20 --dump-header - --output /dev/null "$url" | tr -d '\r')"
+            count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+            value="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+            [[ "$count" == "1" ]]
+            printf '%s' "$value" \
+              | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'
+          }
+
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/health/readiness" | tee /tmp/readiness.json | grep -q '"status":"ok"'
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/" >/dev/null
-          hsts_headers="$(curl --fail --silent --show-error --max-time 20 --dump-header - --output /dev/null "$PRODUCTION_ORIGIN/" | tr -d '\r')"
-          hsts_count="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
-          hsts_value="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
-          [[ "$hsts_count" == "1" ]]
-          printf '%s' "$hsts_value" \
-            | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'
+          require_single_hsts "$PRODUCTION_ORIGIN/"
+          require_single_hsts "$PRODUCTION_ORIGIN/api/version"
+
+          http_api_headers="$(curl --silent --show-error --max-time 20 --dump-header - --output /dev/null "http://$PRODUCTION_DOMAIN/api/version" | tr -d '\r')"
+          http_api_status="$(printf '%s\n' "$http_api_headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
+          http_api_location_count="$(printf '%s\n' "$http_api_headers" | awk 'tolower($0) ~ /^location:/ { count++ } END { print count + 0 }')"
+          http_api_location="$(printf '%s\n' "$http_api_headers" | awk 'tolower($0) ~ /^location:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          http_api_hsts_count="$(printf '%s\n' "$http_api_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+          [[ "$http_api_status" == "301" ]]
+          [[ "$http_api_location_count" == "1" ]]
+          [[ "$http_api_location" == "$PRODUCTION_ORIGIN/api/version" ]]
+          [[ "$http_api_hsts_count" == "0" ]]
 
       - name: Verify TLS remains valid for 14 days
         id: tls

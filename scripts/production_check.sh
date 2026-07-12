@@ -94,6 +94,29 @@ failures=()
 
 fail() { failures+=("$1"); }
 
+require_single_hsts() {
+  local label="$1" url="$2" headers count value
+  headers="$(curl -fsS --max-time 15 -D - -o /dev/null "$url" | tr -d '\r' || true)"
+  count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+  value="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+  if [[ "$count" != "1" ]] || ! printf '%s' "$value" \
+    | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'; then
+    fail "$label must contain exactly one valid Strict-Transport-Security policy"
+  fi
+}
+
+require_exact_http_redirect() {
+  local label="$1" url="$2" expected="$3" headers status location_count location hsts_count
+  headers="$(curl -sS --max-time 15 -D - -o /dev/null "$url" | tr -d '\r' || true)"
+  status="$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP\// { status=$2 } END { print status }')"
+  location_count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^location:/ { count++ } END { print count + 0 }')"
+  location="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^location:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+  hsts_count="$(printf '%s\n' "$headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+  if [[ "$status" != "301" || "$location_count" != "1" || "$location" != "$expected" || "$hsts_count" != "0" ]]; then
+    fail "$label must return one HTTP 301 to $expected without HSTS"
+  fi
+}
+
 disk_used="$(df -P "$DISK_PATH" | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
 [[ "$disk_used" =~ ^[0-9]+$ ]] || fail "disk usage could not be read for $DISK_PATH"
 if [[ "$disk_used" =~ ^[0-9]+$ ]] && (( disk_used >= DISK_MAX_PERCENT )); then
@@ -236,13 +259,12 @@ fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
-hsts_headers="$(curl -fsS --max-time 15 -D - -o /dev/null "https://${DOMAIN}/" | tr -d '\r' || true)"
-hsts_count="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
-hsts_value="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
-if [[ "$hsts_count" != "1" ]] || ! printf '%s' "$hsts_value" \
-  | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'; then
-  fail "public HTTPS response must contain exactly one valid Strict-Transport-Security policy"
-fi
+require_single_hsts "public HTTPS frontend" "https://${DOMAIN}/"
+require_single_hsts "public HTTPS /api/version" "https://${DOMAIN}/api/version"
+require_exact_http_redirect \
+  "public HTTP /api/version" \
+  "http://${DOMAIN}/api/version" \
+  "https://${DOMAIN}/api/version"
 if ! timeout 15 openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" </dev/null 2>/dev/null \
   | openssl x509 -checkend "$((TLS_MIN_VALID_DAYS * 86400))" -noout >/dev/null 2>&1; then
   fail "TLS certificate expires within ${TLS_MIN_VALID_DAYS} days or could not be verified"

@@ -32,11 +32,18 @@ trivy image --severity HIGH,CRITICAL --exit-code 1 <image>
 
 ## 2. TLS & security headers (nginx)
 
-The production `:443` server block in `nginx/nginx.conf`:
+The production listeners in `nginx/nginx.conf` enforce:
 
 - `ssl_protocols TLSv1.2 TLSv1.3;` only.
-- `Strict-Transport-Security: max-age=63072000; includeSubDomains` (TLS block only).
-- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+- `Strict-Transport-Security: max-age=63072000; includeSubDomains` on direct
+  TLS and on edge-terminated HTTPS only when the forwarding peer is in the
+  reviewed Cloudflare/cloudflared ranges.
+- HTTP 301 for every untrusted/plain request except ACME HTTP-01. A direct
+  client cannot bypass the redirect merely by spoofing `X-Forwarded-Proto`.
+- API locations inherit the same HSTS, CSP, frame, content-type, referrer,
+  permissions, and robots policies; the SSE proxy disables buffering without
+  declaring a location-level `add_header` that would shadow them.
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
   `Referrer-Policy: strict-origin-when-cross-origin`.
 - A conservative `Content-Security-Policy`. **Caveat:** the CSP may need tuning
   for the SPA (fonts, inline styles, API origin). It is intentionally tight —

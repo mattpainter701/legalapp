@@ -179,7 +179,7 @@ jobs:
       - name: Verify frontend image delivery and stale-volume rejection
         run: sh scripts/test_frontend_image_delivery.sh
 
-      - name: Verify nginx Zoom webhook ingress policy
+      - name: Verify nginx webhook ingress and API security headers
         run: sh scripts/test_nginx_webhook_ingress.sh
 
   # Real-browser proof of the sold first-customer workflow. Unlike the Vitest
