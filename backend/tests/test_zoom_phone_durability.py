@@ -1613,7 +1613,7 @@ def test_production_gate_runs_backend_zoom_api_probe():
     probe = (root / "backend" / "scripts" / "check_zoom_phone.py").read_text(
         encoding="utf-8"
     )
-    assert "python scripts/check_zoom_phone.py" in production_check
+    assert "python -m scripts.check_zoom_phone" in production_check
     assert "probe_zoom_phone_connection" in probe
     assert "app.zoom_account_id.strip()" in probe
     assert "grant.service_account_email.strip()" in probe

@@ -165,7 +165,8 @@ if [[ "$ZOOM_REQUIRED" == true ]]; then
     --data '{"event":"endpoint.url_validation","payload":{"plainToken":"clarity-production-probe"}}' \
     "https://${DOMAIN}/api/integrations/zoom-phone/webhook/${ZOOM_REQUIRED_TENANT_ID}" || true)"
   [[ "$zoom_crc" == *'"plainToken":"clarity-production-probe"'* && "$zoom_crc" == *'"encryptedToken"'* ]] || fail "Zoom Phone production-ingress CRC handshake failed for the required tenant"
-  "${compose[@]}" exec -T backend python scripts/check_zoom_phone.py \
+  # Run as a module so /app remains on sys.path in the non-root image.
+  "${compose[@]}" exec -T backend python -m scripts.check_zoom_phone \
     --tenant-id "$ZOOM_REQUIRED_TENANT_ID" >/dev/null 2>&1 || fail "Zoom Phone live API probe failed for the required tenant"
 else
   echo "WARNING: NOT GO-LIVE — Zoom Phone launch gates were skipped for fresh-host bootstrap." >&2
