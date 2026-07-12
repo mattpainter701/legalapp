@@ -15,6 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "prod_env_preflight.sh"
 CAPACITY_CHECK = ROOT / "scripts" / "check_host_capacity.sh"
+PRODUCTION_CHECK = ROOT / "scripts" / "production_check.sh"
 BASH_BIN = os.environ.get("BASH", "bash")
 NEW_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 OLD_FERNET_KEY = "KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY="
@@ -25,12 +26,14 @@ def _production_env(**overrides: str) -> str:
         "DOMAIN": "ops-test.invalid",
         "BACKEND_URL": "https://ops-test.invalid",
         "FRONTEND_URL": "https://ops-test.invalid",
+        "VITE_PUBLIC_SITE_URL": "https://ops-test.invalid",
         "VITE_CONTACT_URL": "mailto:ops@example.invalid",
         "DEV_MODE": "false",
         "PUBLIC_SIGNUP_ENABLED": "false",
         "VITE_PUBLIC_SIGNUP_ENABLED": "false",
         "SECRET_KEY": "ops-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz",
         "MCP_PRODUCT_ENABLED": "false",
+        "PLATFORM_LEGACY_BOOTSTRAP_ENABLED": "false",
         "POSTGRES_PASSWORD": "owner-password-0123456789",
         "CLARITY_APP_PASSWORD": "runtime-password-0123456789",
         "REDIS_PASSWORD": "redis-password-0123456789",
@@ -46,6 +49,9 @@ def _production_env(**overrides: str) -> str:
         "MCP_SERVER_URL": "http://courtlistener-mcp:8000",
         "MCP_UPSTREAM_API_KEY": "mcp-upstream-key-0123456789-abcdef",
         "UPLOADS_HOST_DIR": "/srv/legalapp/uploads",
+        "HOST_STATUS_HOST_DIR": "/srv/legalapp/host-status",
+        "HOST_DISK_STATUS_FILE": "/run/legalapp-host-status/disk-status.json",
+        "HEALTH_HOST_DISK_MAX_AGE_SECONDS": "180",
         "DISK_PATH": "/",
         "DISK_MAX_PERCENT": "85",
         "OFFSITE_BACKUP_REQUIRED": "true",
@@ -155,6 +161,46 @@ def _run_preflight(
     env.update(process_overrides or {})
     return subprocess.run(
         [BASH_BIN, str(PREFLIGHT)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+
+def _run_production_policy_check(
+    tmp_path: Path,
+    *,
+    legacy_value: str | None,
+    mcp_value: str | None = "false",
+    process_overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env_text = _production_env()
+    lines = [
+        line
+        for line in env_text.splitlines()
+        if not line.startswith(
+            ("PLATFORM_LEGACY_BOOTSTRAP_ENABLED=", "MCP_PRODUCT_ENABLED=")
+        )
+    ]
+    if legacy_value is not None:
+        lines.append(f"PLATFORM_LEGACY_BOOTSTRAP_ENABLED={legacy_value}")
+    if mcp_value is not None:
+        lines.append(f"MCP_PRODUCT_ENABLED={mcp_value}")
+    env_file = tmp_path / "production-check.env"
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("PLATFORM_LEGACY_BOOTSTRAP_ENABLED", None)
+    env.pop("MCP_PRODUCT_ENABLED", None)
+    env["ENV_FILE"] = str(env_file)
+    env["COMPOSE_FILES"] = str(ROOT / "docker-compose.hypervisor.yml")
+    env["ZOOM_REQUIRED"] = "false"
+    env["MONITOR_STATE_FILE"] = str(tmp_path / "monitor.state")
+    env.update(process_overrides or {})
+    return subprocess.run(
+        [BASH_BIN, str(PRODUCTION_CHECK)],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -388,8 +434,8 @@ def test_capacity_gate_checks_all_resolved_bind_and_docker_filesystems() -> None
 
     assert "docker info --format '{{.DockerRootDir}}'" in preflight
     assert (
-        'capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")'
-        in preflight
+        'capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$host_status_dir" '
+        '"$ROOT_DIR/backups" "$docker_root_dir")' in preflight
     )
     assert 'capacity_paths+=("${compose_bind_sources[@]}")' in preflight
     assert "/data/legalapp/postgres" in preflight
@@ -582,6 +628,137 @@ def test_production_preflight_rejects_public_signup_flag_drift(tmp_path: Path) -
     assert result.returncode != 0
     assert "VITE_PUBLIC_SIGNUP_ENABLED must remain false" in output
     assert "PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match" in output
+
+
+def test_production_preflight_rejects_public_site_domain_mismatch(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(VITE_PUBLIC_SITE_URL="https://different-host.invalid"),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN" in output
+
+
+def test_production_preflight_rejects_missing_legacy_platform_disable(
+    tmp_path: Path,
+) -> None:
+    env_text = "".join(
+        line
+        for line in _production_env().splitlines(keepends=True)
+        if not line.startswith("PLATFORM_LEGACY_BOOTSTRAP_ENABLED=")
+    )
+    result = _run_preflight(tmp_path, env_text)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "PLATFORM_LEGACY_BOOTSTRAP_ENABLED" in output
+    assert "explicitly false" in output
+
+
+def test_production_preflight_rejects_enabled_legacy_platform_bridge(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path, _production_env(PLATFORM_LEGACY_BOOTSTRAP_ENABLED="true")
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" in output
+
+
+def test_production_check_rejects_missing_or_enabled_legacy_platform_bridge(
+    tmp_path: Path,
+) -> None:
+    for value in (None, "true"):
+        result = _run_production_policy_check(tmp_path, legacy_value=value)
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert "PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" in output
+
+
+def test_production_check_rejects_mcp_env_file_and_process_drift(
+    tmp_path: Path,
+) -> None:
+    missing = _run_production_policy_check(
+        tmp_path,
+        legacy_value="false",
+        mcp_value=None,
+    )
+    missing_output = missing.stdout + missing.stderr
+    assert missing.returncode != 0
+    assert "MCP_PRODUCT_ENABLED must remain false" in missing_output
+
+    conflict = _run_production_policy_check(
+        tmp_path,
+        legacy_value="false",
+        mcp_value="true",
+        process_overrides={"MCP_PRODUCT_ENABLED": "false"},
+    )
+    conflict_output = conflict.stdout + conflict.stderr
+    assert conflict.returncode != 0
+    assert "inherited MCP_PRODUCT_ENABLED conflicts" in conflict_output
+
+
+def test_production_check_asserts_disabled_public_mcp_surface() -> None:
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+    assert '"https://${DOMAIN}/api/mcp" 404' in production_check
+    assert '"https://${DOMAIN}/api/mcp/manifest" 404' in production_check
+    scheduled_health = (
+        ROOT / ".github" / "workflows" / "production-health.yml"
+    ).read_text(encoding="utf-8")
+    assert "for disabled_mcp_path in /api/mcp /api/mcp/manifest" in scheduled_health
+    assert '[[ "$disabled_mcp_status" == "404" ]]' in scheduled_health
+
+
+def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
+    hypervisor = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
+    production = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    for model in (hypervisor, production):
+        backend = model["services"]["backend"]
+        assert any(
+            "/run/legalapp-host-status:ro" in volume
+            for volume in backend.get("volumes", [])
+        )
+        assert backend["environment"]["HOST_DISK_STATUS_FILE"] == (
+            "/run/legalapp-host-status/disk-status.json"
+        )
+        assert not any(
+            "/var/run/docker.sock" in volume or ":/var/lib/docker" in volume
+            for volume in backend.get("volumes", [])
+        )
+
+    deploy = (ROOT / "scripts" / "deploy_prod.sh").read_text(encoding="utf-8")
+    assert "install_host_disk_timer.sh" in deploy
+    assert "enable-linger" in deploy
+    installer = (ROOT / "scripts" / "install_host_disk_timer.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "render_host_disk_units.sh" in installer
+    unit_gate = (ROOT / "scripts" / "test_host_disk_systemd_units.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "systemd-analyze verify" in unit_gate
+    assert "render_host_disk_units.sh" in unit_gate
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "test_host_disk_systemd_units.sh" in ci_workflow
+    rehearsal = (ROOT / "scripts" / "rehearse_fresh_host.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "update_host_disk_status.py" in rehearsal
+    workflow = (ROOT / ".github" / "workflows" / "production-health.yml").read_text(
+        encoding="utf-8"
+    )
+    assert '"host_disks":"ok"' in workflow
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+    assert "https://${DOMAIN}/health/readiness" in production_check
+    assert 'components.get("host_disks") == "ok"' in production_check
 
 
 def test_production_preflight_rejects_shared_upstream_auth(tmp_path: Path) -> None:

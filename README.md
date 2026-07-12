@@ -139,6 +139,9 @@ The production frontend build uses `VITE_PUBLIC_SITE_URL` to emit absolute
 canonical/social URLs, `robots.txt`, `sitemap.xml`, and JSON-LD. `/`, `/privacy`,
 and `/terms` are indexable. Login, signup, portals, and every authenticated
 workspace route are marked `noindex, nofollow` and omitted from the sitemap.
+Production preflight requires this value and verifies that, after removing one
+optional trailing slash, it exactly equals `https://$DOMAIN`; both supported
+Compose topologies pass that explicit value into the frontend build.
 
 This is a client-rendered SPA. The home page has useful static metadata and a
 `noscript` summary, but it is not server-rendered or prerendered. If organic
@@ -218,6 +221,8 @@ the off-host restore proof described in the runbook.
 - [SBOM tracking inventory](docs/SBOM_TRACKING_INVENTORY.md)
 
 The current Alembic head for this release is
-`090_zoom_account_binding`; migrations `086`-`090` cover retained PDF template
+`091_pdf_preview_evidence`; migrations `086`-`091` cover retained PDF template
 sources, fail-closed MCP product security, tenant-isolated scheduler logs,
-durable Zoom Phone call import, and explicit Zoom Account binding.
+durable Zoom Phone call import, explicit Zoom Account binding, and value-bound
+single-consumption PDF activation/generation preview evidence with fail-closed
+storage reconciliation state.

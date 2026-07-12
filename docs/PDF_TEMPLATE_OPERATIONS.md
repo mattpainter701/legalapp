@@ -30,9 +30,12 @@ renderer.
    choice/radio option. Resolve every warning before creating the template.
 4. Choose **Create reviewed template**. New upload-based templates are
    intentionally inactive.
-5. Open **Preview**, enter representative values (including long names and
-   addresses), and inspect every page of the binary PDF preview. A successful
-   binary preview records the template's test-render timestamp.
+5. Use **Preview draft** for blank or partial diagnostic renders; it never
+   records activation readiness. Enter representative values in every
+   non-signature field (including long names and addresses), choose **Record
+   activation preview**, and inspect every page. Only that representative,
+   flattened action records value-bound activation evidence for the current
+   user and unchanged template.
 6. Correct the source PDF if a field is too small or has the wrong type. Source
    files and field maps cannot be safely replaced in place; recreate the
    template from the corrected PDF.
@@ -43,7 +46,9 @@ renderer.
    again.
 8. To create a customer document, choose the active template, select a matter,
    review smart-fill suggestions and their provenance, explicitly review every
-   field, and generate the matter document.
+   field, and preview the exact values. Inspect every page, then save without
+   changing the matter, fields, or output mode. Generation preview evidence is
+   valid for 30 minutes; activation evidence is valid for 24 hours.
 9. Download the stored matter document and inspect it before use or signature.
 
 Smart-fill is a suggestion system. It can populate deterministic matter,
@@ -52,15 +57,37 @@ marked for review. It does not make a legal or factual approval decision.
 
 ## Preview versus final output
 
-| Behavior | Preview | Save to matter |
-|---|---|---|
-| Requires active template | No | Yes |
-| Enforces required fields | No | Yes |
-| Requires every mapped field to be reviewed | No | Yes; blank/false must be explicit |
-| Records a successful template test render | Yes | No |
-| Creates a matter document | No | Yes |
-| Default PDF mode | Flattened | Flattened |
-| Signature field | Must remain blank | Must remain blank for the signing workflow |
+| Behavior | Draft preview | Activation preview | Save to matter |
+|---|---|---|---|
+| Requires active template | No | No | Yes |
+| Enforces required fields | No | Yes | Yes |
+| Requires every mapped field to be reviewed | No | Yes; representative values | Yes; blank/false must be explicit |
+| Records activation evidence | No | Yes | No |
+| Creates a matter document | No | No | Yes |
+| Default PDF mode | Flattened | Flattened | Flattened |
+| Signature field | Must remain blank | Must remain blank | Must remain blank for the signing workflow |
+
+For PDFs, **Save to matter** also requires a current generation-preview ID
+bound to the same tenant, user, template contract, matter, flattening mode, and
+exact field values. The database never retains raw preview field values. Normal
+evidence contains field names, counts, integrity hashes, and a server-keyed HMAC
+of the values. A reconciliation-blocked row may additionally contain bounded
+provider item/drive IDs, an output filename/hash, intended document ID, or a
+tenant-scoped local path. That protected operational metadata exists only to
+reconcile a storage/database divergence and remains tenant-isolated by FORCE
+RLS.
+The final render must also have the exact SHA-256 recorded for the reviewed
+preview. Generation evidence is consumed atomically with its MatterDocument and
+MatterEvent. A lost or retried response returns that existing document
+idempotently; it never creates a second file from the same preview.
+
+Consumed evidence follows the saved document's records lifecycle and survives
+template deletion (its template reference becomes null). Recent generation
+attempts also survive template deletion so a failed save can still persist its
+reconciliation block after rollback releases row locks. Generation trimming
+removes only non-terminal evidence expired beyond a one-hour safety grace;
+draft/activation attempts remain capped newest-first. Cleanup never removes
+consumed or reconciliation evidence.
 
 Flattened output removes form widgets and paints reviewed values into the page,
 which avoids dependence on a recipient's PDF viewer. An editable output can be
@@ -94,7 +121,10 @@ approval record.
 | Required field empty/unchecked | Final matter render enforces the source/schema requirement | Supply the reviewed value or correct the requirement in the source and recreate. |
 | Invalid choice/radio option | Value is not one of the source field's allowed export values | Select an advertised option; correct the source field if its options are wrong. |
 | `Source missing - recreate this PDF template` in the UI | Template predates retained-source migration | Recreate from the original source, preview, activate the replacement, then retire the old row. |
-| `Preview this PDF successfully before activating it` | The source-backed template has not passed a binary preview, or its field map/body changed afterward | Open Preview, inspect every rendered page, close the preview, then activate the template. |
+| `Run a representative flattened PDF preview` | The last preview was blank/partial, expired, belonged to another user, or no longer matches the source/field map | Enter representative values for every non-signature field, preview and inspect every page, then activate within 24 hours. |
+| `The PDF preview expired ... or field values changed` | Matter, values, flattening mode, template contract, user, or the 30-minute evidence window no longer matches | Preview the exact current values again, inspect the result, and save without further edits. |
+| `blocked pending storage reconciliation` | Database finalization and staged storage cleanup could not be proven consistent | Do not retry that preview. An operator must reconcile the exact staged object and database outcome. Require a fresh preview unless the original MatterDocument is proven committed. |
+| `Template creation commit outcome could not be verified` or retained-source cleanup failed | The source file was staged, but the template-row commit or confirmed-rollback cleanup could not be proven | Do not retry the upload. This path has no preview-evidence row. An operator must use the logged tenant/template IDs to reconcile the exact scoped source directory against the template row and its source SHA-256. |
 | Storage warning after generation | Cloud write failed and local fallback was used, or provider metadata is incomplete | Confirm the matter document's reported storage backend, repair the cloud integration, and move/regenerate under the firm's records policy. |
 
 ## Operator triage
@@ -123,11 +153,30 @@ Before copying logs into a ticket, remove document text, field values, tokens,
 cookies, provider responses, and tenant identifiers not required by the support
 case.
 
+For reconciliation-blocked evidence, use only its bounded audit metadata:
+backend, provider item/drive ID or tenant-scoped local path, intended document
+ID, filename, and output SHA-256. Never follow a display URL. If the atomic
+MatterDocument transaction committed, verify the stored object hash, then mark
+reconciliation resolved and link consumption to that document. If it did not
+commit, delete the exact staged object first, then mark reconciliation
+resolved. An unconsumed resolved preview remains retired; require a fresh
+preview. Never clear a block merely to make retry possible. If the database is
+unavailable, preserve bytes until the outcome can be proved.
+
+Template-create ambiguity is separate: no preview-evidence row exists yet. Use
+the logged tenant and template UUIDs to derive only that template's retained
+source directory under the configured uploads root. If the template row exists,
+verify the file against `source_sha256` and preserve it. If the row is confirmed
+absent, remove only the regular, non-symlink source inside that exact scoped
+directory. On any query, path-scope, or hash uncertainty, preserve the source
+and escalate; do not retry the upload or delete by filename search.
+
 Useful automated coverage:
 
 ```bash
 docker compose exec -T backend \
-  pytest tests/test_document_templates.py tests/test_matter_file_store.py -q
+  pytest tests/test_document_templates.py tests/test_matter_file_store.py \
+    tests/test_document_template_preview_rls.py -q
 
 cd frontend
 npm test -- src/pages/TemplatesPage.test.jsx

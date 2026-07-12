@@ -43,7 +43,18 @@ SCHEDULER_MAX_AGE_MINUTES="${SCHEDULER_MAX_AGE_MINUTES:-$(get_env SCHEDULER_MAX_
 QUEUE_MAX_AGE_MINUTES="${QUEUE_MAX_AGE_MINUTES:-$(get_env QUEUE_MAX_AGE_MINUTES)}"
 TLS_MIN_VALID_DAYS="${TLS_MIN_VALID_DAYS:-$(get_env TLS_MIN_VALID_DAYS)}"
 ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(get_env ALERT_WEBHOOK_URL)}"
-MCP_PRODUCT_ENABLED="${MCP_PRODUCT_ENABLED:-$(get_env MCP_PRODUCT_ENABLED)}"
+mcp_product_from_file="$(get_env MCP_PRODUCT_ENABLED)"
+if [[ -n "${MCP_PRODUCT_ENABLED+x}" && "$MCP_PRODUCT_ENABLED" != "$mcp_product_from_file" ]]; then
+  echo "FAIL: inherited MCP_PRODUCT_ENABLED conflicts with the deployed production environment" >&2
+  exit 1
+fi
+MCP_PRODUCT_ENABLED="$mcp_product_from_file"
+legacy_platform_from_file="$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)"
+if [[ -n "${PLATFORM_LEGACY_BOOTSTRAP_ENABLED+x}" && "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" != "$legacy_platform_from_file" ]]; then
+  echo "FAIL: inherited PLATFORM_LEGACY_BOOTSTRAP_ENABLED conflicts with the deployed production environment" >&2
+  exit 1
+fi
+PLATFORM_LEGACY_BOOTSTRAP_ENABLED="$legacy_platform_from_file"
 ZOOM_REQUIRED_TENANT_ID="${ZOOM_REQUIRED_TENANT_ID:-$(get_env ZOOM_REQUIRED_TENANT_ID)}"
 ZOOM_REQUIRED_TENANT_PLAN="${ZOOM_REQUIRED_TENANT_PLAN:-$(get_env ZOOM_REQUIRED_TENANT_PLAN)}"
 email_enabled_from_file="$(get_env EMAIL_ENABLED)"
@@ -71,6 +82,7 @@ for numeric_name in DISK_MAX_PERCENT SCHEDULER_MAX_AGE_MINUTES QUEUE_MAX_AGE_MIN
 done
 (( DISK_MAX_PERCENT <= 100 )) || { echo "FAIL: DISK_MAX_PERCENT must be at most 100" >&2; exit 1; }
 [[ "$MCP_PRODUCT_ENABLED" == "false" ]] || { echo "FAIL: MCP_PRODUCT_ENABLED must remain false" >&2; exit 1; }
+[[ "$PLATFORM_LEGACY_BOOTSTRAP_ENABLED" == "false" ]] || { echo "FAIL: PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false" >&2; exit 1; }
 [[ "$EMAIL_ENABLED" == "true" || "$EMAIL_ENABLED" == "false" ]] || { echo "FAIL: EMAIL_ENABLED must be true or false" >&2; exit 1; }
 if [[ "$ZOOM_REQUIRED" == true ]]; then
   [[ "$ZOOM_REQUIRED_TENANT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || {
@@ -117,10 +129,23 @@ require_exact_http_redirect() {
   fi
 }
 
+require_http_status() {
+  local label="$1" url="$2" expected="$3" actual
+  actual="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$url" || true)"
+  [[ "$actual" == "$expected" ]] || fail "$label returned HTTP ${actual:-unavailable}, expected $expected"
+}
+
 disk_used="$(df -P "$DISK_PATH" | awk 'NR==2 {gsub(/%/,"",$5); print $5}')"
 [[ "$disk_used" =~ ^[0-9]+$ ]] || fail "disk usage could not be read for $DISK_PATH"
 if [[ "$disk_used" =~ ^[0-9]+$ ]] && (( disk_used >= DISK_MAX_PERCENT )); then
   fail "disk usage is ${disk_used}% (threshold ${DISK_MAX_PERCENT}%)"
+fi
+command -v systemctl >/dev/null 2>&1 || fail "systemctl is unavailable for the host disk monitor"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user is-enabled --quiet legalapp-host-disk.timer \
+    || fail "host disk timer is not enabled; run scripts/install_host_disk_timer.sh"
+  systemctl --user is-active --quiet legalapp-host-disk.timer \
+    || fail "host disk timer is not active; inspect systemctl --user status legalapp-host-disk.timer"
 fi
 
 for service in postgres redis litellm-postgres litellm backend scheduler frontend nginx; do
@@ -258,7 +283,22 @@ else
 fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
+readiness_json="$(curl -fsS --max-time 15 "https://${DOMAIN}/health/readiness" || true)"
+if ! printf '%s' "$readiness_json" | python3 -c '
+import json
+import sys
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+components = payload.get("components", {})
+raise SystemExit(0 if payload.get("status") == "ok" and components.get("host_disks") == "ok" else 1)
+'; then
+  fail "public readiness must report status=ok and host_disks=ok"
+fi
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
+require_http_status "disabled public MCP transport" "https://${DOMAIN}/api/mcp" 404
+require_http_status "disabled public MCP manifest" "https://${DOMAIN}/api/mcp/manifest" 404
 require_single_hsts "public HTTPS frontend" "https://${DOMAIN}/"
 require_single_hsts "public HTTPS /api/version" "https://${DOMAIN}/api/version"
 require_exact_http_redirect \

@@ -36,6 +36,28 @@ if [ "$EXPECTED_INDEX_SHA" != "$SERVED_INDEX_SHA" ]; then
   exit 1
 fi
 
+for route in privacy terms; do
+  ROUTE_FILE="$DIST_DIR/$route/index.html"
+  if [ ! -s "$ROUTE_FILE" ]; then
+    echo "ERROR: frontend image has no route-specific $route server shell" >&2
+    exit 1
+  fi
+  EXPECTED_ROUTE_SHA="$(sha256sum "$ROUTE_FILE" | awk '{print $1}')"
+  SERVED_ROUTE_SHA="$(curl -fsS "$FRONTEND_URL/$route/index.html" | sha256sum | awk '{print $1}')"
+  if [ "$EXPECTED_ROUTE_SHA" != "$SERVED_ROUTE_SHA" ]; then
+    echo "ERROR: served $route shell does not match the running image" >&2
+    exit 1
+  fi
+  CANONICAL="$(grep -oE '<link rel="canonical" href="[^"]+"' "$ROUTE_FILE" | sed -E 's/^.*href="([^"]+)"$/\1/' | head -n 1)"
+  case "$CANONICAL" in
+    "/$route"|http://localhost*/"$route"|https://*/"$route") ;;
+    *)
+      echo "ERROR: $route shell does not contain its route-correct canonical" >&2
+      exit 1
+      ;;
+  esac
+done
+
 EXPECTED_ASSET_SHA="$(sha256sum "$ASSET_FILE" | awk '{print $1}')"
 SERVED_ASSET_SHA="$(curl -fsS "$FRONTEND_URL$ASSET_PATH" | sha256sum | awk '{print $1}')"
 if [ "$EXPECTED_ASSET_SHA" != "$SERVED_ASSET_SHA" ]; then

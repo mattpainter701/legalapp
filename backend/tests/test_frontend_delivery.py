@@ -135,12 +135,14 @@ def _resolved_compose(files: tuple[str, ...]) -> dict:
         "postgresql+asyncpg://clarity_app:compose-runtime-password-0123456789@postgres:5432/legalapp",
     )
     env.setdefault("UPLOADS_HOST_DIR", "/tmp/legalapp-compose-uploads")
+    env.setdefault("HOST_STATUS_HOST_DIR", "/tmp/legalapp-compose-host-status")
     env.setdefault("EMAIL_ENABLED", "false")
     env.setdefault("EMAIL_HOST", "smtp.compose-test.invalid")
     env.setdefault("EMAIL_PORT", "587")
     env.setdefault("EMAIL_USER", "")
     env.setdefault("EMAIL_PASS", "")
     env.setdefault("EMAIL_FROM", "noreply@compose-test.invalid")
+    env.setdefault("VITE_PUBLIC_SITE_URL", "https://compose-test.invalid")
     env.setdefault("VITE_CONTACT_URL", "mailto:compose-test@example.invalid")
     result = subprocess.run(
         command,
@@ -165,16 +167,24 @@ def test_compose_sources_never_mask_image_baked_frontend_dist() -> None:
         )
 
 
+def test_production_topologies_require_explicit_public_site_origin() -> None:
+    for filename in ("docker-compose.prod.yml", "docker-compose.hypervisor.yml"):
+        compose_text = (ROOT / filename).read_text(encoding="utf-8")
+        assert (
+            "VITE_PUBLIC_SITE_URL: ${VITE_PUBLIC_SITE_URL:?" in compose_text
+        ), f"{filename} must not default SEO canonicals to a deployment-specific host"
+
+
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI unavailable")
 def test_resolved_compose_variants_ship_image_baked_frontend() -> None:
     for label, files in COMPOSE_VARIANTS.items():
         config = _resolved_compose(files)
         _assert_no_stale_frontend_mounts(config, label)
-        if label == "production":
+        if label in {"production", "hypervisor"}:
             assert (
                 config["services"]["frontend"]["build"]["args"]["VITE_PUBLIC_SITE_URL"]
                 == "https://compose-test.invalid"
-            ), "production SEO canonical must derive from the configured DOMAIN"
+            ), f"{label} SEO canonical must match the configured public site URL"
         if label in {"production", "hypervisor"}:
             services = config["services"]
             assert not services["backend"].get("ports")
@@ -183,11 +193,6 @@ def test_resolved_compose_variants_ship_image_baked_frontend() -> None:
                 int(port["target"]) for port in services["nginx"].get("ports", [])
             }
             assert nginx_targets == {80, 443}
-        if label == "hypervisor":
-            assert (
-                config["services"]["frontend"]["build"]["args"]["VITE_PUBLIC_SITE_URL"]
-                == "https://legalapp.perevagagroup.com"
-            ), "hypervisor SEO canonical must default to its documented public host"
 
 
 def test_frontend_runtime_verifier_is_part_of_production_deploy() -> None:
@@ -203,9 +208,15 @@ def test_frontend_runtime_verifier_is_part_of_production_deploy() -> None:
 
     dockerfile = (ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY --from=build /app/dist ./dist" in dockerfile
+    assert "COPY serve.json ./serve.json" in dockerfile
     assert (
-        'CMD ["serve", "--no-port-switching", "-s", "dist", "-l", "3000"]' in dockerfile
+        'CMD ["serve", "--no-port-switching", "-s", "dist", "-l", "3000", '
+        '"--config", "/app/serve.json"]' in dockerfile
     )
+    serve_config = json.loads(
+        (ROOT / "frontend" / "serve.json").read_text(encoding="utf-8")
+    )
+    assert serve_config == {"cleanUrls": False}
 
     verifier = ROOT / "scripts" / "verify_frontend_runtime.sh"
     assert verifier.is_file()
@@ -237,6 +248,8 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     assert "object-src 'self' blob:" in csp_lines[0]
     assert "script-src 'self';" in csp_lines[0]
     assert "'unsafe-eval'" not in csp_lines[0]
+    assert nginx.count("location ~ ^/(privacy|terms)/?$ {") == 2
+    assert nginx.count("rewrite ^/(privacy|terms)/?$ /$1/index.html break;") == 2
 
 
 def test_production_nginx_keeps_platform_routes_active_in_http_and_tls() -> None:

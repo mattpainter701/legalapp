@@ -1,7 +1,8 @@
 """Pydantic schemas for DocumentTemplate."""
 
+import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -91,6 +92,11 @@ class DocumentTemplateRenderRequest(BaseModel):
     variables: dict[str, str] = Field(default_factory=dict, max_length=200)
     matter_id: Optional[str] = None
     include_suggestions: bool = False
+    # Binary PDF previews persist non-PII evidence.  Activation previews must
+    # exercise representative values; generation previews bind an exact value
+    # set and matter to the later save request.
+    preview_purpose: Literal["draft", "activation", "generation"] = "draft"
+    preview_id: Optional[uuid.UUID] = None
     # Matter-ready output is non-editable by default. The renderer fails rather
     # than clipping or substituting unsupported glyphs.
     flatten_pdf: bool = True

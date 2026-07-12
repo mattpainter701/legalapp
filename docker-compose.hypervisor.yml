@@ -138,10 +138,13 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       EMAIL_PASS: ${EMAIL_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
+      HOST_DISK_STATUS_FILE: /run/legalapp-host-status/disk-status.json
+      HEALTH_HOST_DISK_MAX_AGE_SECONDS: ${HEALTH_HOST_DISK_MAX_AGE_SECONDS:-180}
       DATABASE_URL: ${APP_DATABASE_URL:?Set APP_DATABASE_URL to the clarity_app role}
       MIGRATOR_DATABASE_URL: ${MIGRATOR_DATABASE_URL:?Set MIGRATOR_DATABASE_URL in .env}
     volumes:
       - ${UPLOADS_HOST_DIR:?Set an absolute UPLOADS_HOST_DIR in .env}:/app/uploads
+      - ${HOST_STATUS_HOST_DIR:?Set an absolute HOST_STATUS_HOST_DIR in .env}:/run/legalapp-host-status:ro
     # All user traffic must traverse nginx. Operator diagnostics use
     # `docker compose exec` and never publish the API directly on the host.
     ports: []
@@ -200,7 +203,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_PUBLIC_SITE_URL: ${VITE_PUBLIC_SITE_URL:-https://legalapp.perevagagroup.com}
+        VITE_PUBLIC_SITE_URL: ${VITE_PUBLIC_SITE_URL:?Set VITE_PUBLIC_SITE_URL to https://DOMAIN in .env}
         VITE_CONTACT_URL: ${VITE_CONTACT_URL:?Set VITE_CONTACT_URL in .env}
         VITE_PUBLIC_SIGNUP_ENABLED: ${VITE_PUBLIC_SIGNUP_ENABLED:-false}
     depends_on:

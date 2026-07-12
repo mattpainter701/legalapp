@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # also take a Postgres advisory lock so a stray second runner cannot double-fire.
     RUN_SCHEDULER: bool = True
     HEALTH_DISK_MAX_PERCENT: int = 90
+    # Production receives a non-sensitive aggregate from a host timer through
+    # one dedicated read-only mount. Empty keeps local/dev readiness unchanged.
+    HOST_DISK_STATUS_FILE: str = ""
+    HEALTH_HOST_DISK_MAX_AGE_SECONDS: int = 180
     HEALTH_SCHEDULER_MAX_AGE_MINUTES: int = 5
     HEALTH_QUEUE_MAX_AGE_MINUTES: int = 15
 

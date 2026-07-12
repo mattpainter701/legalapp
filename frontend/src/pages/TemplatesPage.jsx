@@ -658,7 +658,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   )
 }
 
-function MatterPicker({ matters, selectedMatterId, onSelect, loading }) {
+function MatterPicker({ matters, selectedMatterId, onSelect, loading, disabled = false }) {
   const [query, setQuery] = useState('')
   const selected = matters.find((matter) => matter.id === selectedMatterId)
   const filtered = matters.filter((matter) => {
@@ -683,6 +683,7 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading }) {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          disabled={disabled}
           className="w-full pl-9 pr-3 py-2 border border-brand-line rounded text-sm bg-brand-surface-2 text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
           placeholder={loading ? 'Loading matters...' : 'Search by matter, client, or practice area'}
         />
@@ -693,6 +694,7 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading }) {
           <button
             type="button"
             onClick={() => onSelect('')}
+            disabled={disabled}
             className="text-brand-muted hover:text-brand-ink"
           >
             Clear
@@ -705,6 +707,7 @@ function MatterPicker({ matters, selectedMatterId, onSelect, loading }) {
             key={matter.id}
             type="button"
             onClick={() => onSelect(matter.id)}
+            disabled={disabled}
             className={`w-full text-left px-3 py-2 rounded border text-sm transition-colors ${
               selectedMatterId === matter.id
                 ? 'border-brand-accent bg-brand-accent/10 text-brand-ink'
@@ -739,12 +742,17 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   const [storageWarning, setStorageWarning] = useState('')
   const [filePreview, setFilePreview] = useState(null)
   const [filePreviewUrl, setFilePreviewUrl] = useState('')
+  const [previewId, setPreviewId] = useState('')
+  const [previewPurpose, setPreviewPurpose] = useState('')
   const [rendering, setRendering] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState(null)
   const [smartFillState, setSmartFillState] = useState('idle')
   const [smartFillMessage, setSmartFillMessage] = useState('')
+  const previewRequestGenerationRef = useRef(0)
+  const smartFillRequestGenerationRef = useRef(0)
+  const formRevisionRef = useRef(0)
 
   const names = useMemo(() => getTemplateVariables(template), [template])
   const fieldDefinitions = useMemo(() => Object.fromEntries(
@@ -770,6 +778,10 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     if (field?.field_type === 'checkbox') return variables[name] === ''
     return !String(variables[name] || '').trim()
   })
+  const activationUnresolvedNames = fillableNames.filter((name) => (
+    fieldDefinitions[name]?.field_type !== 'checkbox'
+    && !String(variables[name] || '').trim()
+  ))
 
   useEffect(() => {
     const initialVars = {}
@@ -787,16 +799,32 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     setStorageWarning('')
     setFilePreview(null)
     setFilePreviewUrl('')
+    setPreviewId('')
+    setPreviewPurpose('')
+    previewRequestGenerationRef.current += 1
+    smartFillRequestGenerationRef.current += 1
+    formRevisionRef.current += 1
   }, [fillableNames, fieldDefinitions])
 
   useEffect(() => () => {
     if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl)
   }, [filePreviewUrl])
 
+  useEffect(() => () => {
+    previewRequestGenerationRef.current += 1
+    smartFillRequestGenerationRef.current += 1
+  }, [])
+
   const invalidatePreview = () => {
+    previewRequestGenerationRef.current += 1
+    smartFillRequestGenerationRef.current += 1
+    formRevisionRef.current += 1
     setRendered(null)
     setFilePreview(null)
     setFilePreviewUrl('')
+    setPreviewId('')
+    setPreviewPurpose('')
+    setRendering(false)
     setOutputFilename('')
     setOutputFormat('')
   }
@@ -834,13 +862,25 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       setSmartFillMessage('Choose a matter before smart fill.')
       return
     }
+    const requestGeneration = smartFillRequestGenerationRef.current + 1
+    smartFillRequestGenerationRef.current = requestGeneration
+    const requestRevision = formRevisionRef.current
+    const requestMatterId = matterId.trim()
     setSmartFillState('loading')
     setSmartFillMessage('')
     try {
       const res = await discoverTemplateVariables(template.id, {
-        matter_id: matterId.trim(),
+        matter_id: requestMatterId,
         variables: fillableNames,
       })
+      if (
+        smartFillRequestGenerationRef.current !== requestGeneration
+        || formRevisionRef.current !== requestRevision
+      ) {
+        setSmartFillState('idle')
+        setSmartFillMessage('Smart-fill results were not applied because the matter or fields changed. Run Smart Fill again if needed.')
+        return
+      }
       const discovered = normalizeDiscovery(res)
       if (Object.keys(discovered).length === 0) {
         setSmartFillState('empty')
@@ -853,6 +893,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       setSmartFillState('ready')
       setSmartFillMessage('Smart-fill values loaded. Review each field before saving.')
     } catch (err) {
+      if (smartFillRequestGenerationRef.current !== requestGeneration) return
       if ([404, 405, 501].includes(err?.response?.status)) {
         setSmartFillState('unavailable')
         setSmartFillMessage('Smart fill is not enabled on this server yet. Manual fields are ready for review.')
@@ -863,21 +904,57 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     }
   }
 
-  const handleRender = async () => {
+  const handleRender = async (requestedPdfPurpose = null) => {
+    const pdfPurpose = isPdfTemplate
+      ? (requestedPdfPurpose || (canSaveToMatter ? 'generation' : 'draft'))
+      : null
+    if (isPdfTemplate && canSaveToMatter && !matterId.trim()) {
+      setError('Choose the destination matter before previewing the exact PDF values for save.')
+      return
+    }
+    if (pdfPurpose === 'activation' && activationUnresolvedNames.length > 0) {
+      setError(`Enter representative values for every non-signature PDF field before the activation preview. Missing: ${activationUnresolvedNames.join(', ')}.`)
+      return
+    }
+    const requestGeneration = previewRequestGenerationRef.current + 1
+    previewRequestGenerationRef.current = requestGeneration
+    const requestVariables = { ...variables }
+    const requestMatterId = isPdfTemplate && canSaveToMatter ? matterId.trim() : null
     setRendering(true)
     setError(null)
     try {
-      const payload = { variables, matter_id: null }
+      const payload = {
+        variables: requestVariables,
+        matter_id: requestMatterId,
+        ...(isPdfTemplate
+          ? { preview_purpose: pdfPurpose }
+          : {}),
+      }
       if (isPdfTemplate) {
         const result = await renderTemplateFile(template.id, payload)
         const nextUrl = URL.createObjectURL(result.blob)
+        if (previewRequestGenerationRef.current !== requestGeneration) {
+          URL.revokeObjectURL(nextUrl)
+          return
+        }
+        if (!result.previewId) {
+          URL.revokeObjectURL(nextUrl)
+          throw new Error('The server did not return PDF preview evidence. Preview again before saving or activating.')
+        }
+        if (result.previewPurpose !== pdfPurpose) {
+          URL.revokeObjectURL(nextUrl)
+          throw new Error('The server returned preview evidence for a different review purpose. Preview again.')
+        }
         setFilePreview({ blob: result.blob, filename: result.filename, contentType: result.contentType })
         setFilePreviewUrl(nextUrl)
+        setPreviewId(result.previewId)
+        setPreviewPurpose(result.previewPurpose)
         setOutputFilename(result.filename)
         setOutputFormat('pdf')
         setRendered(null)
       } else {
         const res = await renderTemplate(template.id, payload)
+        if (previewRequestGenerationRef.current !== requestGeneration) return
         setRendered(res.rendered)
         setFilePreview(null)
         setFilePreviewUrl('')
@@ -885,9 +962,13 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       setMatterDocId(null)
       setSaved(false)
     } catch (err) {
-      setError(getErrorMessage(err, 'Render failed.'))
+      if (previewRequestGenerationRef.current === requestGeneration) {
+        setError(getErrorMessage(err, 'Render failed.'))
+      }
     } finally {
-      setRendering(false)
+      if (previewRequestGenerationRef.current === requestGeneration) {
+        setRendering(false)
+      }
     }
   }
 
@@ -901,14 +982,33 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       setError(`Complete ${requiredUnresolvedNames.length} required field${requiredUnresolvedNames.length === 1 ? '' : 's'} before saving.`)
       return
     }
+    if (isPdfTemplate && !previewId) {
+      setError('Preview the exact current PDF values for this matter before saving.')
+      return
+    }
+    if (smartFillState === 'loading') {
+      setError('Wait for Smart Fill to finish, or change a field to discard it, before saving.')
+      return
+    }
+    const saveRevision = formRevisionRef.current
+    const saveVariables = { ...variables }
+    const saveMatterId = matterId.trim()
+    const savePreviewId = previewId
+    smartFillRequestGenerationRef.current += 1
     setSaving(true)
     setError(null)
     setStorageWarning('')
     try {
       const res = await renderTemplate(template.id, {
-        variables,
-        matter_id: matterId.trim(),
+        variables: saveVariables,
+        matter_id: saveMatterId,
+        ...(isPdfTemplate ? { preview_id: savePreviewId } : {}),
       })
+      if (formRevisionRef.current !== saveRevision) {
+        setError('The form changed while the save was in flight, so this response was not marked Saved. Review the matter document before continuing.')
+        return
+      }
+      setError(null)
       if (!isPdfTemplate) setRendered(res.rendered || rendered)
       setSavedDownloadUrl(res.download_url || '')
       setOutputFilename(res.output_filename || res.filename || outputFilename || '')
@@ -928,8 +1028,16 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     }
   }
 
+  const handleClose = () => {
+    if (saving) {
+      setError('Save in progress. Keep this window open until the matter document is finalized.')
+      return
+    }
+    onClose()
+  }
+
   return (
-    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={onClose}>
+    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
@@ -946,8 +1054,9 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         <MatterPicker
           matters={matters}
           selectedMatterId={matterId}
-          onSelect={(id) => { setMatterId(id); setSaved(false) }}
+          onSelect={(id) => { setMatterId(id); setSaved(false); invalidatePreview() }}
           loading={matterLoading}
+          disabled={saving}
         />
 
         <div>
@@ -957,7 +1066,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           <input id="templatespage-matter-uuid-fallback"
             type="text"
             value={matterId}
-            onChange={(e) => { setMatterId(e.target.value); setSaved(false) }}
+            onChange={(e) => { setMatterId(e.target.value); setSaved(false); invalidatePreview() }}
+            disabled={saving}
             className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent font-mono"
             placeholder="Paste matter UUID if the matter is not listed"
           />
@@ -973,7 +1083,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             </div>
             <button
               onClick={handleSmartFill}
-              disabled={smartFillState === 'loading' || !matterId.trim()}
+              disabled={saving || smartFillState === 'loading' || !matterId.trim()}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-surface-2 disabled:opacity-50"
             >
               <Wand2 size={15} />
@@ -1039,6 +1149,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                         type="checkbox"
                         checked={variables[name] === 'true'}
                         onChange={(e) => setVariable(name, e.target.checked ? 'true' : 'false')}
+                        disabled={saving}
                         className="h-4 w-4 rounded border-brand-line text-brand-accent focus:ring-brand-accent"
                       />
                       Checked
@@ -1048,6 +1159,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       id={inputId}
                       value={variables[name] || ''}
                       onChange={(e) => setVariable(name, e.target.value)}
+                      disabled={saving}
                       className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
                     >
                       <option value="">Select {label}</option>
@@ -1059,6 +1171,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       rows={3}
                       value={variables[name] || ''}
                       onChange={(e) => setVariable(name, e.target.value)}
+                      disabled={saving}
                       className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
                       placeholder={`Enter ${label}`}
                     />
@@ -1068,6 +1181,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                       type="text"
                       value={variables[name] || ''}
                       onChange={(e) => setVariable(name, e.target.value)}
+                      disabled={saving}
                       className="w-full px-3 py-2 border border-brand-line rounded text-sm bg-brand-bg text-brand-ink focus:outline-none focus:ring-1 focus:ring-brand-accent"
                       placeholder={`Enter ${label}`}
                     />
@@ -1099,18 +1213,43 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         )}
 
         <div className="flex flex-col sm:flex-row gap-3">
-          <button
-            onClick={handleRender}
-            disabled={rendering}
-            className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
-          >
-            <Eye size={16} />
-            {rendering ? 'Rendering...' : 'Preview'}
-          </button>
+          {isPdfTemplate && !canSaveToMatter ? (
+            <>
+              <button
+                onClick={() => handleRender('draft')}
+                disabled={rendering || saving}
+                className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line bg-brand-surface hover:bg-brand-surface-2 rounded disabled:opacity-50"
+              >
+                <Eye size={16} />
+                {rendering ? 'Rendering...' : 'Preview draft'}
+              </button>
+              <button
+                onClick={() => handleRender('activation')}
+                disabled={rendering || saving}
+                className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
+              >
+                <Check size={16} />
+                {rendering ? 'Recording...' : 'Record activation preview'}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => handleRender()}
+              disabled={rendering || saving}
+              className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
+            >
+              <Eye size={16} />
+              {rendering ? 'Rendering...' : 'Preview'}
+            </button>
+          )}
           <button
             onClick={handleSave}
-            disabled={saving || saved || !matterId.trim() || !canSaveToMatter}
-            title={!canSaveToMatter ? 'Activate this verified template before saving to a matter' : undefined}
+            disabled={saving || smartFillState === 'loading' || saved || !matterId.trim() || !canSaveToMatter || (isPdfTemplate && !previewId)}
+            title={!canSaveToMatter
+              ? 'Activate this verified template before saving to a matter'
+              : (isPdfTemplate && !previewId)
+                ? 'Preview the exact current PDF values before saving'
+                : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-accent hover:opacity-90 rounded disabled:opacity-50"
           >
             {saved ? (
@@ -1156,6 +1295,13 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
             <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
               <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
             </object>
+            <p className="mt-2 text-xs font-medium text-brand-green" role="status">
+              {previewPurpose === 'generation'
+                ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
+                : previewPurpose === 'activation'
+                  ? 'Representative activation preview recorded. Inspect every page, then activate this unchanged template.'
+                  : 'Draft preview only. This is diagnostic and does not record activation evidence. Use Record activation preview after every field has a representative value.'}
+            </p>
           </div>
         )}
 

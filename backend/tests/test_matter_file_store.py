@@ -7,6 +7,7 @@ import pytest
 import app.services.matter_file_store as store_module
 from app.services.matter_file_store import (
     MatterFileAccessError,
+    MatterFileCleanupError,
     MatterFileIntegrityError,
     MatterFileMetadataError,
     MatterFileStore,
@@ -87,7 +88,9 @@ async def test_local_read_is_tenant_scoped_size_bounded_and_hash_checked(
 
 
 @pytest.mark.asyncio
-async def test_local_read_rejects_cross_tenant_and_traversal_paths(tmp_path, monkeypatch):
+async def test_local_read_rejects_cross_tenant_and_traversal_paths(
+    tmp_path, monkeypatch
+):
     tenant_id = "tenant-a"
     (tmp_path / tenant_id).mkdir()
     outside = tmp_path / "outside.pdf"
@@ -281,7 +284,9 @@ async def test_explicit_primary_cloud_never_spills_to_another_cloud_and_warns_on
     assert "saved to local storage" in result.error
     assert "Reconnect Google Drive" in result.error
     assert "provider failure that must not be exposed verbatim" not in result.error
-    assert (tmp_path / tenant_id / "matters" / "matter-1" / "documents" / "agreement.pdf").read_bytes() == content
+    assert (
+        tmp_path / tenant_id / "matters" / "matter-1" / "documents" / "agreement.pdf"
+    ).read_bytes() == content
 
 
 @pytest.mark.asyncio
@@ -328,3 +333,233 @@ async def test_auto_mode_keeps_first_available_cross_cloud_cascade(monkeypatch):
     assert calls == ["onedrive", "sharepoint"]
     assert result.backend == "sharepoint"
     assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deletes_only_exact_local_file_beneath_tenant_root(
+    tmp_path, monkeypatch
+):
+    tenant_id = "tenant-a"
+    tenant_root = tmp_path / tenant_id
+    tenant_root.mkdir()
+    staged = tenant_root / "matters" / "matter-1" / "generated" / "form.pdf"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"staged")
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(b"outside")
+    monkeypatch.setattr(store_module.settings, "UPLOAD_DIR", str(tmp_path))
+    store = MatterFileStore()
+
+    await store.delete_stored_result(
+        db=object(),
+        tenant_id=tenant_id,
+        result=StorageResult(
+            provider="local",
+            backend="local",
+            storage_path=str(staged),
+        ),
+    )
+    assert not staged.exists()
+
+    with pytest.raises(MatterFileAccessError):
+        await store.delete_stored_result(
+            db=object(),
+            tenant_id=tenant_id,
+            result=StorageResult(
+                provider="local",
+                backend="local",
+                storage_path=str(outside),
+            ),
+        )
+    assert outside.read_bytes() == b"outside"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rejects_local_symlink_even_when_target_is_in_tenant_root(
+    tmp_path, monkeypatch
+):
+    tenant_id = "tenant-a"
+    tenant_root = tmp_path / tenant_id
+    tenant_root.mkdir()
+    target = tenant_root / "real-staged.pdf"
+    target.write_bytes(b"inside target")
+    link = tenant_root / "linked.pdf"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        # Windows may disallow symlink creation without Developer Mode. Still
+        # exercise the fail-closed branch; Linux CI uses the real symlink above.
+        link.write_bytes(b"simulated symlink entry")
+        original_is_symlink = type(link).is_symlink
+        monkeypatch.setattr(
+            type(link),
+            "is_symlink",
+            lambda path: path == link or original_is_symlink(path),
+        )
+    monkeypatch.setattr(store_module.settings, "UPLOAD_DIR", str(tmp_path))
+
+    with pytest.raises(MatterFileAccessError):
+        await MatterFileStore().delete_stored_result(
+            db=object(),
+            tenant_id=tenant_id,
+            result=StorageResult(
+                provider="local",
+                backend="local",
+                storage_path=str(link),
+            ),
+        )
+    assert target.read_bytes() == b"inside target"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend", "provider", "item_id", "drive_id", "token_provider", "expected_url"),
+    [
+        (
+            "google_drive",
+            "google",
+            "google item",
+            None,
+            "google",
+            "https://www.googleapis.com/drive/v3/files/google%20item",
+        ),
+        (
+            "onedrive",
+            "microsoft",
+            "one item",
+            None,
+            "microsoft",
+            "https://graph.microsoft.com/v1.0/me/drive/items/one%20item",
+        ),
+        (
+            "sharepoint",
+            "microsoft",
+            "share item",
+            "drive id",
+            "microsoft",
+            "https://graph.microsoft.com/v1.0/drives/drive%20id/items/share%20item",
+        ),
+    ],
+)
+async def test_cloud_cleanup_uses_fixed_host_and_durable_provider_ids(
+    monkeypatch,
+    backend,
+    provider,
+    item_id,
+    drive_id,
+    token_provider,
+    expected_url,
+):
+    tenant_id = "tenant-a"
+    token_calls = []
+    requested = []
+
+    async def token(db, resolved_tenant, resolved_provider):
+        token_calls.append((db, resolved_tenant, resolved_provider))
+        return "fresh-token"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        assert request.method == "DELETE"
+        assert request.headers["Authorization"] == "Bearer fresh-token"
+        return httpx.Response(204)
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(store_module, "get_fresh_token", token)
+    monkeypatch.setattr(store_module.httpx, "AsyncClient", mock_client)
+    db = object()
+    await MatterFileStore().delete_stored_result(
+        db=db,
+        tenant_id=tenant_id,
+        result=StorageResult(
+            provider=provider,
+            backend=backend,
+            storage_path="https://attacker.invalid/display-only",
+            provider_item_id=item_id,
+            drive_id=drive_id,
+        ),
+    )
+
+    assert token_calls == [(db, tenant_id, token_provider)]
+    assert requested == [expected_url]
+    assert "attacker.invalid" not in requested[0]
+
+
+@pytest.mark.asyncio
+async def test_cloud_cleanup_treats_provider_404_as_idempotent_success(monkeypatch):
+    async def token(*_args):
+        return "fresh-token"
+
+    real_async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _request: httpx.Response(404))
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(store_module, "get_fresh_token", token)
+    monkeypatch.setattr(store_module.httpx, "AsyncClient", mock_client)
+
+    await MatterFileStore().delete_stored_result(
+        db=object(),
+        tenant_id="tenant-a",
+        result=StorageResult(
+            provider="google",
+            backend="google_drive",
+            provider_item_id="already-gone",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        StorageResult(provider="google", backend="google_drive"),
+        StorageResult(
+            provider="microsoft",
+            backend="sharepoint",
+            provider_item_id="item-without-drive",
+        ),
+        StorageResult(
+            provider="unknown",
+            backend="unsupported",
+            provider_item_id="item",
+        ),
+    ],
+)
+async def test_cloud_cleanup_missing_metadata_and_unknown_backends_fail_closed(
+    monkeypatch, result
+):
+    async def unexpected_token(*_args):
+        raise AssertionError("metadata must be validated before token lookup")
+
+    monkeypatch.setattr(store_module, "get_fresh_token", unexpected_token)
+    with pytest.raises(MatterFileCleanupError):
+        await MatterFileStore().delete_stored_result(
+            db=object(), tenant_id="tenant-a", result=result
+        )
+
+
+@pytest.mark.asyncio
+async def test_cloud_cleanup_missing_tenant_token_fails_closed(monkeypatch):
+    async def missing_token(*_args):
+        return None
+
+    monkeypatch.setattr(store_module, "get_fresh_token", missing_token)
+    with pytest.raises(MatterFileCleanupError, match="credentials are unavailable"):
+        await MatterFileStore().delete_stored_result(
+            db=object(),
+            tenant_id="tenant-a",
+            result=StorageResult(
+                provider="google",
+                backend="google_drive",
+                provider_item_id="item",
+            ),
+        )

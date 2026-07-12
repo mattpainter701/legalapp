@@ -382,6 +382,64 @@ def _schema_value_map(schema: dict | None, variables: dict[str, str]) -> dict[st
     return values
 
 
+def pdf_review_evidence(
+    variable_schema: dict | None,
+    variables: dict[str, str],
+) -> tuple[list[str], int]:
+    """Return reviewed field names and a nonblank count without retaining values."""
+    reviewed: list[str] = []
+    nonblank = 0
+    for field in (variable_schema or {}).get("fields") or []:
+        if not isinstance(field, dict) or field.get("field_type") == "signature":
+            continue
+        name = str(field.get("name") or "").strip()
+        if not name or name not in variables:
+            continue
+        reviewed.append(name)
+        if str(variables.get(name) or "").strip():
+            nonblank += 1
+    return sorted(reviewed), nonblank
+
+
+def validate_representative_pdf_variables(
+    variable_schema: dict | None,
+    variables: dict[str, str],
+) -> None:
+    """Require meaningful sample values before a PDF can be activated.
+
+    A normal draft preview may remain partial.  Activation evidence is stricter:
+    every non-signature field must be explicitly exercised, and every text,
+    choice, or radio field must contain a value.  Optional checkboxes may be
+    deliberately false, while required checkbox semantics are enforced by the
+    renderer's normal ``enforce_required`` path.
+    """
+    missing: list[str] = []
+    blank: list[str] = []
+    fields = (variable_schema or {}).get("fields") or []
+    for field in fields:
+        if not isinstance(field, dict) or field.get("field_type") == "signature":
+            continue
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        if name not in variables:
+            missing.append(name)
+            continue
+        field_type = str(field.get("field_type") or "text")
+        if field_type != "checkbox" and not str(variables.get(name) or "").strip():
+            blank.append(name)
+    if missing or blank:
+        parts = []
+        if missing:
+            parts.append("missing: " + ", ".join(sorted(missing)))
+        if blank:
+            parts.append("blank: " + ", ".join(sorted(blank)))
+        raise TemplatePdfError(
+            "Activation preview requires representative values for every "
+            "non-signature PDF field (" + "; ".join(parts) + ")."
+        )
+
+
 _TRUE_VALUES = {"1", "true", "yes", "y", "on", "checked", "x"}
 _FALSE_VALUES = {"", "0", "false", "no", "n", "off", "unchecked"}
 

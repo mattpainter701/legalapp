@@ -25,16 +25,30 @@ Set these non-secret relationships in `.env`:
 - `LITELLM_SALT_KEY` is a dedicated, permanent encryption key for values in the LiteLLM database. Back it up with the environment and keep it unchanged when `LITELLM_API_KEY` rotates. The image is digest-pinned; an upstream one-shot migrator and an exact reviewed schema reconciler must both finish before the proxy can start. Runtime schema writes are disabled, and monitoring requires a zero Prisma diff plus authenticated model discovery.
 - `TOKEN_ENCRYPTION_KEYS` is newest-first (`new_key,old_key`) during staged rotation. Keep the old key until all stored credentials have been re-encrypted and verified. This first-customer preflight deliberately requires both distinct keys; do not collapse the keyring until rotation and provider reconnect tests are recorded.
 - `MCP_PRODUCT_ENABLED=false`. When `MCP_SERVER_URL` is non-empty, `MCP_UPSTREAM_API_KEY` must be a separate 32+ character server credential.
+- `PLATFORM_LEGACY_BOOTSTRAP_ENABLED=false` must be present explicitly. The
+  static bridge is not an accepted production fallback even when its secret is
+  currently empty.
 - `PUBLIC_SIGNUP_ENABLED=false` and `VITE_PUBLIC_SIGNUP_ENABLED=false`. New
   tenants are operator/invite-provisioned until paid conversion and expiry
   enforcement are implemented and proven; marketing CTAs use `VITE_CONTACT_URL`.
 - `VITE_CONTACT_URL` is the verified sales/contact destination used by the public site.
+- `VITE_PUBLIC_SITE_URL=https://<DOMAIN>` is required and must match `DOMAIN`
+  exactly (apart from one optional trailing slash). It is baked into legal-page
+  canonicals, social metadata, `robots.txt`, and the sitemap, so rerun the
+  frontend build whenever the production hostname changes.
 - `UPLOADS_HOST_DIR` is one absolute, non-symlink host directory used by Compose
   and backup tooling in both topologies. For the existing Skynet checkout set
   `/home/varta/legalapp/uploads`; a conventional VPS may use
   `/data/legalapp/uploads`. Deployment changes only the directory root to
   UID/GID `10001:10001` (mode 0750), never recursively rewrites customer files,
   then proves write/read/delete through the backend container.
+- `HOST_STATUS_HOST_DIR` is a dedicated, non-symlink host directory (for
+  example `/home/varta/.local/state/clarity-legal/host-status` or
+  `/data/legalapp/host-status`). Only this aggregate-status directory is mounted
+  read-only at `/run/legalapp-host-status`; DockerRootDir, the Docker socket,
+  and database paths are never mounted into the application. Keep
+  `HOST_DISK_STATUS_FILE=/run/legalapp-host-status/disk-status.json` and
+  `HEALTH_HOST_DISK_MAX_AGE_SECONDS=180`.
 - `OFFSITE_BACKUP_REQUIRED=true`. Deployment will not build or migrate until a
   fresh encrypted Restic snapshot succeeds or the bounded one-time manual
   off-host handshake below is consumed.
@@ -152,6 +166,13 @@ inference passed. A seeded 089 Zoom app/grant then upgraded to 090 with the
 account mapping backfilled, both source tables returned to FORCE RLS, and zero
 rows visible without tenant context. Downgrade to 089 and re-upgrade to 090
 preserved the source rows and reproduced the binding.
+
+The current head is `091_pdf_preview_evidence`. It adds a FORCE-RLS,
+tenant-scoped evidence table for representative PDF activation previews and
+exact matter/value-bound generation previews. Generation evidence is consumed
+with its saved document, and ambiguous storage/database outcomes become
+operator-reconcilable retry blocks; a fresh deployment/restore proof must
+therefore report 091 before this newer revision is released.
 
 ## 3. Back up and rehearse restore
 
@@ -274,6 +295,31 @@ COMPOSE_FILES="docker-compose.yml docker-compose.prod.yml" bash scripts/deploy_p
 ```
 
 Only nginx binds host ports 80/443 in either production topology.
+Deployment idempotently installs `legalapp-host-disk.timer` for the deploy user,
+requires systemd user lingering, and proves one immediate run. If deployment
+reports that lingering is disabled, run
+`sudo loginctl enable-linger <deploy-user>` and rerun deployment; do not bypass
+the timer gate. CI renders the same unit files used by the installer and runs
+`systemd-analyze verify`; this is a syntax/dependency gate, not a substitute for
+the live host lifecycle proof.
+
+After every production deployment, retain this acceptance output with the
+release record (run it as the deploy user, not root):
+
+```bash
+loginctl show-user "$USER" -p Linger --value
+systemctl --user is-enabled legalapp-host-disk.timer
+systemctl --user is-active legalapp-host-disk.timer
+systemctl --user start legalapp-host-disk.service
+systemctl --user show legalapp-host-disk.service -p Result -p ExecMainStatus
+stat "$(grep '^HOST_STATUS_HOST_DIR=' .env | tail -1 | cut -d= -f2-)/disk-status.json"
+curl -fsS "https://$DOMAIN/health/readiness"
+```
+
+Accept only `yes`, `enabled`, `active`, `Result=success`, `ExecMainStatus=0`, a
+fresh regular artifact, and readiness with both `status=ok` and
+`components.host_disks=ok`. The deployment check already enforces these live
+conditions; the captured output is the operator evidence after remote start.
 Successful deployment tags prior/current application image IDs and records a
 mode-600 release manifest under
 `${XDG_STATE_HOME:-$HOME/.local/state}/clarity-legal/releases` for rollback.
@@ -294,7 +340,18 @@ ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml bash scripts/production
 after tenant Zoom setup and before go-live, even when the host was created with
 `BOOTSTRAP_MODE=true`.
 
-It fails on excessive disk use, missing/unhealthy containers, PostgreSQL, authenticated Redis, missing per-tenant scheduler heartbeats, stale/exhausted durable jobs, incomplete Zoom Phone configuration, failed Zoom CRC ingress, public HTTP, or a TLS certificate inside the 14-day floor. For the strict sold-tenant gate, email must be enabled: the check connects to SMTP, negotiates TLS where configured, authenticates, and disconnects without issuing `MAIL`, `RCPT`, or `DATA`. Only a `ZOOM_REQUIRED=false` bootstrap check may remain email-disabled, and that check explicitly reports that it is not go-live evidence.
+It fails on excessive disk use, a missing/inactive host disk timer, a stale or
+malformed aggregate, any monitored filesystem at the configured threshold,
+missing/unhealthy containers, PostgreSQL, authenticated Redis, missing
+per-tenant scheduler heartbeats, stale/exhausted durable jobs, incomplete Zoom
+Phone configuration, failed Zoom CRC ingress, public HTTP, or a TLS certificate
+inside the 14-day floor. The host probe deduplicates filesystem identities while
+covering `DISK_PATH`, uploads, backups, every resolved Compose bind, and
+DockerRootDir (which covers named volumes). For the strict sold-tenant gate,
+email must be enabled: the check connects to SMTP, negotiates TLS where
+configured, authenticates, and disconnects without issuing `MAIL`, `RCPT`, or
+`DATA`. Only a `ZOOM_REQUIRED=false` bootstrap check may remain email-disabled,
+and that check explicitly reports that it is not go-live evidence.
 
 Confirm scheduler ownership and RLS evidence:
 
@@ -341,7 +398,13 @@ pytest backend/tests/test_intake_dashboard.py -k zoom_ingress_to_intake_to_assig
 
 ## 7. Alerts
 
-The scheduled **Production public health** workflow polls `/health/readiness`, the frontend, and TLS every ten minutes. It creates or updates one deduplicated `[production-alert]` GitHub issue on failure and closes it on recovery. Enable scheduled Actions and issue notifications for the operator repository.
+The scheduled **Production public health** workflow polls `/health/readiness`,
+requires the `host_disks` component to be present and healthy, checks the
+frontend and TLS every ten minutes, creates or updates one deduplicated
+`[production-alert]` GitHub issue on failure, and closes it on recovery. Enable
+scheduled Actions and issue notifications for the operator repository. The host
+timer refreshes its aggregate every minute; a stopped timer becomes stale and
+alertable within three minutes.
 
 `ALERT_WEBHOOK_URL` is an optional second delivery path for both the GitHub workflow and the on-host operator script. If configured, new-failure and recovery transitions are sent without repeating every interval. The public endpoint contains component states only—no tenant IDs, queue data, credentials, or infrastructure addresses.
 

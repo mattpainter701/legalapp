@@ -300,11 +300,17 @@ deployment, billing reconciliation, monitoring, restore, and support gates in
 
 The public SPA emits absolute canonical/Open Graph/Twitter metadata, JSON-LD,
 `robots.txt`, and a sitemap when built with `VITE_PUBLIC_SITE_URL`. Only `/`,
-`/privacy`, and `/terms` are indexable. Private routes are runtime-labeled
-`noindex, nofollow` and omitted from the sitemap.
+`/privacy`, and `/terms` are indexable. The build emits dedicated initial HTML
+shells for `/privacy` and `/terms`, so title, description, canonical, social
+metadata, and legal-summary content are route-correct before JavaScript loads;
+React then takes over normally. Private routes are runtime-labeled `noindex,
+nofollow` and omitted from the sitemap.
+Production preflight binds this build-time origin to `https://$DOMAIN` in both
+supported Compose topologies so a copied deployment cannot retain canonicals
+from a different host.
 
-This is still a client-rendered SPA, not SSR. Static metadata and a noscript
-summary improve discovery, but crawl rendering and Core Web Vitals must be
+This is still a client-rendered SPA, not SSR. Route-specific public shells
+improve discovery, but crawl rendering and Core Web Vitals must be
 measured after deployment. Public claims must stay within implemented and
 operationally verified behavior; certification, uptime, trial, price, customer,
 or provider claims require separate evidence and owner approval.

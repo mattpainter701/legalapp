@@ -1,6 +1,6 @@
 """Document task lifecycle events in the contact's communication history.
 
-Assignment, reassignment, customer contact, and closure of a contact-linked
+Assignment, reassignment, unassignment, customer contact, and closure of a contact-linked
 task each append a ``CommunicationLog`` row, so the caller's history shows the
 full follow-up trail (who was assigned, whether the customer was reached, and
 why the task was closed) — not just the calls themselves.
@@ -24,6 +24,7 @@ _CONTACT_CHANNELS = {"call", "email", "sms", "meeting"}
 _EVENT_SUBJECTS = {
     "assigned": "Task assigned",
     "reassigned": "Task reassigned",
+    "unassigned": "Task unassigned",
     "completed": "Task completed",
     "cancelled": "Task cancelled",
 }
@@ -50,13 +51,16 @@ async def record_task_event(
     actor=None,
     actor_user_id=None,
     note: str | None = None,
+    previous_assignee_user_id=None,
 ) -> CommunicationLog | None:
     """Append a task lifecycle event to the linked contact's history.
 
-    ``event`` is one of ``assigned``/``reassigned``/``completed``/``cancelled``.
+    ``event`` is one of
+    ``assigned``/``reassigned``/``unassigned``/``completed``/``cancelled``.
     ``actor`` is the acting User when the caller has one; ``actor_user_id`` is
     the fallback for flows that only carry an id. Adds the row to the session;
-    the caller commits.
+    the caller commits. ``previous_assignee_user_id`` preserves who was removed
+    when an assignment is explicitly cleared.
     """
     if not task.contact_id or event not in _EVENT_SUBJECTS:
         return None
@@ -67,12 +71,25 @@ async def record_task_event(
     elif actor_user_id:
         actor_label = await _user_label(db, task, actor_user_id)
     assignee_label = await _user_label(db, task, task.assigned_to_user_id)
+    previous_assignee_label = (
+        await _user_label(db, task, previous_assignee_user_id)
+        if event == "unassigned"
+        else None
+    )
 
     lines = []
     if event in ("assigned", "reassigned") and assignee_label:
         lines.append(f"Assigned to: {assignee_label}")
+    if event == "unassigned" and previous_assignee_label:
+        lines.append(f"Previously assigned to: {previous_assignee_label}")
     if actor_label:
-        by = "Closed by" if event in ("completed", "cancelled") else "Assigned by"
+        by = (
+            "Closed by"
+            if event in ("completed", "cancelled")
+            else "Unassigned by"
+            if event == "unassigned"
+            else "Assigned by"
+        )
         lines.append(f"{by}: {actor_label}")
     if note and note.strip():
         label = "Reason" if event in ("completed", "cancelled") else "Note"

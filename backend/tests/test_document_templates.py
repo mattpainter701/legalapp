@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from decimal import Decimal
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from app.services.pdf_templates import (
     TemplatePdfError,
     discover_pdf_fields,
     fill_pdf_template,
+    validate_representative_pdf_variables,
 )
 
 
@@ -103,6 +105,72 @@ async def _grant_manage_documents(db_session, test_tenant, test_user) -> None:
     await db_session.commit()
 
 
+async def _prepare_active_pdf_generation(
+    *,
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    tmp_path,
+    monkeypatch,
+    slug: str,
+):
+    from app.models.plugin import Matter
+    from app.services import matter_file_store as matter_store_module
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(matter_store_module.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": (f"{slug}.pdf", _fillable_pdf(), "application/pdf")},
+        data={"title": f"{slug} form", "category": "other"},
+    )
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+    activation = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": {
+                "client_name": "Representative Client",
+                "approved": "yes",
+                "notes": "Representative narrative",
+            },
+            "preview_purpose": "activation",
+        },
+    )
+    assert activation.status_code == 200, activation.text
+    activated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert activated.status_code == 200, activated.text
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=slug,
+        matter_name=f"{slug} Matter",
+        matter_type="general",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    values = {
+        "client_name": "Ada Lovelace",
+        "approved": "yes",
+        "notes": "Reviewed narrative",
+    }
+    generation = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert generation.status_code == 200, generation.text
+    return template_id, matter, values, generation.headers["x-clarity-preview-id"]
+
+
 def test_render_template_preserves_unknown_variables():
     rendered = document_templates.render_template(
         "Dear {{ client_name }}, matter {{case_number}} remains {{unknown}}.",
@@ -118,6 +186,409 @@ def test_extract_template_variables_preserves_first_seen_order():
     )
 
     assert variables == ["client_name", "case_number", "attorney_email"]
+
+
+def test_pdf_preview_value_evidence_is_keyed_and_contains_no_raw_values(monkeypatch):
+    variables = {"client_name": "Ada", "approved": "false"}
+    first = document_templates._pdf_values_hmac_sha256(
+        variables=variables,
+        flatten_pdf=True,
+        matter_id=None,
+    )
+    unkeyed = document_templates._canonical_sha256(
+        {"variables": variables, "flatten_pdf": True, "matter_id": None}
+    )
+    monkeypatch.setattr(
+        document_templates.settings,
+        "SECRET_KEY",
+        "different-preview-evidence-test-secret",
+    )
+    second = document_templates._pdf_values_hmac_sha256(
+        variables=variables,
+        flatten_pdf=True,
+        matter_id=None,
+    )
+
+    assert len(first) == 64
+    assert "Ada" not in first
+    assert first != unkeyed
+    assert second != first
+
+
+@pytest.mark.asyncio
+async def test_pdf_preview_trimming_never_deletes_consumed_evidence(
+    db_session, test_tenant, test_user
+):
+    from sqlalchemy import func, select
+
+    from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    template = DocumentTemplate(
+        tenant_id=test_tenant.id,
+        title="Retention form",
+        body="",
+        format="pdf",
+        is_active=True,
+    )
+    db_session.add(template)
+    await db_session.flush()
+    now = datetime.now(timezone.utc)
+    consumed = DocumentTemplatePreview(
+        tenant_id=test_tenant.id,
+        template_id=template.id,
+        previewed_by_user_id=test_user.id,
+        purpose="activation",
+        contract_sha256="a" * 64,
+        values_hmac_sha256="b" * 64,
+        output_sha256="c" * 64,
+        renderer_version="retention-test",
+        flatten_pdf=True,
+        reviewed_field_count=0,
+        nonblank_field_count=0,
+        reviewed_field_names=[],
+        created_at=now - timedelta(days=100),
+        expires_at=now - timedelta(days=99),
+        consumed_at=now - timedelta(days=98),
+    )
+    attempts = [
+        DocumentTemplatePreview(
+            tenant_id=test_tenant.id,
+            template_id=template.id,
+            previewed_by_user_id=test_user.id,
+            purpose="activation",
+            contract_sha256=f"{index:064x}",
+            values_hmac_sha256="d" * 64,
+            output_sha256="e" * 64,
+            renderer_version="retention-test",
+            flatten_pdf=True,
+            reviewed_field_count=0,
+            nonblank_field_count=0,
+            reviewed_field_names=[],
+            created_at=now - timedelta(minutes=55 - index),
+            expires_at=(
+                now - timedelta(minutes=1) if index < 30 else now + timedelta(hours=1)
+            ),
+        )
+        for index in range(55)
+    ]
+    db_session.add_all([consumed, *attempts])
+    await db_session.commit()
+
+    await document_templates._trim_preview_evidence(
+        db_session,
+        tenant_id=test_tenant.id,
+        template_id=template.id,
+        user_id=test_user.id,
+        purpose="activation",
+    )
+    await db_session.commit()
+
+    assert await db_session.get(DocumentTemplatePreview, consumed.id) is not None
+    unconsumed_count = await db_session.scalar(
+        select(func.count())
+        .select_from(DocumentTemplatePreview)
+        .where(
+            DocumentTemplatePreview.template_id == template.id,
+            DocumentTemplatePreview.consumed_at.is_(None),
+        )
+    )
+    assert unconsumed_count == 50
+
+
+@pytest.mark.asyncio
+async def test_generation_trim_preserves_recent_inflight_window_and_removes_old_expiry(
+    db_session, test_tenant, test_user
+):
+    from sqlalchemy import select
+
+    from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    template = DocumentTemplate(
+        tenant_id=test_tenant.id,
+        title="Generation trim grace",
+        body="",
+        format="pdf",
+    )
+    db_session.add(template)
+    await db_session.flush()
+    now = datetime.now(timezone.utc)
+
+    def attempt(marker: str, expires_at: datetime):
+        return DocumentTemplatePreview(
+            tenant_id=test_tenant.id,
+            template_id=template.id,
+            previewed_by_user_id=test_user.id,
+            purpose="generation",
+            contract_sha256=marker * 64,
+            values_hmac_sha256="b" * 64,
+            output_sha256="c" * 64,
+            renderer_version="generation-trim-test",
+            flatten_pdf=True,
+            reviewed_field_count=0,
+            nonblank_field_count=0,
+            reviewed_field_names=[],
+            expires_at=expires_at,
+        )
+
+    recent = [
+        attempt(f"{index % 10}", now - timedelta(minutes=1)) for index in range(55)
+    ]
+    old = attempt("f", now - timedelta(hours=2))
+    db_session.add_all([*recent, old])
+    await db_session.commit()
+
+    await document_templates._trim_preview_evidence(
+        db_session,
+        tenant_id=test_tenant.id,
+        template_id=template.id,
+        user_id=test_user.id,
+        purpose="generation",
+    )
+    await db_session.commit()
+
+    remaining_ids = set(
+        await db_session.scalars(
+            select(DocumentTemplatePreview.id).where(
+                DocumentTemplatePreview.template_id == template.id
+            )
+        )
+    )
+    assert old.id not in remaining_ids
+    assert {row.id for row in recent}.issubset(remaining_ids)
+
+
+@pytest.mark.asyncio
+async def test_pdf_preview_cannot_be_consumed_and_unresolved_reconciliation(
+    db_session, test_tenant, test_user
+):
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    template = DocumentTemplate(
+        tenant_id=test_tenant.id,
+        title="Terminal state constraint",
+        body="",
+        format="pdf",
+    )
+    db_session.add(template)
+    await db_session.flush()
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        DocumentTemplatePreview(
+            tenant_id=test_tenant.id,
+            template_id=template.id,
+            previewed_by_user_id=test_user.id,
+            purpose="generation",
+            contract_sha256="a" * 64,
+            values_hmac_sha256="b" * 64,
+            output_sha256="c" * 64,
+            renderer_version="terminal-state-test",
+            flatten_pdf=True,
+            reviewed_field_count=0,
+            nonblank_field_count=0,
+            reviewed_field_names=[],
+            expires_at=now + timedelta(hours=1),
+            consumed_at=now,
+            reconciliation_required_at=now,
+            reconciliation_reason="cleanup_failed",
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_commit_absence_uses_two_second_observation_window(monkeypatch):
+    sessions = []
+    sleeps = []
+
+    class VerificationSession:
+        async def scalar(self, _statement):
+            return None
+
+    class VerificationContext:
+        async def __aenter__(self):
+            session = VerificationSession()
+            sessions.append(session)
+            return session
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def set_context(_db, _tenant_id):
+        return None
+
+    async def record_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(document_templates, "async_session_maker", VerificationContext)
+    monkeypatch.setattr(document_templates, "set_tenant_context", set_context)
+    monkeypatch.setattr(document_templates.asyncio, "sleep", record_sleep)
+
+    outcome = await document_templates._matter_document_commit_outcome(
+        tenant_id=uuid.uuid4(), document_id=uuid.uuid4()
+    )
+
+    assert outcome is False
+    assert len(sessions) == 5
+    assert sleeps == [0.1, 0.3, 0.6, 1.0]
+    assert sum(sleeps) == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_commit_verification_error_is_unknown(monkeypatch):
+    class FailingSession:
+        async def scalar(self, _statement):
+            raise RuntimeError("verification database unavailable")
+
+    class FailingContext:
+        async def __aenter__(self):
+            return FailingSession()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def set_context(_db, _tenant_id):
+        return None
+
+    monkeypatch.setattr(document_templates, "async_session_maker", FailingContext)
+    monkeypatch.setattr(document_templates, "set_tenant_context", set_context)
+
+    outcome = await document_templates._matter_document_commit_outcome(
+        tenant_id=uuid.uuid4(), document_id=uuid.uuid4()
+    )
+
+    assert outcome is None
+
+
+@pytest.mark.asyncio
+async def test_template_deletion_preserves_terminal_preview_audit_rows(
+    client, db_session, test_tenant, test_user
+):
+    from sqlalchemy import select
+
+    from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
+
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = DocumentTemplate(
+        tenant_id=test_tenant.id,
+        title="Retired audit template",
+        body="",
+        format="pdf",
+    )
+    db_session.add(template)
+    await db_session.flush()
+    now = datetime.now(timezone.utc)
+
+    def evidence(marker: str, *, purpose: str = "generation", **terminal_fields):
+        return DocumentTemplatePreview(
+            tenant_id=test_tenant.id,
+            template_id=template.id,
+            previewed_by_user_id=test_user.id,
+            purpose=purpose,
+            contract_sha256=marker * 64,
+            values_hmac_sha256="b" * 64,
+            output_sha256="c" * 64,
+            renderer_version="retirement-test",
+            flatten_pdf=True,
+            reviewed_field_count=0,
+            nonblank_field_count=0,
+            reviewed_field_names=[],
+            expires_at=now + timedelta(hours=1),
+            **terminal_fields,
+        )
+
+    consumed = evidence("1", consumed_at=now)
+    reconciliation = evidence(
+        "2",
+        reconciliation_required_at=now,
+        reconciliation_reason="cleanup_failed",
+    )
+    pending_generation = evidence("3")
+    ordinary = evidence("4", purpose="draft")
+    db_session.add_all([consumed, reconciliation, pending_generation, ordinary])
+    await db_session.commit()
+    terminal_ids = {consumed.id, reconciliation.id, pending_generation.id}
+    ordinary_id = ordinary.id
+
+    response = await client.delete(f"/api/templates/{template.id}")
+
+    assert response.status_code == 204, response.text
+    terminal_rows = list(
+        await db_session.scalars(
+            select(DocumentTemplatePreview)
+            .where(DocumentTemplatePreview.id.in_(terminal_ids))
+            .execution_options(populate_existing=True)
+        )
+    )
+    assert {row.id for row in terminal_rows} == terminal_ids
+    assert all(row.template_id is None for row in terminal_rows)
+    assert await db_session.get(DocumentTemplatePreview, ordinary_id) is None
+
+
+@pytest.mark.asyncio
+async def test_template_delete_stays_successful_when_post_commit_source_cleanup_fails(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    import logging
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.models.document_template import DocumentTemplate
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    template = DocumentTemplate(
+        tenant_id=test_tenant.id,
+        title="Cleanup failure template",
+        body="",
+        format="pdf",
+    )
+    db_session.add(template)
+    await db_session.flush()
+    source_dir = Path(
+        document_templates._template_source_dir(str(test_tenant.id), template.id)
+    )
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "source.pdf"
+    source_path.write_bytes(b"%PDF-1.7 source")
+    template.source_storage_path = str(source_path)
+    await db_session.commit()
+    original_unlink = Path.unlink
+
+    def fail_source_unlink(path, *args, **kwargs):
+        if path.resolve() == source_path.resolve():
+            raise OSError("injected source cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    caplog.set_level(logging.ERROR, logger="app.routers.document_templates")
+    with monkeypatch.context() as cleanup_failure:
+        cleanup_failure.setattr(Path, "unlink", fail_source_unlink)
+        response = await client.delete(f"/api/templates/{template.id}")
+
+    assert response.status_code == 204, response.text
+    assert (
+        await db_session.scalar(
+            select(DocumentTemplate.id).where(DocumentTemplate.id == template.id)
+        )
+        is None
+    )
+    assert source_path.is_file()
+    assert "Template source cleanup failed after committed delete" in caplog.text
 
 
 def test_upload_analysis_detects_fields_and_letterhead_from_text():
@@ -367,6 +838,28 @@ def test_pdf_final_render_requires_explicit_review_and_true_required_checkbox():
         )
 
 
+def test_pdf_activation_preview_requires_representative_non_signature_values():
+    source = _fillable_pdf()
+    schema = {"fields": discover_pdf_fields(source)}
+
+    with pytest.raises(TemplatePdfError, match="representative values") as exc_info:
+        validate_representative_pdf_variables(
+            schema,
+            {"client_name": "", "approved": "false", "notes": ""},
+        )
+    assert "client_name" in str(exc_info.value)
+    assert "notes" in str(exc_info.value)
+
+    validate_representative_pdf_variables(
+        schema,
+        {
+            "client_name": "Representative Client",
+            "approved": "false",
+            "notes": "Representative multiline narrative",
+        },
+    )
+
+
 def test_pdf_final_render_clears_sample_values_and_leaves_signature_blank():
     from pypdf import PdfReader, PdfWriter
     from pypdf.generic import NameObject, NumberObject
@@ -577,15 +1070,180 @@ async def test_build_variable_suggestions_from_matter_client_and_current_user(
 
 
 @pytest.mark.asyncio
+async def test_template_upload_lost_commit_ack_preserves_committed_source(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.models.document_template import DocumentTemplate
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    original_commit = db_session.commit
+
+    async def commit_then_lose_ack():
+        await original_commit()
+        raise RuntimeError("injected lost template commit acknowledgement")
+
+    with monkeypatch.context() as lost_ack:
+        lost_ack.setattr(db_session, "commit", commit_then_lose_ack)
+        response = await client.post(
+            "/api/templates/intake/create",
+            files={"file": ("lost-ack.pdf", _fillable_pdf(), "application/pdf")},
+            data={"title": "Lost ACK template", "category": "other"},
+        )
+
+    assert response.status_code == 201, response.text
+    template_id = uuid.UUID(response.json()["id"])
+    template = await db_session.scalar(
+        select(DocumentTemplate).where(DocumentTemplate.id == template_id)
+    )
+    assert template is not None
+    assert Path(template.source_storage_path).is_file()
+
+
+@pytest.mark.asyncio
+async def test_template_upload_confirmed_rollback_removes_staged_source(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.document_template import DocumentTemplate
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+
+    async def fail_commit():
+        raise RuntimeError("injected template commit failure")
+
+    async def confirmed_rollback(**_kwargs):
+        return False, None
+
+    with monkeypatch.context() as failure:
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(
+            document_templates, "_template_commit_outcome", confirmed_rollback
+        )
+        response = await client.post(
+            "/api/templates/intake/create",
+            files={"file": ("rolled-back.pdf", _fillable_pdf(), "application/pdf")},
+            data={"title": "Rolled back template", "category": "other"},
+        )
+
+    assert response.status_code == 500, response.text
+    assert "staged source was removed" in response.json()["detail"]
+    assert list(Path(tmp_path).rglob("*.pdf")) == []
+    assert (
+        await db_session.scalar(select(func.count()).select_from(DocumentTemplate)) == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_upload_confirmed_rollback_cleanup_failure_preserves_source(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    import logging
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.document_template import DocumentTemplate
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+
+    async def fail_commit():
+        raise RuntimeError("injected template commit failure")
+
+    async def confirmed_rollback(**_kwargs):
+        return False, None
+
+    def fail_unlink(_path, *_args, **_kwargs):
+        raise OSError("injected scoped source cleanup failure")
+
+    caplog.set_level(logging.CRITICAL, logger="app.routers.document_templates")
+    with monkeypatch.context() as failure:
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(
+            document_templates, "_template_commit_outcome", confirmed_rollback
+        )
+        failure.setattr(Path, "unlink", fail_unlink)
+        response = await client.post(
+            "/api/templates/intake/create",
+            files={"file": ("cleanup-failed.pdf", _fillable_pdf(), "application/pdf")},
+            data={"title": "Cleanup failed template", "category": "other"},
+        )
+
+    assert response.status_code == 500, response.text
+    assert "retained-source cleanup failed" in response.json()["detail"]
+    preserved = list(Path(tmp_path).rglob("*.pdf"))
+    assert len(preserved) == 1
+    assert preserved[0].is_file()
+    assert "uncommitted template-source cleanup failed" in caplog.text
+    assert (
+        await db_session.scalar(select(func.count()).select_from(DocumentTemplate)) == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_upload_unknown_commit_preserves_source_for_reconciliation(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.document_template import DocumentTemplate
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+
+    async def fail_commit():
+        raise RuntimeError("injected ambiguous template commit")
+
+    async def unknown_outcome(**_kwargs):
+        return None, None
+
+    with monkeypatch.context() as failure:
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(document_templates, "_template_commit_outcome", unknown_outcome)
+        response = await client.post(
+            "/api/templates/intake/create",
+            files={"file": ("unknown-commit.pdf", _fillable_pdf(), "application/pdf")},
+            data={"title": "Unknown commit template", "category": "other"},
+        )
+
+    assert response.status_code == 500, response.text
+    assert "outcome could not be verified" in response.json()["detail"]
+    preserved = list(Path(tmp_path).rglob("*.pdf"))
+    assert len(preserved) == 1
+    assert preserved[0].read_bytes().startswith(b"%PDF")
+    assert (
+        await db_session.scalar(select(func.count()).select_from(DocumentTemplate)) == 0
+    )
+
+
+@pytest.mark.asyncio
 async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
     client, db_session, test_tenant, test_user, tmp_path, monkeypatch
 ):
     from pathlib import Path
 
     from pypdf import PdfReader
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from app.models.document_template import DocumentTemplate
+    from app.models.document_template_preview import DocumentTemplatePreview
     from app.models.matter_document import MatterDocument
     from app.models.plugin import Matter, MatterEvent
     from app.services import matter_file_store as matter_store_module
@@ -623,7 +1281,14 @@ async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
 
     preview = await client.post(
         f"/api/templates/{template_id}/render-file",
-        json={"variables": {"client_name": "Ada Lovelace", "approved": "yes"}},
+        json={
+            "variables": {
+                "client_name": "Representative Client",
+                "approved": "yes",
+                "notes": "Representative multiline narrative",
+            },
+            "preview_purpose": "activation",
+        },
     )
     assert preview.status_code == 200, preview.text
     assert preview.headers["content-type"].startswith("application/pdf")
@@ -631,7 +1296,9 @@ async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
     assert preview_reader.get_fields() is None
     preview_text = preview_reader.pages[0].extract_text()
     assert "Client:" in preview_text
-    assert "Ada Lovelace" in preview_text
+    assert "Representative Client" in preview_text
+    assert preview.headers["x-clarity-preview-purpose"] == "activation"
+    assert preview.headers["x-clarity-preview-id"]
 
     matter = Matter(
         id=uuid.uuid4(),
@@ -662,27 +1329,122 @@ async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
     )
     assert activated.status_code == 200, activated.text
 
-    filenames = []
-    for _ in range(2):
-        saved = await client.post(
-            f"/api/templates/{template_id}/render",
-            json={
-                "variables": {
-                    "client_name": "Ada Lovelace",
-                    "approved": "yes",
-                    "notes": "",
-                },
-                "matter_id": str(matter.id),
-            },
+    generation_values = {
+        "client_name": "Ada Lovelace",
+        "approved": "yes",
+        "notes": "",
+    }
+    missing_preview = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={"variables": generation_values, "matter_id": str(matter.id)},
+    )
+    assert missing_preview.status_code == 409
+    assert "Preview the exact current PDF values" in missing_preview.json()["detail"]
+
+    generation_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert generation_preview.status_code == 200, generation_preview.text
+    generation_preview_id = generation_preview.headers["x-clarity-preview-id"]
+
+    changed_after_preview = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": {**generation_values, "client_name": "Grace Hopper"},
+            "matter_id": str(matter.id),
+            "preview_id": generation_preview_id,
+        },
+    )
+    assert changed_after_preview.status_code == 409
+    assert "field values changed" in changed_after_preview.json()["detail"]
+
+    first_save = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_id": generation_preview_id,
+        },
+    )
+    assert first_save.status_code == 200, first_save.text
+    first_payload = first_save.json()
+    assert first_payload["output_format"] == "pdf"
+    assert first_payload["output_filename"].endswith(".pdf")
+    assert first_payload["download_url"].endswith("/download")
+    assert first_payload["storage_backend"] == "local"
+    assert first_payload.get("storage_warning") is None
+
+    replay = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_id": generation_preview_id,
+        },
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["matter_document_id"] == first_payload["matter_document_id"]
+    assert replay.json()["output_filename"] == first_payload["output_filename"]
+    assert "original request" in replay.json()["rendered"]
+    consumed_wrong_values = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": {**generation_values, "client_name": "Different Client"},
+            "matter_id": str(matter.id),
+            "preview_id": generation_preview_id,
+        },
+    )
+    assert consumed_wrong_values.status_code == 409
+    assert "field values changed" in consumed_wrong_values.json()["detail"]
+    assert "consumed" not in consumed_wrong_values.json()["detail"]
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(MatterDocument)
+            .where(MatterDocument.matter_id == matter.id)
         )
-        assert saved.status_code == 200, saved.text
-        payload = saved.json()
-        assert payload["output_format"] == "pdf"
-        assert payload["output_filename"].endswith(".pdf")
-        assert payload["download_url"].endswith("/download")
-        assert payload["storage_backend"] == "local"
-        assert payload.get("storage_warning") is None
-        filenames.append(payload["output_filename"])
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(MatterEvent)
+            .where(
+                MatterEvent.matter_id == matter.id,
+                MatterEvent.event_type == "document_generated",
+            )
+        )
+        == 1
+    )
+
+    second_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert second_preview.status_code == 200, second_preview.text
+    second_preview_id = second_preview.headers["x-clarity-preview-id"]
+    second_save = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_id": second_preview_id,
+        },
+    )
+    assert second_save.status_code == 200, second_save.text
+    filenames = [
+        first_payload["output_filename"],
+        second_save.json()["output_filename"],
+    ]
     assert filenames[0] != filenames[1]
 
     documents = list(
@@ -706,9 +1468,480 @@ async def test_pdf_upload_preview_and_matter_render_are_binary_and_unique(
         ).all()
     )
     assert len(events) == 2
-    assert events[0].metadata_json["template_source_sha256"] == template.source_sha256
-    assert events[0].metadata_json["filled_variables"] == ["approved", "client_name"]
-    assert "Ada Lovelace" not in str(events[0].metadata_json)
+    first_event = next(
+        event
+        for event in events
+        if event.metadata_json["preview_evidence_id"] == generation_preview_id
+    )
+    assert first_event.metadata_json["template_source_sha256"] == template.source_sha256
+    assert first_event.metadata_json["filled_variables"] == ["approved", "client_name"]
+    assert "Ada Lovelace" not in str(first_event.metadata_json)
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview).where(
+            DocumentTemplatePreview.id == uuid.UUID(generation_preview_id)
+        )
+    )
+    assert evidence.values_hmac_sha256
+    assert "Ada Lovelace" not in str(evidence.__dict__)
+    assert evidence.expires_at > evidence.created_at
+    assert evidence.consumed_at is not None
+    assert str(evidence.consumed_by_document_id) == first_payload["matter_document_id"]
+
+    expiry_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert expiry_preview.status_code == 200, expiry_preview.text
+    expiry_preview_id = expiry_preview.headers["x-clarity-preview-id"]
+    expiry_evidence = await db_session.scalar(
+        select(DocumentTemplatePreview).where(
+            DocumentTemplatePreview.id == uuid.UUID(expiry_preview_id)
+        )
+    )
+    assert expiry_evidence.consumed_at is None
+    expiry_evidence.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
+    expired_preview = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_id": expiry_preview_id,
+        },
+    )
+    assert expired_preview.status_code == 409
+    assert "preview expired" in expired_preview.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_pdf_save_rejects_output_that_differs_from_reviewed_preview_before_write(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.matter_document import MatterDocument
+    from app.models.plugin import Matter, MatterEvent
+    from app.services import matter_file_store as matter_store_module
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(matter_store_module.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("integrity-form.pdf", _fillable_pdf(), "application/pdf")},
+        data={"title": "Integrity Form", "category": "other"},
+    )
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+    representative_values = {
+        "client_name": "Representative Client",
+        "approved": "yes",
+        "notes": "Representative narrative",
+    }
+    activation_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": representative_values,
+            "preview_purpose": "activation",
+        },
+    )
+    assert activation_preview.status_code == 200, activation_preview.text
+    activated = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert activated.status_code == 200, activated.text
+
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug="pdf-integrity-matter",
+        matter_name="PDF Integrity Matter",
+        matter_type="general",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    generation_values = {
+        "client_name": "Ada Lovelace",
+        "approved": "yes",
+        "notes": "Reviewed output",
+    }
+    generation_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": generation_values,
+            "matter_id": str(matter.id),
+            "preview_purpose": "generation",
+        },
+    )
+    assert generation_preview.status_code == 200, generation_preview.text
+    preview_id = generation_preview.headers["x-clarity-preview-id"]
+    files_before = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+
+    with monkeypatch.context() as mismatch:
+        mismatch.setattr(
+            document_templates,
+            "fill_pdf_template",
+            lambda *_args, **_kwargs: b"%PDF-1.7\n% deterministic mismatch\n%%EOF\n",
+        )
+        rejected = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": generation_values,
+                "matter_id": str(matter.id),
+                "preview_id": preview_id,
+            },
+        )
+
+    assert rejected.status_code == 409, rejected.text
+    assert "does not match the reviewed preview" in rejected.json()["detail"]
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(MatterDocument)
+            .where(MatterDocument.matter_id == matter.id)
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(MatterEvent)
+            .where(
+                MatterEvent.matter_id == matter.id,
+                MatterEvent.event_type == "document_generated",
+            )
+        )
+        == 0
+    )
+    files_after = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+    assert files_after == files_before
+
+
+@pytest.mark.asyncio
+async def test_failed_commit_with_confirmed_absence_removes_local_staged_file(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+    from app.models.matter_document import MatterDocument
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="commit-failure-local",
+    )
+    files_before = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+
+    async def fail_commit():
+        raise RuntimeError("injected pre-commit failure")
+
+    async def confirmed_absent(**_kwargs):
+        return False
+
+    with monkeypatch.context() as failure:
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(
+            document_templates,
+            "_matter_document_commit_outcome",
+            confirmed_absent,
+        )
+        response = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": str(matter.id),
+                "preview_id": preview_id,
+            },
+        )
+
+    assert response.status_code == 500, response.text
+    assert "staged storage was removed" in response.json()["detail"]
+    files_after = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+    assert files_after == files_before
+    assert (
+        await db_session.scalar(select(func.count()).select_from(MatterDocument)) == 0
+    )
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview)
+        .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+        .execution_options(populate_existing=True)
+    )
+    assert evidence.consumed_at is None
+    assert evidence.reconciliation_required_at is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_blocks_preview_and_retry_performs_no_storage_write(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from sqlalchemy import select
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+    from app.services.matter_file_store import StorageResult
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="cleanup-reconciliation",
+    )
+    staged = StorageResult(
+        provider="google",
+        backend="google_drive",
+        storage_path="https://attacker.invalid/display-only",
+        provider_item_id="provider-item-123",
+        drive_id="provider-drive-456",
+    )
+    store_calls = []
+    cleanup_calls = []
+    matter_id = str(matter.id)
+
+    async def fake_store(**kwargs):
+        store_calls.append(kwargs)
+        return staged
+
+    async def failed_cleanup(**kwargs):
+        cleanup_calls.append(kwargs)
+        raise RuntimeError("injected provider cleanup failure")
+
+    async def fail_commit():
+        raise RuntimeError("injected commit failure")
+
+    async def confirmed_absent(**_kwargs):
+        return False
+
+    with monkeypatch.context() as failure:
+        failure.setattr(
+            document_templates.matter_file_store,
+            "store_matter_file_result",
+            fake_store,
+        )
+        failure.setattr(
+            document_templates.matter_file_store,
+            "delete_stored_result",
+            failed_cleanup,
+        )
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(
+            document_templates,
+            "_matter_document_commit_outcome",
+            confirmed_absent,
+        )
+        failed = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": matter_id,
+                "preview_id": preview_id,
+            },
+        )
+
+    assert failed.status_code == 500, failed.text
+    assert "cleanup failed" in failed.json()["detail"]
+    assert len(store_calls) == 1
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0]["result"] is staged
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview)
+        .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+        .execution_options(populate_existing=True)
+    )
+    assert evidence.consumed_at is None
+    assert evidence.reconciliation_required_at is not None
+    assert evidence.reconciliation_reason == "cleanup_failed"
+    assert evidence.reconciliation_storage_backend == "google_drive"
+    assert evidence.reconciliation_provider_item_id == "provider-item-123"
+    assert evidence.reconciliation_provider_drive_id == "provider-drive-456"
+    assert evidence.reconciliation_local_path is None
+
+    async def unexpected_store(**_kwargs):
+        raise AssertionError("blocked evidence must fail before another storage write")
+
+    with monkeypatch.context() as retry_guard:
+        retry_guard.setattr(
+            document_templates.matter_file_store,
+            "store_matter_file_result",
+            unexpected_store,
+        )
+        retry = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": matter_id,
+                "preview_id": preview_id,
+            },
+        )
+    assert retry.status_code == 409, retry.text
+    assert "blocked pending storage reconciliation" in retry.json()["detail"]
+    assert len(store_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_commit_outcome_preserves_storage_and_blocks_preview(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from sqlalchemy import select
+
+    from app.models.document_template_preview import DocumentTemplatePreview
+    from app.services.matter_file_store import StorageResult
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="unknown-commit",
+    )
+    staged = StorageResult(
+        provider="microsoft",
+        backend="onedrive",
+        storage_path="https://attacker.invalid/display-only",
+        provider_item_id="unknown-item",
+    )
+    cleanup_calls = []
+    matter_id = str(matter.id)
+
+    async def fake_store(**_kwargs):
+        return staged
+
+    async def unexpected_cleanup(**kwargs):
+        cleanup_calls.append(kwargs)
+
+    async def fail_commit():
+        raise RuntimeError("injected ambiguous commit")
+
+    async def unknown_outcome(**_kwargs):
+        return None
+
+    with monkeypatch.context() as failure:
+        failure.setattr(
+            document_templates.matter_file_store,
+            "store_matter_file_result",
+            fake_store,
+        )
+        failure.setattr(
+            document_templates.matter_file_store,
+            "delete_stored_result",
+            unexpected_cleanup,
+        )
+        failure.setattr(db_session, "commit", fail_commit)
+        failure.setattr(
+            document_templates,
+            "_matter_document_commit_outcome",
+            unknown_outcome,
+        )
+        response = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": matter_id,
+                "preview_id": preview_id,
+            },
+        )
+
+    assert response.status_code == 500, response.text
+    assert "outcome could not be verified" in response.json()["detail"]
+    assert cleanup_calls == []
+    evidence = await db_session.scalar(
+        select(DocumentTemplatePreview)
+        .where(DocumentTemplatePreview.id == uuid.UUID(preview_id))
+        .execution_options(populate_existing=True)
+    )
+    assert evidence.reconciliation_reason == "commit_outcome_unknown"
+    assert evidence.reconciliation_provider_item_id == "unknown-item"
+
+
+@pytest.mark.asyncio
+async def test_lost_commit_ack_preserves_committed_storage_and_replays_idempotently(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.models.matter_document import MatterDocument
+
+    template_id, matter, values, preview_id = await _prepare_active_pdf_generation(
+        client=client,
+        db_session=db_session,
+        test_tenant=test_tenant,
+        test_user=test_user,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        slug="lost-commit-ack",
+    )
+    original_commit = db_session.commit
+    matter_id = str(matter.id)
+    files_before = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+
+    async def commit_then_lose_ack():
+        await original_commit()
+        raise RuntimeError("injected lost commit acknowledgement")
+
+    with monkeypatch.context() as lost_ack:
+        lost_ack.setattr(db_session, "commit", commit_then_lose_ack)
+        first = await client.post(
+            f"/api/templates/{template_id}/render",
+            json={
+                "variables": values,
+                "matter_id": matter_id,
+                "preview_id": preview_id,
+            },
+        )
+
+    assert first.status_code == 200, first.text
+    generated_id = first.json()["matter_document_id"]
+    files_after = {
+        path.resolve() for path in Path(tmp_path).rglob("*") if path.is_file()
+    }
+    assert len(files_after - files_before) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(MatterDocument)) == 1
+    )
+
+    replay = await client.post(
+        f"/api/templates/{template_id}/render",
+        json={
+            "variables": values,
+            "matter_id": matter_id,
+            "preview_id": preview_id,
+        },
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["matter_document_id"] == generated_id
+    assert (
+        await db_session.scalar(select(func.count()).select_from(MatterDocument)) == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -807,12 +2040,38 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         f"/api/templates/{template_id}", json={"is_active": True}
     )
     assert blocked_activation.status_code == 409
-    assert "Preview this PDF successfully" in blocked_activation.json()["detail"]
+    assert "representative flattened PDF preview" in blocked_activation.json()["detail"]
 
-    preview = await client.post(
+    draft_preview = await client.post(
         f"/api/templates/{template_id}/render-file", json={"variables": {}}
     )
+    assert draft_preview.status_code == 200, draft_preview.text
+    still_blocked = await client.patch(
+        f"/api/templates/{template_id}", json={"is_active": True}
+    )
+    assert still_blocked.status_code == 409
+
+    blank_activation_preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={"variables": {}, "preview_purpose": "activation"},
+    )
+    assert blank_activation_preview.status_code == 422
+    assert "representative values" in blank_activation_preview.json()["detail"]
+
+    activation_values = {
+        "client_name": "Representative Client",
+        "approved": "true",
+        "notes": "Representative narrative",
+    }
+    preview = await client.post(
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": activation_values,
+            "preview_purpose": "activation",
+        },
+    )
     assert preview.status_code == 200, preview.text
+    assert preview.headers["x-clarity-preview-purpose"] == "activation"
 
     activated = await client.patch(
         f"/api/templates/{template_id}", json={"is_active": True}
@@ -853,10 +2112,14 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         f"/api/templates/{template_id}", json={"is_active": True}
     )
     assert edited_activation.status_code == 409
-    assert "Preview this PDF successfully" in edited_activation.json()["detail"]
+    assert "representative flattened PDF preview" in edited_activation.json()["detail"]
 
     second_preview = await client.post(
-        f"/api/templates/{template_id}/render-file", json={"variables": {}}
+        f"/api/templates/{template_id}/render-file",
+        json={
+            "variables": activation_values,
+            "preview_purpose": "activation",
+        },
     )
     assert second_preview.status_code == 200, second_preview.text
     reactivated = await client.patch(

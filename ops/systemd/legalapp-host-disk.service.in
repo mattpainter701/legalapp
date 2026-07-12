@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh LegalApp aggregate host disk status
+After=docker.service
+OnFailure=legalapp-host-disk-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=@LEGALAPP_ROOT@
+Environment="ENV_FILE=@ENV_FILE@"
+Environment="COMPOSE_FILES=@COMPOSE_FILES@"
+Environment="PATH=@EXEC_PATH@"
+UMask=0022
+ExecStart=@PYTHON_BIN@ @LEGALAPP_ROOT@/scripts/update_host_disk_status.py
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

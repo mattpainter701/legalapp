@@ -14,12 +14,19 @@ MOCK_CONTAINER="nginx-ingress-mock-$SUFFIX"
 PROD_CONTAINER="nginx-ingress-prod-$SUFFIX"
 
 cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "nginx ingress test failed; container logs follow" >&2
+    docker logs "$PROD_CONTAINER" >&2 || true
+    docker logs "$MOCK_CONTAINER" >&2 || true
+  fi
   docker rm -f "$PROD_CONTAINER" "$MOCK_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$TEST_NETWORK" >/dev/null 2>&1 || true
   docker volume rm -f "$CERT_VOLUME" >/dev/null 2>&1 || true
   if [ "${KEEP_NGINX_TEST_IMAGES:-0}" != "1" ]; then
     docker image rm "$PROD_IMAGE" "$DEV_IMAGE" >/dev/null 2>&1 || true
   fi
+  return "$status"
 }
 trap cleanup EXIT INT TERM
 
@@ -147,7 +154,11 @@ docker run -d --name "$MOCK_CONTAINER" \
   -c 'set -eu
       mkdir -p /tmp/backend/api
       printf "%s\n" "{\"version\":\"header-test\"}" > /tmp/backend/api/version
-      exec python3 -m http.server 8000 --directory /tmp/backend' >/dev/null
+      mkdir -p /tmp/frontend/privacy /tmp/frontend/terms
+      printf "%s\n" "<html><head><title>Privacy Summary | Clarity Legal</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
+      printf "%s\n" "<html><head><title>Service Summary | Clarity Legal</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
+      python3 -m http.server 8000 --directory /tmp/backend &
+      exec python3 -m http.server 3000 --directory /tmp/frontend' >/dev/null
 
 docker run -d --name "$PROD_CONTAINER" \
   --network "$TEST_NETWORK" \
@@ -335,6 +346,43 @@ assert_header_exactly_once "$local_tls" "local TLS" \
   "Strict-Transport-Security" "max-age=63072000; includeSubDomains"
 assert_plain_redirect "$plain_http" "/api/version" "plain HTTP /api/version"
 
+for public_path in /privacy /privacy/ /terms /terms/; do
+  public_name="$(printf '%s' "$public_path" | cut -d/ -f2)"
+  if [ "$public_name" = privacy ]; then
+    expected_title="Privacy Summary | Clarity Legal"
+  else
+    expected_title="Service Summary | Clarity Legal"
+  fi
+  for transport in edge tls; do
+    public_response=""
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      if [ "$transport" = edge ]; then
+        public_response="$(http_request "$public_path" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" 2>/dev/null || true)"
+        label="edge HTTPS $public_path"
+      else
+        public_response="$(tls_request "$public_path" 2>/dev/null || true)"
+        label="local TLS $public_path"
+      fi
+      if [ "$(response_status "$public_response")" = 200 ]; then
+        break
+      fi
+      sleep 1
+    done
+    assert_status "$public_response" "$label" 200
+    assert_header_absent "$public_response" "$label" "X-Robots-Tag"
+    assert_header_exactly_once "$public_response" "$label" \
+      "Strict-Transport-Security" "max-age=63072000; includeSubDomains"
+    printf '%s' "$public_response" | grep -Fq "<title>$expected_title</title>" || {
+      echo "ERROR: $label did not serve its route-correct title" >&2
+      exit 1
+    }
+    printf '%s' "$public_response" | grep -Fq "href=\"https://headers.test/$public_name\"" || {
+      echo "ERROR: $label did not serve its route-correct canonical" >&2
+      exit 1
+    }
+  done
+done
+
 # The redirect gate is server-wide, so more-specific auth, webhook, utility,
 # asset, and frontend locations cannot accidentally serve direct plaintext.
 for direct_path in \
@@ -346,6 +394,10 @@ for direct_path in \
   /openapi.json \
   /redoc \
   /assets/app.js \
+  /privacy \
+  /privacy/ \
+  /terms \
+  /terms/ \
   /
 do
   direct_response="$(http_request "$direct_path")"

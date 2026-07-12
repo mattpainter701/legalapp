@@ -62,6 +62,13 @@ uploads_host_dir="$(get_env UPLOADS_HOST_DIR)"
 }
 [[ ! -L "$uploads_host_dir" ]] || { echo "ERROR: UPLOADS_HOST_DIR may not be a symlink" >&2; exit 2; }
 mkdir -p -- "$uploads_host_dir"
+host_status_dir="$(get_env HOST_STATUS_HOST_DIR)"
+[[ "$host_status_dir" == /* && "$host_status_dir" != "/" ]] || {
+  echo "ERROR: HOST_STATUS_HOST_DIR must be an absolute non-root path" >&2
+  exit 2
+}
+[[ ! -L "$host_status_dir" ]] || { echo "ERROR: HOST_STATUS_HOST_DIR may not be a symlink" >&2; exit 2; }
+mkdir -p -- "$host_status_dir" "$ROOT_DIR/backups"
 
 compose=(docker compose --env-file "$ENV_FILE")
 # prod_data_guard.sh accepts a shell-style Compose prefix for compatibility.
@@ -73,6 +80,12 @@ done
 
 echo "==> Deploying $APP_VERSION with the hardened production topology"
 ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/prod_env_preflight.sh
+
+echo "==> Installing and proving the persistent host disk monitor"
+if ! ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILES" bash scripts/install_host_disk_timer.sh; then
+  echo "ERROR: host disk monitoring is not persistent. Enable user lingering with 'sudo loginctl enable-linger $USER', then rerun deployment." >&2
+  exit 3
+fi
 
 if [[ ! -r nginx/ssl/fullchain.pem || ! -r nginx/ssl/privkey.pem ]]; then
   echo "ERROR: nginx TLS certificate files are missing." >&2

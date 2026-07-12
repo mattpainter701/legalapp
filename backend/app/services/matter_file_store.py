@@ -98,6 +98,10 @@ class MatterFileIntegrityError(MatterFileReadError):
     """Stored bytes do not match persisted size or hash evidence."""
 
 
+class MatterFileCleanupError(RuntimeError):
+    """A staged matter file could not be safely removed after persistence failed."""
+
+
 class MatterFileStore:
     """Store matter files in the customer's connected cloud storage."""
 
@@ -199,6 +203,94 @@ class MatterFileStore:
             expected_sha256=expected_sha256,
         )
         return content
+
+    async def delete_stored_result(
+        self,
+        *,
+        db: AsyncSession,
+        tenant_id: str,
+        result: StorageResult,
+    ) -> None:
+        """Compensate a staged upload using only scoped, durable metadata.
+
+        Display URLs are never followed. Local paths must resolve beneath the
+        tenant upload root, while cloud deletion uses the freshly resolved
+        tenant OAuth token plus the provider item/drive IDs returned by upload.
+        Missing objects are treated as already compensated.
+        """
+        backend = str(result.backend or "").strip().lower().replace("-", "_")
+        if backend == "local":
+            if not result.storage_path:
+                raise MatterFileCleanupError(
+                    "Local staged file is missing its cleanup path"
+                )
+            await asyncio.to_thread(
+                _delete_scoped_local_file,
+                tenant_id,
+                result.storage_path,
+            )
+            logger.info(
+                "Removed staged local matter file for tenant %s after persistence failure",
+                tenant_id,
+            )
+            return
+
+        item_id = str(result.provider_item_id or "").strip()
+        if not item_id:
+            raise MatterFileCleanupError(
+                f"Staged {backend or 'cloud'} file is missing its provider item ID"
+            )
+        encoded_item_id = quote(item_id, safe="")
+        if backend == "google_drive":
+            token_provider = "google"
+            provider_label = "Google Drive"
+            delete_url = f"{GOOGLE_DOWNLOAD_BASE}/files/{encoded_item_id}"
+        elif backend in {"onedrive", "sharepoint"}:
+            token_provider = "microsoft"
+            provider_label = (
+                "Microsoft SharePoint" if backend == "sharepoint" else "OneDrive"
+            )
+            drive_id = str(result.drive_id or "").strip()
+            if backend == "sharepoint" and not drive_id:
+                raise MatterFileCleanupError(
+                    "Staged SharePoint file is missing its drive ID"
+                )
+            delete_url = (
+                f"{GRAPH_BASE}/drives/{quote(drive_id, safe='')}/items/{encoded_item_id}"
+                if drive_id
+                else f"{GRAPH_BASE}/me/drive/items/{encoded_item_id}"
+            )
+        else:
+            raise MatterFileCleanupError(
+                f"Unsupported staged storage backend: {backend or 'unknown'}"
+            )
+
+        token = await get_fresh_token(db, tenant_id, token_provider)
+        if not token:
+            raise MatterFileCleanupError(
+                f"{provider_label} credentials are unavailable for staged-file cleanup"
+            )
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.delete(
+                    delete_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise MatterFileCleanupError(
+                f"{provider_label} staged-file cleanup did not complete"
+            ) from exc
+        if response.status_code not in {200, 202, 204, 404}:
+            raise MatterFileCleanupError(
+                f"{provider_label} staged-file cleanup failed with HTTP "
+                f"{response.status_code}"
+            )
+        logger.info(
+            "Removed staged %s item %s for tenant %s after persistence failure",
+            backend,
+            item_id,
+            tenant_id,
+        )
 
     async def _download_provider_bytes(
         self,
@@ -1000,6 +1092,19 @@ def _read_local_file_capped(path: Path, max_bytes: int) -> bytes:
 def _write_local_file(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+
+def _delete_scoped_local_file(tenant_id: str, raw_path: str) -> None:
+    root = _tenant_local_root(tenant_id)
+    unresolved = Path(raw_path)
+    if unresolved.is_symlink():
+        raise MatterFileAccessError("Staged local cleanup path must not be a symlink")
+    path = _ensure_within_root(unresolved.resolve(), root)
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise MatterFileCleanupError("Staged local path is not a regular file")
+    path.unlink()
 
 
 def _validate_read_integrity(

@@ -468,6 +468,42 @@ async def _resolve_active_user(
     ).scalar_one_or_none()
 
 
+async def _load_tenant_contact_or_404(
+    db: AsyncSession, tenant_id: uuid.UUID, contact_id: uuid.UUID
+) -> Contact:
+    contact = (
+        await db.execute(
+            select(Contact).where(
+                Contact.id == contact_id,
+                Contact.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not contact:
+        # Do not distinguish a foreign contact from a nonexistent contact.
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+async def _load_tenant_lead_or_404(
+    db: AsyncSession, tenant_id: uuid.UUID, lead_id: uuid.UUID
+) -> Lead:
+    lead = (
+        await db.execute(
+            select(Lead).where(
+                Lead.id == lead_id,
+                Lead.tenant_id == tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    # A tenant-scoped lead is not sufficient on its own: the database FK does
+    # not enforce that the linked contact has the same tenant.
+    await _load_tenant_contact_or_404(db, tenant_id, lead.contact_id)
+    return lead
+
+
 async def _upsert_lead_assignment_task(
     db: AsyncSession,
     *,
@@ -1709,6 +1745,17 @@ async def create_dashboard_call(
 
     contact_id = payload.existing_contact_id
     lead_id = payload.existing_lead_id
+    selected_lead = None
+    if contact_id:
+        await _load_tenant_contact_or_404(db, tenant_id, contact_id)
+    if lead_id:
+        selected_lead = await _load_tenant_lead_or_404(db, tenant_id, lead_id)
+        if contact_id and contact_id != selected_lead.contact_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Selected lead does not belong to the selected contact",
+            )
+        contact_id = selected_lead.contact_id
     created_lead = False
     assignment_task_id = None
     task = None
@@ -1735,6 +1782,8 @@ async def create_dashboard_call(
         # links written by the first successful request are then reused by every
         # waiter rather than creating another contact or lead.
         contact_id = contact_id or source_log.contact_id
+        if contact_id:
+            await _load_tenant_contact_or_404(db, tenant_id, contact_id)
         captured_lead_id = _log_participant_uuid(source_log, "intake_lead_id")
         if not captured_lead_id:
             captured_lead_id = await db.scalar(
@@ -1777,18 +1826,17 @@ async def create_dashboard_call(
                 ),
             )
         if not lead_id and captured_lead_id:
-            captured_lead = (
-                await db.execute(
-                    select(Lead).where(
-                        Lead.id == captured_lead_id,
-                        Lead.tenant_id == tenant_id,
-                    )
+            try:
+                captured_lead = await _load_tenant_lead_or_404(
+                    db, tenant_id, captured_lead_id
                 )
-            ).scalar_one_or_none()
+            except HTTPException:
+                captured_lead = None
             if captured_lead and (
                 contact_id is None or captured_lead.contact_id == contact_id
             ):
                 lead_id = captured_lead.id
+                selected_lead = captured_lead
                 contact_id = captured_lead.contact_id
             else:
                 raise HTTPException(
@@ -1822,13 +1870,9 @@ async def create_dashboard_call(
 
     if payload.outcome == "create_lead":
         if lead_id:
-            lead = (
-                await db.execute(
-                    select(Lead).where(Lead.id == lead_id, Lead.tenant_id == tenant_id)
-                )
-            ).scalar_one_or_none()
-            if not lead:
-                raise HTTPException(status_code=404, detail="Lead not found")
+            lead = selected_lead or await _load_tenant_lead_or_404(
+                db, tenant_id, lead_id
+            )
             if lead_assignee:
                 lead.assigned_to_user_id = lead_assignee.id
             if payload.qualified:
@@ -1836,6 +1880,13 @@ async def create_dashboard_call(
             lead_id = lead.id
             contact_id = lead.contact_id
             if payload.task_mode == "partner_rotation":
+                if lead.assigned_to_user_id and not await _resolve_active_user(
+                    db, tenant_id, lead.assigned_to_user_id
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Lead assigned user is not active in this tenant",
+                    )
                 existing_task = await _assignment_task_for_lead(db, tenant_id, lead)
                 previous_assignee_id = (
                     existing_task.assigned_to_user_id if existing_task else None
@@ -1894,6 +1945,12 @@ async def create_dashboard_call(
                 )
                 assignment_task_id = task.id if task else None
                 should_notify_task = task is not None
+
+    # Every contact link written below (call, task, lead or assignment log) is
+    # tenant-owned. This final guard also covers IDs derived from older source
+    # call records rather than supplied directly by the request.
+    if contact_id:
+        await _load_tenant_contact_or_404(db, tenant_id, contact_id)
 
     occurred_at = payload.occurred_at or datetime.now(timezone.utc)
     body_bits = [

@@ -1,11 +1,17 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   buildMarketingStructuredData,
   buildRobotsTxt,
   buildSitemapXml,
   normalizeSiteOrigin,
 } from './src/seo/config.js'
+import {
+  PUBLIC_SERVER_SHELL_PATHS,
+  buildPublicRouteHtml,
+} from './src/seo/serverShell.js'
 
 function seoAssets(siteOrigin) {
   return {
@@ -27,6 +33,19 @@ function seoAssets(siteOrigin) {
           children: JSON.stringify(buildMarketingStructuredData(siteOrigin)),
           injectTo: 'head',
         }],
+      }
+    },
+    writeBundle(options) {
+      const outputDirectory = path.resolve(options.dir || 'dist')
+      const indexHtml = readFileSync(path.join(outputDirectory, 'index.html'), 'utf8')
+      for (const pathname of PUBLIC_SERVER_SHELL_PATHS) {
+        const routeDirectory = path.join(outputDirectory, pathname.slice(1))
+        mkdirSync(routeDirectory, { recursive: true })
+        writeFileSync(
+          path.join(routeDirectory, 'index.html'),
+          buildPublicRouteHtml(indexHtml, pathname, siteOrigin),
+          'utf8',
+        )
       }
     },
     generateBundle() {

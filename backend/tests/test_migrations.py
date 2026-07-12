@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["090_zoom_account_binding"]
+    assert heads == ["091_pdf_preview_evidence"]
 
 
 def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():
@@ -28,6 +28,20 @@ def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():
     assert source.index(no_force) < source.index(duplicate_gate) < source.index(force)
     assert source.index(force) < source.index(unique_index)
     assert "no customer rows were changed" in source
+
+
+def test_pdf_preview_evidence_migration_preserves_terminal_audit_and_forces_rls():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "091_pdf_preview_evidence.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'sa.ForeignKey("document_templates.id", ondelete="SET NULL")' in source
+    assert 'sa.Column("consumed_at"' in source
+    assert '"reconciliation_required_at"' in source
+    assert "ck_document_template_previews_terminal_state" in source
+    assert "document_template_previews_tenant_isolation" in source
+    assert "ALTER TABLE document_template_previews FORCE ROW LEVEL SECURITY" in source
 
 
 def test_zoom_account_binding_backfill_crosses_force_rls_then_restores_it():

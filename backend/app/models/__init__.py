@@ -59,6 +59,7 @@ from app.models.task import Task
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
+from app.models.document_template_preview import DocumentTemplatePreview
 from app.models.cloud_metadata import CloudMetadata
 from app.models.mediation import (
     MediationParty,
@@ -156,6 +157,7 @@ __all__ = [
     "ScheduledEvent",
     "CommunicationLog",
     "DocumentTemplate",
+    "DocumentTemplatePreview",
     "PromptOverride",
     "CloudMetadata",
     "SmbAgent",

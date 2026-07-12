@@ -176,3 +176,33 @@ async def test_legacy_api_key_is_rejected_without_database_lookup():
         )
 
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "expected_detail"),
+    [
+        (mcp.get_api_key_info, "Legacy MCP API keys are retired"),
+        (mcp.regenerate_api_key, "Legacy MCP API key issuance is retired"),
+    ],
+)
+async def test_authenticated_legacy_api_key_routes_are_retired(
+    monkeypatch, handler, expected_detail
+):
+    request = SimpleNamespace(headers={"Authorization": "Bearer current-session"})
+    db = object()
+    authenticated_user = SimpleNamespace(id=uuid.uuid4())
+    calls = []
+
+    async def allow_current_user(resolved_request, resolved_db):
+        calls.append((resolved_request, resolved_db))
+        return authenticated_user
+
+    monkeypatch.setattr(mcp, "get_current_user", allow_current_user)
+
+    with pytest.raises(HTTPException) as exc:
+        await handler(request=request, db=db)
+
+    assert calls == [(request, db)]
+    assert exc.value.status_code == 410
+    assert expected_detail in exc.value.detail

@@ -1,5 +1,5 @@
 import React from 'react'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TemplatesPage from './TemplatesPage'
@@ -7,6 +7,7 @@ import {
   analyzeTemplateUpload,
   createTemplate,
   createTemplateFromUpload,
+  discoverTemplateVariables,
   getTemplates,
   renderTemplate,
   renderTemplateFile,
@@ -205,25 +206,136 @@ describe('document template workflow', () => {
   it('uses the binary endpoint for a side-effect-free PDF preview', async () => {
     getTemplates.mockResolvedValueOnce({ items: [{ id: 'pdf-template', title: 'Court Form', body: 'Name: {{client_name}}', category: 'other', format: 'pdf', source_filename: 'court.pdf', source_sha256: 'abc', is_active: true }] })
     const pdfBlob = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
-    renderTemplateFile.mockResolvedValue({ blob: pdfBlob, filename: 'Court_Form.pdf', contentType: 'application/pdf' })
+    renderTemplateFile.mockResolvedValue({ blob: pdfBlob, filename: 'Court_Form.pdf', contentType: 'application/pdf', previewId: 'preview-1', previewPurpose: 'generation' })
     URL.createObjectURL = vi.fn().mockReturnValue('blob:pdf-preview')
     URL.revokeObjectURL = vi.fn()
     const user = userEvent.setup()
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    await user.type(screen.getByPlaceholderText('Enter Client Name'), 'Ada')
     await user.click(screen.getByRole('button', { name: 'Preview' }))
 
-    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledWith('pdf-template', { variables: { client_name: '' }, matter_id: null }))
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledWith('pdf-template', {
+      variables: { client_name: 'Ada' },
+      matter_id: 'matter-1',
+      preview_purpose: 'generation',
+    }))
     expect(renderTemplate).not.toHaveBeenCalled()
     expect(screen.getByTitle('Preview of Court Form')).toHaveAttribute('data', 'blob:pdf-preview')
     expect(screen.getByRole('button', { name: 'Download preview' })).toBeInTheDocument()
     expect(URL.createObjectURL).toHaveBeenCalledWith(pdfBlob)
 
-    await user.type(screen.getByPlaceholderText('Enter Client Name'), 'Ada')
+    expect(screen.getByText(/These exact values and this matter are previewed/)).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText('Enter Client Name'), ' Lovelace')
     await waitFor(() => expect(screen.queryByTitle('Preview of Court Form')).not.toBeInTheDocument())
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-preview')
 
+  })
+
+  it('discards and revokes a stale PDF response when values change in flight', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{ id: 'race-pdf', title: 'Race Form', body: '{{client_name}}', category: 'other', format: 'pdf', source_filename: 'race.pdf', source_sha256: 'abc', is_active: true }] })
+    let resolvePreview
+    renderTemplateFile.mockImplementation(() => new Promise((resolve) => { resolvePreview = resolve }))
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:stale-preview')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    const clientName = screen.getByPlaceholderText('Enter Client Name')
+    await user.type(clientName, 'Ada')
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledTimes(1))
+
+    await user.type(clientName, ' Lovelace')
+    await act(async () => {
+      resolvePreview({
+        blob: new Blob(['%PDF-1.7 stale'], { type: 'application/pdf' }),
+        filename: 'Race_Form.pdf',
+        contentType: 'application/pdf',
+        previewId: 'stale-preview-id',
+        previewPurpose: 'generation',
+      })
+      await Promise.resolve()
+    })
+
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:stale-preview')
+    expect(screen.queryByTitle('Preview of Race Form')).not.toBeInTheDocument()
+    expect(screen.queryByText(/These exact values and this matter are previewed/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Render & Save to Matter' })).toBeDisabled()
+  })
+
+  it('locks form controls and prevents modal close while a PDF save is in flight', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{
+      id: 'saving-pdf', title: 'Saving Form', body: '{{client_name}}', category: 'other', format: 'pdf',
+      source_filename: 'saving.pdf', source_sha256: 'abc', is_active: true,
+      variable_schema: { fields: [
+        { name: 'client_name', label: 'Client name', pdf_field_name: 'ClientName', field_type: 'text', required: true },
+      ] },
+    }] })
+    const pdfBlob = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+    renderTemplateFile.mockResolvedValue({ blob: pdfBlob, filename: 'Saving_Form.pdf', contentType: 'application/pdf', previewId: 'saving-preview', previewPurpose: 'generation' })
+    let resolveSave
+    renderTemplate.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve }))
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:saving-preview')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    const clientName = screen.getByRole('textbox', { name: /Client name/ })
+    await user.type(clientName, 'Ada')
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByText(/These exact values and this matter are previewed/)
+    await user.click(screen.getByRole('button', { name: 'Render & Save to Matter' }))
+    await waitFor(() => expect(renderTemplate).toHaveBeenCalledTimes(1))
+
+    expect(clientName).toBeDisabled()
+    expect(screen.getByLabelText('Matter UUID fallback')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Smart Fill' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.getByRole('dialog', { name: /Generate PDF: Saving Form/ })).toBeInTheDocument()
+    expect(screen.getByText(/Save in progress.*Keep this window open/)).toBeInTheDocument()
+
+    await act(async () => {
+      resolveSave({
+        rendered: '',
+        matter_document_id: 'saved-document',
+        output_format: 'pdf',
+        output_filename: 'Saving_Form-final.pdf',
+      })
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled()
+    expect(clientName).not.toBeDisabled()
+    expect(screen.queryByText(/Save in progress.*Keep this window open/)).not.toBeInTheDocument()
+  })
+
+  it('does not overwrite manual edits with a late smart-fill response', async () => {
+    let resolveSmartFill
+    discoverTemplateVariables.mockImplementation(() => new Promise((resolve) => { resolveSmartFill = resolve }))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
+    await user.click(screen.getByRole('button', { name: 'Smart Fill' }))
+    await waitFor(() => expect(discoverTemplateVariables).toHaveBeenCalledTimes(1))
+    const clientName = screen.getByPlaceholderText('Enter Client Name')
+    await user.type(clientName, 'Manual Client')
+
+    await act(async () => {
+      resolveSmartFill({ variables: { client_name: 'Stale Suggested Client' } })
+      await Promise.resolve()
+    })
+
+    expect(clientName).toHaveValue('Manual Client')
+    expect(screen.getByText(/Smart-fill results were not applied because the matter or fields changed/)).toBeInTheDocument()
   })
 
   it('surfaces an actionable PDF render error', async () => {
@@ -235,6 +347,7 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.click(screen.getByRole('button', { name: /Smith Matter/ }))
     await user.click(screen.getByRole('button', { name: 'Preview' }))
 
     expect(await screen.findByText('This PDF has no fillable AcroForm fields.')).toBeInTheDocument()
@@ -253,6 +366,10 @@ describe('document template workflow', () => {
       ] },
     }] })
     renderTemplate.mockResolvedValue({ rendered: '', matter_document_id: 'document-2', output_format: 'pdf' })
+    const pdfBlob = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+    renderTemplateFile.mockResolvedValue({ blob: pdfBlob, filename: 'Schema_Form.pdf', contentType: 'application/pdf', previewId: 'schema-preview-1', previewPurpose: 'generation' })
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:schema-preview')
+    URL.revokeObjectURL = vi.fn()
     const user = userEvent.setup()
     render(<TemplatesPage />)
 
@@ -275,12 +392,68 @@ describe('document template workflow', () => {
     await user.type(screen.getByRole('textbox', { name: /Client name/ }), 'Jane')
     await user.selectOptions(screen.getByRole('combobox', { name: /Venue/ }), 'Cook County')
     expect(screen.getByText(/1 optional field left unfilled/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Render & Save to Matter' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledWith('schema-pdf', {
+      matter_id: 'matter-1',
+      preview_purpose: 'generation',
+      variables: { client_name: 'Jane', approved: 'false', venue: 'Cook County', notes: '' },
+    }))
     await user.click(screen.getByRole('button', { name: 'Render & Save to Matter' }))
 
     await waitFor(() => expect(renderTemplate).toHaveBeenCalledWith('schema-pdf', {
       matter_id: 'matter-1',
+      preview_id: 'schema-preview-1',
       variables: { client_name: 'Jane', approved: 'false', venue: 'Cook County', notes: '' },
     }))
+  })
+
+  it('separates partial draft diagnosis from representative activation evidence', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{
+      id: 'draft-pdf', title: 'Draft Court Form', body: '{{client_name}} {{notes}}', category: 'other', format: 'pdf',
+      source_filename: 'draft.pdf', source_sha256: 'abc', is_active: false,
+      variable_schema: { fields: [
+        { name: 'client_name', label: 'Client name', pdf_field_name: 'ClientName', field_type: 'text' },
+        { name: 'notes', label: 'Notes', pdf_field_name: 'Notes', field_type: 'text', multiline: true },
+        { name: 'approved', label: 'Approved', pdf_field_name: 'Approved', field_type: 'checkbox' },
+      ] },
+    }] })
+    const pdfBlob = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+    renderTemplateFile
+      .mockResolvedValueOnce({ blob: pdfBlob, filename: 'Draft_Court_Form.pdf', contentType: 'application/pdf', previewId: 'draft-preview-1', previewPurpose: 'draft' })
+      .mockResolvedValueOnce({ blob: pdfBlob, filename: 'Draft_Court_Form.pdf', contentType: 'application/pdf', previewId: 'activation-preview-1', previewPurpose: 'activation' })
+    URL.createObjectURL = vi.fn()
+      .mockReturnValueOnce('blob:draft-preview')
+      .mockReturnValueOnce('blob:activation-preview')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Preview draft' }))
+    const dialog = screen.getByRole('dialog', { name: /Preview Draft: Draft Court Form/ })
+    await user.click(within(dialog).getByRole('button', { name: 'Preview draft' }))
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenNthCalledWith(1, 'draft-pdf', {
+      matter_id: null,
+      preview_purpose: 'draft',
+      variables: { client_name: '', notes: '', approved: 'false' },
+    }))
+    expect(screen.getByText(/Draft preview only.*does not record activation evidence/)).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Record activation preview' }))
+    expect(await screen.findByText(/Enter representative values for every non-signature PDF field/)).toBeInTheDocument()
+    expect(renderTemplateFile).toHaveBeenCalledTimes(1)
+
+    await user.type(screen.getByRole('textbox', { name: /Client name/ }), 'Representative Client')
+    await user.type(screen.getByRole('textbox', { name: /Notes/ }), 'Representative narrative')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:draft-preview')
+    await user.click(within(dialog).getByRole('button', { name: 'Record activation preview' }))
+
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenNthCalledWith(2, 'draft-pdf', {
+      matter_id: null,
+      preview_purpose: 'activation',
+      variables: { client_name: 'Representative Client', notes: 'Representative narrative', approved: 'false' },
+    }))
+    expect(screen.getByText(/Representative activation preview recorded/)).toBeInTheDocument()
   })
 
   it('flags migrated PDF records without source metadata and disables generation', async () => {

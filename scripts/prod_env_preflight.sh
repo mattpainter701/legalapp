@@ -24,10 +24,10 @@ get_env() {
 errors=()
 warnings=()
 required=(
-  DOMAIN BACKEND_URL FRONTEND_URL VITE_CONTACT_URL DEV_MODE PUBLIC_SIGNUP_ENABLED VITE_PUBLIC_SIGNUP_ENABLED SECRET_KEY MCP_PRODUCT_ENABLED
+  DOMAIN BACKEND_URL FRONTEND_URL VITE_PUBLIC_SITE_URL VITE_CONTACT_URL DEV_MODE PUBLIC_SIGNUP_ENABLED VITE_PUBLIC_SIGNUP_ENABLED SECRET_KEY MCP_PRODUCT_ENABLED PLATFORM_LEGACY_BOOTSTRAP_ENABLED
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD
-  LITELLM_DATABASE_URL UPLOADS_HOST_DIR OFFSITE_BACKUP_REQUIRED
+  LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
   EMAIL_ENABLED EMAIL_HOST EMAIL_PORT EMAIL_FROM
 )
 
@@ -84,6 +84,7 @@ vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
 [[ "$vite_public_signup_enabled" == "false" ]] || errors+=("VITE_PUBLIC_SIGNUP_ENABLED must remain false until public signup is enabled end to end")
 [[ "$public_signup_enabled" == "$vite_public_signup_enabled" ]] || errors+=("PUBLIC_SIGNUP_ENABLED and VITE_PUBLIC_SIGNUP_ENABLED must match")
 [[ "$(get_env MCP_PRODUCT_ENABLED)" == "false" ]] || errors+=("MCP_PRODUCT_ENABLED must remain false for this launch")
+[[ "$(get_env PLATFORM_LEGACY_BOOTSTRAP_ENABLED)" == "false" ]] || errors+=("PLATFORM_LEGACY_BOOTSTRAP_ENABLED must be explicitly false for production")
 [[ "$(get_env OFFSITE_BACKUP_REQUIRED)" == "true" ]] || errors+=("OFFSITE_BACKUP_REQUIRED must be true for production deploys")
 email_enabled="$(get_env EMAIL_ENABLED)"
 [[ "$email_enabled" == "true" || "$email_enabled" == "false" ]] || errors+=("EMAIL_ENABLED must be explicitly true or false")
@@ -93,6 +94,11 @@ if [[ "$email_enabled" == "true" ]]; then
 fi
 [[ "$(get_env BACKEND_URL)" == https://* ]] || errors+=("BACKEND_URL must use https")
 [[ "$(get_env FRONTEND_URL)" == https://* ]] || errors+=("FRONTEND_URL must use https")
+public_site_url="$(get_env VITE_PUBLIC_SITE_URL)"
+normalized_public_site_url="${public_site_url%/}"
+expected_public_site_url="https://$(get_env DOMAIN)"
+[[ "$normalized_public_site_url" == "$expected_public_site_url" ]] \
+  || errors+=("VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN (an optional trailing slash is normalized)")
 [[ "$(get_env VITE_CONTACT_URL)" == https://* || "$(get_env VITE_CONTACT_URL)" == mailto:* ]] || errors+=("VITE_CONTACT_URL must be an https or mailto destination")
 [[ "$(get_env DOMAIN)" != *yourdomain* && "$(get_env DOMAIN)" != *localhost* ]] || errors+=("DOMAIN is a placeholder")
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
@@ -104,6 +110,18 @@ uploads_host_dir="$(get_env UPLOADS_HOST_DIR)"
 if [[ -e "$uploads_host_dir" ]]; then
   [[ -d "$uploads_host_dir" && ! -L "$uploads_host_dir" ]] || errors+=("UPLOADS_HOST_DIR must be a non-symlink directory")
 fi
+
+host_status_dir="$(get_env HOST_STATUS_HOST_DIR)"
+[[ "$host_status_dir" == /* && "$host_status_dir" != "/" ]] || errors+=("HOST_STATUS_HOST_DIR must be an absolute non-root host path")
+if [[ -e "$host_status_dir" || -L "$host_status_dir" ]]; then
+  [[ -d "$host_status_dir" && ! -L "$host_status_dir" ]] || errors+=("HOST_STATUS_HOST_DIR must be a non-symlink directory")
+fi
+[[ "$(get_env HOST_DISK_STATUS_FILE)" == "/run/legalapp-host-status/disk-status.json" ]] \
+  || errors+=("HOST_DISK_STATUS_FILE must use the dedicated read-only host-status mount")
+host_disk_max_age="$(get_env HEALTH_HOST_DISK_MAX_AGE_SECONDS)"
+[[ "$host_disk_max_age" =~ ^[0-9]+$ ]] \
+  && (( host_disk_max_age >= 120 && host_disk_max_age <= 600 )) \
+  || errors+=("HEALTH_HOST_DISK_MAX_AGE_SECONDS must be between 120 and 600")
 
 monitor_disk_path="$(get_env DISK_PATH)"
 monitor_disk_path="${monitor_disk_path:-/}"
@@ -308,7 +326,7 @@ docker_root_dir="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true
   echo "FAIL: DockerRootDir could not be resolved to a non-root absolute path" >&2
   exit 1
 }
-capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")
+capacity_paths=("$monitor_disk_path" "$uploads_host_dir" "$host_status_dir" "$ROOT_DIR/backups" "$docker_root_dir")
 capacity_paths+=("${compose_bind_sources[@]}")
 DISK_MAX_PERCENT="$disk_max_percent" main "$capacity_profile" "${capacity_paths[@]}"
 echo "Production preflight passed: required secrets are non-placeholder, Compose resolves, and host capacity is safe."

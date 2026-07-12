@@ -17,5 +17,6 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 WORKDIR /app
 RUN apk add --no-cache curl && npm install -g serve@14.2.6
 COPY --from=build /app/dist ./dist
+COPY serve.json ./serve.json
 EXPOSE 3000
-CMD ["serve", "--no-port-switching", "-s", "dist", "-l", "3000"]
+CMD ["serve", "--no-port-switching", "-s", "dist", "-l", "3000", "--config", "/app/serve.json"]

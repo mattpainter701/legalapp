@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from app.models.communication_log import CommunicationLog
 from app.models.contact import Contact
@@ -201,6 +201,57 @@ async def test_reassign_with_note_resets_receipt_and_documents_history(
     assert len(rows) == 1
     assert rows[0].subject.startswith("Task reassigned:")
     assert "Pat Paralegal" in (rows[0].body or "")
+
+
+@pytest.mark.asyncio
+async def test_unassign_is_row_locked_and_records_contact_history(
+    client, db_session, test_tenant, test_user
+):
+    contact = await _make_contact(db_session, test_tenant, test_user)
+    assignee = await _make_assignee(db_session, test_tenant)
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Return prospective client call",
+        task_type="follow_up",
+        status="pending",
+        priority="urgent",
+        contact_id=contact.id,
+        assigned_to_user_id=assignee.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    statements: list[str] = []
+
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    sync_engine = db_session.bind.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", capture_sql)
+    try:
+        response = await client.patch(
+            f"/api/tasks/{task.id}",
+            json={
+                "assigned_to_user_id": None,
+                "assignment_note": "Return to the unassigned intake queue.",
+            },
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", capture_sql)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["assigned_to_user_id"] is None
+    assert any(
+        "FROM tasks" in statement and "FOR UPDATE" in statement.upper()
+        for statement in statements
+    )
+    rows = await _history_rows(db_session, test_tenant.id, f"task:{task.id}:unassigned")
+    assert len(rows) == 1
+    assert rows[0].subject.startswith("Task unassigned:")
+    assert "Previously assigned to: Pat Paralegal" in (rows[0].body or "")
+    assert "Unassigned by: Test Attorney" in (rows[0].body or "")
+    assert "Return to the unassigned intake queue" in (rows[0].body or "")
 
 
 @pytest.mark.asyncio

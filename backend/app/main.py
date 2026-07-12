@@ -64,6 +64,7 @@ from app.routers.onboarding import router as onboarding_router
 from app.routers.licensing import router as licensing_router
 from app.services.mcp_protocol import protocol_endpoint, protocol_lifespan
 from app.services.scheduler import LegalScheduler
+from app.services.host_disk_status import HostDiskStatusError, read_host_disk_status
 from app.routers.chat import cache_manager
 from app.routers.plugins import plugin_cache_manager
 from app.routers.prompt_admin import router as prompt_admin_router
@@ -294,7 +295,11 @@ app.add_middleware(
         "Mcp-Session-Id",
         "Last-Event-ID",
     ],
-    expose_headers=["Mcp-Session-Id"],
+    expose_headers=[
+        "Mcp-Session-Id",
+        "X-Clarity-Preview-ID",
+        "X-Clarity-Preview-Purpose",
+    ],
 )
 
 # Tenant middleware (must come after CORS)
@@ -439,6 +444,8 @@ async def health_readiness(request: Request):
         "scheduler": "stale",
         "queue": "stale",
     }
+    if settings.HOST_DISK_STATUS_FILE:
+        states["host_disks"] = "unavailable"
 
     try:
         usage = shutil.disk_usage(settings.UPLOAD_DIR)
@@ -448,6 +455,16 @@ async def health_readiness(request: Request):
         )
     except Exception:
         logger.exception("Readiness disk probe failed")
+
+    if settings.HOST_DISK_STATUS_FILE:
+        try:
+            states["host_disks"] = read_host_disk_status(
+                settings.HOST_DISK_STATUS_FILE,
+                max_age_seconds=settings.HEALTH_HOST_DISK_MAX_AGE_SECONDS,
+            )
+        except HostDiskStatusError as exc:
+            states["host_disks"] = exc.state
+            logger.error("Host disk readiness probe failed: %s", exc)
 
     redis_client = getattr(request.app.state, "redis", None)
     if redis_client is not None:

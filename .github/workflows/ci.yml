@@ -41,6 +41,9 @@ jobs:
       - name: ruff format (style check)
         run: ruff format --check backend/app/
 
+      - name: Render and verify host disk systemd units
+        run: bash scripts/test_host_disk_systemd_units.sh
+
   # ─── Backend: Tests ─────────────────────────────────────────────────────────
   test-backend:
     name: Backend — Tests (pytest)

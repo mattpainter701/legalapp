@@ -36,7 +36,14 @@ jobs:
           }
 
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/health/readiness" | tee /tmp/readiness.json | grep -q '"status":"ok"'
+          grep -q '"host_disks":"ok"' /tmp/readiness.json
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/" >/dev/null
+          for disabled_mcp_path in /api/mcp /api/mcp/manifest; do
+            disabled_mcp_status="$(curl --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' \
+              "$PRODUCTION_ORIGIN$disabled_mcp_path")"
+            [[ "$disabled_mcp_status" == "404" ]]
+          done
           require_single_hsts "$PRODUCTION_ORIGIN/"
           require_single_hsts "$PRODUCTION_ORIGIN/api/version"
 

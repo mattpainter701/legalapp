@@ -7,6 +7,7 @@ import {
   getRouteMeta,
   normalizeSiteOrigin,
 } from './config'
+import { buildPublicRouteHtml } from './serverShell'
 
 describe('SEO configuration', () => {
   it('ships useful Call Intake content in the server-delivered HTML', () => {
@@ -70,5 +71,20 @@ describe('SEO configuration', () => {
       expect(node).not.toHaveProperty('review')
       expect(node).not.toHaveProperty('offers')
     }
+  })
+
+  it.each([
+    ['/privacy', 'Privacy Summary | Clarity Legal', 'Privacy summary'],
+    ['/terms', 'Service Summary | Clarity Legal', 'Service summary'],
+  ])('builds route-correct no-JavaScript HTML for %s', (route, title, heading) => {
+    const base = readFileSync('index.html', 'utf8')
+    const html = buildPublicRouteHtml(base, route, 'https://clarity.example')
+
+    expect(html).toContain(`<title>${title}</title>`)
+    expect(html).toContain(`rel="canonical" href="https://clarity.example${route}"`)
+    expect(html).toContain(`property="og:url" content="https://clarity.example${route}"`)
+    expect(html).toContain(`<h1>${heading}</h1>`)
+    expect(html).not.toContain('Start focused with a dependable intake workflow.')
+    expect(html).toContain('<script type="module" src="/src/main.jsx"></script>')
   })
 })

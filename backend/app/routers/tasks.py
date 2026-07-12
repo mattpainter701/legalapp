@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
+from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
@@ -96,6 +97,43 @@ async def _load_task_or_404(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+async def _require_task_references_for_tenant(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    values: dict,
+) -> None:
+    """Reject foreign or missing objects before a Task can reference them.
+
+    The referenced tables use ordinary foreign keys, which prove that an ID
+    exists but do not prove that it belongs to the task's tenant.  Keep the
+    checks explicit even when PostgreSQL RLS is enabled so this invariant also
+    holds in maintenance/test contexts and cannot depend on connection state.
+    An assignee must also be active; inactive and foreign users receive the
+    same response as a missing user.
+    """
+
+    checks = (
+        ("matter_id", Matter, "Matter not found", False),
+        ("contact_id", Contact, "Contact not found", False),
+        ("assigned_to_user_id", User, "Assigned user not found", True),
+    )
+    for field, model, detail, require_active in checks:
+        reference_id = values.get(field)
+        if reference_id is None:
+            continue
+        filters = [
+            model.id == reference_id,
+            model.tenant_id == tenant_id,
+        ]
+        if require_active:
+            filters.append(User.is_active.is_(True))
+        found_id = await db.scalar(select(model.id).where(*filters))
+        if found_id is None:
+            # A single 404 response covers both missing and foreign records so
+            # the endpoint does not become a cross-tenant ID oracle.
+            raise HTTPException(status_code=404, detail=detail)
 
 
 @router.get("/overdue", response_model=TaskListResponse)
@@ -240,9 +278,11 @@ async def create_task(
 
     data = payload.model_dump(exclude_none=True)
     assignment_note = (data.pop("assignment_note", None) or "").strip() or None
+    tenant_uuid = uuid.UUID(tenant_id)
+    await _require_task_references_for_tenant(db, tenant_uuid, data)
 
     task = Task(
-        tenant_id=uuid.UUID(tenant_id),
+        tenant_id=tenant_uuid,
         created_by_user_id=current_user.id,
         **data,
     )
@@ -548,10 +588,12 @@ async def update_task(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(Task).where(
+        select(Task)
+        .where(
             Task.id == task_id,
             Task.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     task = result.scalar_one_or_none()
     if not task:
@@ -561,8 +603,23 @@ async def update_task(
     previous_assignee_id = task.assigned_to_user_id
     previous_status = task.status
     updates = payload.model_dump(exclude_none=True)
+    reference_fields = {"matter_id", "contact_id", "assigned_to_user_id"}
+    for field in reference_fields & payload.model_fields_set:
+        # PATCH distinguishes omission (leave unchanged) from an explicit null
+        # (remove the optional link). Other nullable-looking fields retain the
+        # endpoint's existing exclude-none behavior.
+        updates[field] = getattr(payload, field)
     assignment_note = (updates.pop("assignment_note", None) or "").strip() or None
     closed_reason = (updates.pop("closed_reason", None) or "").strip() or None
+    changed_references = {
+        field: updates[field] for field in reference_fields & payload.model_fields_set
+    }
+    # Validate only links this PATCH writes. Historical assignments may become
+    # inactive after creation; that must not prevent completion, notes, or
+    # cleanup, while any newly supplied reference remains fail-closed.
+    await _require_task_references_for_tenant(
+        db, uuid.UUID(tenant_id), changed_references
+    )
     calendar_changed = bool(_CALENDAR_RELEVANT_FIELDS & set(updates))
     assignment_changed = "assigned_to_user_id" in updates
 
@@ -609,13 +666,20 @@ async def update_task(
     elif closed_reason and task.status in ("completed", "cancelled"):
         task.closed_reason = closed_reason
 
-    if reassigned and task.assigned_to_user_id:
+    if reassigned:
         await record_task_event(
             db,
             task,
-            event="reassigned" if previous_assignee_id else "assigned",
+            event=(
+                "unassigned"
+                if task.assigned_to_user_id is None
+                else "reassigned"
+                if previous_assignee_id
+                else "assigned"
+            ),
             actor=current_user,
             note=assignment_note,
+            previous_assignee_user_id=previous_assignee_id,
         )
     if closing:
         await record_task_event(

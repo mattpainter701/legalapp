@@ -145,6 +145,11 @@ release revision:
 - a successful call creates one usage row and one durable meter job, retry is
   idempotent, Stripe receives it, reconciliation agrees, and exhausted jobs
   alert;
+- a same-key concurrency/load gate exercises slow upstream responses at the
+  intended burst ceiling. Record bounded end-to-end latency, database-pool
+  headroom, and zero quota overruns while the transaction-scoped advisory lock
+  serializes that key's quota check and usage commit. Do not enable MCP merely
+  because single-call protocol tests pass;
 - a dedicated upstream credential is present on both services and neither
   customer keys nor application JWTs appear in upstream logs;
 - off-host backup and clean-host restore include MCP keys, usage, and durable

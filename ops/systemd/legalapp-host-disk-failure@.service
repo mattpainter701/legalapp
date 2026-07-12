@@ -1,0 +1,6 @@
+[Unit]
+Description=Report failed LegalApp host disk probe %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p user.err -t legalapp-host-disk "LegalApp host disk probe %i failed; the public readiness check will alert when the aggregate is unhealthy or stale"

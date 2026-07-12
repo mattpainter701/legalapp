@@ -36,6 +36,7 @@ tar -C "$ROOT_DIR" \
 # production_check.sh and the scheduled production-health workflow.
 mkdir -p "$APP_DIR/nginx/ssl"
 mkdir -p "$APP_DIR/uploads"
+mkdir -p "$APP_DIR/backups" "$APP_DIR/host-status"
 MSYS2_ARG_CONV_EXCL='/CN=' openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -keyout "$APP_DIR/nginx/ssl/privkey.pem" \
   -out "$APP_DIR/nginx/ssl/fullchain.pem" \
@@ -78,6 +79,7 @@ TOKEN_ENCRYPTION_KEY=$old_token_key
 TOKEN_ENCRYPTION_KEYS=$new_token_key,$old_token_key
 DEV_MODE=false
 MCP_PRODUCT_ENABLED=false
+PLATFORM_LEGACY_BOOTSTRAP_ENABLED=false
 DOMAIN=rehearsal.invalid
 BACKEND_URL=https://rehearsal.invalid
 FRONTEND_URL=https://rehearsal.invalid
@@ -85,6 +87,9 @@ VITE_PUBLIC_SITE_URL=https://rehearsal.invalid
 VITE_CONTACT_URL=mailto:rehearsal@example.invalid
 UPLOAD_DIR=/app/uploads
 UPLOADS_HOST_DIR=$APP_DIR/uploads
+HOST_STATUS_HOST_DIR=$APP_DIR/host-status
+HOST_DISK_STATUS_FILE=/run/legalapp-host-status/disk-status.json
+HEALTH_HOST_DISK_MAX_AGE_SECONDS=180
 DISK_PATH=/
 DISK_MAX_PERCENT=85
 OFFSITE_BACKUP_REQUIRED=true
@@ -153,6 +158,8 @@ done
     bash "$APP_DIR/scripts/prod_env_preflight.sh"
 )
 "${compose[@]}" config --quiet
+ENV_FILE="$APP_DIR/.env" COMPOSE_FILES="${compose_files[*]}" \
+  python3 "$APP_DIR/scripts/update_host_disk_status.py"
 uploads_mount_source="$APP_DIR/uploads"
 case "${OSTYPE:-}" in
   msys*|cygwin*) uploads_mount_source="$(cygpath -w "$uploads_mount_source")" ;;

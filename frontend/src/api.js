@@ -1383,6 +1383,8 @@ export const renderTemplateFile = (id, data) =>
       blob: r.data,
       filename,
       contentType: r.headers?.['content-type'] || r.data?.type || 'application/octet-stream',
+      previewId: r.headers?.['x-clarity-preview-id'] || '',
+      previewPurpose: r.headers?.['x-clarity-preview-purpose'] || '',
     }
   }).catch(async (error) => {
     const blob = error?.response?.data
