@@ -175,14 +175,25 @@ http_request() {
   forwarded_proto="${2:-}"
   source_container="${3:-$PROD_CONTAINER}"
   target_host="${4:-127.0.0.1}"
-  {
-    printf 'GET %s HTTP/1.1\r\n' "$request_path"
-    printf 'Host: headers.test\r\n'
-    if [ -n "$forwarded_proto" ]; then
-      printf 'X-Forwarded-Proto: %s\r\n' "$forwarded_proto"
-    fi
-    printf 'Connection: close\r\n\r\n'
-  } | docker exec -i "$source_container" nc "$target_host" 80 | tr -d '\r'
+  # BusyBox nc can exit as soon as docker closes stdin, racing nginx while it
+  # is still proxying the response body. Read the complete response through
+  # Python's HTTP client so route-shell assertions are deterministic in CI.
+  docker exec "$source_container" python3 -c '
+import http.client
+import sys
+
+host, path, forwarded_proto = sys.argv[1:4]
+headers = {"Host": "headers.test", "Connection": "close"}
+if forwarded_proto:
+    headers["X-Forwarded-Proto"] = forwarded_proto
+connection = http.client.HTTPConnection(host, 80, timeout=10)
+connection.request("GET", path, headers=headers)
+response = connection.getresponse()
+lines = [f"HTTP/1.1 {response.status} {response.reason}"]
+lines.extend(f"{name}: {value}" for name, value in response.getheaders())
+payload = ("\r\n".join(lines) + "\r\n\r\n").encode() + response.read()
+sys.stdout.buffer.write(payload)
+' "$target_host" "$request_path" "$forwarded_proto" | tr -d '\r'
 }
 
 tls_request() {
