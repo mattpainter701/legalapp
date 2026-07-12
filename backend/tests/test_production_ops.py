@@ -384,6 +384,10 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "SELECT pg_export_snapshot();" in data_guard
     assert '--snapshot="$snapshot_id"' in data_guard
     assert data_guard.count("SET TRANSACTION SNAPSHOT :'snapshot_id';") == 2
+    # Nullable tenant_id columns are legitimate for global rows. Their count
+    # metric must remain named so clean restores can compare it exactly.
+    nullable_tenant_metric = "COALESCE(tenant_id::text, ''<null>'')"
+    assert data_guard.count(nullable_tenant_metric) == 2
     assert "prisma migrate diff --exit-code" in production_check
     assert "for service in postgres redis litellm-postgres litellm backend" in (
         production_check
@@ -420,6 +424,7 @@ def test_production_guards_cover_litellm_data_and_schema() -> None:
     assert "MANUAL_RESTORE_PROOF=" in manual_restore
     assert "OFFSITE_RESTORE_SIGNING_KEY_FILE" in manual_restore
     assert "openssl dgst -sha256 -sign" in manual_restore
+    assert nullable_tenant_metric in manual_restore
 
 
 def test_tls_and_recurring_backup_ops_support_multi_compose() -> None:

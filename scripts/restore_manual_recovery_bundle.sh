@@ -209,7 +209,7 @@ WHERE table_schema = 'public'
 ORDER BY table_name
 \gexec
 SELECT format(
-  'SELECT (%L || tenant_id::text) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;',
+  'SELECT (%L || COALESCE(tenant_id::text, ''<null>'')) AS metric, count(*)::bigint AS row_count FROM %I.%I GROUP BY tenant_id;',
   'tenant:' || table_name || ':',
   table_schema,
   table_name
