@@ -117,6 +117,7 @@ def _resolved_compose(files: tuple[str, ...]) -> dict:
     env.setdefault("REDIS_PASSWORD", "compose-redis-password-0123456789")
     env.setdefault("LITELLM_DB_PASSWORD", "compose-litellm-password-0123456789")
     env.setdefault("LITELLM_API_KEY", "compose-litellm-api-key-0123456789")
+    env.setdefault("LITELLM_SALT_KEY", "compose-permanent-litellm-salt-0123456789")
     env.setdefault(
         "LITELLM_DATABASE_URL",
         "postgresql://litellm:compose-litellm-password-0123456789@litellm-postgres:5432/litellm",
@@ -133,6 +134,13 @@ def _resolved_compose(files: tuple[str, ...]) -> dict:
         "APP_DATABASE_URL",
         "postgresql+asyncpg://clarity_app:compose-runtime-password-0123456789@postgres:5432/legalapp",
     )
+    env.setdefault("UPLOADS_HOST_DIR", "/tmp/legalapp-compose-uploads")
+    env.setdefault("EMAIL_ENABLED", "false")
+    env.setdefault("EMAIL_HOST", "smtp.compose-test.invalid")
+    env.setdefault("EMAIL_PORT", "587")
+    env.setdefault("EMAIL_USER", "")
+    env.setdefault("EMAIL_PASS", "")
+    env.setdefault("EMAIL_FROM", "noreply@compose-test.invalid")
     env.setdefault("VITE_CONTACT_URL", "mailto:compose-test@example.invalid")
     result = subprocess.run(
         command,
