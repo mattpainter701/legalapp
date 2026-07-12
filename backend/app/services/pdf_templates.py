@@ -68,6 +68,12 @@ _COMPLEX_SCRIPT_RANGES = (
     (0x1000, 0x109F),  # Myanmar
     (0x1780, 0x17FF),  # Khmer
 )
+# The request schema applies matching character limits, but the renderer is
+# also called directly by background/service code and must enforce its own
+# dimension-independent work bounds.
+_MAX_PDF_FIELD_VALUE_CHARS = 10_000
+_MAX_PDF_RENDERED_LINES_PER_FIELD = 200
+_MAX_PDF_WIDTH_PROBES_PER_RENDER = 50_000
 
 
 def _validate_no_active_content(reader: PdfReader) -> None:
@@ -434,6 +440,16 @@ def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
         )
         pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
     char_to_glyph = pdfmetrics.getFont(font_name).face.charToGlyph
+    width_probe_count = 0
+
+    def measured_string_width(value: str, font_size: float, field_name: str) -> float:
+        nonlocal width_probe_count
+        width_probe_count += 1
+        if width_probe_count > _MAX_PDF_WIDTH_PROBES_PER_RENDER:
+            raise TemplatePdfError(
+                f"PDF field {field_name!r} requires too much layout work; shorten long values or enlarge fields in the source PDF, then re-upload."
+            )
+        return pdfmetrics.stringWidth(value, font_name, font_size)
 
     def ensure_supported(value: str, field_name: str) -> str:
         value = unicodedata.normalize("NFC", value)
@@ -470,39 +486,92 @@ def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
             )
         return value
 
-    def wrap_text(value: str, width: float, font_size: float) -> list[str]:
+    def wrap_text(
+        value: str,
+        width: float,
+        font_size: float,
+        *,
+        field_name: str,
+        max_lines: int,
+    ) -> list[str] | None:
+        if max_lines <= 0:
+            return None
+
         lines: list[str] = []
+
+        def append_line(line: str) -> bool:
+            if len(lines) >= max_lines:
+                return False
+            lines.append(line)
+            return True
+
+        def fitting_prefix_end(text: str, start: int) -> int:
+            """Find a fitting end offset without scanning the whole suffix."""
+            best = start
+            step = 1
+            high = min(len(text), start + step)
+            while high > best:
+                if (
+                    measured_string_width(text[start:high], font_size, field_name)
+                    > width
+                ):
+                    break
+                best = high
+                if best == len(text):
+                    return best
+                step *= 2
+                high = min(len(text), start + step)
+
+            low = best + 1
+            high -= 1
+            while low <= high:
+                middle = (low + high) // 2
+                if (
+                    measured_string_width(text[start:middle], font_size, field_name)
+                    <= width
+                ):
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            return best
+
         for paragraph in value.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            if len(lines) >= max_lines:
+                return None
             words = paragraph.split(" ")
             current = ""
             for word in words:
-                candidate = word if not current else f"{current} {word}"
-                if pdfmetrics.stringWidth(candidate, font_name, font_size) <= width:
-                    current = candidate
-                    continue
                 if current:
-                    lines.append(current)
+                    candidate = f"{current} {word}"
+                    if measured_string_width(candidate, font_size, field_name) <= width:
+                        current = candidate
+                        continue
+                    if not append_line(current):
+                        return None
                     current = ""
-                while (
-                    word and pdfmetrics.stringWidth(word, font_name, font_size) > width
-                ):
-                    split_at = len(word) - 1
-                    while (
-                        split_at > 1
-                        and pdfmetrics.stringWidth(
-                            word[:split_at], font_name, font_size
-                        )
-                        > width
-                    ):
-                        split_at -= 1
-                    if split_at <= 1:
-                        raise TemplatePdfError(
-                            "A PDF field is too narrow for its value."
-                        )
-                    lines.append(word[:split_at])
-                    word = word[split_at:]
-                current = word
-            lines.append(current)
+                    if len(lines) >= max_lines:
+                        return None
+                if not word:
+                    continue
+                offset = 0
+                while offset < len(word):
+                    split_at = fitting_prefix_end(word, offset)
+                    if split_at <= offset:
+                        # This size cannot fit even one glyph. Let the caller
+                        # try a smaller size before reporting a field-specific,
+                        # customer-actionable overflow error.
+                        return None
+                    if split_at == len(word):
+                        current = word[offset:]
+                        break
+                    if not append_line(word[offset:split_at]):
+                        return None
+                    offset = split_at
+                    if len(lines) >= max_lines:
+                        return None
+            if not append_line(current):
+                return None
         return lines or [""]
 
     def set_canvas_color(color: tuple[float, ...], *, stroke: bool) -> None:
@@ -626,10 +695,23 @@ def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
             maximum_size = max(10, min(22, int((widget.preferred_font_size or 11) * 2)))
             for size_step in range(maximum_size, 9, -1):
                 font_size = size_step / 2
-                lines = wrap_text(value, available_width, font_size)
+                leading = font_size * 1.15
+                max_lines = _MAX_PDF_RENDERED_LINES_PER_FIELD
+                if available_height < leading * max_lines:
+                    max_lines = int(available_height // leading)
+                if not multiline:
+                    max_lines = min(max_lines, 1)
+                lines = wrap_text(
+                    value,
+                    available_width,
+                    font_size,
+                    field_name=widget.pdf_field_name,
+                    max_lines=max_lines,
+                )
+                if lines is None:
+                    continue
                 if not multiline and len(lines) > 1:
                     continue
-                leading = font_size * 1.15
                 if len(lines) * leading <= available_height:
                     chosen = (font_size, lines)
                     break
@@ -734,7 +816,13 @@ def fill_pdf_template(
     for variable, actual_field in variable_fields.items():
         if variable not in variables:
             continue
-        value = str(variables[variable] or "").strip()
+        raw_value = str(variables[variable] or "")
+        pdf_field_name = str(actual_field.get("pdf_field_name") or variable)
+        if len(raw_value) > _MAX_PDF_FIELD_VALUE_CHARS:
+            raise TemplatePdfError(
+                f"Value for PDF field {pdf_field_name!r} exceeds the 10,000-character limit; shorten it before rendering."
+            )
+        value = raw_value.strip()
         field_type = str(actual_field.get("field_type") or "text")
         if field_type == "signature" and value:
             raise TemplatePdfError(

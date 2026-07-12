@@ -74,12 +74,24 @@ The detailed trust boundaries and data flows are in
 ## Can this run on AWS Lightsail or another VPS?
 
 Yes, as a **single-host first-customer deployment** on an x86-64 Linux VPS with
-Docker Engine, Compose v2, persistent SSD storage, a static public address, DNS,
-and inbound TCP 80/443 only. The checked-in service limits total roughly 17.5
-GiB of memory and 9 vCPU; provision at least a 32 GiB RAM / 8 vCPU instance for
-the current single-host topology and verify sustained headroom before adding
-customers. Smaller Lightsail plans are not a supported production target. Use
-the base plus production topology:
+Docker Engine, Compose v2, Python 3, persistent SSD storage, a static public
+address, DNS, and inbound TCP 80/443 only. The configured Compose memory **limits** sum to
+17.5 GiB and the configured CPU limits sum to 9 vCPU. These are per-container
+ceilings, not reservations or a promise that the stack fits that sum; nginx,
+builds, migration helpers, Docker, and the host OS also need capacity. The
+supported Lightsail starting point is AWS's general-purpose
+[2Xlarge-32GB Linux bundle](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html):
+8 vCPU, 32 GB memory, and 640 GB SSD. The 16 GB bundle is not supported.
+
+Production preflight enforces a conservative hard floor of 8 online CPUs and
+24 GiB guest-visible RAM. Every distinct filesystem used by uploads,
+application/LiteLLM database binds, release backups/source, Docker, or any other
+bind in the exact resolved production Compose model must provide at least 160
+GiB total and 25 GiB free. The reviewed VPS database paths are
+`/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`; changing or
+removing either fails preflight until the topology and gate are reviewed together.
+The 24 GiB gate accounts for provider/guest reporting while still requiring the
+32 GB Lightsail bundle. Use the base plus production topology:
 
 ```bash
 COMPOSE_FILES="docker-compose.yml docker-compose.prod.yml" \
@@ -200,5 +212,6 @@ the off-host restore proof described in the runbook.
 - [SBOM tracking inventory](docs/SBOM_TRACKING_INVENTORY.md)
 
 The current Alembic head for this release is
-`088_scheduler_logs_rls`; migrations `086`-`088` cover retained PDF template
-sources, fail-closed MCP product security, and tenant-isolated scheduler logs.
+`090_zoom_account_binding`; migrations `086`-`090` cover retained PDF template
+sources, fail-closed MCP product security, tenant-isolated scheduler logs,
+durable Zoom Phone call import, and explicit Zoom Account binding.

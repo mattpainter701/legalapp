@@ -345,7 +345,8 @@ export default function ChatPage() {
   const handleRailDeleteConversation = useCallback(
     async (id) => {
       try {
-        await onConversationDeleted(id)
+        const deleted = await onConversationDeleted(id)
+        if (deleted === false) return
       } catch (err) {
         const status = err?.response?.status
         if (status !== 403 && status !== 404) {

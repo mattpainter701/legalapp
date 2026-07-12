@@ -65,8 +65,8 @@ export function ConfirmProvider({ children }) {
             <h2 id="confirm-title" className="font-serif text-xl text-brand-ink">{request.title}</h2>
             <p id="confirm-message" className="mt-3 text-sm leading-6 text-brand-ink-2">{request.message}</p>
             <div className="mt-6 flex justify-end gap-2">
-              <button ref={cancelRef} type="button" onClick={() => finish(false)} className="rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold text-brand-ink">Cancel</button>
-              <button type="button" onClick={() => finish(true)} className={`rounded-lg px-4 py-2 text-sm font-semibold text-white ${request.destructive ? 'bg-brand-rose' : 'bg-brand-ink'}`}>{request.confirmLabel}</button>
+              <button ref={cancelRef} type="button" onClick={() => finish(false)} className="min-h-11 rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold text-brand-ink">Cancel</button>
+              <button type="button" onClick={() => finish(true)} className={`min-h-11 rounded-lg px-4 py-2 text-sm font-semibold text-white ${request.destructive ? 'bg-brand-rose' : 'bg-brand-ink'}`}>{request.confirmLabel}</button>
             </div>
           </div>
         </div>

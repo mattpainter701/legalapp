@@ -539,6 +539,11 @@ class LegalScheduler:
             name="Scheduler Heartbeat",
             replace_existing=True,
             max_instances=1,
+            # Container health can turn green before an interval trigger's
+            # default first run one minute later. Seed the tenant-scoped
+            # readiness proof as soon as APScheduler starts; subsequent runs
+            # retain the normal one-minute cadence.
+            next_run_time=datetime.now(timezone.utc),
         )
 
         # renewal-watcher: Mon 8:00 AM ET

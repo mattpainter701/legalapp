@@ -53,11 +53,49 @@ Set these non-secret relationships in `.env`:
   `EMAIL_PASS`, and a provider-authorized `EMAIL_FROM` address.
 - Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Copy the firm's exact Zoom Account ID from Zoom Account Management > Account Profile; this explicit binding avoids an extra Zoom user-profile scope. A token account is compared when Zoom supplies one, but every new grant remains `account_verification_required` until a correctly signed v3 call event matches `payload.account_id` and the pending grant successfully fetches that exact call from Zoom. The event proves the app account; the fetch proves grant access. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, exact app-to-grant account match, `healthy` verification state, required read scopes, and public CRC. Remove unused scopes in the Zoom Marketplace app and reauthorize the tenant before go-live; the application cannot revoke provider-side grants.
 
+For a single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
+The supported Lightsail starting size is the general-purpose
+[2Xlarge-32GB Linux bundle](https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-bundles.html)
+with 640 GB SSD; a 16 GB plan is not safe for this topology. Compose currently
+defines 17.5 GiB of memory limits and 9 vCPU limits. Limits are ceilings, not
+reservations: uncapped services, builds, migrations, Docker, and Linux consume
+additional memory and disk, while CPU is time-shared. Preflight therefore
+requires 8 online CPUs and 24 GiB guest-visible RAM. Every distinct filesystem
+used by `UPLOADS_HOST_DIR`, the checkout/release backups, Docker's root, the
+application/LiteLLM database binds, or any other bind in the exact resolved
+production Compose model must provide at least 160 GiB total and 25 GiB free.
+For the VPS topology, preflight additionally requires the reviewed database
+sources `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`; do not
+relocate them without updating and re-proving the topology and capacity gate.
+Python 3 is required to inspect the canonical resolved Compose model safely.
+
 Validate without printing secret values:
 
 ```bash
 ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml bash scripts/prod_env_preflight.sh
 ```
+
+The capacity gate accepts only the repository's exact production Compose profiles
+and inspects every resolved host bind source before deployment.
+Base-plus-production uses the VPS disk floor above. The Skynet hypervisor keeps
+the same 8 CPU / 24 GiB RAM floor and uses its established 80 GiB total /
+15 GiB free floor on every distinct checked filesystem. Its separate disk-usage
+readiness and alert threshold
+still applies, so passing the preflight floor is not permission to let usage
+grow. A reviewed exception for another partitioned/nonstandard host is
+process-only, requires a specific operational reason, and is not go-live
+capacity evidence:
+
+```bash
+HOST_CAPACITY_OVERRIDE=true \
+HOST_CAPACITY_OVERRIDE_REASON="change record: dedicated storage/capacity reviewed" \
+  ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
+  bash scripts/prod_env_preflight.sh
+```
+
+Never persist either override variable in `.env`. Resolve the undersizing or
+record/load-test the nonstandard host before using the same process variables
+with `deploy_prod.sh`.
 
 On a new public host, point DNS at the instance, open inbound TCP 80/443 only, and provision the first certificate before deployment:
 
@@ -148,11 +186,25 @@ The Restic repository password and any S3/SFTP/cloud credentials must be
 escrowed separately from both the application host and the Restic repository.
 Otherwise a total-host-loss snapshot is encrypted but unrecoverable.
 
-Pre-release evidence recorded 2026-07-10: an off-host dump copy had matching local/remote SHA-256 (`596aedd5…`); an isolated pgvector PostgreSQL 16 restore reached revision `085_durable_jobs`, restored 102 tables, and matched all 175 recorded table/tenant count metrics. Repeat after the release migration and record the new head.
+Release evidence recorded 2026-07-12: the exact dual-database recovery bundle
+(`019aa4da5c57c873fc0035e72e58861e04ac6b2f54a0b8408f1f3af8c777fd2a`)
+matched its off-host SHA-256 and passed an isolated clean-host restore of both
+PostgreSQL 16 databases at LegalApp revision `090_zoom_account_binding`. The
+signed restore proof also verified every recorded table/tenant count, immutable
+upload hash, TLS key pair, and escrowed token-keyring material. Repeat this
+bundle-bound restore and attestation for every production deployment.
 
 ## 4. Deploy
 
-The checked-out production revision is deployed through one hardened path. The script runs the secret/config preflight, captures a database dump and exact counts, builds the hypervisor topology, gates API startup on the owner-role migrator, recreates the dedicated scheduler, checks nginx/readiness/Zoom/TLS, and refuses any post-deploy count decrease:
+The checked-out production revision is deployed through one hardened path. The
+script runs the secret/config preflight, captures a database dump and exact
+counts, builds the hypervisor topology, and gates API startup on the owner-role
+migrator. Immediately before recreation it stops the previous scheduler and
+records the database clock; the replacement must then complete a heartbeat for
+every active tenant after that marker. Only that release-specific proof can
+advance to the bounded HTTP readiness poll (which shows each safe component
+state). The script then checks nginx/Zoom/TLS and refuses any post-deploy count
+decrease:
 
 ```bash
 bash scripts/deploy_prod.sh --build

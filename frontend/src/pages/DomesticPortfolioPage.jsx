@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getDomesticCases, createDomesticCase } from '../api'
 import StatusBadge from '../components/StatusBadge'
@@ -207,9 +207,18 @@ export default function DomesticPortfolioPage() {
                 </thead>
                 <tbody className="divide-y divide-brand-line">
                   {filtered.map((c) => (
-                    <tr key={c.id} className="hover:bg-brand-bg-soft cursor-pointer transition-colors group"
-                      onClick={() => navigate(`/plugins/domestic/cases/${c.id}`)}>
-                      <td className="px-5 py-4 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">{c.case_name || '—'}</td>
+                    <tr
+                      key={c.id}
+                      className="group transition-colors hover:bg-brand-bg-soft"
+                    >
+                      <td className="px-5 py-0 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">
+                        <Link
+                          to={`/plugins/domestic/cases/${c.id}`}
+                          className="flex min-h-[52px] items-center rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                        >
+                          {c.case_name || '—'}
+                        </Link>
+                      </td>
                       <td className="px-5 py-4"><TypeBadge type={c.case_type} /></td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{c.client_name || '—'}</td>
                       <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">{c.jurisdiction || '—'}{c.county ? ` — ${c.county}` : ''}</td>

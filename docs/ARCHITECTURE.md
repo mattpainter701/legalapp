@@ -54,6 +54,28 @@ Linux VPS, including AWS Lightsail, uses `docker-compose.yml` plus
 `docker-compose.prod.yml`. Both paths use digest-pinned foundational images and
 the same nginx-only public boundary.
 
+The `deploy.resources.limits` entries in `docker-compose.prod.yml` are runtime
+ceilings, not reservations. Their configured totals are 17.5 GiB of memory and
+9 vCPU, but services without limits, transient builds/migrations, Docker, and
+the host OS sit outside those sums. CPU may be time-shared, so the supported
+single-customer host has 8 vCPU; memory cannot safely be overcommitted onto a
+16 GB host. `prod_env_preflight.sh` runs `check_host_capacity.sh` before a
+deployment can reach the data guard or build. It requires 8 online CPUs and
+24 GiB guest-visible RAM. Every distinct filesystem backing `UPLOADS_HOST_DIR`,
+the checkout/release backups, Docker's root, the application and LiteLLM
+database binds, or any other bind in the exact resolved Compose model must have
+160 GiB total and 25 GiB free. The VPS gate also requires its reviewed database
+sources, `/data/legalapp/postgres` and `/data/legalapp/litellm-postgres`, to
+remain present; an unreviewed relocation fails closed. Named volumes remain
+covered by Docker's root filesystem. The Skynet hypervisor profile keeps the same CPU/memory floor but
+accepts its separately monitored 80 GiB total / 15 GiB free floor on each of
+those filesystems; it is selected only by the repository's exact
+`docker-compose.hypervisor.yml` path. The supported
+AWS Lightsail bundle is the general-purpose 2Xlarge-32GB Linux plan
+(8 vCPU, 32 GB memory, 640 GB SSD); smaller bundles are not production targets.
+This is a capacity floor, not a load-test result, and scaling still follows
+observed CPU, memory, I/O, database, and queue headroom.
+
 ## 2. Persistence and failure domains
 
 | Data | Persistence | Backup requirement |

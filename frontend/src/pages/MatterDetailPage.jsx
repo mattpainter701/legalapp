@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import {
@@ -58,6 +58,31 @@ const Icons = {
 }
 
 // ── Small UI pieces ───────────────────────────────────────────────────────────
+export function MatterConversationLink({ conversation: conv, cloudConnected = false }) {
+  return (
+    <Link
+      to={`/chat?conv=${conv.id}`}
+      className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+    >
+      <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[12px] text-brand-muted font-sans">
+            {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
+          </span>
+          {cloudConnected && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-brand-accent bg-brand-accent/10 px-1.5 py-0.5 rounded">
+              <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={10} /> Cloud
+            </span>
+          )}
+        </div>
+      </div>
+      <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
+    </Link>
+  )
+}
+
 const STATUS_COLORS = {
   open: 'bg-blue-50 text-blue-700 border-blue-200',
   active: 'bg-brand-green/10 text-brand-green border-brand-green/20',
@@ -1380,27 +1405,11 @@ export default function MatterDetailPage() {
               ) : (
                 <div className="space-y-2">
                   {matterConvs.map(conv => (
-                    <div
+                    <MatterConversationLink
                       key={conv.id}
-                      onClick={() => navigate(`/chat?conv=${conv.id}`)}
-                      className="flex items-center gap-4 p-4 border border-brand-line rounded-xl bg-brand-bg-soft/40 hover:border-brand-accent/30 hover:bg-brand-accent/5 cursor-pointer transition-colors group"
-                    >
-                      <Icon d={Icons.messageSquare} size={18} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[14px] font-semibold text-brand-ink font-sans truncate">{conv.title || 'Untitled conversation'}</div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[12px] text-brand-muted font-sans">
-                            {conv.updated_at ? format(parseISO(conv.updated_at), 'MMM d, yyyy') : ''}
-                          </span>
-                          {cloudFiles?.connected && (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-brand-accent bg-brand-accent/10 px-1.5 py-0.5 rounded">
-                              <Icon d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" size={10} /> Cloud
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <Icon d={Icons.arrowRight} size={14} className="text-brand-muted group-hover:text-brand-accent shrink-0" />
-                    </div>
+                      conversation={conv}
+                      cloudConnected={cloudFiles?.connected}
+                    />
                   ))}
                 </div>
               )}

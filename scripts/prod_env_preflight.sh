@@ -129,6 +129,8 @@ if [[ "$email_enabled" == "false" ]]; then
   fi
 fi
 [[ -z "$(get_env OFFSITE_BACKUP_ATTESTATION_FILE)" ]] || errors+=("OFFSITE_BACKUP_ATTESTATION_FILE must never be persisted in .env; pass one short-lived file in the deploy process")
+[[ -z "$(get_env HOST_CAPACITY_OVERRIDE)" ]] || errors+=("HOST_CAPACITY_OVERRIDE must never be persisted in .env; pass it only to one reviewed process")
+[[ -z "$(get_env HOST_CAPACITY_OVERRIDE_REASON)" ]] || errors+=("HOST_CAPACITY_OVERRIDE_REASON must never be persisted in .env; pass it only to one reviewed process")
 
 legacy_encryption_key="$(get_env TOKEN_ENCRYPTION_KEY)"
 staged_encryption_keys="$(get_env TOKEN_ENCRYPTION_KEYS)"
@@ -202,15 +204,29 @@ fi
 read -r -a compose_file_list <<< "$COMPOSE_FILES"
 (( ${#compose_file_list[@]} > 0 )) || { echo "FAIL: no production Compose files configured" >&2; exit 1; }
 declare -A guarded_compose_vars=()
+compose_file_paths=()
 for key in "${required[@]}" TOKEN_ENCRYPTION_KEY TOKEN_ENCRYPTION_KEYS MCP_SERVER_URL MCP_UPSTREAM_API_KEY ZOOM_REQUIRED_TENANT_ID ZOOM_REQUIRED_TENANT_PLAN OFFSITE_RESTORE_PUBLIC_KEY_FILE; do
   guarded_compose_vars["$key"]=1
 done
 for compose_file in "${compose_file_list[@]}"; do
   [[ -f "$compose_file" ]] || { echo "FAIL: production Compose file not found: $compose_file" >&2; exit 1; }
+  compose_file_path="$(cd "$(dirname -- "$compose_file")" && pwd -P)/$(basename -- "$compose_file")"
+  compose_file_paths+=("$compose_file_path")
   while IFS= read -r key; do
     [[ -n "$key" ]] && guarded_compose_vars["$key"]=1
   done < <(grep -Eho '\$\{[A-Za-z_][A-Za-z0-9_]*' "$compose_file" | sed 's/^${//' | sort -u)
 done
+capacity_profile=""
+if (( ${#compose_file_paths[@]} == 1 )) \
+  && [[ "${compose_file_paths[0]}" == "$ROOT_DIR/docker-compose.hypervisor.yml" ]]; then
+  capacity_profile="hypervisor"
+elif (( ${#compose_file_paths[@]} == 2 )) \
+  && [[ "${compose_file_paths[0]}" == "$ROOT_DIR/docker-compose.yml" ]] \
+  && [[ "${compose_file_paths[1]}" == "$ROOT_DIR/docker-compose.prod.yml" ]]; then
+  capacity_profile="vps"
+else
+  errors+=("COMPOSE_FILES must be exactly docker-compose.hypervisor.yml, or docker-compose.yml followed by docker-compose.prod.yml; extra, reversed, mixed, and unknown overrides are prohibited")
+fi
 for key in "${!guarded_compose_vars[@]}"; do
   case "$key" in
     APP_COMMIT|APP_VERSION|APP_BUILD_TIME) continue ;;
@@ -231,5 +247,55 @@ compose=(docker compose --env-file "$ENV_FILE")
 for compose_file in "${compose_file_list[@]}"; do
   compose+=( -f "$compose_file" )
 done
-"${compose[@]}" config --quiet
-echo "Production preflight passed: required secrets are non-placeholder and Compose resolves."
+command -v python3 >/dev/null 2>&1 || {
+  echo "FAIL: python3 is required to inspect resolved production bind mounts" >&2
+  exit 1
+}
+if ! compose_config_json="$("${compose[@]}" config --format json)"; then
+  echo "FAIL: production Compose configuration could not be resolved" >&2
+  exit 1
+fi
+# shellcheck source=check_host_capacity.sh
+source "$SCRIPT_DIR/check_host_capacity.sh"
+if ! compose_bind_sources_output="$(
+  printf '%s' "$compose_config_json" | extract_compose_bind_sources
+)"; then
+  echo "FAIL: production Compose bind mounts could not be inspected" >&2
+  exit 1
+fi
+compose_bind_sources=()
+while IFS= read -r bind_source; do
+  [[ -n "$bind_source" ]] && compose_bind_sources+=("$bind_source")
+done <<< "$compose_bind_sources_output"
+
+# These are the reviewed persistent database binds in the VPS topology.  Keep
+# them explicit so an accidental replacement or relocation fails closed, while
+# the resolved-source scan below also covers every future absolute bind mount.
+if [[ "$capacity_profile" == "vps" ]]; then
+  required_database_binds=(
+    /data/legalapp/postgres
+    /data/legalapp/litellm-postgres
+  )
+  for required_database_bind in "${required_database_binds[@]}"; do
+    database_bind_found=false
+    for bind_source in "${compose_bind_sources[@]}"; do
+      if [[ "$bind_source" == "$required_database_bind" ]]; then
+        database_bind_found=true
+        break
+      fi
+    done
+    [[ "$database_bind_found" == true ]] || {
+      echo "FAIL: resolved VPS Compose config must retain reviewed database bind $required_database_bind" >&2
+      exit 1
+    }
+  done
+fi
+docker_root_dir="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+[[ "$docker_root_dir" == /* && "$docker_root_dir" != "/" ]] || {
+  echo "FAIL: DockerRootDir could not be resolved to a non-root absolute path" >&2
+  exit 1
+}
+capacity_paths=("$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")
+capacity_paths+=("${compose_bind_sources[@]}")
+main "$capacity_profile" "${capacity_paths[@]}"
+echo "Production preflight passed: required secrets are non-placeholder, Compose resolves, and host capacity is safe."

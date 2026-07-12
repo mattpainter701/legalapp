@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
 import { User, Briefcase, Clock, DollarSign, Building } from 'lucide-react'
 import { getMyMatters, getTimeEntries } from '../api'
@@ -105,10 +106,16 @@ export default function ProfilePage() {
             {myMatters.map((m) => (
               <tr
                 key={m.id}
-                onClick={() => window.location.href = `/matters/${m.id}`}
-                style={{ borderBottom: '1px solid #EFE8DA', cursor: 'pointer' }}
+                style={{ borderBottom: '1px solid #EFE8DA' }}
               >
-                <td style={{ padding: 8, color: '#426146', fontWeight: 500 }}>{m.matter_name}</td>
+                <td style={{ padding: '0 8px', color: '#426146', fontWeight: 500 }}>
+                  <Link
+                    to={`/matters/${m.id}`}
+                    className="flex min-h-11 items-center rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                  >
+                    {m.matter_name}
+                  </Link>
+                </td>
                 <td style={{ padding: 8 }}>{m.matter_type}</td>
                 <td style={{ padding: 8 }}>
                   <span style={{

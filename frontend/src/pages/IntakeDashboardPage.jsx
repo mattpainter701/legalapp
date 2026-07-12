@@ -107,18 +107,24 @@ function hasDraftWork(draft) {
     .some((key) => draft[key] !== undefined && draft[key] !== EMPTY_CALL_FORM[key])
 }
 
-function ResultCard({ item, selected, onSelect, onAssign }) {
+export function ResultCard({ item, selected, onSelect, onAssign }) {
   const isLead = item.result_type === 'lead'
+  const selectResult = () => onSelect(item)
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(item)}
-      className={`w-full text-left rounded-2xl border p-4 transition-all ${
+    <div
+      className={`w-full overflow-hidden rounded-2xl border text-left transition-all ${
         selected
           ? 'border-brand-ink bg-brand-ink text-white shadow-lg'
           : 'border-brand-line bg-white hover:border-brand-accent/60 hover:shadow-sm'
       }`}
     >
+      <button
+        type="button"
+        aria-pressed={selected}
+        aria-label={`Select ${RESULT_LABELS[item.result_type] || item.result_type}: ${item.title}`}
+        onClick={selectResult}
+        className="w-full cursor-pointer rounded-2xl p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-accent"
+      >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={`text-[10px] font-black uppercase tracking-[0.18em] ${selected ? 'text-white/70' : 'text-brand-muted'}`}>
@@ -161,22 +167,24 @@ function ResultCard({ item, selected, onSelect, onAssign }) {
           </span>
         )}
       </div>
+      </button>
       {isLead && (
-        <div className="mt-3">
-          <span
+        <div className="px-4 pb-4">
+          <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation()
               onAssign(item.lead_id)
             }}
-            className={`inline-flex cursor-pointer items-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold ${
+            className={`inline-flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent ${
               selected ? 'bg-white text-brand-ink' : 'bg-brand-green/10 text-brand-green'
             }`}
           >
             Assign next <ArrowRight size={12} />
-          </span>
+          </button>
         </div>
       )}
-    </button>
+    </div>
   )
 }
 

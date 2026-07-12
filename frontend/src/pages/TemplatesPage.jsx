@@ -1012,12 +1012,21 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
                 ))
                 return (
                 <div key={name} className={fieldType === 'signature' ? 'border border-brand-line rounded bg-brand-bg px-3 py-2' : ''}>
-                  <label htmlFor={fieldType === 'signature' ? undefined : inputId} className="block text-xs font-medium text-brand-muted mb-0.5">
-                    {label}{field.required && fieldType !== 'signature' ? ' *' : ''}
-                    <span className="font-mono text-brand-muted ml-2">
-                      {'{{'}{name}{'}}'}
-                    </span>
-                  </label>
+                  {fieldType === 'signature' ? (
+                    <p className="block text-xs font-medium text-brand-muted mb-0.5">
+                      {label}
+                      <span className="font-mono text-brand-muted ml-2">
+                        {'{{'}{name}{'}}'}
+                      </span>
+                    </p>
+                  ) : (
+                    <label htmlFor={inputId} className="block text-xs font-medium text-brand-muted mb-0.5">
+                      {label}{field.required ? ' *' : ''}
+                      <span className="font-mono text-brand-muted ml-2">
+                        {'{{'}{name}{'}}'}
+                      </span>
+                    </label>
+                  )}
                   {fieldType === 'signature' ? (
                     <p className="text-sm text-brand-muted">
                       Signature area is left blank for signing; it is not populated during document generation.

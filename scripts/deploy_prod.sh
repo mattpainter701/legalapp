@@ -209,8 +209,48 @@ upload_probe=".legalapp-upload-probe-$release_tag-$$"
   'set -eu; umask 077; printf legalapp-upload-proof > "/app/uploads/$UPLOAD_PROBE_NAME"; test "$(cat "/app/uploads/$UPLOAD_PROBE_NAME")" = legalapp-upload-proof; rm -f "/app/uploads/$UPLOAD_PROBE_NAME"'
 [[ ! -e "$uploads_host_dir/$upload_probe" ]] || { echo "ERROR: upload write probe was not cleaned up" >&2; exit 5; }
 
+postgres_user="$(get_env POSTGRES_USER)"
+postgres_user="${postgres_user:-legalapp}"
+postgres_db="$(get_env POSTGRES_DB)"
+postgres_db="${postgres_db:-legalapp}"
+
+# Stop the previous scheduler before taking the database-clock marker. Without
+# this ordering, a recently completed heartbeat from the old container could
+# make readiness green before the replacement scheduler has executed at all.
+echo "==> Stopping the previous scheduler and recording a release heartbeat marker"
+previous_scheduler_id="$("${compose[@]}" ps -q scheduler 2>/dev/null || true)"
+scheduler_cutover_complete=false
+restore_previous_scheduler_on_cutover_failure() {
+  local status="$?" previous_state
+  trap - EXIT
+  if (( status != 0 )) && [[ "$scheduler_cutover_complete" != true && -n "$previous_scheduler_id" ]]; then
+    previous_state="$(docker inspect --format '{{.State.Status}}' "$previous_scheduler_id" 2>/dev/null || true)"
+    if [[ -n "$previous_state" && "$previous_state" != running ]]; then
+      if docker start "$previous_scheduler_id" >/dev/null 2>&1; then
+        echo "WARNING: deploy cutover failed; the previous scheduler container was restarted." >&2
+      else
+        echo "CRITICAL: deploy cutover failed and the previous scheduler container could not be restarted." >&2
+      fi
+    fi
+  fi
+  exit "$status"
+}
+trap restore_previous_scheduler_on_cutover_failure EXIT
+"${compose[@]}" stop scheduler
+scheduler_release_not_before="$(
+  "${compose[@]}" exec -T postgres \
+    psql -U "$postgres_user" -d "$postgres_db" -Atq -v ON_ERROR_STOP=1 \
+      -c 'SELECT extract(epoch FROM clock_timestamp())' 2>/dev/null || true
+)"
+[[ "$scheduler_release_not_before" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+  echo "ERROR: could not capture the database-clock scheduler release marker" >&2
+  exit 6
+}
+
 echo "==> Starting services; the one-shot migrator gates API and scheduler startup"
 "${compose[@]}" up -d --force-recreate
+scheduler_cutover_complete=true
+trap - EXIT
 
 for _ in $(seq 1 90); do
   backend_id="$("${compose[@]}" ps -q backend 2>/dev/null || true)"
@@ -229,14 +269,43 @@ fi
 
 "${compose[@]}" exec -T nginx nginx -t
 
-readiness="$("${compose[@]}" exec -T backend python - <<'PY'
-import json
-import urllib.request
-with urllib.request.urlopen("http://127.0.0.1:8000/health/readiness", timeout=10) as response:
-    print(json.load(response)["status"])
-PY
-)"
-[[ "$readiness" == ok ]] || { "${compose[@]}" logs --tail=150 backend scheduler; exit 7; }
+echo "==> Requiring every active tenant heartbeat from the replacement scheduler"
+release_heartbeat_counts=""
+release_heartbeat_ready=false
+for _ in $(seq 1 60); do
+  release_heartbeat_counts="$(
+    "${compose[@]}" exec -T postgres \
+      psql -U "$postgres_user" -d "$postgres_db" -Atq -v ON_ERROR_STOP=1 \
+        -c "SELECT (SELECT count(*) FROM tenants WHERE is_active)::text || ':' || (SELECT count(*) FROM tenants t WHERE t.is_active AND EXISTS (SELECT 1 FROM scheduler_logs s WHERE s.tenant_id=t.id AND s.agent_name='scheduler-heartbeat' AND s.status='completed' AND s.run_at >= to_timestamp(${scheduler_release_not_before})))::text" \
+        2>/dev/null || true
+  )"
+  if [[ "$release_heartbeat_counts" =~ ^[0-9]+:[0-9]+$ ]]; then
+    active_tenant_count="${release_heartbeat_counts%%:*}"
+    release_heartbeat_count="${release_heartbeat_counts##*:}"
+    if (( active_tenant_count == release_heartbeat_count )); then
+      release_heartbeat_ready=true
+      break
+    fi
+  fi
+  sleep 2
+done
+if [[ "$release_heartbeat_ready" != true ]]; then
+  echo "ERROR: replacement scheduler did not heartbeat for every active tenant (active:fresh=${release_heartbeat_counts:-unavailable})" >&2
+  "${compose[@]}" logs --tail=150 backend scheduler
+  exit 7
+fi
+
+echo "==> Waiting for tenant-scoped scheduler readiness"
+if ! readiness="$("${compose[@]}" exec -T backend python -m app.services.readiness_wait)"; then
+  echo "ERROR: readiness did not become healthy within the bounded startup window" >&2
+  "${compose[@]}" logs --tail=150 backend scheduler
+  exit 7
+fi
+if [[ "$readiness" != ok ]]; then
+  echo "ERROR: readiness waiter returned an unexpected result: $readiness" >&2
+  "${compose[@]}" logs --tail=150 backend scheduler
+  exit 7
+fi
 
 echo "==> Verifying frontend image contents"
 "${compose[@]}" exec -T frontend sh -s < scripts/verify_frontend_runtime.sh

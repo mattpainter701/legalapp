@@ -2211,6 +2211,43 @@ function AIRoutingTab({ platformKey, onAuthError }) {
   )
 }
 
+export function PlatformTenantRow({ tenant: t, expanded, onToggle }) {
+  const toggle = () => onToggle?.(t.id)
+
+  return (
+    <tr
+      className="transition-colors hover:bg-brand-bg"
+    >
+      <td className="px-5 py-3">{expanded ? <ChevronDown size={14} className="text-brand-ink" /> : <ChevronRight size={14} className="text-brand-muted" />}</td>
+      <td className="px-5 py-3">
+        <p className="text-sm font-medium text-brand-ink font-sans">{t.name}</p>
+        <p className="text-xs text-brand-muted">{t.domain}</p>
+      </td>
+      <td className="px-5 py-3"><TierBadge tier={t.billing_tier} /></td>
+      <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.user_count}</td>
+      <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()}</td>
+      <td className="px-5 py-3 text-right text-sm text-brand-ink-2 font-mono">${t.cost_usd_30d?.toFixed(2)}</td>
+      <td className="px-5 py-3 text-center">
+        <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${t.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
+          <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
+          {t.is_active ? 'Active' : 'Inactive'}
+        </span>
+      </td>
+      <td className="px-5 py-3 text-center">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={`tenant-details-${t.id}`}
+          onClick={toggle}
+          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-sm text-xs text-brand-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent font-sans"
+        >
+          {expanded ? 'Close' : 'Details'}
+        </button>
+      </td>
+    </tr>
+  )
+}
+
 export default function PlatformPage() {
   const [platformKey, setPlatformKey] = useState(null)
   const [tab, setTab] = useState('dashboard')
@@ -2452,31 +2489,14 @@ export default function PlatformPage() {
                     <tbody className="divide-y divide-brand-line">
                       {filtered.map((t) => (
                         <React.Fragment key={t.id}>
-                          <tr className="hover:bg-brand-bg transition-colors cursor-pointer" onClick={() => toggleTenant(t.id)}>
-                            <td className="px-5 py-3">{expandedTenant === t.id ? <ChevronDown size={14} className="text-brand-ink" /> : <ChevronRight size={14} className="text-brand-muted" />}</td>
-                            <td className="px-5 py-3">
-                              <p className="text-sm font-medium text-brand-ink font-sans">{t.name}</p>
-                              <p className="text-xs text-brand-muted">{t.domain}</p>
-                            </td>
-                            <td className="px-5 py-3"><TierBadge tier={t.billing_tier} /></td>
-                            <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.user_count}</td>
-                            <td className="px-5 py-3 text-center text-sm text-brand-ink-2 font-sans">{t.requests_30d?.toLocaleString()}</td>
-                            <td className="px-5 py-3 text-right text-sm text-brand-ink-2 font-mono">${t.cost_usd_30d?.toFixed(2)}</td>
-                            <td className="px-5 py-3 text-center">
-                              <span className={`inline-flex items-center gap-1.5 text-xs font-medium font-sans ${t.is_active ? 'text-brand-accent' : 'text-brand-rose'}`}>
-                                <span className={`w-2 h-2 rounded-full ${t.is_active ? 'bg-brand-accent' : 'bg-brand-rose'}`} />
-                                {t.is_active ? 'Active' : 'Inactive'}
-                              </span>
-                            </td>
-                            <td className="px-5 py-3 text-center">
-                              <button onClick={(e) => { e.stopPropagation(); toggleTenant(t.id) }} className="text-xs text-brand-accent hover:underline font-sans">
-                                {expandedTenant === t.id ? 'Close' : 'Details'}
-                              </button>
-                            </td>
-                          </tr>
+                          <PlatformTenantRow
+                            tenant={t}
+                            expanded={expandedTenant === t.id}
+                            onToggle={toggleTenant}
+                          />
                           {/* Expanded detail row */}
                           {expandedTenant === t.id && (
-                            <tr key={`detail-${t.id}`}>
+                            <tr key={`detail-${t.id}`} id={`tenant-details-${t.id}`}>
                               <td colSpan={8} className="px-5 py-4 bg-brand-bg-soft">
                                 {loadingDetail ? (
                                   <div className="flex justify-center py-4"><div className="w-6 h-6 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" /></div>

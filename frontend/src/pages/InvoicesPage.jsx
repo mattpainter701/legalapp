@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { getInvoices, generateInvoice, getMattersV2 } from '../api'
 
@@ -194,10 +194,16 @@ export default function InvoicesPage() {
               return (
                 <tr
                   key={inv.id}
-                  onClick={() => navigate(`/invoices/${inv.id}`)}
-                  style={{ borderBottom: '1px solid #EFE8DA', cursor: 'pointer' }}
+                  style={{ borderBottom: '1px solid #EFE8DA' }}
                 >
-                  <td style={{ padding: 8, color: '#426146', fontWeight: 500 }}>{inv.invoice_number}</td>
+                  <td style={{ padding: '0 8px', color: '#426146', fontWeight: 500 }}>
+                    <Link
+                      to={`/invoices/${inv.id}`}
+                      className="flex min-h-11 items-center rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    >
+                      {inv.invoice_number}
+                    </Link>
+                  </td>
                   <td style={{ padding: 8, color: '#6A7587' }}>{inv.matter_name || '—'}</td>
                   <td style={{ padding: 8 }}>{inv.issue_date}</td>
                   <td style={{ padding: 8, color: inv.is_overdue ? '#9C4F3F' : undefined }}>{inv.due_date}</td>

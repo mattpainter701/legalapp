@@ -27,6 +27,12 @@ jobs:
         run: |
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/health/readiness" | tee /tmp/readiness.json | grep -q '"status":"ok"'
           curl --fail --silent --show-error --max-time 20 "$PRODUCTION_ORIGIN/" >/dev/null
+          hsts_headers="$(curl --fail --silent --show-error --max-time 20 --dump-header - --output /dev/null "$PRODUCTION_ORIGIN/" | tr -d '\r')"
+          hsts_count="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+          hsts_value="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          [[ "$hsts_count" == "1" ]]
+          printf '%s' "$hsts_value" \
+            | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'
 
       - name: Verify TLS remains valid for 14 days
         id: tls

@@ -49,14 +49,13 @@ function DateCell({ dateStr }) {
   }
 }
 
-export function MediationCaseRow({ caseRecord: c, onNavigate }) {
+export function MediationCaseRow({ caseRecord: c }) {
   return (
-    <tr className="group cursor-pointer transition-colors hover:bg-brand-bg-soft" onClick={() => onNavigate?.(c.id)}>
-      <td className="whitespace-nowrap px-5 py-4 pl-6 font-sans text-[14px] font-semibold text-brand-ink">
+    <tr className="group transition-colors hover:bg-brand-bg-soft">
+      <td className="whitespace-nowrap px-5 py-0 pl-6 font-sans text-[14px] font-semibold text-brand-ink">
         <Link
           to={`/plugins/mediation/cases/${c.id}`}
-          onClick={(event) => event.stopPropagation()}
-          className="rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          className="inline-flex min-h-[44px] min-w-[44px] items-center rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
         >
           {c.case_name || '—'}
         </Link>
@@ -279,7 +278,6 @@ export default function MediationPortfolioPage() {
                     <MediationCaseRow
                       key={c.id}
                       caseRecord={c}
-                      onNavigate={(id) => navigate(`/plugins/mediation/cases/${id}`)}
                     />
                   ))}
                 </tbody>

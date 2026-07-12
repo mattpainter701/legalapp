@@ -4,6 +4,7 @@ import { useAuth } from '../App'
 import Sidebar from './Sidebar'
 import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
+import { useConfirm } from './dialog/ConfirmProvider'
 import { Briefcase, CalendarDays, CheckSquare, Menu, MessageSquare, PhoneCall, Shield } from 'lucide-react'
 
 const AppShellContext = createContext(null)
@@ -24,6 +25,7 @@ export function useAppShell() {
 
 export default function AppShell({ children, title }) {
   const { user, logout: authLogout } = useAuth()
+  const confirmAction = useConfirm()
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -84,17 +86,25 @@ export default function AppShell({ children, title }) {
   }, [canSeeModule, navigate])
 
   const handleConversationDeleted = useCallback(async (id) => {
+    const confirmed = await confirmAction({
+      title: 'Delete conversation?',
+      message: 'This permanently deletes the conversation and its messages.',
+      confirmLabel: 'Delete conversation',
+      destructive: true,
+    })
+    if (!confirmed) return false
     try {
       await deleteConversation(id)
       setConversations((prev) => prev.filter((c) => c.id !== id))
       if (activeConvId === id) {
         setActiveConvId(null)
       }
+      return true
     } catch (err) {
       console.error('Failed to delete conversation', err)
       throw err
     }
-  }, [activeConvId])
+  }, [activeConvId, confirmAction])
 
   const handleDocumentUploaded = useCallback((doc) => {
     setDocuments((prev) => {

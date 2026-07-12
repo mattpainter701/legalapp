@@ -236,6 +236,13 @@ fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
 curl -fsS --max-time 15 "https://${DOMAIN}/" >/dev/null || fail "public frontend check failed"
+hsts_headers="$(curl -fsS --max-time 15 -D - -o /dev/null "https://${DOMAIN}/" | tr -d '\r' || true)"
+hsts_count="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { count++ } END { print count + 0 }')"
+hsts_value="$(printf '%s\n' "$hsts_headers" | awk 'tolower($0) ~ /^strict-transport-security:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+if [[ "$hsts_count" != "1" ]] || ! printf '%s' "$hsts_value" \
+  | grep -Eiq '^max-age=63072000;[[:space:]]*includeSubDomains([[:space:]]*;[[:space:]]*preload)?[[:space:]]*$'; then
+  fail "public HTTPS response must contain exactly one valid Strict-Transport-Security policy"
+fi
 if ! timeout 15 openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" </dev/null 2>/dev/null \
   | openssl x509 -checkend "$((TLS_MIN_VALID_DAYS * 86400))" -noout >/dev/null 2>&1; then
   fail "TLS certificate expires within ${TLS_MIN_VALID_DAYS} days or could not be verified"

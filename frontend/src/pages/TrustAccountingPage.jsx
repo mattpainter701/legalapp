@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { listTrustAccounts, createTrustAccount, getMattersV2 } from '../api'
 import { Landmark, Plus, X, Loader2, Building2, ShieldCheck } from 'lucide-react'
 
@@ -186,10 +186,16 @@ export default function TrustAccountingPage() {
               {accounts.map(acc => (
                 <tr
                   key={acc.id}
-                  onClick={() => navigate(`/trust/${acc.id}`)}
-                  className="border-b border-brand-line last:border-0 hover:bg-brand-surface-2 cursor-pointer transition-colors"
+                  className="border-b border-brand-line transition-colors last:border-0 hover:bg-brand-surface-2"
                 >
-                  <td className="px-5 py-3 font-sans font-medium text-brand-ink">{acc.account_name}</td>
+                  <td className="px-5 py-0 font-sans font-medium text-brand-ink">
+                    <Link
+                      to={`/trust/${acc.id}`}
+                      className="flex min-h-11 items-center rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                    >
+                      {acc.account_name}
+                    </Link>
+                  </td>
                   <td className="px-5 py-3 font-sans text-brand-muted">
                     <span className="inline-flex items-center gap-1.5">
                       <Building2 className="w-3.5 h-3.5" strokeWidth={1.5} />

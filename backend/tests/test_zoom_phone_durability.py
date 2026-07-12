@@ -1632,6 +1632,7 @@ def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():
     deploy_path = root / "scripts" / "deploy_prod.sh"
     production = production_path.read_text(encoding="utf-8")
     deploy = deploy_path.read_text(encoding="utf-8")
+    bash_bin = os.environ.get("BASH", "bash")
 
     assert 'ZOOM_REQUIRED="${ZOOM_REQUIRED:-true}"' in production
     assert 'if [[ "$ZOOM_REQUIRED" == true ]]; then' in production
@@ -1648,7 +1649,7 @@ def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():
     assert "$ROOT_DIR/.monitor-state" not in production
 
     invalid_zoom = subprocess.run(
-        ["bash", str(production_path)],
+        [bash_bin, str(production_path)],
         env={**os.environ, "ZOOM_REQUIRED": "sometimes"},
         capture_output=True,
         text=True,
@@ -1658,7 +1659,7 @@ def test_zoom_shell_gates_are_strict_by_default_and_bootstrap_is_explicit():
     assert "ZOOM_REQUIRED must be true or false" in invalid_zoom.stderr
 
     invalid_bootstrap = subprocess.run(
-        ["bash", str(deploy_path)],
+        [bash_bin, str(deploy_path)],
         env={**os.environ, "BOOTSTRAP_MODE": "sometimes"},
         capture_output=True,
         text=True,

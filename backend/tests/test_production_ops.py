@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -11,6 +14,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "prod_env_preflight.sh"
+CAPACITY_CHECK = ROOT / "scripts" / "check_host_capacity.sh"
 BASH_BIN = os.environ.get("BASH", "bash")
 NEW_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 OLD_FERNET_KEY = "KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY="
@@ -61,6 +65,7 @@ def _run_preflight(
     tmp_path: Path,
     env_text: str,
     *,
+    compose_files: str | None = None,
     process_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env_file = tmp_path / ".env"
@@ -69,22 +74,41 @@ def _run_preflight(
     env_text = env_text.replace("__TEST_OFFSITE_PUBLIC_KEY__", str(restore_public_key))
     env_file.write_text(env_text, encoding="utf-8")
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(exist_ok=True)
     docker = fake_bin / "docker"
-    docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = info ]; then printf '/var/lib/docker\\n'; fi\n"
+        'if [ "${1:-}" = compose ]; then\n'
+        "  printf '%s\\n' \"$FAKE_COMPOSE_CONFIG_JSON\"\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    python3 = fake_bin / "python3"
+    python3.write_text(
+        "#!/bin/sh\nprintf '%s' \"$FAKE_BIND_SOURCES\"\n",
+        encoding="utf-8",
+    )
+    python3.chmod(python3.stat().st_mode | stat.S_IXUSR)
     env = os.environ.copy()
     # Preflight rejects process variables that would override the validated
     # env file during Compose interpolation. CI exports several such values for
     # the backend itself, so sanitize every guarded key before applying a
     # test's explicit conflict override.
-    guarded_keys = {
-        match.group(1)
-        for match in re.finditer(
-            r"\$\{([A-Za-z_][A-Za-z0-9_]*)",
-            (ROOT / "docker-compose.hypervisor.yml").read_text(encoding="utf-8"),
+    selected_compose_files = (
+        compose_files or (ROOT / "docker-compose.hypervisor.yml").as_posix()
+    )
+    guarded_keys: set[str] = set()
+    for selected_compose_file in selected_compose_files.split():
+        guarded_keys.update(
+            match.group(1)
+            for match in re.finditer(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*)",
+                Path(selected_compose_file).read_text(encoding="utf-8"),
+            )
         )
-    }
     guarded_keys.update(
         line.split("=", 1)[0]
         for line in env_text.splitlines()
@@ -94,7 +118,38 @@ def _run_preflight(
         env.pop(key, None)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
     env["ENV_FILE"] = str(env_file)
-    env["COMPOSE_FILES"] = str(ROOT / "docker-compose.hypervisor.yml")
+    env["COMPOSE_FILES"] = selected_compose_files
+    env["HOST_CAPACITY_OVERRIDE"] = "true"
+    env["HOST_CAPACITY_OVERRIDE_REASON"] = (
+        "isolated preflight unit test; not production evidence"
+    )
+    env["FAKE_COMPOSE_CONFIG_JSON"] = json.dumps(
+        {
+            "services": {
+                "postgres": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/data/legalapp/postgres",
+                            "target": "/var/lib/postgresql/data",
+                        }
+                    ]
+                },
+                "litellm-postgres": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/data/legalapp/litellm-postgres",
+                            "target": "/var/lib/postgresql/data",
+                        }
+                    ]
+                },
+            }
+        }
+    )
+    env["FAKE_BIND_SOURCES"] = (
+        "/data/legalapp/postgres\n/data/legalapp/litellm-postgres\n"
+    )
     env.update(process_overrides or {})
     return subprocess.run(
         [BASH_BIN, str(PREFLIGHT)],
@@ -103,6 +158,48 @@ def _run_preflight(
         capture_output=True,
         text=True,
         timeout=20,
+        check=False,
+    )
+
+
+def _validate_capacity(
+    *,
+    profile: str = "vps",
+    cpus: int,
+    memory_gib: int,
+    disk_total_gib: int,
+    disk_free_gib: int,
+) -> subprocess.CompletedProcess[str]:
+    kib_per_gib = 1024 * 1024
+    command = (
+        f"source {shlex.quote(CAPACITY_CHECK.as_posix())}; "
+        f"validate_capacity {shlex.quote(profile)} {cpus} {memory_gib * kib_per_gib} "
+        f"{disk_total_gib * kib_per_gib} {disk_free_gib * kib_per_gib} /data"
+    )
+    return subprocess.run(
+        [BASH_BIN, "-c", command],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def _extract_bind_sources(model: object) -> subprocess.CompletedProcess[str]:
+    command = (
+        f'python3() {{ {shlex.quote(Path(sys.executable).as_posix())} "$@"; }}; '
+        "export -f python3; "
+        f"source {shlex.quote(CAPACITY_CHECK.as_posix())}; "
+        "extract_compose_bind_sources"
+    )
+    return subprocess.run(
+        [BASH_BIN, "-c", command],
+        cwd=ROOT,
+        input=json.dumps(model),
+        capture_output=True,
+        text=True,
+        timeout=10,
         check=False,
     )
 
@@ -117,6 +214,262 @@ def test_production_preflight_accepts_staged_keyring_and_dedicated_mcp_auth(
     assert "Production preflight passed" in output
     assert "ops-secret-key-0123456789" not in output
     assert "mcp-upstream-key-0123456789" not in output
+
+
+def test_host_capacity_gate_accepts_supported_floor() -> None:
+    result = _validate_capacity(
+        cpus=8,
+        memory_gib=24,
+        disk_total_gib=160,
+        disk_free_gib=25,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Host capacity passed" in result.stdout
+
+
+def test_host_capacity_gate_rejects_16_gib_and_low_disk_headroom() -> None:
+    result = _validate_capacity(
+        cpus=4,
+        memory_gib=16,
+        disk_total_gib=120,
+        disk_free_gib=12,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "4 online CPU(s); at least 8 are required" in output
+    assert "16.0 GiB RAM; at least 24.0 GiB is required" in output
+    assert "120.0 GiB total" in output
+    assert "12.0 GiB free" in output
+
+
+def test_host_capacity_gate_uses_realistic_hypervisor_disk_profile() -> None:
+    result = _validate_capacity(
+        profile="hypervisor",
+        cpus=16,
+        memory_gib=62,
+        disk_total_gib=98,
+        disk_free_gib=17,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Host capacity passed (hypervisor)" in result.stdout
+
+    low_headroom = _validate_capacity(
+        profile="hypervisor",
+        cpus=16,
+        memory_gib=62,
+        disk_total_gib=98,
+        disk_free_gib=14,
+    )
+    assert low_headroom.returncode != 0
+    assert "at least 15.0 GiB is required" in (
+        low_headroom.stdout + low_headroom.stderr
+    )
+
+
+def test_production_preflight_selects_only_known_capacity_profiles(
+    tmp_path: Path,
+) -> None:
+    base_prod = " ".join(
+        (
+            (ROOT / "docker-compose.yml").as_posix(),
+            (ROOT / "docker-compose.prod.yml").as_posix(),
+        )
+    )
+    vps = _run_preflight(tmp_path, _production_env(), compose_files=base_prod)
+    assert vps.returncode == 0, vps.stdout + vps.stderr
+    assert "overridden for the vps profile" in vps.stderr
+
+    hypervisor_file = (ROOT / "docker-compose.hypervisor.yml").as_posix()
+    mixed = _run_preflight(
+        tmp_path,
+        _production_env(),
+        compose_files=f"{hypervisor_file} {base_prod}",
+    )
+    assert mixed.returncode != 0
+    assert "COMPOSE_FILES must be exactly" in mixed.stderr
+
+    dev_override = (ROOT / "docker-compose.override.yml").as_posix()
+    extra_override = _run_preflight(
+        tmp_path,
+        _production_env(),
+        compose_files=f"{base_prod} {dev_override}",
+    )
+    assert extra_override.returncode != 0
+    assert "extra, reversed, mixed, and unknown overrides are prohibited" in (
+        extra_override.stderr
+    )
+
+    reversed_vps = _run_preflight(
+        tmp_path,
+        _production_env(),
+        compose_files=" ".join(reversed(base_prod.split())),
+    )
+    assert reversed_vps.returncode != 0
+    assert "COMPOSE_FILES must be exactly" in reversed_vps.stderr
+
+
+def test_capacity_gate_checks_all_resolved_bind_and_docker_filesystems() -> None:
+    preflight = PREFLIGHT.read_text(encoding="utf-8")
+    capacity_check = CAPACITY_CHECK.read_text(encoding="utf-8")
+
+    assert "docker info --format '{{.DockerRootDir}}'" in preflight
+    assert (
+        'capacity_paths=("$uploads_host_dir" "$ROOT_DIR/backups" "$docker_root_dir")'
+        in preflight
+    )
+    assert 'capacity_paths+=("${compose_bind_sources[@]}")' in preflight
+    assert "/data/legalapp/postgres" in preflight
+    assert "/data/legalapp/litellm-postgres" in preflight
+    assert "config --format json" in preflight
+    assert "extract_compose_bind_sources" in capacity_check
+    assert 'for requested_path in "$@"' in capacity_check
+    assert "checked_devices" in capacity_check
+
+
+def test_compose_bind_extractor_covers_future_absolute_sources() -> None:
+    result = _extract_bind_sources(
+        {
+            "services": {
+                "postgres": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/data/legalapp/postgres",
+                            "target": "/var/lib/postgresql/data",
+                        },
+                        {
+                            "type": "volume",
+                            "source": "named-data",
+                            "target": "/ignored",
+                        },
+                    ]
+                },
+                "future-worker": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/mnt/dedicated storage/future-data",
+                            "target": "/srv/data",
+                        }
+                    ]
+                },
+            }
+        }
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [
+        "/data/legalapp/postgres",
+        "/mnt/dedicated storage/future-data",
+    ]
+
+
+def test_compose_bind_extractor_fails_closed_on_invalid_source() -> None:
+    result = _extract_bind_sources(
+        {
+            "services": {
+                "worker": {
+                    "volumes": [
+                        {"type": "bind", "source": "relative/data", "target": "/data"}
+                    ]
+                }
+            }
+        }
+    )
+
+    assert result.returncode != 0
+    assert "absolute non-root single-line path" in result.stderr
+
+
+def test_vps_preflight_requires_both_reviewed_database_binds(tmp_path: Path) -> None:
+    base_prod = " ".join(
+        (
+            (ROOT / "docker-compose.yml").as_posix(),
+            (ROOT / "docker-compose.prod.yml").as_posix(),
+        )
+    )
+    missing_litellm_bind = json.dumps(
+        {
+            "services": {
+                "postgres": {
+                    "volumes": [
+                        {
+                            "type": "bind",
+                            "source": "/data/legalapp/postgres",
+                            "target": "/var/lib/postgresql/data",
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    result = _run_preflight(
+        tmp_path,
+        _production_env(),
+        compose_files=base_prod,
+        process_overrides={
+            "FAKE_COMPOSE_CONFIG_JSON": missing_litellm_bind,
+            "FAKE_BIND_SOURCES": "/data/legalapp/postgres\n",
+        },
+    )
+
+    assert result.returncode != 0
+    assert (
+        "must retain reviewed database bind /data/legalapp/litellm-postgres"
+        in result.stderr
+    )
+
+
+def test_documented_compose_limits_are_ceilings_not_reservations() -> None:
+    services = yaml.safe_load(
+        (ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    )["services"]
+    memory_gib = 0.0
+    cpu_limit = 0.0
+    for service in services.values():
+        resources = service.get("deploy", {}).get("resources", {})
+        assert "reservations" not in resources
+        limits = resources.get("limits", {})
+        memory = limits.get("memory")
+        if memory:
+            match = re.fullmatch(r"([0-9.]+)([MG])", memory)
+            assert match, memory
+            value, unit = match.groups()
+            memory_gib += float(value) / 1024 if unit == "M" else float(value)
+        if "cpus" in limits:
+            cpu_limit += float(limits["cpus"])
+
+    assert memory_gib == 17.5
+    assert cpu_limit == 9.0
+
+
+def test_host_capacity_override_requires_reason_and_cannot_be_persisted(
+    tmp_path: Path,
+) -> None:
+    missing_reason = _run_preflight(
+        tmp_path,
+        _production_env(),
+        process_overrides={
+            "HOST_CAPACITY_OVERRIDE": "true",
+            "HOST_CAPACITY_OVERRIDE_REASON": "",
+        },
+    )
+    assert missing_reason.returncode != 0
+    assert "requires a specific HOST_CAPACITY_OVERRIDE_REASON" in (
+        missing_reason.stdout + missing_reason.stderr
+    )
+
+    persisted = _run_preflight(
+        tmp_path,
+        _production_env(HOST_CAPACITY_OVERRIDE="true"),
+    )
+    assert persisted.returncode != 0
+    assert "HOST_CAPACITY_OVERRIDE must never be persisted in .env" in (
+        persisted.stdout + persisted.stderr
+    )
 
 
 def test_production_preflight_rejects_launch_flags_and_unstaged_credentials(
@@ -362,7 +715,9 @@ def test_upload_bind_scheduler_and_launch_capability_contracts() -> None:
     assert "scheduler runtime SMTP configuration is disabled or incomplete" in (
         production_check
     )
-    assert "backend and scheduler runtime SMTP configurations differ" in production_check
+    assert (
+        "backend and scheduler runtime SMTP configurations differ" in production_check
+    )
     assert "inherited EMAIL_ENABLED conflicts" in production_check
 
 

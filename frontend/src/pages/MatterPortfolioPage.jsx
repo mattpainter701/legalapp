@@ -114,7 +114,7 @@ function CloudFolderLinks({ cloudFolder, compact = false }) {
   if (links.length === 0) return null
 
   return (
-    <div className="flex flex-wrap gap-1.5" onClick={e => e.stopPropagation()}>
+    <div className="flex flex-wrap gap-1.5">
       {links.map(({ key, label, title, className, url }) => (
         <a
           key={key}
@@ -122,7 +122,7 @@ function CloudFolderLinks({ cloudFolder, compact = false }) {
           target="_blank"
           rel="noopener noreferrer"
           title={title}
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-sans font-semibold transition-colors ${className}`}
+          className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 px-2 py-0.5 rounded border text-[11px] font-sans font-semibold transition-colors ${className}`}
         >
           <Icon d={Icons.folder} size={11} />
           {label}
@@ -164,21 +164,19 @@ function dueTomorrow(m) {
 }
 
 // ── Matter Card (board view) ──────────────────────────────────────────────────
-export function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAlert }) {
+export function MatterCard({ m, onToggleActive, togglingId, showAlert }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
-      className={`bg-brand-surface border rounded-2xl p-4 cursor-pointer hover:border-brand-accent/30 hover:shadow-md transition-all group ${
+      className={`bg-brand-surface border rounded-2xl p-4 hover:border-brand-accent/30 hover:shadow-md transition-all group ${
         showAlert ? 'border-brand-rose/30' : 'border-brand-line'
       }`}
-      onClick={() => onNavigate(m.id)}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0 flex-1">
           <Link
             to={`/matters/${m.id}`}
-            onClick={(event) => event.stopPropagation()}
-            className="block truncate rounded-sm font-sans text-[14px] font-semibold leading-snug text-brand-ink transition-colors hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+            className="flex min-h-[44px] w-full items-center truncate rounded-sm font-sans text-[14px] font-semibold leading-snug text-brand-ink transition-colors hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
           >
             {m.matter_name}
           </Link>
@@ -215,11 +213,12 @@ export function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAler
       )}
 
       {m.my_assignment_id && (
-        <div className="mt-3 pt-3 border-t border-brand-line" onClick={e => e.stopPropagation()}>
+        <div className="mt-3 pt-3 border-t border-brand-line">
           <button
+            type="button"
             onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
             disabled={isToggling}
-            className={`w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+            className={`w-full min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
               m.is_active_working
                 ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
                 : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
@@ -235,19 +234,17 @@ export function MatterCard({ m, onNavigate, onToggleActive, togglingId, showAler
 }
 
 // ── My Matters list row ───────────────────────────────────────────────────────
-export function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
+export function MyMatterRow({ m, onToggleActive, togglingId }) {
   const isToggling = togglingId === m.my_assignment_id
   return (
     <div
-      className="flex items-start gap-4 px-5 py-4 hover:bg-brand-bg-soft cursor-pointer transition-colors group border-b border-brand-line last:border-0"
-      onClick={() => onNavigate(m.id)}
+      className="flex items-start gap-4 px-5 py-4 hover:bg-brand-bg-soft transition-colors group border-b border-brand-line last:border-0"
     >
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <Link
             to={`/matters/${m.id}`}
-            onClick={(event) => event.stopPropagation()}
-            className="truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+            className="inline-flex min-h-[44px] min-w-[44px] max-w-full items-center truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
           >
             {m.matter_name}
           </Link>
@@ -271,11 +268,12 @@ export function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center gap-2 shrink-0">
         <button
+          type="button"
           onClick={() => onToggleActive(m.my_assignment_id, m.id, !m.is_active_working)}
           disabled={isToggling}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
+          className={`flex min-h-[44px] min-w-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${
             m.is_active_working
               ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
               : 'bg-brand-bg-soft text-brand-muted border-brand-line hover:text-brand-ink hover:border-brand-line-2'
@@ -292,19 +290,13 @@ export function MyMatterRow({ m, onNavigate, onToggleActive, togglingId }) {
   )
 }
 
-export function MatterPortfolioRow({ matter: m, onNavigate }) {
+export function MatterPortfolioRow({ matter: m }) {
   return (
-    <tr
-      className="group cursor-pointer transition-colors hover:bg-brand-bg-soft"
-      onClick={(event) => {
-        if (event.target.closest('a, button')) return
-        onNavigate?.(m.id)
-      }}
-    >
-      <td className="max-w-xs px-5 py-4 pl-6">
+    <tr className="group transition-colors hover:bg-brand-bg-soft">
+      <td className="max-w-xs px-5 py-0 pl-6">
         <Link
           to={`/matters/${m.id}`}
-          className="block truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+          className="flex min-h-[44px] min-w-[44px] items-center truncate rounded-sm font-sans text-[14px] font-semibold text-brand-ink hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
         >
           {m.matter_name || '—'}
         </Link>
@@ -561,7 +553,6 @@ export default function MatterPortfolioPage() {
                         <MatterCard
                           key={m.id}
                           m={m}
-                          onNavigate={id => navigate(`/matters/${id}`)}
                           onToggleActive={handleToggleActive}
                           togglingId={togglingId}
                           showAlert={col.showAlert}
@@ -579,7 +570,6 @@ export default function MatterPortfolioPage() {
                 <MyMatterRow
                   key={m.id}
                   m={m}
-                  onNavigate={id => navigate(`/matters/${id}`)}
                   onToggleActive={handleToggleActive}
                   togglingId={togglingId}
                 />
@@ -713,7 +703,6 @@ export default function MatterPortfolioPage() {
                     <MatterPortfolioRow
                       key={m.id}
                       matter={m}
-                      onNavigate={(id) => navigate(`/matters/${id}`)}
                     />
                   ))}
                 </tbody>

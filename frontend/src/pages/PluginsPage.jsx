@@ -47,16 +47,16 @@ const STATE_META = {
 }
 
 // ── Plugin card ──────────────────────────────────────────────────────────────
-function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate }) {
+export function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate }) {
   const pluginId = plugin.plugin_name || plugin.plugin_id || plugin.id
   const Icon = PLUGIN_ICONS[pluginId] || Settings2
   const state = stateFor(plugin)
   const meta = STATE_META[state]
+  const openPlugin = () => onNavigate(plugin.primary_route || `/plugins/${pluginId}`)
 
   return (
     <div
-      className="bg-brand-surface border border-brand-line rounded-2xl p-6 flex flex-col hover:shadow-md hover:border-brand-accent hover:-translate-y-1 transition-all duration-200 group cursor-pointer"
-      onClick={() => onNavigate(plugin.primary_route || `/plugins/${pluginId}`)}
+      className="bg-brand-surface border border-brand-line rounded-2xl p-6 flex flex-col hover:shadow-md hover:border-brand-accent hover:-translate-y-1 transition-all duration-200 group"
     >
       {/* Icon + name */}
       <div className="flex items-start gap-4 mb-4">
@@ -86,7 +86,11 @@ function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate }) {
 
       {/* Actions */}
       <div className="space-y-2">
-        <button className="w-full py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors">
+        <button
+          type="button"
+          onClick={openPlugin}
+          className="inline-flex min-h-[44px] min-w-[44px] w-full items-center justify-center py-2.5 bg-brand-surface text-brand-ink border border-brand-line text-sm font-sans font-medium rounded-xl group-hover:bg-brand-ink group-hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+        >
           {plugin.is_purchased || state === 'purchased' ? 'Open Workspace' : 'View Add-on'}
         </button>
         {isAdmin && (
@@ -94,26 +98,30 @@ function PluginCard({ plugin, isAdmin, saving, onEntitlement, onNavigate }) {
             {!plugin.is_purchased && plugin.entitlement_status !== 'trial' ? (
               <>
                 <button
-                  onClick={(e) => onEntitlement(e, pluginId, 'trial')}
+                  type="button"
+                  onClick={() => onEntitlement(pluginId, 'trial')}
                   disabled={saving === `${pluginId}:trial`}
-                  className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg disabled:opacity-50"
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg disabled:opacity-50"
                 >Trial</button>
                 <button
-                  onClick={(e) => onEntitlement(e, pluginId, 'purchased')}
+                  type="button"
+                  onClick={() => onEntitlement(pluginId, 'purchased')}
                   disabled={saving === `${pluginId}:purchased`}
-                  className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg bg-brand-ink text-white hover:bg-brand-ink-2 disabled:opacity-50"
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-3 py-2 text-[12px] font-sans font-semibold rounded-lg bg-brand-ink text-white hover:bg-brand-ink-2 disabled:opacity-50"
                 >Purchase</button>
               </>
             ) : (
               <>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onNavigate(`/plugins/${pluginId}`) }}
-                  className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg"
+                  type="button"
+                  onClick={() => onNavigate(`/plugins/${pluginId}`)}
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-ink hover:bg-brand-bg"
                 >Configure</button>
                 <button
-                  onClick={(e) => onEntitlement(e, pluginId, 'disabled')}
+                  type="button"
+                  onClick={() => onEntitlement(pluginId, 'disabled')}
                   disabled={saving === `${pluginId}:disabled`}
-                  className="px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-muted hover:text-brand-ink hover:bg-brand-bg disabled:opacity-50"
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-3 py-2 text-[12px] font-sans font-semibold rounded-lg border border-brand-line text-brand-muted hover:text-brand-ink hover:bg-brand-bg disabled:opacity-50"
                 >Disable</button>
               </>
             )}
@@ -151,8 +159,7 @@ export default function PluginsPage() {
 
   useEffect(() => { loadPlugins() }, [])
 
-  const handleEntitlement = async (event, pluginId, status) => {
-    event.stopPropagation()
+  const handleEntitlement = async (pluginId, status) => {
     setSavingPlugin(`${pluginId}:${status}`)
     setError(null)
     try {

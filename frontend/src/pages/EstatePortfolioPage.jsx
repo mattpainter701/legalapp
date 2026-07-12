@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getEstates, createEstate } from '../api'
 import StatusBadge from '../components/StatusBadge'
@@ -231,10 +231,16 @@ export default function EstatePortfolioPage() {
                   {filtered.map((e) => (
                     <tr
                       key={e.id}
-                      className="hover:bg-brand-bg-soft cursor-pointer transition-colors group"
-                      onClick={() => navigate(`/plugins/trust-estate/estates/${e.id}`)}
+                      className="group transition-colors hover:bg-brand-bg-soft"
                     >
-                      <td className="px-5 py-4 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">{e.estate_name || '—'}</td>
+                      <td className="px-5 py-0 pl-6 font-semibold text-brand-ink font-sans whitespace-nowrap text-[14px]">
+                        <Link
+                          to={`/plugins/trust-estate/estates/${e.id}`}
+                          className="flex min-h-[52px] items-center rounded-sm hover:text-brand-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
+                        >
+                          {e.estate_name || '—'}
+                        </Link>
+                      </td>
                       <td className="px-5 py-4"><TypeBadge type={e.estate_type} /></td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{e.client_name || '—'}</td>
                       <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">{e.jurisdiction || '—'}</td>

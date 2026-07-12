@@ -152,20 +152,20 @@ export default function HomePage() {
             <span className="font-serif font-bold text-[17px] tracking-tight">Clarity Legal</span>
           </div>
           <nav aria-label="Marketing" className="hidden md:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
-            <a href="#how" onClick={scrollTo('how')} className="hover:text-brand-ink transition-colors">How it works</a>
-            <a href="#features" onClick={scrollTo('features')} className="hover:text-brand-ink transition-colors">Features</a>
-            <a href="#skills" onClick={scrollTo('skills')} className="hover:text-brand-ink transition-colors">Practice areas</a>
-            <a href="#modules" onClick={scrollTo('modules')} className="hover:text-brand-ink transition-colors">Add-ons</a>
-            <a href="#pricing" onClick={scrollTo('pricing')} className="hover:text-brand-ink transition-colors">Plans</a>
+            <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">How it works</a>
+            <a href="#features" onClick={scrollTo('features')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Features</a>
+            <a href="#skills" onClick={scrollTo('skills')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Practice areas</a>
+            <a href="#modules" onClick={scrollTo('modules')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Add-ons</a>
+            <a href="#pricing" onClick={scrollTo('pricing')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Plans</a>
           </nav>
           <div className="flex items-center gap-3">
-            <button onClick={goLogin} className="text-[14px] font-sans font-semibold text-brand-ink hover:text-brand-accent-2 transition-colors">
+            <button onClick={goLogin} className="inline-flex min-h-11 items-center px-2 -mx-2 text-[14px] font-sans font-semibold text-brand-ink hover:text-brand-accent-2 transition-colors">
               Sign in
             </button>
-            <a href={intakeStartUrl} className="hidden sm:inline-flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
+            <a href={intakeStartUrl} className="hidden sm:inline-flex min-h-11 items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
               Start with Call Intake
             </a>
-            <a href={intakeStartUrl} className="inline-flex sm:hidden items-center px-3 py-2 bg-brand-ink text-white text-[13px] font-sans font-semibold rounded-xl">
+            <a href={intakeStartUrl} className="inline-flex sm:hidden min-h-11 items-center px-3 py-2 bg-brand-ink text-white text-[13px] font-sans font-semibold rounded-xl">
               Call Intake
             </a>
           </div>
@@ -580,8 +580,8 @@ export default function HomePage() {
           </div>
           <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Built for deliberate legal work.</p>
           <div className="flex items-center gap-4 text-brand-muted font-sans text-[12.5px]">
-            <Link to="/privacy" className="hover:text-brand-ink">Privacy</Link>
-            <Link to="/terms" className="hover:text-brand-ink">Terms</Link>
+            <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
+            <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
             <span>© {new Date().getFullYear()} Clarity Legal</span>
           </div>
         </div>

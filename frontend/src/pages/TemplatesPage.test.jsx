@@ -258,8 +258,16 @@ describe('document template workflow', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Generate' }))
     expect(screen.getByRole('checkbox')).not.toBeChecked()
+    expect(screen.getByLabelText(/Client name/)).toHaveAttribute('id', 'template-variable-client_name')
     expect(screen.getByRole('combobox', { name: /Venue/ })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /Notes/ }).tagName).toBe('TEXTAREA')
+    const signatureHeading = screen.getByText((_, element) => (
+      element.tagName === 'P'
+      && element.textContent.includes('Client signature')
+      && element.textContent.includes('{{signature_1}}')
+    ))
+    expect(signatureHeading).not.toHaveAttribute('for')
+    expect(signatureHeading.closest('label')).toBeNull()
     expect(screen.getByText(/Signature area is left blank for signing/)).toBeInTheDocument()
     expect(screen.getByText(/2 required fields still need review/)).toBeInTheDocument()
 

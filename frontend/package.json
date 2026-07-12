@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
@@ -39,6 +40,9 @@
     "preview": "vite preview",
     "lint": "eslint src",
     "test": "vitest run",
+    "e2e:prepare": "node ./e2e/prepare.mjs",
+    "e2e": "npm run e2e:prepare && playwright test",
+    "e2e:install": "playwright install --with-deps chromium",
     "check": "npm run lint && npm run test && npm run build"
   },
   "overrides": {

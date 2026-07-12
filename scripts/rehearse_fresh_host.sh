@@ -141,7 +141,10 @@ done
       done
     } | sort -u
   )
-  BOOTSTRAP_MODE=true ENV_FILE="$APP_DIR/.env" \
+  BOOTSTRAP_MODE=true \
+    HOST_CAPACITY_OVERRIDE=true \
+    HOST_CAPACITY_OVERRIDE_REASON="isolated fresh-host rehearsal; not a production capacity claim" \
+    ENV_FILE="$APP_DIR/.env" \
     COMPOSE_FILES="$compose_files_value" \
     bash "$APP_DIR/scripts/prod_env_preflight.sh"
 )
