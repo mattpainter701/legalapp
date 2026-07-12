@@ -752,6 +752,7 @@ def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
         encoding="utf-8"
     )
     assert "update_host_disk_status.py" in rehearsal
+    assert '"$APP_DIR/nginx/webroot"' in rehearsal
     workflow = (ROOT / ".github" / "workflows" / "production-health.yml").read_text(
         encoding="utf-8"
     )

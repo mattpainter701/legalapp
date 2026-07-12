@@ -34,7 +34,7 @@ tar -C "$ROOT_DIR" \
 # A short-lived self-signed certificate is sufficient for an isolated transport
 # rehearsal; public certificate validity is checked separately by
 # production_check.sh and the scheduled production-health workflow.
-mkdir -p "$APP_DIR/nginx/ssl"
+mkdir -p "$APP_DIR/nginx/ssl" "$APP_DIR/nginx/webroot"
 mkdir -p "$APP_DIR/uploads"
 mkdir -p "$APP_DIR/backups" "$APP_DIR/host-status"
 MSYS2_ARG_CONV_EXCL='/CN=' openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
