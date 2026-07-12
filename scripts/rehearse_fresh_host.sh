@@ -116,16 +116,18 @@ services:
       - "127.0.0.1::443"
 YAML
 
-compose_files=("$APP_DIR/docker-compose.hypervisor.yml")
+production_compose_files=("$APP_DIR/docker-compose.hypervisor.yml")
 if [[ "$FRESH_HOST_TOPOLOGY" == "base-prod" ]]; then
-  compose_files=("$APP_DIR/docker-compose.yml" "$APP_DIR/docker-compose.prod.yml")
+  production_compose_files=("$APP_DIR/docker-compose.yml" "$APP_DIR/docker-compose.prod.yml")
 fi
-compose_files+=("$APP_DIR/docker-compose.rehearsal.yml")
+compose_files=("${production_compose_files[@]}" "$APP_DIR/docker-compose.rehearsal.yml")
 compose=(docker compose -p "$PROJECT" --env-file "$APP_DIR/.env")
-compose_files_value=""
+preflight_compose_files_value=""
+for compose_file in "${production_compose_files[@]}"; do
+  preflight_compose_files_value+="${preflight_compose_files_value:+ }$compose_file"
+done
 for compose_file in "${compose_files[@]}"; do
   compose+=( -f "$compose_file" )
-  compose_files_value+="${compose_files_value:+ }$compose_file"
 done
 (
   # Preserve the executable environment (notably Docker Desktop paths on
@@ -145,7 +147,7 @@ done
     HOST_CAPACITY_OVERRIDE=true \
     HOST_CAPACITY_OVERRIDE_REASON="isolated fresh-host rehearsal; not a production capacity claim" \
     ENV_FILE="$APP_DIR/.env" \
-    COMPOSE_FILES="$compose_files_value" \
+    COMPOSE_FILES="$preflight_compose_files_value" \
     bash "$APP_DIR/scripts/prod_env_preflight.sh"
 )
 "${compose[@]}" config --quiet

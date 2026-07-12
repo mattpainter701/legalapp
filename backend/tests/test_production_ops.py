@@ -819,3 +819,6 @@ def test_fresh_host_workflow_rehearses_both_production_topologies() -> None:
     assert "topology: [hypervisor, base-prod]" in workflow
     assert "FRESH_HOST_TOPOLOGY: ${{ matrix.topology }}" in workflow
     assert "OFFSITE_RESTORE_PUBLIC_KEY_FILE=" in rehearsal
+    assert 'compose_files=("${production_compose_files[@]}"' in rehearsal
+    assert 'COMPOSE_FILES="$preflight_compose_files_value"' in rehearsal
+    assert 'COMPOSE_FILES="$compose_files_value"' not in rehearsal
