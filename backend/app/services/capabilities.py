@@ -11,6 +11,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "view_billing",
         "manage_matters",
         "manage_intake",
+        "view_confidential_call_content",
         "manage_documents",
         "manage_integrations",
         "admin_settings",
@@ -27,7 +28,14 @@ def is_valid_capability(cap: str) -> bool:
 SYSTEM_ROLE_CAPABILITIES: dict[str, list[str]] = {
     "Administrator": sorted(CAPABILITIES),
     "Accountant": ["view_billing", "manage_billing"],
-    "User": ["manage_matters", "manage_intake", "manage_documents"],
+    # Internal staff have access by default. Intake/reception roles should
+    # explicitly omit this capability when the firm wants to restrict them.
+    "User": [
+        "manage_matters",
+        "manage_intake",
+        "manage_documents",
+        "view_confidential_call_content",
+    ],
     "Client": [],
 }
 

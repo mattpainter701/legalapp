@@ -88,6 +88,22 @@ export default function CallFacts({ caller }) {
           </div>
         ))}
       </dl>
+      {(caller.call_summary || caller.transcript_text) && (
+        <div className="mt-5 space-y-3 border-t border-brand-line pt-4">
+          {caller.call_summary && (
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Call summary</dt>
+              <dd className="mt-1 whitespace-pre-wrap text-sm leading-6 text-brand-ink">{caller.call_summary}</dd>
+            </div>
+          )}
+          {caller.transcript_text && (
+            <details>
+              <summary className="cursor-pointer text-xs font-black uppercase tracking-widest text-brand-accent">View transcript</summary>
+              <p className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-3 text-xs leading-5 text-brand-ink">{caller.transcript_text}</p>
+            </details>
+          )}
+        </div>
+      )}
     </section>
   )
 }

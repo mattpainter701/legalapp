@@ -25,6 +25,7 @@ from app.models.intake_dashboard import (
 from app.models.plugin import Matter
 from app.models.task import Task
 from app.models.user import User
+from app.services.rbac_service import get_user_capabilities
 from app.schemas.intake_dashboard import (
     AssignNextResponse,
     AssignmentAvailabilityResponse,
@@ -609,6 +610,10 @@ async def _upsert_general_call_task(
         f"Customer reason: {purpose}" if purpose else "",
         f"Reception notes: {notes}" if notes else "",
         f"Task detail: {description}" if description else "",
+        f"Zoom call summary: {log.summary}" if log.summary else "",
+        f"Zoom transcript:\n{_log_participant(log, 'transcript_text')}"
+        if _log_participant(log, "transcript_text")
+        else "",
         f"Linked lead: {lead_id}" if lead_id else "",
     ]
     task = (
@@ -840,6 +845,10 @@ async def assignment_availability(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
+    capabilities = await get_user_capabilities(db, current_user.id)
+    can_view_confidential_call_content = (
+        "view_confidential_call_content" in capabilities
+    )
     practice_key = _practice_key(practice_area)
     rule, ordered, _active_by_id = await _rotation_rule_with_active_users(
         db, tenant_id, practice_key
@@ -1053,6 +1062,12 @@ async def recent_callers(
                 answered_by=_log_participant(log, "callee_name"),
                 result=_log_participant(log, "result"),
                 duration_seconds=_log_int(log, "duration_seconds"),
+                call_summary=log.summary if can_view_confidential_call_content else None,
+                transcript_text=(
+                    _log_participant(log, "transcript_text")
+                    if can_view_confidential_call_content
+                    else None
+                ),
                 recording_url=_log_participant(log, "recording_url"),
                 transcript_url=_log_participant(log, "transcript_url"),
             )
