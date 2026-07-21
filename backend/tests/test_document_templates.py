@@ -14,6 +14,8 @@ from app.services.pdf_templates import (
     fill_pdf_template,
     validate_representative_pdf_variables,
 )
+from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.template_ocr import OcrLine, PdfOcrResult
 
 
 def _fillable_pdf() -> bytes:
@@ -623,6 +625,50 @@ Fee: $2,500.00
     assert "{{client_name}}" in analysis.body
 
 
+def test_upload_analysis_detects_common_application_label_values():
+    analysis = analyze_template_upload(
+        file_bytes=(
+            b"Applicant Name: Ada Lovelace\n"
+            b"Phone: (701) 555-0100\n"
+            b"Address: 123 Main Street\n"
+            b"City: Fargo\nState: ND\nZip Code: 58102\n"
+        ),
+        filename="client-application.txt",
+        content_type="text/plain",
+    )
+
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+    assert {
+        "client_name",
+        "client_phone",
+        "client_street",
+        "client_city",
+        "client_state",
+        "client_zip",
+    } <= set(fields)
+    assert fields["client_name"]["source_text"] == "Ada Lovelace"
+    assert "Applicant Name: {{client_name}}" in analysis.body
+
+
+def test_upload_analysis_turns_custom_labeled_values_into_reviewable_fields():
+    analysis = analyze_template_upload(
+        file_bytes=(
+            b"Emergency Contact: Grace Hopper\n"
+            b"Preferred Pronouns: she/her\n"
+            b"Internal Reference: NORTH-42\n"
+        ),
+        filename="custom-intake.txt",
+        content_type="text/plain",
+    )
+
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+    assert {"emergency_contact", "preferred_pronouns", "internal_reference"} <= set(
+        fields
+    )
+    assert fields["emergency_contact"]["source_text"] == "Grace Hopper"
+    assert "Emergency Contact: {{emergency_contact}}" in analysis.body
+
+
 def test_pdf_analysis_discovers_acroform_fields_without_losing_mapping():
     analysis = analyze_template_upload(
         file_bytes=_fillable_pdf(),
@@ -635,6 +681,263 @@ def test_pdf_analysis_discovers_acroform_fields_without_losing_mapping():
     assert fields["notes"]["multiline"] is True
     assert "{{client_name}}" in analysis.body
     assert analysis.format == "pdf"
+
+
+def test_static_application_pdf_discovers_and_renders_reviewed_overlay_fields():
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from app.utils.text_processing import extract_text_from_pdf
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.drawString(72, 720, "Applicant Name:")
+    pdf.drawString(72, 690, "Dear Ada Lovelace,")
+    pdf.drawString(72, 660, "Case No. CV-2026-42")
+    pdf.save()
+
+    analysis = analyze_template_upload(
+        file_bytes=output.getvalue(),
+        filename="client-application.pdf",
+        content_type="application/pdf",
+    )
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+
+    assert analysis.variable_schema["source"] == "pdf_text_overlay"
+    assert {"client_name", "case_number"} <= set(fields)
+    assert all(field.get("pdf_overlay") for field in fields.values())
+    assert all(field.get("pdf_source_key") for field in fields.values())
+    assert len(fields["client_name"]["pdf_overlays"]) == 2
+
+    rendered = fill_pdf_template(
+        output.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={
+            "client_name": "Grace Hopper",
+            "case_number": "CV-2027-9",
+        },
+    )
+    rendered_text = extract_text_from_pdf(rendered)
+    assert "Grace Hopper" in rendered_text
+    assert "CV-2027-9" in rendered_text
+    assert "Ada Lovelace" not in rendered_text
+    assert "CV-2026-42" not in rendered_text
+
+
+def test_image_only_pdf_uses_ocr_coordinates_and_renders_flattened_fields(
+    monkeypatch,
+):
+    from PIL import Image, ImageDraw
+    from pypdf import PdfReader
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    import app.services.template_intake as template_intake
+    from app.utils.text_processing import extract_text_from_pdf
+
+    image = Image.new("RGB", (1224, 1584), "white")
+    drawing = ImageDraw.Draw(image)
+    drawing.text((140, 180), "Applicant Name: Ada Lovelace", fill="black")
+    drawing.text((140, 260), "Case Number: CV-2026-42", fill="black")
+    source = BytesIO()
+    pdf = canvas.Canvas(source, pagesize=(612, 792))
+    pdf.drawImage(ImageReader(image), 0, 0, width=612, height=792)
+    pdf.save()
+
+    monkeypatch.setattr(
+        template_intake,
+        "ocr_pdf",
+        lambda _content: PdfOcrResult(
+            text="Applicant Name: Ada Lovelace\nCase Number: CV-2026-42",
+            lines=(
+                OcrLine(0, "Applicant Name: Ada Lovelace", 0.97, (70, 680, 310, 704)),
+                OcrLine(0, "Case Number: CV-2026-42", 0.95, (70, 638, 300, 662)),
+            ),
+            pages_analyzed=1,
+            pages_total=1,
+            average_confidence=0.96,
+            truncated=False,
+        ),
+    )
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="scanned-application.pdf",
+        content_type="application/pdf",
+    )
+    fields = {field["name"]: field for field in analysis.variable_schema["fields"]}
+
+    assert analysis.variable_schema["source"] == "pdf_ocr_overlay"
+    assert analysis.variable_schema["detection"]["method"] == "ocr"
+    assert {"client_name", "case_number"} <= set(fields)
+    assert fields["client_name"]["pdf_overlay"]["source_kind"] == "ocr"
+
+    rendered = fill_pdf_template(
+        source.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={"client_name": "Grace Hopper", "case_number": "CV-2027-9"},
+    )
+    rendered_text = extract_text_from_pdf(rendered)
+    assert "Grace Hopper" in rendered_text
+    assert "CV-2027-9" in rendered_text
+    assert len(PdfReader(BytesIO(rendered)).pages[0].images) == 1
+
+
+def test_reviewed_static_pdf_schema_keeps_server_discovered_placements():
+    import copy
+    import json
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.drawString(72, 720, "Applicant Name:")
+    pdf.drawString(72, 690, "Dear Ada Lovelace,")
+    pdf.save()
+    analysis = analyze_template_upload(
+        file_bytes=output.getvalue(),
+        filename="application.pdf",
+        content_type="application/pdf",
+    )
+    discovered = analysis.variable_schema
+    reviewed = copy.deepcopy(discovered)
+    reviewed["fields"][0]["name"] = "party_name"
+    reviewed["fields"][0]["pdf_overlays"][0]["rect"] = [0, 0, 500, 500]
+
+    validated = document_templates._reviewed_variable_schema(
+        json.dumps(reviewed), discovered
+    )
+
+    assert validated["fields"][0]["name"] == "party_name"
+    assert validated["fields"][0]["pdf_overlays"] == discovered["fields"][0][
+        "pdf_overlays"
+    ]
+    assert len(validated["fields"][0]["pdf_overlays"]) == 2
+
+
+def test_docx_source_render_preserves_structure_and_replaces_split_run_values():
+    from docx import Document
+
+    document = Document()
+    paragraph = document.add_paragraph("Dear ")
+    paragraph.add_run("Ada ").bold = True
+    paragraph.add_run("Lovelace,")
+    document.add_paragraph("Case No. CV-2026-42")
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Client: Ada Lovelace"
+    source = BytesIO()
+    document.save(source)
+
+    analysis = analyze_template_upload(
+        file_bytes=source.getvalue(),
+        filename="engagement-letter.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert analysis.variable_schema["source"] == "docx_source"
+
+    rendered = fill_docx_template(
+        source.getvalue(),
+        variable_schema=analysis.variable_schema,
+        variables={"client_name": "Ada Lovelace Jr.", "case_number": "CV-2027-9"},
+    )
+    reopened = Document(BytesIO(rendered))
+
+    assert reopened.paragraphs[0].text == "Dear Ada Lovelace Jr.,"
+    assert reopened.paragraphs[1].text == "Case No. CV-2027-9"
+    assert reopened.tables[0].cell(0, 0).text == "Client: Ada Lovelace Jr."
+    assert len(reopened.tables) == 1
+
+
+def test_docx_analysis_rejects_damaged_upload_with_actionable_error():
+    with pytest.raises(TemplateDocxError, match="damaged or could not be parsed"):
+        analyze_template_upload(
+            file_bytes=b"this is not an office package",
+            filename="damaged.docx",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_docx_intake_retains_source_and_binary_preview(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from docx import Document
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    document = Document()
+    paragraph = document.add_paragraph("Dear ")
+    paragraph.add_run("Ada ")
+    paragraph.add_run("Lovelace,")
+    source = BytesIO()
+    document.save(source)
+
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={
+            "file": (
+                "engagement.docx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["format"] == "docx"
+    assert payload["source_filename"] == "engagement.docx"
+    assert payload["source_sha256"]
+    assert payload["variable_schema"]["source"] == "docx_source"
+
+    preview = await client.post(
+        f"/api/templates/{payload['id']}/render-file",
+        json={"variables": {"client_name": "Grace Hopper"}},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    rendered = Document(BytesIO(preview.content))
+    assert rendered.paragraphs[0].text == "Dear Grace Hopper,"
+
+
+@pytest.mark.asyncio
+async def test_static_pdf_intake_creates_reviewable_overlay_template(
+    client, db_session, test_tenant, test_user, tmp_path, monkeypatch
+):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    monkeypatch.setattr(document_templates.settings, "UPLOAD_DIR", str(tmp_path))
+    await _grant_manage_documents(db_session, test_tenant, test_user)
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.drawString(72, 720, "Applicant Name:")
+    pdf.drawString(72, 690, "Dear Ada Lovelace,")
+    pdf.save()
+
+    created = await client.post(
+        "/api/templates/intake/create",
+        files={"file": ("application.pdf", output.getvalue(), "application/pdf")},
+    )
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    fields = payload["variable_schema"]["fields"]
+    assert {field["name"] for field in fields} == {"client_name"}
+    assert all(field.get("pdf_overlay") for field in fields)
+    assert len(fields[0]["pdf_overlays"]) == 2
+
+    preview = await client.post(
+        f"/api/templates/{payload['id']}/render-file",
+        json={
+            "variables": {"client_name": "Grace Hopper"},
+            "preview_purpose": "activation",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["content-type"].startswith("application/pdf")
+    assert preview.headers["x-clarity-preview-purpose"] == "activation"
 
 
 def test_pdf_discovery_and_fill_support_radio_choice_pairs_and_hierarchy():
@@ -1970,7 +2273,7 @@ async def test_pdf_intake_rejects_empty_non_form_and_active_documents(
     )
     assert analysis.status_code == 200
     assert any(
-        "no fillable AcroForm" in warning for warning in analysis.json()["warnings"]
+        "No reusable field locations" in warning for warning in analysis.json()["warnings"]
     )
     create = await client.post(
         "/api/templates/intake/create",
@@ -2034,7 +2337,7 @@ async def test_pdf_patch_revalidates_field_map_source_and_activation(
         f"/api/templates/{template_id}", json={"body": "{{phantom}}"}
     )
     assert phantom_body.status_code == 422
-    assert "without AcroForm mappings" in phantom_body.json()["detail"]
+    assert "without source mappings" in phantom_body.json()["detail"]
 
     blocked_activation = await client.patch(
         f"/api/templates/{template_id}", json={"is_active": True}
@@ -2152,7 +2455,7 @@ async def test_pdf_creation_rejects_unmapped_reviewed_body_and_json_shortcut(
         data={"reviewed_body": "Matter: {{phantom}}"},
     )
     assert phantom_body.status_code == 422
-    assert "without AcroForm mappings" in phantom_body.json()["detail"]
+    assert "without source mappings" in phantom_body.json()["detail"]
 
     shortcut = await client.post(
         "/api/templates",

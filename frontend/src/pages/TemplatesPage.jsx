@@ -206,15 +206,16 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
   const [category, setCategory] = useState(initial?.category || 'other')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
-  const isPdfTemplate = String(initial?.format || '').toLowerCase() === 'pdf'
+  const sourceFormat = String(initial?.format || '').toLowerCase()
+  const isSourceBackedTemplate = ['pdf', 'docx'].includes(sourceFormat) && Boolean(initial?.source_sha256)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!title.trim() || (!isPdfTemplate && !body.trim())) return
+    if (!title.trim() || (!isSourceBackedTemplate && !body.trim())) return
     setSaving(true)
     setError(null)
     try {
-      await onSubmit(isPdfTemplate
+      await onSubmit(isSourceBackedTemplate
         ? { title: title.trim(), category }
         : { title: title.trim(), body: body.trim(), category })
     } catch (err) {
@@ -262,11 +263,11 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
           ))}
         </select>
       </div>
-      {isPdfTemplate ? (
+      {isSourceBackedTemplate ? (
         <div role="note" className="rounded border border-brand-line bg-brand-bg px-3 py-2">
-          <p className="text-sm font-medium text-brand-ink">PDF layout and field mappings come from the source file.</p>
+          <p className="text-sm font-medium text-brand-ink">{sourceFormat.toUpperCase()} layout and field mappings come from the retained source file.</p>
           <p className="mt-1 text-xs text-brand-muted">
-            Rename or recategorize this template here. To replace its PDF or mappings, recreate it from Upload Sample and verify the new preview before activation.
+            Rename or recategorize this template here. To replace the document or its field map, upload the new source as a fresh draft and verify it before activation.
           </p>
         </div>
       ) : (
@@ -308,8 +309,8 @@ function TemplateForm({ initial, onSubmit, onCancel }) {
   )
 }
 
-const isPdfSourceMissing = (template) => (
-  String(template?.format || '').toLowerCase() === 'pdf'
+const isSourceBackedTemplateMissing = (template) => (
+  ['pdf', 'docx'].includes(String(template?.format || '').toLowerCase())
   && (!template?.source_filename || !template?.source_sha256)
 )
 
@@ -341,6 +342,10 @@ function UploadTemplateForm({ onCreated, onCancel }) {
   const [analyzing, setAnalyzing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const [analysisFileKey, setAnalysisFileKey] = useState('')
+  const analysisRequestRef = useRef(0)
+
+  const fileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : ''
 
   useEffect(() => () => {
     if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl)
@@ -353,10 +358,12 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     fields: reviewedFields(),
   })
 
-  const buildFormData = ({ includeCategory = false, includeReview = false } = {}) => {
+  const buildFormData = ({ includeCategory = false, includeReview = false, sourceFile = file } = {}) => {
     const form = new FormData()
-    form.append('file', file)
-    if (title.trim()) form.append('title', title.trim())
+    form.append('file', sourceFile)
+    // A newly selected File is analyzed before React commits its reset state.
+    // Never carry the previous document's title into that request.
+    if (sourceFile === file && title.trim()) form.append('title', title.trim())
     if (includeCategory) form.append('category', category)
     if (includeReview) {
       if (draftBody.trim()) form.append('reviewed_body', draftBody)
@@ -365,41 +372,49 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     return form
   }
 
-  const handleAnalyze = async () => {
-    if (!file) {
+  const handleAnalyze = async (selectedFile = file) => {
+    if (!selectedFile) {
       setError('Choose a DOCX, PDF, or TXT sample first.')
       return
     }
+    const requestId = analysisRequestRef.current + 1
+    analysisRequestRef.current = requestId
+    const requestedFileKey = `${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}`
+    const shouldUseSuggestedTitle = selectedFile !== file || !title.trim()
     setAnalyzing(true)
     setError(null)
     try {
-      const form = buildFormData()
+      const form = buildFormData({ sourceFile: selectedFile })
       const result = await analyzeTemplateUpload(form)
+      if (analysisRequestRef.current !== requestId) return
       setAnalysis(result)
+      setAnalysisFileKey(requestedFileKey)
       setDraftBody(result.body || result.extracted_text || '')
       setMappedFields((result.suggested_variable_schema?.fields || []).map((field) => ({ ...field, _bodyName: field.name })))
       setSourcePreviewUrl(
         String(result.format || '').toLowerCase() === 'pdf'
-          ? URL.createObjectURL(file)
+          ? URL.createObjectURL(selectedFile)
           : '',
       )
-      if (!title.trim()) setTitle(result.title || '')
+      if (shouldUseSuggestedTitle) setTitle(result.title || '')
     } catch (err) {
+      if (analysisRequestRef.current !== requestId) return
       setSourcePreviewUrl('')
+      setAnalysisFileKey('')
       setError(getErrorMessage(err, 'Could not analyze that sample.'))
     } finally {
-      setAnalyzing(false)
+      if (analysisRequestRef.current === requestId) setAnalyzing(false)
     }
   }
 
   const handleCreate = async () => {
-    if (!file || !analysis) {
+    if (!file || !analysis || analysisFileKey !== fileKey) {
       setError('Analyze the sample and review the extracted text and fields before creating the template.')
       return
     }
     const isPdfUpload = String(analysis.format || '').toLowerCase() === 'pdf'
-    if (isPdfUpload && !mappedFields.some((field) => field?.pdf_field_name)) {
-      setError('This PDF has no fillable form fields. Make the source PDF fillable, then upload and analyze it again.')
+    if (isPdfUpload && !mappedFields.some((field) => field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length)) {
+      setError('No reusable details were located confidently. Try a clearer source or add visible labels next to the values that should change.')
       return
     }
     if (!title.trim() || (!isPdfUpload && !draftBody.trim())) {
@@ -410,28 +425,24 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       setError('Every included field needs a valid variable name.')
       return
     }
+    const reviewedNames = new Set(mappedFields.map((field) => field.name))
+    const bodyNames = [...String(draftBody || '').matchAll(/\{\{\s*([a-zA-Z][a-zA-Z0-9_.-]*)\s*\}\}/g)].map((match) => match[1])
+    const unmappedBodyNames = bodyNames.filter((name) => !reviewedNames.has(name))
+    if (unmappedBodyNames.length > 0) {
+      setError(`Map every placeholder before creating this source-backed template. Missing: ${[...new Set(unmappedBodyNames)].join(', ')}.`)
+      return
+    }
+    if (String(analysis.format || '').toLowerCase() === 'docx' && mappedFields.some((field) => !String(field.source_text || field.example || '').trim())) {
+      setError('Every Word field needs the exact text it replaces in the source document.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      if (isPdfUpload) {
-        // The source PDF must go through the multipart endpoint so the server
-        // can retain the original bytes and its form/layout metadata.
-        await createTemplateFromUpload(buildFormData({ includeCategory: true, includeReview: true }))
-      } else {
-        await createTemplate({
-          title: title.trim(),
-          body: draftBody,
-          category,
-          status: 'draft',
-          format: analysis.format || 'markdown',
-          variable_schema: {
-            ...(analysis.suggested_variable_schema || {}),
-            fields: reviewedFields(),
-          },
-          branding_profile: analysis.detected_branding_profile || {},
-          description: `Draft created from reviewed upload: ${file.name}`,
-        })
-      }
+      // Every uploaded template uses the same source-backed lifecycle. This
+      // keeps Word formatting intact and binds the reviewed analysis to the
+      // exact bytes that are persisted by the server.
+      await createTemplateFromUpload(buildFormData({ includeCategory: true, includeReview: true }))
       onCreated()
     } catch (err) {
       setError(getErrorMessage(err, 'Could not create template from upload.'))
@@ -442,8 +453,9 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
   const fields = mappedFields
   const branding = analysis?.detected_branding_profile || {}
+  const detection = analysis?.suggested_variable_schema?.detection || {}
   const isPdfAnalysis = String(analysis?.format || '').toLowerCase() === 'pdf'
-  const hasPdfMappings = fields.some((field) => field?.pdf_field_name)
+  const hasPdfMappings = fields.some((field) => field?.pdf_field_name || field?.pdf_overlay || field?.pdf_overlays?.length)
 
   const renameField = (index, rawName) => {
     const nextName = normalizeVariableName(rawName)
@@ -457,6 +469,54 @@ function UploadTemplateForm({ onCreated, onCancel }) {
     if (previousBodyName && nextName) setDraftBody((current) => replaceTemplateVariable(current, previousBodyName, nextName))
   }
 
+  const addManualField = () => {
+    const existing = new Set(fields.map((field) => field.name))
+    let suffix = fields.length + 1
+    while (existing.has(`field_${suffix}`)) suffix += 1
+    setMappedFields((current) => [
+      ...current,
+      {
+        name: `field_${suffix}`,
+        label: 'New replacement field',
+        source_text: '',
+        confidence: 1,
+        review_required: true,
+        _bodyName: `field_${suffix}`,
+      },
+    ])
+  }
+
+  const updateSourceText = (index, sourceText) => {
+    setMappedFields((current) => current.map((field, fieldIndex) => (
+      fieldIndex === index ? { ...field, source_text: sourceText, example: sourceText } : field
+    )))
+  }
+
+  const applySourceText = (index) => {
+    const field = fields[index]
+    const sourceText = String(field?.source_text || '').trim()
+    if (!sourceText || !field?.name) return
+    if (!draftBody.includes(sourceText) && !draftBody.includes(`{{${field.name}}}`)) {
+      setError(`“${sourceText}” was not found in the extracted document text.`)
+      return
+    }
+    setDraftBody((current) => current.split(sourceText).join(`{{${field.name}}}`))
+    setError(null)
+  }
+
+  const removeField = (index) => {
+    const field = fields[index]
+    const sourceText = field?.source_text || field?.example || ''
+    if (field?.name && sourceText) {
+      const escaped = field.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      setDraftBody((current) => String(current || '').replace(
+        new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, 'g'),
+        sourceText,
+      ))
+    }
+    setMappedFields((current) => current.filter((_, fieldIndex) => fieldIndex !== index))
+  }
+
   return (
     <div className="space-y-4">
       {error && (
@@ -464,6 +524,19 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           {error}
         </div>
       )}
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Template setup progress">
+        {[
+          ['1', 'Choose source', file ? 'Complete' : 'Current'],
+          ['2', 'Review fields', analysisFileKey === fileKey && analysis ? 'Complete' : file ? 'Current' : 'Next'],
+          ['3', 'Create draft', analysisFileKey === fileKey && analysis ? 'Current' : 'Next'],
+        ].map(([step, label, state]) => (
+          <div key={step} className={`rounded border px-3 py-2 ${state === 'Current' ? 'border-brand-accent bg-brand-accent/10' : 'border-brand-line bg-brand-bg'}`}>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-muted">Step {step} · {state}</p>
+            <p className="mt-0.5 text-sm font-medium text-brand-ink">{label}</p>
+          </div>
+        ))}
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-4">
         <div>
@@ -474,21 +547,33 @@ function UploadTemplateForm({ onCreated, onCancel }) {
             id="template-sample-file"
             type="file"
             aria-describedby="template-sample-guidance"
-            disabled={analyzing || saving}
+            disabled={saving}
             accept=".docx,.pdf,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
             onChange={(e) => {
-              setFile(e.target.files?.[0] || null)
+              const selectedFile = e.target.files?.[0] || null
+              analysisRequestRef.current += 1
+              setFile(selectedFile)
+              setTitle('')
               setAnalysis(null)
+              setAnalysisFileKey('')
               setDraftBody('')
               setMappedFields([])
               setSourcePreviewUrl('')
+              setAnalyzing(false)
+              setError(null)
+              if (selectedFile) void handleAnalyze(selectedFile)
             }}
             className="block w-full text-sm text-brand-ink file:mr-3 file:px-3 file:py-2 file:rounded file:border file:border-brand-line file:bg-brand-bg file:text-brand-ink file:text-xs file:font-semibold"
           />
           <p id="template-sample-guidance" className="mt-2 text-xs text-brand-muted">
-            <span className="font-semibold text-brand-ink">PDF requirement:</span>{' '}
-            PDFs must already contain fillable AcroForm fields. Static PDFs and scans cannot be used for generation until fillable fields are added in a PDF editor. DOCX and TXT samples are imported as reviewed text templates.
+            Upload the document your team already reuses. We automatically read Word files, ordinary PDFs, fillable PDFs, and image-only scans while preserving the original design.
           </p>
+          {file && (
+            <p className="mt-2 text-xs font-medium text-brand-accent-2" role="status">
+              Current source: {file.name} ({Math.max(1, Math.round(file.size / 1024))} KB)
+              {analysisFileKey === fileKey ? ' · ready to review' : analyzing ? ' · reading now' : ' · waiting to be read'}
+            </p>
+          )}
         </div>
         <div>
           <label htmlFor="templatespage-category" className="block text-sm font-medium text-brand-ink mb-1">
@@ -522,12 +607,12 @@ function UploadTemplateForm({ onCreated, onCancel }) {
       <div className="flex flex-col sm:flex-row gap-3">
         <button
           type="button"
-          onClick={handleAnalyze}
+          onClick={() => handleAnalyze()}
           disabled={analyzing || !file}
           className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-brand-ink border border-brand-line rounded hover:bg-brand-bg disabled:opacity-50"
         >
           <Wand2 size={16} />
-          {analyzing ? 'Analyzing...' : 'Analyze sample'}
+          {analyzing ? 'Reading document and finding reusable details...' : analysis ? 'Scan again' : 'Find reusable details'}
         </button>
         <button
           type="button"
@@ -536,7 +621,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
           className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
         >
           <Upload size={16} />
-          {saving ? 'Creating...' : analysis ? 'Create reviewed template' : 'Analyze before creating'}
+          {saving ? 'Creating...' : analysis ? 'Save reusable template' : 'Reading document first'}
         </button>
         <button
           type="button"
@@ -549,29 +634,46 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
       {analysis && (
         <div className="space-y-4 pt-2">
+          <div className={`rounded border p-4 ${fields.length ? 'border-brand-green/30 bg-brand-green/10' : 'border-brand-amber/40 bg-brand-amber/10'}`} role="status">
+            <p className="text-base font-semibold text-brand-ink">
+              {fields.length
+                ? `${fields.length} reusable detail${fields.length === 1 ? '' : 's'} found`
+                : 'We read the document but need a little help'}
+            </p>
+            <p className="mt-1 text-sm text-brand-muted">
+              {fields.length
+                ? `Read using ${detection.label || 'document structure'}. We’ll ask for these details whenever someone uses this template.`
+                : 'Try a clearer copy, or add a replacement field below. Nothing has been saved yet.'}
+            </p>
+            {detection.pages_analyzed && (
+              <p className="mt-2 text-xs text-brand-muted">
+                Pages checked: {detection.pages_analyzed}{detection.pages_total ? ` of ${detection.pages_total}` : ''}
+              </p>
+            )}
+          </div>
           {isPdfAnalysis && (
             <div className="border border-brand-green/30 rounded bg-brand-green/10 p-4 text-sm text-brand-ink">
               <p className="font-semibold">Original PDF design preserved</p>
-              <p className="mt-1 text-brand-muted">The source PDF remains the rendering canvas. Field mappings fill its PDF form controls; extracted text is used only for search and smart-fill context.</p>
+              <p className="mt-1 text-brand-muted">The source PDF remains the visual design. Existing controls, ordinary page text, and scanned pages all become reusable through reviewed field placements.</p>
             </div>
           )}
           {isPdfAnalysis && !hasPdfMappings && (
             <div role="alert" className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4 text-sm text-brand-ink">
-              <p className="font-semibold">No fillable PDF form fields detected</p>
-              <p className="mt-1 text-brand-muted">This sample cannot be created as a generation template. Make the source PDF fillable with AcroForm fields, then upload and analyze it again.</p>
+              <p className="font-semibold">No reusable details located confidently</p>
+              <p className="mt-1 text-brand-muted">Try a clearer copy or add visible labels next to the details that change. Image-only scans are read automatically.</p>
             </div>
           )}
           {String(analysis.format || '').toLowerCase() === 'docx' && (
             <div role="alert" className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4 text-sm text-brand-ink">
-              <p className="font-semibold">Text-extraction template</p>
-              <p className="mt-1 text-brand-muted">DOCX samples are currently imported as reviewed text. Review the extracted Markdown below before creating this draft.</p>
+              <p className="font-semibold">Original Word document preserved</p>
+              <p className="mt-1 text-brand-muted">The generated file remains a DOCX with the source layout, tables, headers, and footers. Review the detected replacement values below.</p>
             </div>
           )}
           {isPdfAnalysis && sourcePreviewUrl && (
             <div className="border border-brand-line rounded bg-brand-bg p-4">
               <div className="mb-3">
-                <p className="text-sm font-semibold text-brand-ink">Validated source PDF</p>
-                <p className="mt-1 text-xs text-brand-muted">Inspect the page layout while reviewing the detected field map below. This preview appears only after the server accepts the PDF as safe to process.</p>
+                <p className="text-sm font-semibold text-brand-ink">Original document preview</p>
+                <p className="mt-1 text-xs text-brand-muted">Compare the original page with the reusable details found below.</p>
               </div>
               <object
                 title={`Source PDF preview: ${file?.name || analysis.title}`}
@@ -592,13 +694,13 @@ function UploadTemplateForm({ onCreated, onCancel }) {
               </div>
               <span className="text-xs text-brand-muted">{fields.length} field{fields.length === 1 ? '' : 's'}</span>
             </div>
-            <label htmlFor="reviewed-template-body" className="block text-xs font-semibold text-brand-muted mb-2">{isPdfAnalysis ? 'Smart-fill/search text (does not alter page design)' : 'Extracted template body'}</label>
+            <label htmlFor="reviewed-template-body" className="block text-xs font-semibold text-brand-muted mb-2">{isPdfAnalysis ? 'Text found in the document (the page design is unchanged)' : 'Extracted template body'}</label>
             <textarea id="reviewed-template-body" value={draftBody} readOnly={isPdfAnalysis} onChange={(event) => setDraftBody(event.target.value)} rows={18} className="w-full rounded border border-brand-line bg-brand-surface-2 p-3 font-mono text-xs text-brand-ink read-only:opacity-75" />
           </div>
 
           <div className="space-y-3">
             <div className="border border-brand-line rounded bg-brand-bg p-4">
-              <p className="text-sm font-semibold text-brand-ink mb-2">Detected fields</p>
+              <p className="text-sm font-semibold text-brand-ink mb-2">Details we’ll ask for</p>
               {fields.length > 0 ? (
                 <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
                   {fields.map((field, index) => {
@@ -609,10 +711,21 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                     )).filter(Boolean)
                     return (
                       <div key={`${index}-${field.name}`} className="rounded border border-brand-line bg-brand-surface-2 p-3 text-xs">
-                        <label htmlFor={`mapped-field-${index}`} className="block text-brand-muted mb-1">{field.label || `Field ${index + 1}`}</label>
-                        <input id={`mapped-field-${index}`} value={field.name || ''} onChange={(event) => renameField(index, event.target.value)} className="w-full rounded border border-brand-line bg-brand-bg px-2 py-1.5 font-mono text-brand-ink" />
-                        {field.pdf_field_name && <p className="mt-1 font-mono text-brand-accent-2">PDF field: {field.pdf_field_name}</p>}
-                        {field.pdf_field_name && (
+                        <p className="font-semibold text-brand-ink">{field.label || `Detail ${index + 1}`}</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <span className={`rounded border px-2 py-0.5 ${Number(field.confidence || 0) >= 0.75 ? 'border-brand-green/30 bg-brand-green/10 text-brand-ink' : 'border-brand-amber/40 bg-brand-amber/10 text-brand-ink'}`}>
+                            {Number(field.confidence || 0) >= 0.75 ? 'Strong match' : 'Please verify'}
+                          </span>
+                          {(field.pdf_overlay?.source_kind === 'ocr' || field.pdf_overlays?.some((item) => item?.source_kind === 'ocr')) && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Read from scan</span>}
+                        </div>
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-brand-muted">Advanced field settings</summary>
+                          <label htmlFor={`mapped-field-${index}`} className="mt-2 block text-brand-muted">Automation key</label>
+                          <input id={`mapped-field-${index}`} value={field.name || ''} onChange={(event) => renameField(index, event.target.value)} className="mt-1 w-full rounded border border-brand-line bg-brand-bg px-2 py-1.5 font-mono text-brand-ink" />
+                        </details>
+                        {field.pdf_field_name && <p className="mt-1 font-mono text-brand-accent-2">PDF control: {field.pdf_field_name}</p>}
+                        {(field.pdf_overlay || field.pdf_overlays?.length) && <p className="mt-1 font-mono text-brand-accent-2">Detected PDF location · {field.pdf_overlays?.length > 1 ? `${field.pdf_overlays.length} placements` : `Page ${field.page}`}</p>}
+                        {(field.pdf_field_name || field.pdf_overlay || field.pdf_overlays?.length) && (
                           <div className="mt-2 flex flex-wrap gap-1.5" aria-label={`PDF metadata for ${field.label || field.name}`}>
                             <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 capitalize text-brand-muted">{field.field_type || 'text'}</span>
                             {field.page && <span className="rounded border border-brand-line bg-brand-bg px-2 py-0.5 text-brand-muted">Page {field.page}</span>}
@@ -621,13 +734,28 @@ function UploadTemplateForm({ onCreated, onCancel }) {
                           </div>
                         )}
                         {optionLabels.length > 0 && <p className="mt-2 text-brand-muted break-words"><span className="font-semibold text-brand-ink">Options:</span> {optionLabels.join(', ')}</p>}
-                        {(field.example || field.source_path) && <p className="mt-1 text-brand-muted break-words">{field.example || field.source_path}</p>}
+                        {(field.example || field.source_text || field.source_path) && <p className="mt-1 text-brand-muted break-words"><span className="font-semibold text-brand-ink">Replaces:</span> {field.example || field.source_text || field.source_path}</p>}
+                        {!isPdfAnalysis && (
+                          <div className="mt-2 space-y-1.5">
+                            <label htmlFor={`source-text-${index}`} className="block text-brand-muted">Exact text in the source</label>
+                            <div className="flex gap-1.5">
+                              <input id={`source-text-${index}`} value={field.source_text || field.example || ''} onChange={(event) => updateSourceText(index, event.target.value)} className="min-w-0 flex-1 rounded border border-brand-line bg-brand-bg px-2 py-1.5 text-brand-ink" />
+                              <button type="button" onClick={() => applySourceText(index)} className="rounded border border-brand-line px-2 py-1 text-brand-ink hover:bg-brand-bg">Mark</button>
+                              <button type="button" onClick={() => removeField(index)} aria-label={`Remove ${field.label || field.name}`} className="rounded border border-brand-line px-2 py-1 text-brand-rose hover:bg-brand-bg"><Trash2 size={13} /></button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
                 </div>
               ) : (
                 <p className="text-xs text-brand-muted">No fields detected yet.</p>
+              )}
+              {!isPdfAnalysis && (
+                <button type="button" onClick={addManualField} className="mt-3 inline-flex items-center gap-1.5 rounded border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-surface-2">
+                  <Plus size={13} /> Add replacement field
+                </button>
               )}
             </div>
 
@@ -642,7 +770,7 @@ function UploadTemplateForm({ onCreated, onCancel }) {
 
             {analysis.warnings?.length > 0 && (
               <div className="border border-brand-amber/40 rounded bg-brand-amber/10 p-4">
-                <p className="text-sm font-semibold text-brand-ink mb-2">Review notes</p>
+                <p className="text-sm font-semibold text-brand-ink mb-2">Things to check</p>
                 <ul className="space-y-1">
                   {analysis.warnings.map((warning) => (
                     <li key={warning} className="text-xs text-brand-muted">{warning}</li>
@@ -761,6 +889,8 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
       .map((field) => [field.name, field]),
   ), [template])
   const isPdfTemplate = String(template?.format || '').toLowerCase() === 'pdf'
+  const isDocxTemplate = String(template?.format || '').toLowerCase() === 'docx' && Boolean(template?.source_sha256)
+  const isFileTemplate = isPdfTemplate || isDocxTemplate
   const canSaveToMatter = Boolean(template?.is_active)
   const fillableNames = useMemo(
     () => names.filter((name) => fieldDefinitions[name]?.field_type !== 'signature'),
@@ -930,18 +1060,18 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           ? { preview_purpose: pdfPurpose }
           : {}),
       }
-      if (isPdfTemplate) {
+      if (isFileTemplate) {
         const result = await renderTemplateFile(template.id, payload)
         const nextUrl = URL.createObjectURL(result.blob)
         if (previewRequestGenerationRef.current !== requestGeneration) {
           URL.revokeObjectURL(nextUrl)
           return
         }
-        if (!result.previewId) {
+        if (isPdfTemplate && !result.previewId) {
           URL.revokeObjectURL(nextUrl)
           throw new Error('The server did not return PDF preview evidence. Preview again before saving or activating.')
         }
-        if (result.previewPurpose !== pdfPurpose) {
+        if (isPdfTemplate && result.previewPurpose !== pdfPurpose) {
           URL.revokeObjectURL(nextUrl)
           throw new Error('The server returned preview evidence for a different review purpose. Preview again.')
         }
@@ -950,7 +1080,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
         setPreviewId(result.previewId)
         setPreviewPurpose(result.previewPurpose)
         setOutputFilename(result.filename)
-        setOutputFormat('pdf')
+        setOutputFormat(isPdfTemplate ? 'pdf' : 'docx')
         setRendered(null)
       } else {
         const res = await renderTemplate(template.id, payload)
@@ -984,6 +1114,10 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
     }
     if (isPdfTemplate && !previewId) {
       setError('Preview the exact current PDF values for this matter before saving.')
+      return
+    }
+    if (isDocxTemplate && !filePreview) {
+      setError('Download and review the current Word preview before saving it to the matter.')
       return
     }
     if (smartFillState === 'loading') {
@@ -1037,7 +1171,7 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
   }
 
   return (
-    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
+    <Modal title={`${canSaveToMatter ? (isPdfTemplate ? 'Generate PDF' : isDocxTemplate ? 'Generate Word Document' : 'Generate Document') : 'Preview Draft'}: ${template.title}`} onClose={handleClose}>
       <div className="space-y-4">
         {error && (
           <div className="text-sm text-brand-rose bg-brand-rose/10 border border-brand-rose/30 px-3 py-2">
@@ -1244,11 +1378,13 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           )}
           <button
             onClick={handleSave}
-            disabled={saving || smartFillState === 'loading' || saved || !matterId.trim() || !canSaveToMatter || (isPdfTemplate && !previewId)}
+            disabled={saving || smartFillState === 'loading' || saved || !matterId.trim() || !canSaveToMatter || (isPdfTemplate && !previewId) || (isDocxTemplate && !filePreview)}
             title={!canSaveToMatter
               ? 'Activate this verified template before saving to a matter'
               : (isPdfTemplate && !previewId)
                 ? 'Preview the exact current PDF values before saving'
+                : (isDocxTemplate && !filePreview)
+                  ? 'Download and review the current Word preview before saving'
                 : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-accent hover:opacity-90 rounded disabled:opacity-50"
           >
@@ -1281,27 +1417,35 @@ function RenderModal({ template, matters, matterLoading, onClose }) {
           </div>
         )}
 
-        {filePreviewUrl && filePreview && (
+        {filePreview && (
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h3 className="text-sm font-medium text-brand-ink">PDF Preview</h3>
+                <h3 className="text-sm font-medium text-brand-ink">{isPdfTemplate ? 'PDF Preview' : 'Generated Word Preview'}</h3>
                 <p className="text-xs text-brand-muted">{filePreview.filename}</p>
               </div>
               <button type="button" onClick={() => triggerBlobDownload(filePreview.blob, filePreview.filename)} className="inline-flex items-center gap-1.5 rounded border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-surface-2">
                 <Download size={14} /> Download preview
               </button>
             </div>
-            <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
-              <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
-            </object>
-            <p className="mt-2 text-xs font-medium text-brand-green" role="status">
-              {previewPurpose === 'generation'
-                ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
-                : previewPurpose === 'activation'
-                  ? 'Representative activation preview recorded. Inspect every page, then activate this unchanged template.'
-                  : 'Draft preview only. This is diagnostic and does not record activation evidence. Use Record activation preview after every field has a representative value.'}
-            </p>
+            {isPdfTemplate ? (
+              <>
+                <object title={`Preview of ${template.title}`} data={filePreviewUrl} type="application/pdf" className="h-[65vh] min-h-[480px] w-full rounded border border-brand-line bg-white">
+                  <p className="p-4 text-sm text-brand-muted">This browser cannot display the PDF inline. Use Download preview instead.</p>
+                </object>
+                <p className="mt-2 text-xs font-medium text-brand-green" role="status">
+                  {previewPurpose === 'generation'
+                    ? 'These exact values and this matter are previewed. Inspect every page, then save without changing the fields.'
+                    : previewPurpose === 'activation'
+                      ? 'Representative activation preview recorded. Inspect every page, then activate this unchanged template.'
+                      : 'Draft preview only. This is diagnostic and does not record activation evidence. Use Record activation preview after every field has a representative value.'}
+                </p>
+              </>
+            ) : (
+              <div className="rounded border border-brand-green/30 bg-brand-green/10 px-4 py-3 text-sm text-brand-ink">
+                Word formatting was preserved. Download and open this generated DOCX to inspect its exact pagination, tables, headers, and footers.
+              </div>
+            )}
           </div>
         )}
 
@@ -1414,7 +1558,7 @@ export default function TemplatesPage() {
     return text.length > 100 ? `${text.slice(0, 100)}...` : text
   }
 
-  const activeGenerationTemplates = templates.filter((tpl) => tpl.is_active && !isPdfSourceMissing(tpl))
+  const activeGenerationTemplates = templates.filter((tpl) => tpl.is_active && !isSourceBackedTemplateMissing(tpl))
   const activeTemplateCount = templates.filter((tpl) => tpl.is_active).length
   const variableCount = templates.reduce((sum, tpl) => sum + getTemplateVariables(tpl).length, 0)
   const selectedTemplate = activeGenerationTemplates[0] || null
@@ -1438,7 +1582,7 @@ export default function TemplatesPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {templates.map((tpl) => {
           const vars = getTemplateVariables(tpl)
-          const sourceMissing = isPdfSourceMissing(tpl)
+          const sourceMissing = isSourceBackedTemplateMissing(tpl)
           return (
             <div
               key={tpl.id}
@@ -1464,7 +1608,7 @@ export default function TemplatesPage() {
                 {sourceMissing && (
                   <div role="alert" className="mb-3 border border-brand-amber/40 rounded bg-brand-amber/10 px-3 py-2">
                     <p className="text-xs font-semibold text-brand-ink">Source missing — recreate this PDF template</p>
-                    <p className="mt-0.5 text-[11px] text-brand-muted">This older record cannot generate documents. Create a replacement from the original fillable PDF, verify it, then remove this record.</p>
+                    <p className="mt-0.5 text-[11px] text-brand-muted">This older record cannot generate documents. Upload the original Word or PDF file again; ordinary PDFs and scans are supported.</p>
                     <button
                       type="button"
                       onClick={() => setShowUpload(true)}
@@ -1486,7 +1630,7 @@ export default function TemplatesPage() {
                   <button
                     onClick={() => toggleActive(tpl)}
                     disabled={sourceMissing}
-                    title={sourceMissing ? 'Recreate the template from its original PDF before activating it' : undefined}
+                    title={sourceMissing ? 'Recreate the template from its original source document before activating it' : undefined}
                     className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                       tpl.is_active ? 'bg-brand-green' : 'bg-brand-muted/30'
                     }`}
@@ -1515,7 +1659,7 @@ export default function TemplatesPage() {
                     onClick={() => setRenderTarget(tpl)}
                     disabled={sourceMissing}
                     title={sourceMissing
-                      ? 'Recreate the template from its original PDF before previewing it'
+                      ? 'Recreate the template from its original source document before previewing it'
                       : (tpl.is_active ? 'Generate a document' : 'Preview this draft; activate it before saving to a matter')}
                     className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-muted hover:text-brand-ink border border-brand-line rounded disabled:opacity-40 disabled:cursor-not-allowed"
                   >
@@ -1550,8 +1694,8 @@ export default function TemplatesPage() {
           </div>
           <button
             onClick={() => selectedTemplate && setRenderTarget(selectedTemplate)}
-            disabled={!selectedTemplate || isPdfSourceMissing(selectedTemplate)}
-            title={isPdfSourceMissing(selectedTemplate) ? 'Re-upload the source PDF before generating' : undefined}
+            disabled={!selectedTemplate || isSourceBackedTemplateMissing(selectedTemplate)}
+            title={isSourceBackedTemplateMissing(selectedTemplate) ? 'Re-upload the source document before generating' : undefined}
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm text-white bg-brand-ink hover:bg-brand-ink-2 rounded disabled:opacity-50"
           >
             <Sparkles size={16} />
@@ -1591,19 +1735,19 @@ export default function TemplatesPage() {
       </div>
 
       <div className="bg-brand-surface-2 border border-brand-line rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-brand-ink">PDF template checklist</h3>
+        <h3 className="text-sm font-semibold text-brand-ink">Reliable template workflow</h3>
         <div className="mt-4 space-y-3">
           <div className="flex gap-3">
             <Check size={16} className="text-brand-green shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">Start with a standard fillable AcroForm PDF, not a static page or scanned image.</p>
+            <p className="text-sm text-brand-muted">Upload the Word or PDF document your team already uses. Text PDFs and scans are read automatically, and the original source is retained.</p>
           </div>
           <div className="flex gap-3">
             <Eye size={16} className="text-brand-amber shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">Preview every page with representative values before activating the template.</p>
+            <p className="text-sm text-brand-muted">Review detected replacement values, then preview with realistic matter data before activation.</p>
           </div>
           <div className="flex gap-3">
             <Download size={16} className="text-brand-muted shrink-0 mt-0.5" />
-            <p className="text-sm text-brand-muted">After saving to a matter, download and reopen the final PDF before sending or signing.</p>
+            <p className="text-sm text-brand-muted">Generated documents keep their source format: DOCX stays editable; final PDFs are flattened.</p>
           </div>
         </div>
       </div>

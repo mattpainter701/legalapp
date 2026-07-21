@@ -246,6 +246,7 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     assert len(csp_lines) == 2
     assert csp_lines[0] == csp_lines[1]
     assert "object-src 'self' blob:" in csp_lines[0]
+    assert "frame-src 'self' blob:" in csp_lines[0]
     assert "script-src 'self';" in csp_lines[0]
     assert "'unsafe-eval'" not in csp_lines[0]
     assert nginx.count("location ~ ^/(privacy|terms)/?$ {") == 2

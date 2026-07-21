@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -369,6 +370,263 @@ def discover_pdf_fields(content: bytes) -> list[dict[str, Any]]:
     return discovered
 
 
+_LABEL_BLANK_PATTERN = re.compile(
+    r"^\s*([A-Za-z][A-Za-z0-9 /&.'()-]{1,48})\s*:\s*$"
+)
+_LABEL_BLANK_ALIASES = {
+    "name": "client_name",
+    "full_name": "client_name",
+    "client": "client_name",
+    "client_name": "client_name",
+    "applicant": "client_name",
+    "applicant_name": "client_name",
+    "email": "client_email",
+    "email_address": "client_email",
+    "phone": "client_phone",
+    "phone_number": "client_phone",
+    "telephone": "client_phone",
+    "address": "client_street",
+    "street": "client_street",
+    "street_address": "client_street",
+    "city": "client_city",
+    "state": "client_state",
+    "zip": "client_zip",
+    "zip_code": "client_zip",
+    "postal_code": "client_zip",
+    "country": "client_country",
+}
+
+
+def discover_pdf_overlay_fields(
+    content: bytes,
+    candidates: list[dict[str, Any]],
+    *,
+    fragments: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Locate reusable text values and labeled blanks in an ordinary PDF.
+
+    These are deliberately conservative, review-required virtual fields.  The
+    source coordinates are immutable server-discovered metadata, not arbitrary
+    client-provided drawing instructions.
+    """
+
+    from reportlab.pdfbase import pdfmetrics
+
+    reader = _open_pdf(content)
+    located_fragments: list[dict[str, Any]] = []
+    if fragments is not None:
+        for fragment in fragments:
+            if not isinstance(fragment, dict):
+                continue
+            try:
+                page_index = int(fragment.get("page_index"))
+                if page_index < 0 or page_index >= len(reader.pages):
+                    continue
+                located_fragments.append(
+                    {
+                        **fragment,
+                        "page_index": page_index,
+                        "text": str(fragment.get("text") or ""),
+                        "x": float(fragment.get("x") or 0),
+                        "y": float(fragment.get("y") or 0),
+                        "font_size": max(
+                            6.0, min(24.0, float(fragment.get("font_size") or 11))
+                        ),
+                    }
+                )
+            except (TypeError, ValueError):
+                continue
+    else:
+        for page_index, page in enumerate(reader.pages):
+            if int(page.get("/Rotate", 0) or 0) % 360:
+                continue
+
+            def visitor(text, cm, tm, _font, font_size, *, _page=page_index):
+                value = str(text or "").rstrip("\r\n")
+                if not value.strip():
+                    return
+                try:
+                    x = float(cm[0]) * float(tm[4]) + float(cm[2]) * float(tm[5]) + float(cm[4])
+                    y = float(cm[1]) * float(tm[4]) + float(cm[3]) * float(tm[5]) + float(cm[5])
+                    size = max(6.0, min(24.0, float(font_size or 11)))
+                except (TypeError, ValueError, IndexError):
+                    return
+                located_fragments.append(
+                    {
+                        "page_index": _page,
+                        "text": value,
+                        "x": x,
+                        "y": y,
+                        "font_size": size,
+                        "source_kind": "text",
+                    }
+                )
+
+            try:
+                page.extract_text(visitor_text=visitor)
+            except Exception as exc:
+                raise TemplatePdfError(
+                    "The PDF text positions could not be analyzed safely."
+                ) from exc
+
+    def width(value: str, size: float) -> float:
+        try:
+            return float(pdfmetrics.stringWidth(value, "Helvetica", size))
+        except Exception:
+            return max(1.0, len(value) * size * 0.52)
+
+    def fragment_width(fragment: dict[str, Any], value: str) -> float:
+        measured = width(value, float(fragment["font_size"]))
+        text_width = fragment.get("text_width")
+        if text_width is None:
+            return measured
+        full_width = width(str(fragment["text"]), float(fragment["font_size"]))
+        if full_width <= 0:
+            return measured
+        return measured * float(text_width) / full_width
+
+    discovered: list[dict[str, Any]] = []
+    occupied: set[tuple[int, int, int]] = set()
+
+    def add_field(
+        *,
+        name: str,
+        label: str,
+        fragment: dict[str, Any],
+        start: int,
+        source_text: str,
+        confidence: float,
+        erase_source: bool,
+        source_path: str | None = None,
+        example: str | None = None,
+    ) -> None:
+        normalized = _normalize_variable(name)
+        page_index = int(fragment["page_index"])
+        size = float(fragment["font_size"])
+        left = float(fragment["x"]) + fragment_width(
+            fragment, fragment["text"][:start]
+        )
+        page_width = float(reader.pages[page_index].mediabox.width)
+        source_width = fragment_width(fragment, source_text)
+        if erase_source:
+            right = min(page_width - 18.0, left + max(8.0, source_width + 3.0))
+        else:
+            left += 4.0
+            right = min(page_width - 18.0, max(left + 72.0, page_width - 36.0))
+        bottom = float(fragment["y"]) - max(2.0, size * 0.2)
+        top = bottom + max(12.0, size * 1.35)
+        marker = (page_index, round(left), round(bottom))
+        if right <= left or marker in occupied:
+            return
+        rect = [round(left, 3), round(bottom, 3), round(right, 3), round(top, 3)]
+        overlay_spec = {
+            "page": page_index + 1,
+            "rect": rect,
+            "font_size": size,
+            "erase_source": erase_source,
+            "source_text": source_text,
+            "source_kind": str(fragment.get("source_kind") or "text"),
+        }
+        existing = next(
+            (field for field in discovered if field.get("name") == normalized),
+            None,
+        )
+        if existing is not None:
+            overlays = existing.setdefault(
+                "pdf_overlays", [dict(existing["pdf_overlay"])]
+            )
+            overlays.append(overlay_spec)
+            existing["pdf_source_key"] = "overlay:" + hashlib.sha256(
+                json.dumps(overlays, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:24]
+            occupied.add(marker)
+            return
+        source_key = "overlay:" + hashlib.sha256(
+            json.dumps([overlay_spec], sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()[:24]
+        field = {
+            "name": normalized,
+            "label": label.strip() or normalized.replace("_", " ").title(),
+            "field_type": "text",
+            "required": False,
+            "multiline": False,
+            "page": page_index + 1,
+            "rect": rect,
+            "pdf_source_key": source_key,
+            "pdf_overlay": overlay_spec,
+            "pdf_overlays": [overlay_spec],
+            "source_text": source_text,
+            "confidence": round(float(confidence), 2),
+            "review_required": True,
+        }
+        if source_path:
+            field["source_path"] = source_path
+        if example:
+            field["example"] = example
+        discovered.append(field)
+        occupied.add(marker)
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source_text = str(candidate.get("source_text") or "")
+        name = str(candidate.get("name") or "")
+        if not source_text or not name:
+            continue
+        for fragment in located_fragments:
+            cursor = 0
+            folded_fragment = fragment["text"].casefold()
+            folded_source = source_text.casefold()
+            while True:
+                start = folded_fragment.find(folded_source, cursor)
+                if start < 0:
+                    break
+                add_field(
+                    name=name,
+                    label=str(candidate.get("label") or name),
+                    fragment=fragment,
+                    start=start,
+                    source_text=fragment["text"][start : start + len(source_text)],
+                    confidence=min(
+                        float(candidate.get("confidence") or 0.6),
+                        float(fragment.get("ocr_score") or 1.0),
+                    ),
+                    erase_source=True,
+                    source_path=candidate.get("source_path"),
+                    example=candidate.get("example"),
+                )
+                cursor = start + len(source_text)
+
+    # Application forms often use vector-drawn lines, so text extraction sees
+    # only a trailing label such as "Applicant name:".  Place the virtual field
+    # after that label without erasing any source content.
+    for fragment in located_fragments:
+        match = _LABEL_BLANK_PATTERN.match(fragment["text"])
+        if not match:
+            continue
+        label = match.group(1).strip()
+        normalized_label = _normalize_variable(label)
+        name = _LABEL_BLANK_ALIASES.get(normalized_label, normalized_label)
+        add_field(
+            name=name,
+            label=label,
+            fragment=fragment,
+            start=len(fragment["text"]),
+            source_text="",
+            confidence=min(0.58, float(fragment.get("ocr_score") or 1.0)),
+            erase_source=False,
+        )
+
+    location_count = sum(len(field.get("pdf_overlays") or []) for field in discovered)
+    if len(discovered) > 200 or location_count > 400:
+        raise TemplatePdfError("A PDF template may contain at most 200 detected fields.")
+    return discovered
+
+
 def _schema_value_map(schema: dict | None, variables: dict[str, str]) -> dict[str, str]:
     values: dict[str, str] = {}
     fields = (schema or {}).get("fields") or []
@@ -479,7 +737,179 @@ def _editable_values(reader: PdfReader, values: dict[str, str]) -> dict[str, Any
     return output
 
 
-def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
+def _redact_static_overlay_sources(
+    reader: PdfReader,
+    fields_by_page: dict[int, list[dict[str, Any]]],
+) -> None:
+    """Remove replaced source strings from page content before drawing values.
+
+    A white rectangle alone is not redaction: old client data would remain
+    searchable and copyable underneath it.  Intake only creates overlay specs
+    for text it located in the page stream, so rendering can replace those
+    exact strings with spaces before merging the visible overlay.
+    """
+
+    from pypdf.generic import ContentStream, NameObject, TextStringObject
+
+    for page_index, fields in fields_by_page.items():
+        expected: dict[str, int] = {}
+        for field in fields:
+            spec = field.get("pdf_overlay") or {}
+            source_text = str(spec.get("source_text") or "")
+            if (
+                spec.get("source_kind") != "ocr"
+                and spec.get("erase_source", True)
+                and source_text
+            ):
+                expected[source_text] = expected.get(source_text, 0) + 1
+        if not expected:
+            continue
+
+        page = reader.pages[page_index]
+        try:
+            stream = ContentStream(page.get_contents(), reader)
+        except Exception as exc:
+            raise TemplatePdfError(
+                "The PDF source text could not be removed safely."
+            ) from exc
+        removed = {text: 0 for text in expected}
+
+        def redact_value(raw):
+            if not isinstance(raw, (str, bytes)):
+                return raw
+            value = str(raw)
+            updated = value
+            for source_text in expected:
+                matches = updated.count(source_text)
+                if matches:
+                    removed[source_text] += matches
+                    updated = updated.replace(source_text, " " * len(source_text))
+            return TextStringObject(updated) if updated != value else raw
+
+        for operands, operator in stream.operations:
+            if operator in {b"Tj", b"'"} and operands:
+                operands[0] = redact_value(operands[0])
+            elif operator == b'"' and len(operands) >= 3:
+                operands[2] = redact_value(operands[2])
+            elif operator == b"TJ" and operands:
+                array = operands[0]
+                for index, item in enumerate(array):
+                    array[index] = redact_value(item)
+
+        missing = [
+            text for text, count in expected.items() if removed.get(text, 0) < count
+        ]
+        if missing:
+            raise TemplatePdfError(
+                "The PDF source text could not be removed safely. Use a fillable PDF or a source with visible labeled blanks."
+            )
+        page[NameObject("/Contents")] = stream
+
+
+def _rasterize_ocr_source_pdf(
+    reader: PdfReader,
+    fields_by_page: dict[int, list[dict[str, Any]]],
+) -> PdfReader:
+    """Bake scanned pages with old OCR values removed into a fresh PDF.
+
+    Covering an image with a later PDF drawing operation is not sufficient:
+    the original pixels could still be recovered with a PDF editor.  This path
+    modifies the rendered page pixels first, then creates a new flattened PDF.
+    """
+
+    from PIL import ImageDraw
+    import pypdfium2 as pdfium
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    source = io.BytesIO()
+    source_writer = PdfWriter()
+    for source_page in reader.pages:
+        source_writer.add_page(source_page)
+    source_writer.write(source)
+
+    try:
+        document = pdfium.PdfDocument(source.getvalue())
+    except Exception as exc:
+        raise TemplatePdfError("The scanned PDF could not be flattened safely.") from exc
+
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output)
+    render_scale = 2.0
+    try:
+        for page_index in range(len(document)):
+            page = document[page_index]
+            try:
+                width, height = (float(value) for value in page.get_size())
+                bitmap = page.render(scale=render_scale, rev_byteorder=True)
+                try:
+                    image = bitmap.to_pil().convert("RGB")
+                finally:
+                    bitmap.close()
+            except Exception as exc:
+                raise TemplatePdfError(
+                    f"Page {page_index + 1} of the scanned PDF could not be flattened safely."
+                ) from exc
+            finally:
+                page.close()
+
+            drawing = ImageDraw.Draw(image)
+            for field in fields_by_page.get(page_index, []):
+                spec = field.get("pdf_overlay") or {}
+                if not spec.get("erase_source", True):
+                    continue
+                rect = spec.get("rect")
+                if not isinstance(rect, list) or len(rect) != 4:
+                    raise TemplatePdfError(
+                        "The stored OCR field rectangle is invalid."
+                    )
+                try:
+                    left, bottom, right, top = (float(value) for value in rect)
+                except (TypeError, ValueError) as exc:
+                    raise TemplatePdfError(
+                        "The stored OCR field rectangle is invalid."
+                    ) from exc
+                pixel_box = (
+                    max(0, int(min(left, right) * render_scale) - 3),
+                    max(0, int((height - max(bottom, top)) * render_scale) - 3),
+                    min(image.width, int(max(left, right) * render_scale) + 3),
+                    min(
+                        image.height,
+                        int((height - min(bottom, top)) * render_scale) + 3,
+                    ),
+                )
+                drawing.rectangle(pixel_box, fill="white")
+
+            image_bytes = io.BytesIO()
+            image.save(image_bytes, format="JPEG", quality=92, optimize=True)
+            image_bytes.seek(0)
+            pdf.setPageSize((width, height))
+            pdf.drawImage(
+                ImageReader(image_bytes),
+                0,
+                0,
+                width=width,
+                height=height,
+                preserveAspectRatio=False,
+            )
+            pdf.showPage()
+    finally:
+        document.close()
+    pdf.save()
+    output.seek(0)
+    try:
+        return PdfReader(output)
+    except Exception as exc:
+        raise TemplatePdfError("The scanned PDF could not be finalized.") from exc
+
+
+def _flatten_with_overlays(
+    reader: PdfReader,
+    values: dict[str, str],
+    *,
+    static_fields: list[dict[str, Any]] | None = None,
+    static_values: dict[str, str] | None = None,
+) -> bytes:
     from pathlib import Path
 
     import reportlab
@@ -692,7 +1122,34 @@ def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
     for widget in _widgets(reader):
         widgets_by_page.setdefault(widget.page_index, []).append(widget)
 
-    for page_index, widgets in widgets_by_page.items():
+    static_by_page: dict[int, list[dict[str, Any]]] = {}
+    for field in static_fields or []:
+        if not isinstance(field, dict):
+            raise TemplatePdfError("The stored PDF overlay field map is invalid.")
+        overlay_specs = field.get("pdf_overlays") or [field.get("pdf_overlay")]
+        for overlay_spec in overlay_specs:
+            try:
+                page_index = int((overlay_spec or {}).get("page")) - 1
+            except (TypeError, ValueError):
+                raise TemplatePdfError("The stored PDF overlay field map is invalid.")
+            if page_index < 0 or page_index >= len(reader.pages):
+                raise TemplatePdfError("The stored PDF overlay references an invalid page.")
+            static_by_page.setdefault(page_index, []).append(
+                {**field, "pdf_overlay": overlay_spec}
+            )
+
+    has_ocr_overlays = any(
+        (field.get("pdf_overlay") or {}).get("source_kind") == "ocr"
+        for fields in static_by_page.values()
+        for field in fields
+    )
+    if has_ocr_overlays:
+        reader = _rasterize_ocr_source_pdf(reader, static_by_page)
+    else:
+        _redact_static_overlay_sources(reader, static_by_page)
+
+    for page_index in sorted(set(widgets_by_page) | set(static_by_page)):
+        widgets = widgets_by_page.get(page_index, [])
         page = reader.pages[page_index]
         raw_fields = reader.get_fields() or {}
         width = float(page.mediabox.width)
@@ -794,6 +1251,69 @@ def _flatten_with_overlays(reader: PdfReader, values: dict[str, str]) -> bytes:
                 else:
                     overlay.drawString(left + 2, y, line)
                 y -= leading
+
+        for field in static_by_page.get(page_index, []):
+            overlay_spec = field.get("pdf_overlay") or {}
+            rect = overlay_spec.get("rect")
+            if not isinstance(rect, list) or len(rect) != 4:
+                raise TemplatePdfError("The stored PDF overlay rectangle is invalid.")
+            try:
+                x1, y1, x2, y2 = (float(item) for item in rect)
+            except (TypeError, ValueError) as exc:
+                raise TemplatePdfError("The stored PDF overlay rectangle is invalid.") from exc
+            left, bottom = min(x1, x2), min(y1, y2)
+            box_width, box_height = abs(x2 - x1), abs(y2 - y1)
+            if (
+                box_width <= 1
+                or box_height <= 1
+                or left < 0
+                or bottom < 0
+                or left + box_width > width + 1
+                or bottom + box_height > height + 1
+            ):
+                raise TemplatePdfError("The stored PDF overlay falls outside its page.")
+            if overlay_spec.get("erase_source", True):
+                overlay.setFillColorRGB(1, 1, 1)
+                overlay.rect(left, bottom, box_width, box_height, stroke=0, fill=1)
+            variable = str(field.get("name") or "")
+            value = ensure_supported(
+                str((static_values or {}).get(variable) or ""), variable
+            )
+            if not value:
+                continue
+            preferred = float(overlay_spec.get("font_size") or 11)
+            available_width = max(1.0, box_width - 2)
+            available_height = max(1.0, box_height - 2)
+            multiline = bool(field.get("multiline")) or "\n" in value or "\r" in value
+            chosen: tuple[float, list[str]] | None = None
+            for size_step in range(int(min(18.0, preferred) * 2), 11, -1):
+                font_size = size_step / 2
+                leading = font_size * 1.15
+                max_lines = max(1, min(20, int(available_height // leading)))
+                if not multiline:
+                    max_lines = 1
+                lines = wrap_text(
+                    value,
+                    available_width,
+                    font_size,
+                    field_name=variable,
+                    max_lines=max_lines,
+                )
+                if lines is not None and len(lines) * leading <= available_height:
+                    chosen = (font_size, lines)
+                    break
+            if chosen is None:
+                raise TemplatePdfError(
+                    f"Value for PDF field {variable!r} does not fit its detected location; shorten it or use a source with a larger blank."
+                )
+            font_size, lines = chosen
+            overlay.setFillColorRGB(0, 0, 0)
+            overlay.setFont(font_name, font_size)
+            leading = font_size * 1.15
+            y = bottom + box_height - font_size
+            for line in lines:
+                overlay.drawString(left + 1, y, line)
+                y -= leading
         overlay.save()
         overlay_buffer.seek(0)
         overlay_page = PdfReader(overlay_buffer).pages[0]
@@ -833,11 +1353,68 @@ def fill_pdf_template(
     """Fill a PDF's named fields and optionally return a non-editable artifact."""
     reader = _open_pdf(content)
     discovered_fields = discover_pdf_fields(content)
-    if not discovered_fields:
-        raise TemplatePdfError(
-            "This PDF has no fillable form fields. Convert it to an AcroForm PDF before generating documents."
-        )
     schema_fields = (variable_schema or {}).get("fields") or []
+    if not discovered_fields:
+        overlay_fields = [
+            field
+            for field in schema_fields
+            if isinstance(field, dict)
+            and (field.get("pdf_overlay") or field.get("pdf_overlays"))
+        ]
+        if not overlay_fields or len(overlay_fields) != len(schema_fields):
+            raise TemplatePdfError(
+                "This ordinary PDF has no reviewed text-overlay fields. Re-upload it and review the detected locations before generating."
+            )
+        names = [str(field.get("name") or "").strip() for field in overlay_fields]
+        source_keys = [
+            str(field.get("pdf_source_key") or "").strip() for field in overlay_fields
+        ]
+        if (
+            any(not name for name in names)
+            or len(set(names)) != len(names)
+            or any(not key for key in source_keys)
+            or len(set(source_keys)) != len(source_keys)
+        ):
+            raise TemplatePdfError("The stored PDF overlay field map is invalid.")
+        unknown_variables = set(variables) - set(names)
+        if unknown_variables:
+            raise TemplatePdfError(
+                "Unknown PDF template variable(s): "
+                + ", ".join(sorted(unknown_variables)[:5])
+            )
+        if not flatten:
+            raise TemplatePdfError(
+                "Text-overlay PDF templates must be flattened because the source has no editable form controls."
+            )
+        if enforce_required:
+            missing_reviewed = sorted(name for name in names if name not in variables)
+            missing_required = sorted(
+                name
+                for name, field in zip(names, overlay_fields)
+                if field.get("required") and not str(variables.get(name) or "").strip()
+            )
+            if missing_reviewed:
+                raise TemplatePdfError(
+                    "Review every PDF field; send blank explicitly. Missing: "
+                    + ", ".join(missing_reviewed)
+                )
+            if missing_required:
+                raise TemplatePdfError(
+                    "Required PDF field(s) are empty: " + ", ".join(missing_required)
+                )
+        for name, value in variables.items():
+            if len(str(value or "")) > _MAX_PDF_FIELD_VALUE_CHARS:
+                raise TemplatePdfError(
+                    f"Value for PDF field {name!r} exceeds the 10,000-character limit; shorten it before rendering."
+                )
+        output = _flatten_with_overlays(
+            reader,
+            {},
+            static_fields=overlay_fields,
+            static_values=variables,
+        )
+        _open_pdf(output)
+        return output
     actual_fields = {field["pdf_field_name"]: field for field in discovered_fields}
     actual_pdf_names = set(actual_fields)
     schema_pdf_names: set[str] = set()
