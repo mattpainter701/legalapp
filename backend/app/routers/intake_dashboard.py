@@ -845,10 +845,6 @@ async def assignment_availability(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
-    capabilities = await get_user_capabilities(db, current_user.id)
-    can_view_confidential_call_content = (
-        "view_confidential_call_content" in capabilities
-    )
     practice_key = _practice_key(practice_area)
     rule, ordered, _active_by_id = await _rotation_rule_with_active_users(
         db, tenant_id, practice_key
@@ -889,6 +885,10 @@ async def recent_callers(
 ):
     tenant_id = current_user.tenant_id
     await set_tenant_context(db, str(tenant_id))
+    capabilities = await get_user_capabilities(db, current_user.id)
+    can_view_confidential_call_content = (
+        "view_confidential_call_content" in capabilities
+    )
     if limit not in {5, 10, 20, 50}:
         raise HTTPException(status_code=422, detail="Limit must be 5, 10, 20, or 50")
 
