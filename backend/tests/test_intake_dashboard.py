@@ -27,6 +27,7 @@ from app.models.durable_job import DurableJob
 from app.models.task import Task
 from app.models.user import User
 from app.models.plugin import Matter
+from app.models.rbac import Role, UserRole
 from app.routers import intake_dashboard as intake_dashboard_router
 from app.schemas.intake_dashboard import IntakeDashboardCallCreate
 from app.services import email as email_module
@@ -2019,6 +2020,20 @@ async def test_recent_callers_exposes_source_and_call_facts(
     client, db_session, test_tenant, test_user
 ):
     now = datetime.now(timezone.utc)
+    legal_staff_role = Role(
+        tenant_id=test_tenant.id,
+        name="Legal staff",
+        capabilities=["view_confidential_call_content"],
+    )
+    db_session.add(legal_staff_role)
+    await db_session.flush()
+    db_session.add(
+        UserRole(
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            role_id=legal_staff_role.id,
+        )
+    )
     db_session.add_all(
         [
             CommunicationLog(
@@ -2035,6 +2050,8 @@ async def test_recent_callers_exposes_source_and_call_facts(
                     "callee_name": "Front Desk",
                     "result": "answered",
                     "duration_seconds": 142,
+                    "call_summary": "Caller needs a consultation.",
+                    "transcript_text": "Caller: I need help.",
                     "recording_url": "https://zoom.example/rec",
                     "transcript_url": "https://zoom.example/txt",
                     "provider": "zoom_phone",
@@ -2067,6 +2084,11 @@ async def test_recent_callers_exposes_source_and_call_facts(
     assert zed["answered_by"] == "Front Desk"
     assert zed["result"] == "answered"
     assert zed["duration_seconds"] == 142
+    assert zed["has_call_summary"] is True
+    assert zed["has_transcript"] is True
+    assert zed["can_view_confidential_call_content"] is True
+    assert zed["call_summary"] == "Caller needs a consultation."
+    assert zed["transcript_text"] == "Caller: I need help."
     assert zed["recording_url"] == "https://zoom.example/rec"
     assert zed["transcript_url"] == "https://zoom.example/txt"
 

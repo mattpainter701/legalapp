@@ -74,6 +74,9 @@ class RecentIntakeCaller(BaseModel):
     answered_by: Optional[str] = None
     result: Optional[str] = None
     duration_seconds: Optional[int] = None
+    has_call_summary: bool = False
+    has_transcript: bool = False
+    can_view_confidential_call_content: bool = False
     call_summary: Optional[str] = None
     transcript_text: Optional[str] = None
     recording_url: Optional[str] = None

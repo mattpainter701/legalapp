@@ -88,19 +88,35 @@ export default function CallFacts({ caller }) {
           </div>
         ))}
       </dl>
-      {(caller.call_summary || caller.transcript_text) && (
+      {caller.source === 'zoom_phone' && (
         <div className="mt-5 space-y-3 border-t border-brand-line pt-4">
-          {caller.call_summary && (
-            <div>
-              <dt className="font-black uppercase tracking-widest text-brand-muted">Call summary</dt>
+          <div>
+            <dt className="font-black uppercase tracking-widest text-brand-muted">Zoom call summary</dt>
+            {caller.call_summary ? (
               <dd className="mt-1 whitespace-pre-wrap text-sm leading-6 text-brand-ink">{caller.call_summary}</dd>
-            </div>
-          )}
+            ) : (
+              <dd className="mt-1 text-xs text-brand-muted">
+                {caller.has_call_summary
+                  ? 'Generated — restricted by your role.'
+                  : 'Not generated or not provided by Zoom for this call.'}
+              </dd>
+            )}
+          </div>
           {caller.transcript_text && (
             <details>
               <summary className="cursor-pointer text-xs font-black uppercase tracking-widest text-brand-accent">View transcript</summary>
               <p className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-3 text-xs leading-5 text-brand-ink">{caller.transcript_text}</p>
             </details>
+          )}
+          {!caller.transcript_text && (
+            <div>
+              <dt className="font-black uppercase tracking-widest text-brand-muted">Zoom transcript</dt>
+              <dd className="mt-1 text-xs text-brand-muted">
+                {caller.has_transcript
+                  ? (caller.can_view_confidential_call_content ? 'Available from Zoom via the transcript link.' : 'Available — restricted by your role.')
+                  : 'Not generated or not provided by Zoom for this call.'}
+              </dd>
+            </div>
           )}
         </div>
       )}

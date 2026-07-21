@@ -610,7 +610,9 @@ async def _upsert_general_call_task(
         f"Customer reason: {purpose}" if purpose else "",
         f"Reception notes: {notes}" if notes else "",
         f"Task detail: {description}" if description else "",
-        f"Zoom call summary: {log.summary}" if log.summary else "",
+        f"Zoom call summary: {_log_participant(log, 'call_summary')}"
+        if _log_participant(log, "call_summary")
+        else "",
         f"Zoom transcript:\n{_log_participant(log, 'transcript_text')}"
         if _log_participant(log, "transcript_text")
         else "",
@@ -1012,6 +1014,9 @@ async def recent_callers(
     callers = []
     for log, contact, creator in rows:
         participants = log.participants or {}
+        provider_call_summary = _log_participant(log, "call_summary")
+        provider_transcript_text = _log_participant(log, "transcript_text")
+        provider_transcript_url = _log_participant(log, "transcript_url")
         direction = participants.get("direction") or log.direction
         internal_call_type = _zoom_internal_call_type(participants, direction)
         lead = lead_by_contact_id.get(log.contact_id) if log.contact_id else None
@@ -1062,14 +1067,29 @@ async def recent_callers(
                 answered_by=_log_participant(log, "callee_name"),
                 result=_log_participant(log, "result"),
                 duration_seconds=_log_int(log, "duration_seconds"),
-                call_summary=log.summary if can_view_confidential_call_content else None,
+                has_call_summary=bool(provider_call_summary),
+                has_transcript=bool(
+                    provider_transcript_text or provider_transcript_url
+                ),
+                can_view_confidential_call_content=(
+                    can_view_confidential_call_content
+                ),
+                call_summary=(
+                    provider_call_summary
+                    if can_view_confidential_call_content
+                    else None
+                ),
                 transcript_text=(
-                    _log_participant(log, "transcript_text")
+                    provider_transcript_text
                     if can_view_confidential_call_content
                     else None
                 ),
                 recording_url=_log_participant(log, "recording_url"),
-                transcript_url=_log_participant(log, "transcript_url"),
+                transcript_url=(
+                    provider_transcript_url
+                    if can_view_confidential_call_content
+                    else None
+                ),
             )
         )
     return RecentIntakeCallersResponse(limit=limit, callers=callers)
