@@ -73,18 +73,36 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     from docx import Document
 
     doc = Document(io.BytesIO(file_bytes))
-    text_parts = []
+    text_parts: list[str] = []
+    seen_paragraphs: set[int] = set()
 
-    for para in doc.paragraphs:
-        if para.text.strip():
-            text_parts.append(para.text)
+    def add_paragraphs(paragraphs) -> None:
+        for para in paragraphs:
+            marker = id(para._p)
+            if marker in seen_paragraphs:
+                continue
+            seen_paragraphs.add(marker)
+            if para.text.strip():
+                text_parts.append(para.text.strip())
 
-    # Also extract text from tables
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if cell.text.strip():
-                    text_parts.append(cell.text)
+    def add_tables(tables) -> None:
+        for table in tables:
+            for row in table.rows:
+                values = [cell.text.strip() for cell in row.cells]
+                nonblank = [value for value in values if value]
+                if len(values) == 2 and values[0] and values[1]:
+                    text_parts.append(f"{values[0].rstrip(':')}: {values[1]}")
+                elif nonblank:
+                    text_parts.append(" | ".join(nonblank))
+                for cell in row.cells:
+                    add_tables(cell.tables)
+
+    add_paragraphs(doc.paragraphs)
+    add_tables(doc.tables)
+    for section in doc.sections:
+        for container in (section.header, section.footer):
+            add_paragraphs(container.paragraphs)
+            add_tables(container.tables)
 
     return "\n\n".join(text_parts)
 

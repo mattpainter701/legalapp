@@ -53,11 +53,12 @@ from app.schemas.document_template import (
 from app.services.template_intake import analyze_template_upload
 from app.services.pdf_templates import (
     TemplatePdfError,
-    discover_pdf_fields,
     fill_pdf_template,
     pdf_review_evidence,
     validate_representative_pdf_variables,
 )
+from app.services.docx_templates import TemplateDocxError, fill_docx_template
+from app.services.template_ocr import TemplateOcrError
 from app.services.matter_file_store import MatterFileStore
 from app.services.access_control import require_capability
 
@@ -72,7 +73,7 @@ _ALLOWED_TEMPLATE_UPLOAD_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
 }
-_PDF_RENDERER_VERSION = "pdf-acroform-v2-preview-bound"
+_PDF_RENDERER_VERSION = "pdf-source-v4-ocr-preview-bound"
 _MAX_PERSISTED_PREVIEWS_PER_USER_PURPOSE = 50
 _PDF_PREVIEW_TTLS = {
     "draft": timedelta(hours=1),
@@ -578,8 +579,23 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         for field in (discovered.get("fields") or [])
         if isinstance(field, dict) and field.get("pdf_field_name")
     }
+    discovered_overlay_keys = {
+        str(field.get("pdf_source_key"))
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict)
+        and (field.get("pdf_overlay") or field.get("pdf_overlays"))
+        and field.get("pdf_source_key")
+    }
+    discovered_by_overlay_key = {
+        str(field.get("pdf_source_key")): field
+        for field in (discovered.get("fields") or [])
+        if isinstance(field, dict)
+        and (field.get("pdf_overlay") or field.get("pdf_overlays"))
+        and field.get("pdf_source_key")
+    }
     seen_names: set[str] = set()
     seen_pdf_names: set[str] = set()
+    seen_overlay_keys: set[str] = set()
     for field in schema["fields"]:
         if not isinstance(field, dict):
             raise HTTPException(
@@ -626,10 +642,46 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
                 "rect",
             ):
                 field[key] = authoritative.get(key)
+        overlay_key = field.get("pdf_source_key")
+        if discovered_overlay_keys:
+            if overlay_key is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"PDF variable {name!r} is missing pdf_source_key",
+                )
+            overlay_key = str(overlay_key)
+            if overlay_key not in discovered_overlay_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown PDF overlay mapping: {overlay_key}",
+                )
+            if overlay_key in seen_overlay_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Duplicate PDF overlay mapping: {overlay_key}",
+                )
+            seen_overlay_keys.add(overlay_key)
+            authoritative = discovered_by_overlay_key[overlay_key]
+            for key in (
+                "field_type",
+                "required",
+                "multiline",
+                "page",
+                "rect",
+                "pdf_overlay",
+                "pdf_overlays",
+                "source_text",
+            ):
+                field[key] = authoritative.get(key)
     if discovered_pdf_names and seen_pdf_names != discovered_pdf_names:
         raise HTTPException(
             status_code=422,
             detail="Reviewed PDF schema must preserve every discovered pdf_field_name mapping",
+        )
+    if discovered_overlay_keys and seen_overlay_keys != discovered_overlay_keys:
+        raise HTTPException(
+            status_code=422,
+            detail="Reviewed PDF schema must preserve every detected overlay mapping",
         )
     try:
         schema["version"] = max(1, int(schema.get("version") or 1))
@@ -637,6 +689,8 @@ def _reviewed_variable_schema(raw: str | None, discovered: dict) -> dict:
         raise HTTPException(
             status_code=422, detail="variable_schema.version must be an integer"
         ) from exc
+    if isinstance(discovered.get("detection"), dict):
+        schema["detection"] = discovered["detection"]
     schema["source"] = "reviewed_upload"
     return schema
 
@@ -1011,10 +1065,10 @@ async def create_template(
             detail=f"Invalid category. Must be one of: {', '.join(CATEGORIES)}",
         )
 
-    if (payload.format or "").lower() == "pdf":
+    if (payload.format or "").lower() in {"pdf", "docx"}:
         raise HTTPException(
             status_code=422,
-            detail="PDF templates require multipart /api/templates/intake/create so the source PDF is retained.",
+            detail="PDF and DOCX templates require multipart /api/templates/intake/create so the original source is retained.",
         )
 
     template = DocumentTemplate(
@@ -1047,7 +1101,7 @@ async def analyze_template_sample(
             content_type=file.content_type,
             title=_validated_title(title),
         )
-    except TemplatePdfError as exc:
+    except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DocumentTemplateUploadAnalysisResponse(**analysis.as_dict())
 
@@ -1088,15 +1142,23 @@ async def create_template_from_sample(
             content_type=file.content_type,
             title=_validated_title(title),
         )
-    except TemplatePdfError as exc:
+    except (TemplatePdfError, TemplateDocxError, TemplateOcrError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if analysis.format == "pdf" and not any(
-        isinstance(field, dict) and field.get("pdf_field_name")
+        isinstance(field, dict)
+        and (
+            field.get("pdf_field_name")
+            or field.get("pdf_overlay")
+            or field.get("pdf_overlays")
+        )
         for field in (analysis.variable_schema.get("fields") or [])
     ):
         raise HTTPException(
             status_code=422,
-            detail="This PDF has no fillable AcroForm fields. Add fillable fields, then upload it again.",
+            detail=(
+                "No reusable PDF fields were detected. Try a clearer source or add "
+                "visible labels next to the values that should change."
+            ),
         )
     body = analysis.body
     if reviewed_body is not None:
@@ -1112,11 +1174,43 @@ async def create_template_from_sample(
     reviewed_schema = _reviewed_variable_schema(
         variable_schema, analysis.variable_schema
     )
-    if analysis.format == "pdf":
+    if analysis.format == "docx":
+        seen_source_text: dict[str, str] = {}
+        for field in reviewed_schema.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            name = str(field.get("name") or "").strip()
+            source_text = str(
+                field.get("source_text") or field.get("example") or ""
+            ).strip()
+            if not source_text:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Word variable {name!r} needs the exact source text it replaces.",
+                )
+            if source_text not in analysis.extracted_text:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Word variable {name!r} no longer matches text in the uploaded document. "
+                        "Select the source again and review the detected details."
+                    ),
+                )
+            previous_name = seen_source_text.get(source_text)
+            if previous_name and previous_name != name:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"The same Word source text cannot map to both {previous_name!r} "
+                        f"and {name!r}."
+                    ),
+                )
+            seen_source_text[source_text] = name
+    if analysis.format in {"pdf", "docx"}:
         mapped_variables = {
             str(field.get("name"))
             for field in (reviewed_schema.get("fields") or [])
-            if isinstance(field, dict) and field.get("pdf_field_name")
+            if isinstance(field, dict) and field.get("name")
         }
         unknown_body_variables = (
             set(extract_template_variables(body)) - mapped_variables
@@ -1125,7 +1219,7 @@ async def create_template_from_sample(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "PDF reviewed_body contains variables without AcroForm mappings: "
+                    f"{analysis.format.upper()} reviewed_body contains variables without source mappings: "
                     + ", ".join(sorted(unknown_body_variables))
                 ),
             )
@@ -1294,7 +1388,7 @@ async def preview_template_file(
     current_user=Depends(require_capability("manage_documents")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Render a PDF without storing a matter document."""
+    """Render a source-backed PDF or DOCX without storing a matter document."""
     tenant_id = uuid.UUID(str(current_user.tenant_id))
     await set_tenant_context(db, str(tenant_id))
     template = await db.scalar(
@@ -1307,9 +1401,34 @@ async def preview_template_file(
     )
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.format != "pdf":
+    template_format = str(template.format or "").lower()
+    if template_format not in {"pdf", "docx"}:
         raise HTTPException(
-            status_code=409, detail="Binary preview is available only for PDF templates"
+            status_code=409,
+            detail="File preview is available only for source-backed PDF or DOCX templates",
+        )
+    if template_format == "docx":
+        source = await _verified_template_source(template)
+        try:
+            output = await asyncio.to_thread(
+                fill_docx_template,
+                source,
+                variable_schema=template.variable_schema,
+                variables=payload.variables,
+                enforce_required=False,
+            )
+        except TemplateDocxError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        filename = _safe_generated_filename(template.title, "docx")
+        return Response(
+            content=output,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, no-store",
+                "Pragma": "no-cache",
+            },
         )
     purpose = payload.preview_purpose
     if purpose == "activation" and payload.matter_id:
@@ -1451,14 +1570,26 @@ async def update_template(
             status_code=422,
             detail="PDF templates require multipart intake with the original source file.",
         )
+    if current_format == "docx" and requested_format != "docx":
+        raise HTTPException(
+            status_code=422,
+            detail="A source-backed DOCX template cannot be converted to another format in place.",
+        )
+    if current_format == "docx" and (
+        "body" in updates or "variable_schema" in updates
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Upload a new Word source to change a DOCX template body or field map.",
+        )
     if "format" in updates:
         updates["format"] = requested_format
 
     pdf_schema_update_requested = "variable_schema" in updates
     pdf_body_update_requested = "body" in updates
     # A PDF field map is only trustworthy relative to the immutable retained
-    # source. Re-discover the AcroForm whenever its map changes or the template
-    # is activated, and require a complete, one-to-one reviewed mapping.
+    # source. Re-discover form controls or text-overlay locations whenever its
+    # map changes or the template is activated.
     validate_pdf_contract = current_format == "pdf" and (
         "variable_schema" in updates
         or "body" in updates
@@ -1467,19 +1598,22 @@ async def update_template(
     if validate_pdf_contract:
         source = await _verified_template_source(template)
         try:
-            discovered_fields = await asyncio.to_thread(discover_pdf_fields, source)
+            rediscovered = await asyncio.to_thread(
+                analyze_template_upload,
+                file_bytes=source,
+                filename=template.source_filename or "template.pdf",
+                content_type=template.source_content_type or "application/pdf",
+                title=template.title,
+            )
         except TemplatePdfError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        discovered_fields = rediscovered.variable_schema.get("fields") or []
         if not discovered_fields:
             raise HTTPException(
                 status_code=422,
-                detail="A PDF template must contain at least one mapped AcroForm field before activation.",
+                detail="A PDF template must contain at least one reviewed form or text-overlay field before activation.",
             )
-        discovered_schema = {
-            "version": 1,
-            "source": "pdf_acroform",
-            "fields": discovered_fields,
-        }
+        discovered_schema = rediscovered.variable_schema
         effective_schema = updates.get("variable_schema", template.variable_schema)
         updates["variable_schema"] = _reviewed_variable_schema(
             json.dumps(effective_schema), discovered_schema
@@ -1487,7 +1621,12 @@ async def update_template(
         mapped_variables = {
             str(field.get("name"))
             for field in (updates["variable_schema"].get("fields") or [])
-            if isinstance(field, dict) and field.get("pdf_field_name")
+            if isinstance(field, dict)
+            and (
+                field.get("pdf_field_name")
+                or field.get("pdf_overlay")
+                or field.get("pdf_overlays")
+            )
         }
         effective_body = str(updates.get("body", template.body) or "")
         unknown_body_variables = (
@@ -1497,7 +1636,7 @@ async def update_template(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "PDF body contains variables without AcroForm mappings: "
+                    "PDF body contains variables without source mappings: "
                     + ", ".join(sorted(unknown_body_variables))
                 ),
             )
@@ -1706,7 +1845,12 @@ async def render_template_endpoint(
         )
 
     rendered = render_template(template.body, payload.variables)
-    output_format = "pdf" if template.format == "pdf" else "markdown"
+    template_format = str(template.format or "").lower()
+    output_format = (
+        template_format
+        if template_format in {"pdf", "docx"} and template.source_sha256
+        else "markdown"
+    )
     preview_evidence = None
     if output_format == "pdf" and matter is not None:
         if payload.preview_id is None:
@@ -1828,7 +1972,8 @@ async def render_template_endpoint(
                 ),
             )
     output_filename = _safe_generated_filename(
-        template.title, "pdf" if output_format == "pdf" else "md"
+        template.title,
+        {"pdf": "pdf", "docx": "docx"}.get(output_format, "md"),
     )
     if output_format == "pdf":
         source = await _verified_template_source(template)
@@ -1846,6 +1991,22 @@ async def render_template_endpoint(
         rendered = (
             f'PDF ready: "{output_filename}"\n'
             f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s)."
+        )
+    elif output_format == "docx":
+        source = await _verified_template_source(template)
+        try:
+            output_bytes = await asyncio.to_thread(
+                fill_docx_template,
+                source,
+                variable_schema=template.variable_schema,
+                variables=payload.variables,
+                enforce_required=bool(payload.matter_id),
+            )
+        except TemplateDocxError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        rendered = (
+            f'Word document ready: "{output_filename}"\n'
+            f"Filled {sum(1 for value in payload.variables.values() if value)} reviewed field(s) while preserving the original DOCX layout."
         )
     else:
         output_bytes = rendered.encode("utf-8")
@@ -1886,7 +2047,7 @@ async def render_template_endpoint(
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_filename = _safe_generated_filename(
             f"{template.title}-{timestamp}-{doc_id.hex[:8]}",
-            "pdf" if output_format == "pdf" else "md",
+            {"pdf": "pdf", "docx": "docx"}.get(output_format, "md"),
         )
         if output_format == "pdf":
             rendered = (
@@ -1900,7 +2061,10 @@ async def render_template_endpoint(
         preferred_provider = (
             tenant_settings.primary_cloud_provider if tenant_settings else None
         )
-        content_type = "application/pdf" if output_format == "pdf" else "text/markdown"
+        content_type = {
+            "pdf": "application/pdf",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }.get(output_format, "text/markdown")
         storage_result = await matter_file_store.store_matter_file_result(
             db=db,
             tenant_id=tenant_id,
@@ -1947,9 +2111,13 @@ async def render_template_endpoint(
                     name for name, value in payload.variables.items() if value
                 ),
                 "flatten_pdf": payload.flatten_pdf if output_format == "pdf" else None,
-                "renderer_version": _PDF_RENDERER_VERSION
-                if output_format == "pdf"
-                else "markdown-v1",
+                "renderer_version": (
+                    _PDF_RENDERER_VERSION
+                    if output_format == "pdf"
+                    else "docx-source-v1"
+                    if output_format == "docx"
+                    else "markdown-v1"
+                ),
                 "preview_evidence_id": str(preview_evidence.id)
                 if preview_evidence
                 else None,

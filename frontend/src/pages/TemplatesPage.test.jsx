@@ -72,8 +72,8 @@ describe('document template workflow', () => {
 
     expect(await screen.findByRole('button', { name: 'Templates' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Generate / Smart Fill' }))
-    expect(screen.getByRole('heading', { name: 'PDF template checklist' })).toBeInTheDocument()
-    expect(screen.getByText(/standard fillable AcroForm PDF/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Reliable template workflow' })).toBeInTheDocument()
+    expect(screen.getByText(/Word or PDF document your team already uses/)).toBeInTheDocument()
     expect(screen.queryByText('Integration Hooks')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'E-Sign Queue' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Approvals' })).not.toBeInTheDocument()
@@ -141,11 +141,10 @@ describe('document template workflow', () => {
     render(<TemplatesPage />)
 
     await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
-    expect(screen.getByText(/PDFs must already contain fillable AcroForm fields/)).toBeInTheDocument()
+    expect(screen.getByText(/image-only scans while preserving the original design/)).toBeInTheDocument()
     const file = new File(['%PDF-1.7'], 'court-form.pdf', { type: 'application/pdf' })
     fireEvent.change(await screen.findByLabelText('Sample document'), { target: { files: [file] } })
     expect(screen.queryByTitle('Source PDF preview: court-form.pdf')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
     await screen.findByDisplayValue('Court Form')
     expect(screen.getByTitle('Source PDF preview: court-form.pdf')).toHaveAttribute('data', 'blob:validated-source')
     expect(URL.createObjectURL).toHaveBeenCalledWith(file)
@@ -153,9 +152,9 @@ describe('document template workflow', () => {
     expect(screen.getByLabelText('PDF metadata for Client name')).toHaveTextContent('Page 2')
     expect(screen.getByLabelText('PDF metadata for Client name')).toHaveTextContent('Required')
     expect(screen.getByText('Options:').closest('p')).toHaveTextContent('Options: State Court, Federal Court')
-    const mappedField = screen.getByLabelText('Client name')
+    const mappedField = screen.getByLabelText('Automation key')
     fireEvent.change(mappedField, { target: { value: 'party_name' } })
-    await user.click(screen.getByRole('button', { name: 'Create reviewed template' }))
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
 
     await waitFor(() => expect({ upload: createTemplateFromUpload.mock.calls.length, json: createTemplate.mock.calls.length }).toEqual({ upload: 1, json: 0 }))
     expect(createTemplate).not.toHaveBeenCalled()
@@ -189,7 +188,6 @@ describe('document template workflow', () => {
     const input = screen.getByLabelText('Sample document')
     const first = new File(['%PDF-1.7 first'], 'first.pdf', { type: 'application/pdf' })
     fireEvent.change(input, { target: { files: [first] } })
-    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
     expect(await screen.findByTitle('Source PDF preview: first.pdf')).toHaveAttribute('data', 'blob:first-validated-source')
 
     const second = new File(['%PDF-1.7 second'], 'second.pdf', { type: 'application/pdf' })
@@ -197,10 +195,123 @@ describe('document template workflow', () => {
     await waitFor(() => expect(screen.queryByTitle('Source PDF preview: first.pdf')).not.toBeInTheDocument())
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first-validated-source')
 
-    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
     expect(await screen.findByTitle('Source PDF preview: second.pdf')).toHaveAttribute('data', 'blob:second-validated-source')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:second-validated-source'))
+  })
+
+  it('keeps DOCX uploads source-backed and clears the previous document analysis', async () => {
+    analyzeTemplateUpload
+      .mockResolvedValueOnce({
+        title: 'First Letter',
+        format: 'docx',
+        body: 'Dear {{client_name}}',
+        suggested_variable_schema: { source: 'docx_source', fields: [{ name: 'client_name', label: 'Client name', source_text: 'Ada Lovelace' }] },
+        detected_branding_profile: {},
+        warnings: [],
+      })
+      .mockResolvedValueOnce({
+        title: 'Second Letter',
+        format: 'docx',
+        body: 'Case No. {{case_number}}',
+        suggested_variable_schema: { source: 'docx_source', fields: [{ name: 'case_number', label: 'Case number', source_text: 'CV-2026-42' }] },
+        detected_branding_profile: {},
+        warnings: [],
+      })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const input = screen.getByLabelText('Sample document')
+    const first = new File(['first'], 'first.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(input, { target: { files: [first] } })
+    expect(await screen.findByDisplayValue('First Letter')).toBeInTheDocument()
+    expect(screen.getByText(/Original Word document preserved/)).toBeInTheDocument()
+
+    const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(input, { target: { files: [second] } })
+    expect(screen.queryByDisplayValue('First Letter')).not.toBeInTheDocument()
+    expect(screen.getByText(/Current source: second.docx/)).toHaveTextContent('reading now')
+    expect(await screen.findByDisplayValue('Second Letter')).toBeInTheDocument()
+    expect(analyzeTemplateUpload.mock.calls[1][0].get('title')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    const form = createTemplateFromUpload.mock.calls[0][0]
+    expect(form.get('file')).toEqual(second)
+    expect(form.get('reviewed_body')).toBe('Case No. {{case_number}}')
+    expect(createTemplate).not.toHaveBeenCalled()
+  })
+
+  it('ignores an older analysis response after the selected source changes', async () => {
+    let resolveFirst
+    let resolveSecond
+    analyzeTemplateUpload
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const input = screen.getByLabelText('Sample document')
+    const first = new File(['first'], 'first.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    const second = new File(['second'], 'second.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(input, { target: { files: [first] } })
+    fireEvent.change(input, { target: { files: [second] } })
+
+    await act(async () => {
+      resolveSecond({
+        title: 'Second Source', format: 'docx', body: 'Dear {{client_name}}',
+        suggested_variable_schema: { fields: [{ name: 'client_name', label: 'Client name', source_text: 'Ada' }] },
+        detected_branding_profile: {}, warnings: [],
+      })
+      await Promise.resolve()
+    })
+    expect(await screen.findByDisplayValue('Second Source')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveFirst({
+        title: 'Stale First Source', format: 'docx', body: 'Old {{matter_name}}',
+        suggested_variable_schema: { fields: [{ name: 'matter_name', label: 'Matter name', source_text: 'Old' }] },
+        detected_branding_profile: {}, warnings: [],
+      })
+      await Promise.resolve()
+    })
+    expect(screen.getByDisplayValue('Second Source')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('Stale First Source')).not.toBeInTheDocument()
+    expect(screen.getByText(/Current source: second.docx/)).toHaveTextContent('ready to review')
+  })
+
+  it('lets a reviewer mark an undetected Word value as a replacement field', async () => {
+    analyzeTemplateUpload.mockResolvedValue({
+      title: 'Application',
+      format: 'docx',
+      body: 'Applicant: Ada Lovelace',
+      suggested_variable_schema: { source: 'docx_source', fields: [] },
+      detected_branding_profile: {},
+      warnings: ['No obvious fields were detected.'],
+    })
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Upload Sample' }))
+    const file = new File(['word'], 'application.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    fireEvent.change(screen.getByLabelText('Sample document'), { target: { files: [file] } })
+    await screen.findByDisplayValue('Application')
+    await user.click(screen.getByRole('button', { name: 'Add replacement field' }))
+    const variableName = screen.getByLabelText('Automation key')
+    fireEvent.change(variableName, { target: { value: 'client_name' } })
+    fireEvent.change(screen.getByLabelText('Exact text in the source'), { target: { value: 'Ada Lovelace' } })
+    await user.click(screen.getByRole('button', { name: 'Mark' }))
+    expect(screen.getByLabelText('Extracted template body')).toHaveValue('Applicant: {{client_name}}')
+    await user.click(screen.getByRole('button', { name: 'Save reusable template' }))
+
+    await waitFor(() => expect(createTemplateFromUpload).toHaveBeenCalledTimes(1))
+    const form = createTemplateFromUpload.mock.calls[0][0]
+    expect(form.get('reviewed_body')).toBe('Applicant: {{client_name}}')
+    expect(JSON.parse(form.get('variable_schema')).fields).toEqual([
+      expect.objectContaining({ name: 'client_name', source_text: 'Ada Lovelace' }),
+    ])
   })
 
   it('uses the binary endpoint for a side-effect-free PDF preview', async () => {
@@ -232,6 +343,33 @@ describe('document template workflow', () => {
     await waitFor(() => expect(screen.queryByTitle('Preview of Court Form')).not.toBeInTheDocument())
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:pdf-preview')
 
+  })
+
+  it('downloads a source-preserving DOCX preview through the binary endpoint', async () => {
+    getTemplates.mockResolvedValueOnce({ items: [{
+      id: 'docx-template', title: 'Engagement Letter', body: 'Dear {{client_name}}', category: 'engagement_letter',
+      format: 'docx', source_filename: 'engagement.docx', source_sha256: 'abc', is_active: true,
+      variable_schema: { fields: [{ name: 'client_name', label: 'Client name', source_text: 'Ada Lovelace' }] },
+    }] })
+    const docxBlob = new Blob(['PK generated word'], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    renderTemplateFile.mockResolvedValue({ blob: docxBlob, filename: 'Engagement_Letter.docx', contentType: docxBlob.type })
+    URL.createObjectURL = vi.fn().mockReturnValue('blob:docx-preview')
+    URL.revokeObjectURL = vi.fn()
+    const user = userEvent.setup()
+    render(<TemplatesPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Generate' }))
+    await user.type(screen.getByRole('textbox', { name: /Client name/i }), 'Grace Hopper')
+    await user.click(screen.getByRole('button', { name: 'Preview' }))
+
+    await waitFor(() => expect(renderTemplateFile).toHaveBeenCalledWith(
+      'docx-template',
+      expect.objectContaining({ variables: { client_name: 'Grace Hopper' }, matter_id: null }),
+    ))
+    expect(await screen.findByText(/Word formatting was preserved/)).toBeInTheDocument()
+    expect(screen.getByText('Engagement_Letter.docx')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:docx-preview')
   })
 
   it('discards and revokes a stale PDF response when values change in flight', async () => {
@@ -497,7 +635,7 @@ describe('document template workflow', () => {
     await user.click(await screen.findByRole('button', { name: 'Edit' }))
     const editDialog = screen.getByRole('dialog', { name: 'Edit Template' })
     expect(screen.queryByRole('textbox', { name: 'Body' })).not.toBeInTheDocument()
-    expect(screen.getByText(/PDF layout and field mappings come from the source file/)).toBeInTheDocument()
+    expect(screen.getByText(/PDF layout and field mappings come from the retained source file/)).toBeInTheDocument()
     const title = within(editDialog).getByRole('textbox', { name: 'Title' })
     await waitFor(() => expect(title).toHaveFocus())
     await user.clear(title)
@@ -510,7 +648,7 @@ describe('document template workflow', () => {
     }))
   })
 
-  it('prevents creating a PDF analysis with no AcroForm mappings', async () => {
+  it('prevents creating a PDF analysis with no reusable source mappings', async () => {
     analyzeTemplateUpload.mockResolvedValue({
       title: 'Flat PDF', format: 'pdf', body: 'Extracted text',
       suggested_variable_schema: { fields: [] }, detected_branding_profile: {}, warnings: [],
@@ -522,9 +660,7 @@ describe('document template workflow', () => {
     fireEvent.change(await screen.findByLabelText('Sample document'), {
       target: { files: [new File(['%PDF-1.7'], 'flat.pdf', { type: 'application/pdf' })] },
     })
-    await user.click(screen.getByRole('button', { name: 'Analyze sample' }))
-
-    expect(await screen.findByText(/cannot be created as a generation template/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create reviewed template' })).toBeDisabled()
+    expect(await screen.findByText(/No reusable details located confidently/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save reusable template' })).toBeDisabled()
   })
 })
