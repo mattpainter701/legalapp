@@ -10,7 +10,7 @@ import {
 
 const INDEX_ROBOTS = 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'
 const PRIVATE_ROBOTS = 'noindex, nofollow, noarchive, nosnippet'
-const SOCIAL_IMAGE_PATH = '/social-card.jpg'
+const SOCIAL_IMAGE_PATH = '/social-card-v2.png'
 
 function setMeta(attribute, key, content) {
   let node = document.head.querySelector(`meta[${attribute}="${key}"]`)
@@ -82,7 +82,7 @@ export default function SeoHead() {
     setMeta('property', 'og:description', socialDescription)
     setMeta('property', 'og:url', socialUrl)
     setMeta('property', 'og:image', `${siteOrigin}${SOCIAL_IMAGE_PATH}`)
-    setMeta('property', 'og:image:type', 'image/jpeg')
+    setMeta('property', 'og:image:type', 'image/png')
     setMeta('property', 'og:image:width', '1200')
     setMeta('property', 'og:image:height', '630')
     setMeta('property', 'og:image:alt', 'Clarity Legal law firm operations and legal AI workspace')

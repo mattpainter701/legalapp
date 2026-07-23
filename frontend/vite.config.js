@@ -22,8 +22,8 @@ function seoAssets(siteOrigin) {
       const transformed = html
         .replace('<link rel="canonical" href="/" />', `<link rel="canonical" href="${siteOrigin}/" />`)
         .replace('<meta property="og:url" content="/" />', `<meta property="og:url" content="${siteOrigin}/" />`)
-        .replace('<meta property="og:image" content="/social-card.jpg" />', `<meta property="og:image" content="${siteOrigin}/social-card.jpg" />`)
-        .replace('<meta name="twitter:image" content="/social-card.jpg" />', `<meta name="twitter:image" content="${siteOrigin}/social-card.jpg" />`)
+        .replace('<meta property="og:image" content="/social-card-v2.png" />', `<meta property="og:image" content="${siteOrigin}/social-card-v2.png" />`)
+        .replace('<meta name="twitter:image" content="/social-card-v2.png" />', `<meta name="twitter:image" content="${siteOrigin}/social-card-v2.png" />`)
 
       return {
         html: transformed,
