@@ -46,6 +46,12 @@
     @apply absolute -left-2 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-brand-accent rounded-r-sm;
   }
 
+  @media (min-width: 1024px) {
+    .sidebar-collapsed .sidebar-item-active::before {
+      display: none;
+    }
+  }
+
   .sidebar-item-inactive {
     @apply text-brand-ink-2 hover:bg-brand-bg-soft;
   }
@@ -142,7 +148,9 @@
   /* Improved focus states */
   input:focus-visible,
   textarea:focus-visible,
-  button:focus-visible {
+  button:focus-visible,
+  a:focus-visible,
+  select:focus-visible {
     @apply outline-none ring-2 ring-brand-accent ring-offset-1 ring-offset-brand-bg;
   }
 
@@ -168,6 +176,21 @@
   /* Touch-friendly tap target (>=44px per Apple/Material guidance) */
   .tap-target {
     @apply min-h-[44px] min-w-[44px] flex items-center justify-center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

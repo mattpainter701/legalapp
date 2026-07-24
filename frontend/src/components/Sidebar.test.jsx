@@ -25,20 +25,36 @@ function Harness() {
   )
 }
 
-describe('Sidebar mobile drawer', () => {
+function DesktopHarness() {
+  const [collapsed, setCollapsed] = useState(true)
+  return (
+    <Sidebar
+      user={userRecord}
+      isOpen={false}
+      desktopCollapsed={collapsed}
+      onToggleDesktopCollapsed={() => setCollapsed((current) => !current)}
+      onClose={() => {}}
+      onLogout={() => {}}
+    />
+  )
+}
+
+describe('Sidebar responsive navigation', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
   })
 
   it('uses modal semantics, closes on Escape, and restores the menu trigger', async () => {
-    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
+    const matchMedia = vi.fn().mockReturnValue({
       matches: true,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
-    }))
+    })
+    vi.stubGlobal('matchMedia', matchMedia)
     const user = userEvent.setup()
     render(<MemoryRouter><Harness /></MemoryRouter>)
+    expect(matchMedia).toHaveBeenCalledWith('(max-width: 1023px)')
     const trigger = screen.getByRole('button', { name: 'Open navigation' })
     await user.click(trigger)
     expect(screen.getByRole('dialog', { name: 'Workspace navigation' })).toBeInTheDocument()
@@ -81,5 +97,20 @@ describe('Sidebar mobile drawer', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Upgrade to the full platform' })).not.toBeInTheDocument())
     await waitFor(() => expect(upgradeTrigger).toHaveFocus())
     expect(screen.getByRole('dialog', { name: 'Workspace navigation' })).toBeInTheDocument()
+  })
+
+  it('supports a compact desktop rail without losing navigation names', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }))
+    const user = userEvent.setup()
+    render(<MemoryRouter initialEntries={['/tasks']}><DesktopHarness /></MemoryRouter>)
+
+    expect(screen.getByRole('button', { name: 'Tasks' })).toHaveAttribute('aria-current', 'page')
+    const expand = screen.getByRole('button', { name: 'Expand navigation' })
+    await user.click(expand)
+    expect(screen.getByRole('button', { name: 'Collapse navigation' })).toBeInTheDocument()
   })
 })

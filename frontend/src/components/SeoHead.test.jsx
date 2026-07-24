@@ -26,7 +26,7 @@ describe('SeoHead', () => {
     await waitFor(() => expect(document.title).toContain('Law Firm Operations'))
     expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('index, follow'))
     expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute('href', 'https://clarity.example/')
-    expect(document.querySelector('meta[property="og:image"]')).toHaveAttribute('content', 'https://clarity.example/social-card.jpg')
+    expect(document.querySelector('meta[property="og:image"]')).toHaveAttribute('content', 'https://clarity.example/social-card-v2.png')
 
     const structured = JSON.parse(document.querySelector('script[data-seo-structured-data]').textContent)
     expect(structured['@graph'].map((node) => node['@type'])).toEqual([
