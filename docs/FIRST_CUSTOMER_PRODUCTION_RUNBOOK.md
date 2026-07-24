@@ -171,11 +171,14 @@ Migration `091_pdf_preview_evidence` adds a FORCE-RLS,
 tenant-scoped evidence table for representative PDF activation previews and
 exact matter/value-bound generation previews. Generation evidence is consumed
 with its saved document, and ambiguous storage/database outcomes become
-operator-reconcilable retry blocks. The current head is
-`092_zoom_phone_api_webhook_split`; it repairs numeric Zoom Account Number
-bindings from the retired UI and separates usable Phone API grants from
-provider-proven real-time webhook binding. A fresh deployment/restore proof
-must report 092 before this revision is released.
+operator-reconcilable retry blocks. Migration
+`092_zoom_phone_api_webhook_split` repairs numeric Zoom Account Number bindings
+from the retired UI and separates usable Phone API grants from provider-proven
+real-time webhook binding. Migrations `093_conf_call_content` and
+`094_admin_conf_call_content` backfill confidential-call-content access for the
+default internal User and Administrator roles. The current head is
+`094_admin_conf_call_content`; a fresh deployment/restore proof must report 094
+before this revision is released.
 
 ## 3. Back up and rehearse restore
 

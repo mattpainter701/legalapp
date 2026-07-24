@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["092_zoom_phone_api_webhook_split"]
+    assert heads == ["094_admin_conf_call_content"]
 
 
 def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():
