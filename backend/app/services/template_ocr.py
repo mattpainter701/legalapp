@@ -179,9 +179,7 @@ def ocr_pdf(content: bytes, *, max_pages: int = _MAX_OCR_PAGES) -> PdfOcrResult:
     for line in lines:
         page_text[line.page_index].append(line.text)
     text = "\n\n".join("\n".join(values) for values in page_text if values).strip()
-    confidence = (
-        sum(line.score for line in lines) / len(lines) if lines else 0.0
-    )
+    confidence = sum(line.score for line in lines) / len(lines) if lines else 0.0
     return PdfOcrResult(
         text=text,
         lines=tuple(lines),

@@ -221,9 +221,9 @@ the off-host restore proof described in the runbook.
 - [SBOM tracking inventory](docs/SBOM_TRACKING_INVENTORY.md)
 
 The current Alembic head for this release is
-`092_zoom_phone_api_webhook_split`; migrations `086`-`092` cover retained PDF template
+`094_admin_conf_call_content`; migrations `086`-`094` cover retained PDF template
 sources, fail-closed MCP product security, tenant-isolated scheduler logs,
 durable Zoom Phone call import, automatic provider-proven Zoom webhook binding,
-and value-bound
-single-consumption PDF activation/generation preview evidence with fail-closed
-storage reconciliation state.
+value-bound single-consumption PDF activation/generation preview evidence with
+fail-closed storage reconciliation state, and confidential-call-content
+capability backfills for the default internal User and Administrator roles.
