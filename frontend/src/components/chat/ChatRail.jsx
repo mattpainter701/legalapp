@@ -1,9 +1,21 @@
-import React, { useState, useMemo } from 'react'
-import { Plus, Search, X } from 'lucide-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { FileText, MessageSquare, Plus, Search, X } from 'lucide-react'
 import { useAppShell } from '../AppShell'
 import FileUpload from '../FileUpload'
 import ConversationItem from './ConversationItem'
 import DocumentItem from './DocumentItem'
+
+const PIN_STORAGE_KEY = 'clarity.chat.pinned-conversations'
+
+function readPinnedConversationIds() {
+  try {
+    const stored = localStorage.getItem(PIN_STORAGE_KEY) || localStorage.getItem('pinnedConvIds')
+    const ids = JSON.parse(stored || '[]')
+    return Array.isArray(ids) ? ids : []
+  } catch {
+    return []
+  }
+}
 
 export default function ChatRail({
   className = '',
@@ -11,6 +23,7 @@ export default function ChatRail({
   onSelectConversation,
   onDeleteConversation,
   onClose,
+  isOpen = true,
 }) {
   const {
     conversations,
@@ -20,144 +33,267 @@ export default function ChatRail({
     onDocumentUploaded,
     onDocumentDeleted,
   } = useAppShell()
-
   const handleDeleteConversation = onDeleteConversation || onConversationDeleted
-
+  const [activeSection, setActiveSection] = useState('conversations')
   const [searchQuery, setSearchQuery] = useState('')
-  const [pinnedConvIds, setPinnedConvIds] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('pinnedConvIds') || '[]') }
-    catch { return [] }
-  })
+  const [pinnedConvIds, setPinnedConvIds] = useState(readPinnedConversationIds)
+  const panelRef = useRef(null)
+  const closeRef = useRef(null)
+  const previousFocusRef = useRef(null)
+
+  useEffect(() => {
+    if (!onClose || !isOpen) return undefined
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    const previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    queueMicrotask(() => closeRef.current?.focus())
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(panelRef.current?.querySelectorAll(
+        'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), [href]:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
+      ) || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousBodyOverflow
+      queueMicrotask(() => previousFocusRef.current?.focus())
+    }
+  }, [isOpen, onClose])
 
   const handleTogglePin = (id) => {
-    setPinnedConvIds((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-      localStorage.setItem('pinnedConvIds', JSON.stringify(next))
+    setPinnedConvIds((previous) => {
+      const next = previous.includes(id)
+        ? previous.filter((conversationId) => conversationId !== id)
+        : [...previous, id]
+      try {
+        localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(next))
+      } catch {
+        // Pinning remains available for the current session.
+      }
       return next
     })
   }
 
   const filteredConversations = useMemo(() => {
-    const filtered = conversations.filter((conv) =>
-      (conv.title || '').toLowerCase().includes(searchQuery.toLowerCase())
+    const normalizedQuery = searchQuery.trim().toLowerCase()
+    const filtered = conversations.filter((conversation) =>
+      (conversation.title || '').toLowerCase().includes(normalizedQuery),
     )
-
-    const pinned = filtered.filter((c) => pinnedConvIds.includes(c.id))
-    const unpinned = filtered.filter((c) => !pinnedConvIds.includes(c.id))
-
+    const pinned = filtered.filter((conversation) => pinnedConvIds.includes(conversation.id))
+    const unpinned = filtered.filter((conversation) => !pinnedConvIds.includes(conversation.id))
     unpinned.sort(
       (a, b) =>
         new Date(b.updated_at || b.created_at).getTime() -
-        new Date(a.updated_at || a.created_at).getTime()
+        new Date(a.updated_at || a.created_at).getTime(),
     )
-
     return [...pinned, ...unpinned]
-  }, [conversations, searchQuery, pinnedConvIds])
+  }, [conversations, pinnedConvIds, searchQuery])
+
+  const isMobileDrawer = Boolean(onClose)
 
   return (
-    <div className={`flex flex-col bg-brand-surface-2 ${className}`}>
-      {/* Header */}
-      <div className="h-14 flex items-center justify-between px-4 border-b border-brand-line shrink-0">
-        <span className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Assistant</span>
+    <aside
+      ref={panelRef}
+      role={isMobileDrawer && isOpen ? 'dialog' : undefined}
+      aria-modal={isMobileDrawer && isOpen ? true : undefined}
+      aria-label={isMobileDrawer && isOpen ? 'Conversations and sources' : 'Assistant workspace'}
+      {...(isMobileDrawer && !isOpen ? { inert: '', 'aria-hidden': true } : {})}
+      className={`flex flex-col bg-brand-surface-2 ${className}`}
+    >
+      <div className="flex min-h-16 shrink-0 items-center justify-between border-b border-brand-line px-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-muted">Workspace</p>
+          <p className="mt-0.5 font-serif text-lg font-semibold text-brand-ink">Assistant</p>
+        </div>
         {onClose && (
           <button
-            className="lg:hidden p-1.5 text-brand-muted hover:text-brand-ink transition-colors tap-target"
+            ref={closeRef}
+            type="button"
+            className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink lg:hidden"
             onClick={onClose}
-            aria-label="Close panel"
+            aria-label="Close conversations and sources"
           >
-            <X size={18} />
+            <X size={19} />
           </button>
         )}
       </div>
 
-      {/* New conversation */}
-      <div className="p-3 border-b border-brand-line shrink-0">
+      <div className="shrink-0 border-b border-brand-line p-3">
         <button
-          onClick={() => { onNewConversation?.(); onClose?.() }}
-          className="flex items-center justify-between w-full px-3 py-2 bg-transparent text-brand-ink text-sm hover:bg-brand-line/50 transition-colors border border-brand-line rounded"
+          type="button"
+          onClick={() => {
+            onNewConversation?.()
+            onClose?.()
+          }}
+          className="flex min-h-11 w-full items-center justify-between rounded-xl bg-brand-ink px-3.5 text-sm font-semibold text-white hover:bg-brand-ink-2"
         >
           <span className="flex items-center gap-2">
-            <Plus className="w-4 h-4" /> New Conversation
+            <Plus className="h-4 w-4" /> New conversation
           </span>
-          <span className="text-brand-muted text-xs font-mono">⌘N</span>
+          <kbd className="hidden rounded border border-white/25 px-1.5 py-0.5 font-mono text-[10px] font-normal text-white/75 sm:inline">
+            Ctrl N
+          </kbd>
         </button>
       </div>
 
-      {/* Scrollable areas */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Conversations */}
-        <div className="py-4">
-          <div className="px-4 mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
-            <span>Conversations</span>
-            <span className="font-mono text-[10px]">{filteredConversations.length}</span>
-          </div>
+      <div
+        role="tablist"
+        aria-label="Assistant workspace sections"
+        className="grid grid-cols-2 gap-1 border-b border-brand-line px-3 py-2"
+      >
+        {[
+          {
+            id: 'conversations',
+            label: 'Conversations',
+            icon: MessageSquare,
+            count: conversations.length,
+          },
+          {
+            id: 'sources',
+            label: 'Sources',
+            icon: FileText,
+            count: documents.length,
+          },
+        ].map(({ id, label, icon: Icon, count }) => {
+          const selected = activeSection === id
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`chat-rail-${id}`}
+              onClick={() => setActiveSection(id)}
+              className={`flex min-h-10 items-center justify-center gap-2 rounded-lg px-2 text-xs font-semibold ${
+                selected
+                  ? 'bg-brand-surface text-brand-ink shadow-sm'
+                  : 'text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink'
+              }`}
+            >
+              <Icon size={14} />
+              <span>{label}</span>
+              <span className={`font-mono text-[10px] ${selected ? 'text-brand-accent-2' : ''}`}>
+                {count}
+              </span>
+            </button>
+          )
+        })}
+      </div>
 
-          {/* Search */}
+      {activeSection === 'conversations' ? (
+        <div
+          id="chat-rail-conversations"
+          role="tabpanel"
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {conversations.length > 0 && (
-            <div className="px-4 mb-3 relative">
-              <Search className="absolute left-6 top-2.5 w-3.5 h-3.5 text-brand-muted pointer-events-none" />
+            <div className="relative shrink-0 px-3 py-3">
+              <Search className="pointer-events-none absolute left-6 top-1/2 h-4 w-4 -translate-y-1/2 text-brand-muted" />
               <input
-                type="text"
-                placeholder="Search..."
+                type="search"
+                aria-label="Search conversations"
+                placeholder="Search conversations"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 bg-brand-bg border border-brand-line rounded text-xs text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-1 focus:ring-brand-accent"
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="min-h-10 w-full rounded-xl border border-brand-line bg-brand-surface py-2 pl-9 pr-9 text-sm text-brand-ink placeholder-brand-muted focus:outline-none focus:ring-2 focus:ring-brand-accent"
               />
               {searchQuery && (
                 <button
+                  type="button"
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-6 top-2.5 text-brand-muted hover:text-brand-ink"
+                  className="absolute right-5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-brand-muted hover:text-brand-ink"
+                  aria-label="Clear conversation search"
                 >
-                  <X size={12} />
+                  <X size={14} />
                 </button>
               )}
             </div>
           )}
 
-          {conversations.length === 0 ? (
-            <p className="px-4 text-[13px] text-brand-muted italic font-sans">No history yet</p>
-          ) : filteredConversations.length === 0 ? (
-            <p className="px-4 text-[13px] text-brand-muted italic font-sans">No matching conversations</p>
-          ) : (
-            <div className="flex flex-col">
-              {filteredConversations.map((conv, index) => (
-                <ConversationItem
-                  key={conv.id}
-                  conv={conv}
-                  index={index}
-                  isActive={conv.id === activeConvId}
-                  isPinned={pinnedConvIds.includes(conv.id)}
-                  onClick={() => onSelectConversation?.(conv.id)}
-                  onDelete={handleDeleteConversation}
-                  onTogglePin={handleTogglePin}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="w-full h-px bg-brand-line my-2" />
-
-        {/* Library Documents */}
-        <div className="py-4">
-          <div className="px-4 mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-brand-muted">
-            <span>Library Documents</span>
-            <span className="font-mono text-[10px]">{documents.length}</span>
+          <div className="flex-1 overflow-y-auto pb-4">
+            {conversations.length === 0 ? (
+              <div className="px-5 py-10 text-center">
+                <MessageSquare size={24} className="mx-auto text-brand-line-2" />
+                <p className="mt-3 text-sm font-semibold text-brand-ink">No conversations yet</p>
+                <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+                  Start a conversation to keep research and drafting work together.
+                </p>
+              </div>
+            ) : filteredConversations.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-brand-muted">
+                No conversations match “{searchQuery}”.
+              </p>
+            ) : (
+              <div className="flex flex-col">
+                {filteredConversations.map((conversation, index) => (
+                  <ConversationItem
+                    key={conversation.id}
+                    conv={conversation}
+                    index={index}
+                    isActive={conversation.id === activeConvId}
+                    isPinned={pinnedConvIds.includes(conversation.id)}
+                    onClick={() => onSelectConversation?.(conversation.id)}
+                    onDelete={handleDeleteConversation}
+                    onTogglePin={handleTogglePin}
+                  />
+                ))}
+              </div>
+            )}
           </div>
+        </div>
+      ) : (
+        <div
+          id="chat-rail-sources"
+          role="tabpanel"
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3"
+        >
+          <div className="rounded-xl border border-brand-line bg-brand-surface p-3">
+            <p className="text-sm font-semibold text-brand-ink">Firm source library</p>
+            <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+              Upload reference material that can be retrieved across assistant conversations.
+            </p>
+            <div className="mt-3">
+              <FileUpload onUploadComplete={onDocumentUploaded} />
+            </div>
+          </div>
+
           {documents.length === 0 ? (
-            <p className="px-4 text-[13px] text-brand-muted italic font-sans mb-3">No documents uploaded</p>
+            <div className="px-3 py-10 text-center">
+              <FileText size={24} className="mx-auto text-brand-line-2" />
+              <p className="mt-3 text-sm font-semibold text-brand-ink">No library sources</p>
+              <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+                Conversation attachments remain scoped to their thread. Add reusable firm material here.
+              </p>
+            </div>
           ) : (
-            <div className="flex flex-col gap-1 px-2 mb-3">
-              {documents.map((doc) => (
-                <DocumentItem key={doc.id} doc={doc} onDelete={onDocumentDeleted} />
+            <div className="mt-3 overflow-hidden rounded-xl border border-brand-line bg-brand-surface">
+              {documents.map((document) => (
+                <DocumentItem key={document.id} doc={document} onDelete={onDocumentDeleted} />
               ))}
             </div>
           )}
-          <div className="px-4">
-            <FileUpload onUploadComplete={onDocumentUploaded} />
-          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </aside>
   )
 }

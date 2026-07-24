@@ -31,9 +31,150 @@ const ALERT_VARIANTS = {
 
 export function Spinner() {
   return (
-    <div className="flex justify-center py-16">
+    <div className="flex justify-center py-16" role="status" aria-label="Loading">
       <div className="w-8 h-8 border-2 border-brand-ink border-t-transparent rounded-full animate-spin" />
     </div>
+  )
+}
+
+const PAGE_WIDTHS = {
+  compact: 'max-w-4xl',
+  standard: 'max-w-5xl',
+  wide: 'max-w-7xl',
+  full: 'max-w-none',
+}
+
+export function WorkspacePage({
+  children,
+  width = 'standard',
+  className = '',
+  contentClassName = '',
+}) {
+  return (
+    <div className={`min-h-full bg-brand-bg ${className}`}>
+      <div className={`mx-auto w-full px-4 py-6 sm:px-6 md:py-8 ${PAGE_WIDTHS[width] || PAGE_WIDTHS.standard} ${contentClassName}`}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+export function WorkspacePageHeader({
+  eyebrow,
+  title,
+  description,
+  meta,
+  icon: Icon,
+  actions,
+  className = '',
+}) {
+  return (
+    <header className={`mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-end sm:justify-between ${className}`}>
+      <div className="min-w-0">
+        {eyebrow && (
+          <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">
+            {Icon && (
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-accent/10">
+                <Icon size={15} aria-hidden="true" />
+              </span>
+            )}
+            <span>{eyebrow}</span>
+          </div>
+        )}
+        <h1 className="font-serif text-2xl font-bold tracking-tight text-brand-ink sm:text-[28px]">
+          {title}
+        </h1>
+        {description && (
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-brand-ink-2">
+            {description}
+          </p>
+        )}
+        {meta && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-brand-muted">
+            {meta}
+          </div>
+        )}
+      </div>
+      {actions && (
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          {actions}
+        </div>
+      )}
+    </header>
+  )
+}
+
+export function FilterToolbar({ children, className = '', ariaLabel = 'Filters and view controls' }) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={`mb-6 flex flex-wrap items-center gap-3 rounded-2xl border border-brand-line bg-brand-surface p-3 shadow-sm ${className}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function SegmentedControl({
+  items,
+  value,
+  onChange,
+  label = 'Choose view',
+  className = '',
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-brand-line bg-brand-bg-soft p-1 ${className}`}
+    >
+      {items.map((item) => {
+        const selected = item.value === value
+        const Icon = item.icon
+        return (
+          <button
+            key={item.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(item.value)}
+            className={`inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold ${
+              selected
+                ? 'bg-brand-surface text-brand-ink shadow-sm'
+                : 'text-brand-muted hover:bg-brand-surface/60 hover:text-brand-ink'
+            }`}
+          >
+            {Icon && <Icon size={14} aria-hidden="true" />}
+            {item.label}
+            {item.count != null && (
+              <span className={`font-mono text-[10px] ${selected ? 'text-brand-accent-2' : ''}`}>
+                {item.count}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function MetricStrip({ items, className = '' }) {
+  return (
+    <dl className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-3 ${className}`}>
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="rounded-2xl border border-brand-line bg-brand-surface px-4 py-3 shadow-sm"
+        >
+          <dt className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted">
+            {item.label}
+          </dt>
+          <dd className={`mt-1 font-serif text-xl font-bold ${item.className || 'text-brand-ink'}`}>
+            {item.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   )
 }
 

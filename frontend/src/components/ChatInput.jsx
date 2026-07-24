@@ -1,5 +1,12 @@
 import React, { useRef, useState } from 'react'
-import { FileText, Send, Upload, Sparkles, X } from 'lucide-react'
+import { FileText, Paperclip, Send, Sparkles, X } from 'lucide-react'
+
+const QUICK_EXAMPLES = [
+  'Summarize the key issues and open questions',
+  'Draft a client-ready follow-up',
+  'Build a chronology from the available sources',
+  'Compare the governing standards',
+]
 
 export default function ChatInput({
   inputValue,
@@ -11,96 +18,109 @@ export default function ChatInput({
   disabled,
   pendingAttachments = [],
   onRemoveAttachment,
-  placeholder = "Ask a legal question or drop a document here...",
+  placeholder = 'Ask about a matter, draft, document, or legal issue…',
+  suggestions = QUICK_EXAMPLES,
 }) {
   const textareaRef = useRef(null)
-  const [showExamples, setShowExamples] = useState(false)
-  const [charCount, setCharCount] = useState(0)
   const [isDragOver, setIsDragOver] = useState(false)
+  const charCount = inputValue.length
 
-  const handleDragEnter = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
+  const handleDragEnter = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
     setIsDragOver(true)
   }
 
-  const handleDragLeave = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
+  const handleDragLeave = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!event.currentTarget.contains(event.relatedTarget)) setIsDragOver(false)
+  }
+
+  const handleDragOver = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const handleDrop = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
     setIsDragOver(false)
+    const files = event.dataTransfer?.files
+    if (files?.length && onDropFiles) onDropFiles(Array.from(files))
   }
 
-  const handleDragOver = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
+  const handleTextareaChange = (event) => {
+    onInputChange(event.target.value)
+    event.target.style.height = 'auto'
+    event.target.style.height = `${Math.min(event.target.scrollHeight, 200)}px`
   }
 
-  const handleDrop = (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragOver(false)
-    const files = e.dataTransfer?.files
-    if (files?.length && onDropFiles) {
-      onDropFiles(Array.from(files))
-    }
-  }
-
-  const handleTextareaChange = (e) => {
-    const value = e.target.value
-    onInputChange(value)
-    setCharCount(value.length)
-
-    // Auto-resize
-    e.target.style.height = 'auto'
-    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
       onSend()
     }
   }
 
-  const quickExamples = [
-    'Summarize the key holdings in Twombly and Iqbal',
-    'Draft a demand letter for breach of contract',
-    'What are the elements of promissory estoppel?',
-    'Compare negligence standards across jurisdictions',
-  ]
+  const chooseSuggestion = (suggestion) => {
+    onInputChange(suggestion)
+    textareaRef.current?.focus()
+  }
 
   return (
     <div
-      className={`bg-brand-surface border-t border-brand-line px-4 md:px-8 py-4 flex-shrink-0 z-20 relative transition-colors ${isDragOver ? 'bg-brand-accent/10' : ''}`}
-      style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 1rem))' }}
+      className={`relative z-20 flex-shrink-0 border-t border-brand-line bg-brand-surface/95 px-3 pt-3 backdrop-blur transition-colors sm:px-4 md:px-6 ${
+        isDragOver ? 'bg-brand-accent/10' : ''
+      }`}
+      style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
       {isDragOver && (
-        <div className="absolute inset-0 border-2 border-dashed border-brand-accent bg-brand-accent/5 flex items-center justify-center z-30 pointer-events-none">
-          <p className="text-sm font-medium text-brand-accent">Drop files to upload</p>
+        <div className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-2xl border-2 border-dashed border-brand-accent bg-brand-surface/95">
+          <p className="flex items-center gap-2 text-sm font-semibold text-brand-accent-2">
+            <Paperclip size={17} /> Add files to this conversation
+          </p>
         </div>
       )}
-      <div className="max-w-4xl mx-auto flex flex-col gap-3">
-        {/* Pending attachments */}
-        {pendingAttachments.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {pendingAttachments.map((att) => (
-              <span
-                key={att.id}
-                className="inline-flex items-center gap-1.5 text-xs font-mono px-2 py-1 bg-brand-line/30 border border-brand-line rounded text-brand-ink"
+
+      <div className="mx-auto flex max-w-4xl flex-col gap-2.5">
+        {!inputValue && pendingAttachments.length === 0 && suggestions.length > 0 && (
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5" aria-label="Suggested prompts">
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onClick={() => chooseSuggestion(suggestion)}
+                className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border border-brand-line bg-brand-surface px-3 text-xs font-medium text-brand-ink hover:border-brand-line-2 hover:bg-brand-bg-soft"
               >
-                <FileText size={12} />
-                {att.filename}
+                <Sparkles size={13} className="text-brand-accent-2" />
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-2" aria-label="Pending attachments">
+            {pendingAttachments.map((attachment) => (
+              <span
+                key={attachment.id}
+                className="inline-flex min-h-9 max-w-full items-center gap-2 rounded-lg border border-brand-line bg-brand-bg-soft px-2.5 text-xs text-brand-ink"
+              >
+                <FileText size={13} className="shrink-0 text-brand-accent-2" />
+                <span className="max-w-56 truncate">{attachment.filename}</span>
                 {onRemoveAttachment && (
                   <button
-                    onClick={() => onRemoveAttachment(att.id)}
-                    className="text-brand-muted hover:text-brand-rose transition-colors"
-                    title="Remove attachment"
+                    type="button"
+                    onClick={() => onRemoveAttachment(attachment.id)}
+                    className="rounded-md p-1 text-brand-muted hover:bg-brand-surface hover:text-brand-rose"
+                    aria-label={`Remove ${attachment.filename}`}
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 )}
               </span>
@@ -108,91 +128,67 @@ export default function ChatInput({
           </div>
         )}
 
-        {/* Quick examples dropdown */}
-        <div className="flex justify-center relative">
-          <button
-            onClick={() => setShowExamples(!showExamples)}
-            className="text-xs font-mono text-brand-muted uppercase tracking-wider hover:text-brand-ink transition-colors flex items-center gap-1 mb-2"
-          >
-            <Sparkles size={12} /> Suggested prompts
-          </button>
-          {showExamples && (
-            <div className="absolute top-8 left-1/2 -translate-x-1/2 w-96 bg-brand-surface border border-brand-line shadow-lg z-10 rounded-lg overflow-hidden animate-scale-in">
-              {quickExamples.map((example, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    onInputChange(example)
-                    setShowExamples(false)
-                    setCharCount(example.length)
-                    textareaRef.current?.focus()
-                  }}
-                  className="w-full text-left px-4 py-3 hover:bg-brand-line/40 text-sm text-brand-ink transition-colors border-b border-brand-line last:border-b-0"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Input area */}
-        <div className="relative flex items-end shadow-sm">
-          <div className="absolute left-4 top-4 text-brand-muted pointer-events-none">
-            <FileText className="w-5 h-5" strokeWidth={1.5} />
-          </div>
-
+        <div className="rounded-2xl border border-brand-line-2 bg-brand-surface p-2 shadow-sm focus-within:border-brand-accent focus-within:ring-2 focus-within:ring-brand-accent/15">
           <textarea
             ref={textareaRef}
             value={inputValue}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
-            className="w-full resize-none bg-brand-bg border border-brand-ink text-brand-ink px-12 py-4 pr-24 min-h-[56px] max-h-[200px] text-[15px] font-sans focus:outline-none focus:ring-1 focus:ring-brand-ink placeholder-brand-muted leading-relaxed"
+            aria-label="Message the assistant"
+            aria-describedby="assistant-review-note"
+            className="min-h-[52px] max-h-[200px] w-full resize-none bg-transparent px-2 py-2 text-[15px] leading-relaxed text-brand-ink placeholder-brand-muted focus:outline-none"
             rows={1}
             style={{ height: 'auto' }}
             disabled={disabled || isSending}
           />
 
-          {/* Action buttons */}
-          <div className="absolute right-3 top-3 flex items-center gap-2">
-            {charCount > 0 && (
-              <span
-                className={`text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded ${
-                  charCount > 1000
-                    ? 'text-brand-rose bg-brand-rose/10'
-                    : 'text-brand-muted bg-brand-line/20'
-                }`}
+          <div className="flex items-center justify-between gap-3 border-t border-brand-line/70 px-1 pt-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={onUploadClick}
+                disabled={isSending}
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl px-2.5 text-xs font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Attach a document"
               >
-                {charCount}
-              </span>
-            )}
-            <button
-              onClick={onUploadClick}
-              disabled={isSending}
-              className="p-2 text-brand-muted hover:text-brand-ink hover:bg-brand-line/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded"
-              title="Upload document"
-            >
-              <Upload className="w-4 h-4" />
-            </button>
-            <button
-              onClick={onSend}
-              disabled={!inputValue.trim() || isSending}
-              className="p-2 bg-brand-ink text-brand-surface hover:bg-brand-accent hover:shadow-md disabled:bg-brand-line disabled:text-brand-muted disabled:cursor-not-allowed transition-all rounded"
-              title="Send message (Shift+Enter for new line)"
-            >
-              {isSending ? (
-                <div className="w-4 h-4 border-2 border-brand-surface border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
+                <Paperclip size={16} />
+                <span className="hidden sm:inline">Attach</span>
+              </button>
+              {charCount > 0 && (
+                <span className={`text-[10px] font-mono ${charCount > 1000 ? 'text-brand-rose' : 'text-brand-muted'}`}>
+                  {charCount.toLocaleString()}
+                </span>
               )}
-            </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="hidden text-[10px] text-brand-muted md:inline">Enter to send · Shift+Enter for a new line</span>
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={!inputValue.trim() || isSending}
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-brand-ink px-3.5 text-sm font-semibold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:bg-brand-line-2 disabled:text-brand-muted"
+                aria-label={isSending ? 'Assistant is responding' : 'Send message'}
+              >
+                {isSending ? (
+                  <>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span className="hidden sm:inline">Working</span>
+                  </>
+                ) : (
+                  <>
+                    <Send size={16} />
+                    <span className="hidden sm:inline">Send</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Info text */}
-        <p className="text-center text-[10px] text-brand-muted font-mono uppercase tracking-widest">
-          Clarity Legal may produce inaccurate information. Always verify citations independently.
+        <p id="assistant-review-note" className="text-center text-[10px] leading-relaxed text-brand-muted">
+          Verify cited authority, dates, and legal conclusions before relying on assistant work.
         </p>
       </div>
     </div>

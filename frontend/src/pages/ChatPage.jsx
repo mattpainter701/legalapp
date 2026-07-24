@@ -14,6 +14,7 @@ import {
   getMattersV2,
 } from '../api'
 import { AlertBanner } from '../components/ui'
+import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
 
 function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbackAssistantMessage) {
   const next = Array.isArray(serverMessages) ? [...serverMessages] : []
@@ -202,6 +203,7 @@ export default function ChatPage() {
   const [railOpen, setRailOpen] = useState(false)
   const [notice, setNotice] = useState(null)
   const fileInputRef = useRef(null)
+  const matterPickerRef = useRef(null)
 
   const showErrorNotice = useCallback((title, fallback, err) => {
     setNotice({
@@ -290,6 +292,27 @@ export default function ChatPage() {
       .then((data) => setMatters(Array.isArray(data) ? data : (data.items || [])))
       .catch(() => setMatters([]))
   }, [])
+
+  useEffect(() => {
+    if (!matterPickerOpen) return undefined
+
+    const handlePointerDown = (event) => {
+      if (!matterPickerRef.current?.contains(event.target)) setMatterPickerOpen(false)
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMatterPickerOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [matterPickerOpen])
 
   // Load first conversation on mount, or from URL param
   useEffect(() => {
@@ -618,6 +641,7 @@ export default function ChatPage() {
       {/* Desktop rail */}
       <ChatRail
         className="hidden lg:flex w-[300px] flex-shrink-0 border-r border-brand-line h-full"
+        isOpen
         onNewConversation={handleNewConversation}
         onSelectConversation={handleRailSelectConversation}
         onDeleteConversation={handleRailDeleteConversation}
@@ -625,12 +649,13 @@ export default function ChatPage() {
 
       {/* Mobile rail drawer */}
       <div
-        className={`fixed inset-0 bg-black/40 z-30 lg:hidden transition-opacity duration-300 ${railOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 z-30 bg-brand-ink/45 backdrop-blur-[2px] transition-opacity duration-300 lg:hidden ${railOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`}
         onClick={() => setRailOpen(false)}
         aria-hidden="true"
       />
       <ChatRail
-        className={`fixed inset-y-0 left-0 z-40 w-[300px] border-r border-brand-line lg:hidden transition-transform duration-300 ease-in-out ${railOpen ? 'sidebar-visible' : 'sidebar-hidden'}`}
+        className={`fixed inset-y-0 left-0 z-40 w-[min(340px,calc(100vw-1rem))] rounded-r-2xl border-r border-brand-line shadow-2xl transition-transform duration-300 ease-in-out lg:hidden ${railOpen ? 'sidebar-visible' : 'sidebar-hidden'}`}
+        isOpen={railOpen}
         onNewConversation={() => { handleNewConversation(); setRailOpen(false) }}
         onSelectConversation={handleRailSelectConversation}
         onDeleteConversation={handleRailDeleteConversation}
@@ -657,87 +682,113 @@ export default function ChatPage() {
             setUsePremium={setUsePremium}
             includePublic={includePublic}
             setIncludePublic={setIncludePublic}
-            user={null}
             onExportConversation={handleExportConversation}
             onRenameConversation={handleRenameConversation}
             onRenameError={(message) => setNotice({ type: 'error', title: 'Rename failed', message })}
             onOpenSidebar={() => setRailOpen(true)}
           />
 
-          <div className="relative px-4 pt-4 md:px-6">
-            <div className="flex flex-col gap-3 rounded-xl border border-brand-line bg-brand-surface/95 px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between">
-              <div className="min-w-0">
-                <p className="text-[11px] font-bold uppercase tracking-widest text-brand-muted font-sans">Matter context</p>
-                {linkedMatterId ? (
-                  <p className="mt-1 truncate text-sm font-semibold text-brand-ink font-sans">
-                    {linkedMatterName}
-                    {linkedMatter?.case_number ? <span className="ml-2 font-normal text-brand-muted">{linkedMatter.case_number}</span> : null}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-sm text-brand-muted font-sans">No matter linked to this conversation.</p>
-                )}
+          <div className="relative px-3 pt-3 sm:px-4 md:px-6" ref={matterPickerRef}>
+            <div className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-surface/95 px-3 py-2.5 shadow-sm">
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                linkedMatterId ? 'bg-brand-accent/10 text-brand-accent-2' : 'bg-brand-bg-soft text-brand-muted'
+              }`}>
+                <Briefcase size={17} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted">Working context</p>
+                <p className={`mt-0.5 truncate text-sm font-semibold ${linkedMatterId ? 'text-brand-ink' : 'text-brand-muted'}`}>
+                  {linkedMatterId
+                    ? linkedMatterName
+                    : activeConvId
+                      ? 'No matter linked'
+                      : 'Start a conversation to link a matter'}
+                  {linkedMatter?.case_number ? (
+                    <span className="ml-2 font-normal text-brand-muted">{linkedMatter.case_number}</span>
+                  ) : null}
+                </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {linkedMatterId && (
-                  <button
-                    onClick={() => navigate(`/matters/${linkedMatterId}`)}
-                    className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-xs font-medium text-brand-ink hover:bg-brand-bg-soft font-sans"
-                  >
-                    Open matter
-                  </button>
-                )}
-                {linkedMatterId && (
-                  <button
-                    onClick={() => applyMatterLink('')}
-                    disabled={matterLinking}
-                    className="rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-xs font-medium text-brand-muted hover:text-brand-rose disabled:opacity-50 font-sans"
-                  >
-                    Unlink
-                  </button>
-                )}
+              {linkedMatterId && (
                 <button
-                  onClick={() => setMatterPickerOpen((open) => !open)}
-                  disabled={!activeConvId || matterLinking}
-                  className="rounded-lg bg-brand-ink px-3 py-2 text-xs font-medium text-white hover:bg-brand-ink-2 disabled:opacity-50 font-sans"
+                  type="button"
+                  onClick={() => navigate(`/matters/${linkedMatterId}`)}
+                  className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink"
+                  aria-label={`Open ${linkedMatterName}`}
+                  title="Open linked matter"
                 >
-                  {linkedMatterId ? 'Change matter' : 'Link to matter'}
+                  <ExternalLink size={16} />
                 </button>
-              </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setMatterPickerOpen((open) => !open)}
+                disabled={!activeConvId || matterLinking}
+                aria-expanded={matterPickerOpen}
+                aria-haspopup="dialog"
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Link2 size={14} />
+                <span className="hidden sm:inline">{linkedMatterId ? 'Change' : 'Link matter'}</span>
+                <ChevronDown size={13} />
+              </button>
             </div>
+
             {matterPickerOpen && (
-              <div className="absolute right-4 top-[calc(100%+8px)] z-20 w-[min(420px,calc(100vw-2rem))] rounded-xl border border-brand-line bg-brand-surface shadow-xl md:right-6">
+              <div
+                role="dialog"
+                aria-label="Choose matter context"
+                className="absolute right-3 top-[calc(100%+0.5rem)] z-20 w-[min(430px,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-xl sm:right-4 md:right-6"
+              >
                 <div className="border-b border-brand-line p-3">
-                  <input
-                    value={matterQuery}
-                    onChange={(e) => setMatterQuery(e.target.value)}
-                    placeholder="Search matters"
-                    className="w-full rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent font-sans"
-                    autoFocus
-                  />
+                  <p className="mb-2 text-xs font-semibold text-brand-ink">Choose matter context</p>
+                  <div className="relative">
+                    <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
+                    <input
+                      value={matterQuery}
+                      onChange={(event) => setMatterQuery(event.target.value)}
+                      aria-label="Search matters"
+                      placeholder="Search by matter, client, or case number"
+                      className="w-full rounded-xl border border-brand-line bg-brand-bg py-2.5 pl-9 pr-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent"
+                      autoFocus
+                    />
+                  </div>
                 </div>
                 <div className="max-h-72 overflow-y-auto">
                   {filteredMatters.length === 0 ? (
-                    <p className="px-4 py-6 text-center text-sm text-brand-muted font-sans">No matters found.</p>
+                    <p className="px-4 py-6 text-center text-sm text-brand-muted">No matters found.</p>
                   ) : filteredMatters.map((matter) => (
                     <button
                       key={matter.id}
+                      type="button"
                       onClick={() => applyMatterLink(matter.id)}
                       disabled={matterLinking}
                       className="block w-full border-b border-brand-line px-4 py-3 text-left last:border-0 hover:bg-brand-bg-soft disabled:opacity-50"
                     >
-                      <span className="block truncate text-sm font-semibold text-brand-ink font-sans">{matter.matter_name || matter.name || 'Untitled matter'}</span>
-                      <span className="mt-0.5 block truncate text-xs text-brand-muted font-sans">
-                        {[matter.case_number, matter.client_name, matter.status].filter(Boolean).join(' - ') || 'Matter'}
+                      <span className="block truncate text-sm font-semibold text-brand-ink">{matter.matter_name || matter.name || 'Untitled matter'}</span>
+                      <span className="mt-0.5 block truncate text-xs text-brand-muted">
+                        {[matter.case_number, matter.client_name, matter.status].filter(Boolean).join(' · ') || 'Matter'}
                       </span>
                     </button>
                   ))}
                 </div>
+                {linkedMatterId && (
+                  <div className="border-t border-brand-line p-2">
+                    <button
+                      type="button"
+                      onClick={() => applyMatterLink('')}
+                      disabled={matterLinking}
+                      className="flex min-h-10 w-full items-center gap-2 rounded-xl px-3 text-sm font-medium text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose disabled:opacity-50"
+                    >
+                      <Unlink size={15} /> Remove matter context
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
           {notice && (
-            <div className="px-4 pt-4 md:px-6">
+            <div className="px-3 pt-3 sm:px-4 md:px-6">
               <AlertBanner
                 type={notice.type}
                 title={notice.title}
@@ -752,6 +803,7 @@ export default function ChatPage() {
             messages={messages}
             isLoading={isLoadingMessages}
             isSending={isSending}
+            onPromptSelect={(prompt) => setInputValue(prompt)}
           />
 
           <ChatInput

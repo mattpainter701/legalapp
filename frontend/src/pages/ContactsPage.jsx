@@ -3,7 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { getContacts, createContact } from '../api'
 import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail } from 'lucide-react'
 import { useAuth } from '../App'
-import { AlertBanner, EmptyState, Spinner } from '../components/ui'
+import {
+  AlertBanner,
+  EmptyState,
+  FilterToolbar,
+  Spinner,
+  WorkspacePage,
+  WorkspacePageHeader,
+} from '../components/ui'
 
 const CONTACT_TYPES = ['client', 'opposing_party', 'witness', 'expert', 'vendor', 'referral', 'other']
 const TYPE_COLORS = {
@@ -187,48 +194,50 @@ export default function ContactsPage() {
   }, [loadContacts, q])
 
   return (
-    <div className="">
-      <div className="max-w-5xl mx-auto px-6 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-serif font-bold text-brand-ink">Contacts</h1>
-            <p className="text-sm text-brand-muted mt-1">{total} contact{total !== 1 ? 's' : ''}</p>
-          </div>
+    <WorkspacePage>
+        <WorkspacePageHeader
+          eyebrow="Firm directory"
+          icon={Users}
+          title="Contacts"
+          description="Keep the people and organizations around every matter in one searchable directory."
+          meta={<span>{total} contact{total !== 1 ? 's' : ''}</span>}
+          actions={
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white rounded-lg text-sm font-medium hover:bg-brand-ink/90 transition-colors"
+            className="btn-primary inline-flex items-center gap-2"
           >
             <Plus size={16} />
             New Contact
           </button>
-        </div>
+          }
+        />
 
         {/* Filters */}
-        <div className="flex items-center gap-3 mb-6 flex-wrap">
+        <FilterToolbar ariaLabel="Contact filters">
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-muted" />
             <input
               value={q}
               onChange={e => setQ(e.target.value)}
               placeholder="Search name, email, org…"
-              className="w-full pl-9 pr-3 py-2 border border-brand-line rounded-lg text-sm bg-white placeholder:text-brand-muted focus:outline-none focus:border-brand-accent"
+              aria-label="Search contacts"
+              className="min-h-10 w-full rounded-xl border border-brand-line bg-brand-surface py-2 pl-9 pr-3 text-sm placeholder:text-brand-muted focus:outline-none focus:ring-2 focus:ring-brand-accent"
             />
           </div>
-          <select value={filterType} onChange={e => setFilterType(e.target.value)}
-            className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
+          <select aria-label="Filter contacts by role" value={filterType} onChange={e => setFilterType(e.target.value)}
+            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All roles</option>
             {CONTACT_TYPES.map(t => (
               <option key={t} value={t}>{t.replace('_', ' ')}</option>
             ))}
           </select>
-          <select value={filterEntity} onChange={e => setFilterEntity(e.target.value)}
-            className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
+          <select aria-label="Filter contacts by entity type" value={filterEntity} onChange={e => setFilterEntity(e.target.value)}
+            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All types</option>
             <option value="person">Person</option>
             <option value="organization">Organization</option>
           </select>
-        </div>
+        </FilterToolbar>
 
         {/* List */}
         {loading ? (
@@ -296,8 +305,6 @@ export default function ContactsPage() {
             ))}
           </div>
         )}
-      </div>
-
       {showCreate && (
         <CreateContactModal
           onClose={() => setShowCreate(false)}
@@ -307,6 +314,6 @@ export default function ContactsPage() {
           }}
         />
       )}
-    </div>
+    </WorkspacePage>
   )
 }
