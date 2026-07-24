@@ -187,7 +187,7 @@ export default function HomePage() {
                   <span className="font-serif font-semibold text-[14px]">Intake desk</span>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold bg-brand-green/10 text-brand-green border border-brand-green/20">
-                  <span className="w-1.5 h-1.5 rounded-full bg-brand-green" /> Live workflow
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand-green" /> Illustrative workflow
                 </span>
               </div>
               <div className="p-4 sm:p-5 space-y-3.5">
