@@ -19,7 +19,13 @@ import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X,
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import { useAuth } from '../App'
-import { AlertBanner, EmptyState, Spinner } from '../components/ui'
+import {
+  AlertBanner,
+  EmptyState,
+  FilterToolbar,
+  Spinner,
+  WorkspacePage,
+} from '../components/ui'
 import { canAccessModuleList } from '../moduleAccess'
 
 const PRIORITY_COLORS = {
@@ -1248,11 +1254,12 @@ export default function TasksPage() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-bg">
-      <div className="max-w-4xl mx-auto px-6 py-8">
+    <WorkspacePage width="compact">
+      <div>
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">Personal work queue</p>
             <h1 className="text-2xl font-serif font-bold text-brand-ink">Tasks & Deadlines</h1>
             <p className="text-sm text-brand-muted mt-1">
               {totalActive} active task{totalActive !== 1 ? 's' : ''}
@@ -1264,16 +1271,16 @@ export default function TasksPage() {
           <button
             ref={createTaskButtonRef}
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white rounded-lg text-sm font-medium hover:bg-brand-ink/90 transition-colors"
+            className="btn-primary inline-flex items-center gap-2"
           >
             <Plus size={16} /> New Task
           </button>
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-3 mb-6 flex-wrap">
+        <FilterToolbar ariaLabel="Task filters">
           <select aria-label="Filter tasks by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-            className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
+            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All statuses</option>
             <option value="pending">Pending</option>
             <option value="in_progress">In Progress</option>
@@ -1281,7 +1288,7 @@ export default function TasksPage() {
             <option value="cancelled">Cancelled</option>
           </select>
           <select aria-label="Filter tasks by priority" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
-            className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
+            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All priorities</option>
             <option value="urgent">Urgent</option>
             <option value="high">High</option>
@@ -1289,11 +1296,11 @@ export default function TasksPage() {
             <option value="low">Low</option>
           </select>
           <select aria-label="Filter tasks by type" value={filterType} onChange={e => setFilterType(e.target.value)}
-            className="px-3 py-2 border border-brand-line rounded-lg text-sm bg-white text-brand-ink">
+            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All types</option>
             {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
           </select>
-        </div>
+        </FilterToolbar>
 
         {actionError && (
           <AlertBanner
@@ -1468,6 +1475,6 @@ export default function TasksPage() {
           }}
         />
       )}
-    </div>
+    </WorkspacePage>
   )
 }

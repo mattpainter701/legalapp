@@ -1,6 +1,37 @@
-import React, { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, Download, Search, MoreVertical, PanelLeft } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import {
+  Check,
+  ChevronDown,
+  Download,
+  MoreVertical,
+  PanelLeft,
+  Search,
+  Settings2,
+  ShieldCheck,
+} from 'lucide-react'
+
+function useDismissablePopover(open, onClose, containerRef) {
+  useEffect(() => {
+    if (!open) return undefined
+
+    const handlePointerDown = (event) => {
+      if (!containerRef.current?.contains(event.target)) onClose()
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [containerRef, onClose, open])
+}
 
 export default function ChatHeader({
   activeRef,
@@ -9,18 +40,22 @@ export default function ChatHeader({
   setUsePremium,
   includePublic,
   setIncludePublic,
-  user,
   onExportConversation,
   onSearchMessages,
   onRenameConversation,
   onRenameError,
   onOpenSidebar,
 }) {
-  const navigate = useNavigate()
   const [showMenu, setShowMenu] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editedTitle, setEditedTitle] = useState(activeConvTitle)
   const [savingTitle, setSavingTitle] = useState(false)
+  const menuRef = useRef(null)
+  const settingsRef = useRef(null)
+
+  useDismissablePopover(showMenu, () => setShowMenu(false), menuRef)
+  useDismissablePopover(showSettings, () => setShowSettings(false), settingsRef)
 
   useEffect(() => {
     setEditedTitle(activeConvTitle)
@@ -51,8 +86,12 @@ export default function ChatHeader({
     try {
       await onRenameConversation(nextTitle)
       setIsEditing(false)
-    } catch (e) {
-      onRenameError?.(e?.response?.data?.detail || e?.message || 'Conversation title could not be saved.')
+    } catch (error) {
+      onRenameError?.(
+        error?.response?.data?.detail ||
+        error?.message ||
+        'Conversation title could not be saved.',
+      )
       setEditedTitle(activeConvTitle)
       setIsEditing(false)
     } finally {
@@ -63,147 +102,223 @@ export default function ChatHeader({
   const canEditTitle = Boolean(activeConvTitle && onRenameConversation)
 
   return (
-    <div className="h-16 bg-brand-surface border-b border-brand-line px-4 md:px-6 flex items-center justify-between flex-shrink-0 z-20">
-      {/* Left: Hamburger (mobile) + Conversation info */}
-      <div className="flex items-center gap-3 min-w-0 flex-1">
+    <header className="z-20 flex min-h-16 flex-shrink-0 items-center justify-between gap-3 border-b border-brand-line bg-brand-surface px-3 py-2 sm:px-4 md:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button
-          className="lg:hidden tap-target text-brand-muted hover:text-brand-ink transition-colors -ml-1 flex-shrink-0"
+          type="button"
+          className="tap-target -ml-1 flex-shrink-0 rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink lg:hidden"
           onClick={onOpenSidebar}
-          aria-label="Open conversations panel"
-          title="Conversations & documents"
+          aria-label="Open conversations and sources"
+          title="Conversations and sources"
         >
           <PanelLeft size={20} />
         </button>
-      <div className="flex flex-col min-w-0 flex-1">
-        <div className="text-xs font-mono text-brand-muted uppercase tracking-widest mb-0.5 flex items-center gap-2">
-          <span>Case Ledger</span>
-          <span className="text-brand-line-2">/</span>
-          <span>Ref: {activeRef}</span>
-        </div>
-        {isEditing ? (
-          <input
-            type="text"
-            value={editedTitle}
-            onChange={(e) => setEditedTitle(e.target.value)}
-            onBlur={handleTitleEdit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleTitleEdit()
-              if (e.key === 'Escape') {
-                setEditedTitle(activeConvTitle)
-                setIsEditing(false)
-              }
-            }}
-            disabled={savingTitle}
-            className="font-serif text-xl text-brand-ink font-semibold bg-brand-bg border border-brand-accent px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-accent disabled:opacity-60"
-            autoFocus
-          />
-        ) : (
-          <h1
-            className={`font-serif text-xl text-brand-ink font-semibold truncate px-1 py-0.5 rounded transition-all ${
-              canEditTitle ? 'cursor-pointer hover:text-brand-accent hover:bg-brand-line/20' : ''
-            }`}
-            onClick={handleTitleEdit}
-            title={canEditTitle ? 'Click to edit title' : undefined}
-          >
-            {activeConvTitle || 'Select a conversation'}
-          </h1>
-        )}
-      </div>
-      </div>{/* end left flex wrapper */}
 
-      {/* Right: Controls */}
-      <div className="flex items-center gap-2 md:gap-6 flex-shrink-0">
-        {/* Legal-safe badge */}
-        <div
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-brand-accent/10 text-brand-accent border border-brand-accent/20 text-xs font-semibold"
-          title="Responses are grounded in your sources, cited by confidence, and gated for attorney review"
-        >
-          <ShieldCheck size={14} strokeWidth={2} />
-          <span>LEGAL-SAFE</span>
-        </div>
-
-        {/* Model selector */}
-        <div className="hidden sm:flex items-center bg-brand-surface-2 border border-brand-line p-0.5 rounded">
-          <button
-            onClick={() => setUsePremium(false)}
-            className={`px-3 py-1.5 text-xs font-medium transition-all rounded-sm ${
-              !usePremium
-                ? 'bg-brand-surface text-brand-ink shadow-sm border border-brand-line'
-                : 'text-brand-muted hover:text-brand-ink hover:bg-brand-line/30'
-            }`}
-          >
-            Standard
-          </button>
-          <button
-            onClick={() => setUsePremium(true)}
-            className={`px-3 py-1.5 text-xs font-medium transition-all rounded-sm ${
-              usePremium
-                ? 'bg-brand-surface text-brand-ink shadow-sm border border-brand-line'
-                : 'text-brand-muted hover:text-brand-ink hover:bg-brand-line/30'
-            }`}
-          >
-            Premium
-          </button>
-        </div>
-
-        {/* Public case law toggle */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={includePublic}
-          onClick={() => setIncludePublic((v) => !v)}
-          className="hidden md:flex items-center gap-2 cursor-pointer group focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-ink"
-        >
-          <span
-            className={`relative inline-block w-8 h-4 rounded-full transition-colors ${
-              includePublic ? 'bg-brand-accent' : 'bg-brand-line-2'
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
-                includePublic ? 'left-[18px]' : 'left-0.5'
-              }`}
+        <div className="min-w-0 flex-1">
+          <div className="mb-0.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-brand-muted">
+            <span>AI assistant</span>
+            {activeRef !== '—' && (
+              <>
+                <span aria-hidden="true" className="text-brand-line-2">/</span>
+                <span>Conversation {activeRef}</span>
+              </>
+            )}
+          </div>
+          {isEditing ? (
+            <input
+              type="text"
+              value={editedTitle}
+              onChange={(event) => setEditedTitle(event.target.value)}
+              onBlur={handleTitleEdit}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') handleTitleEdit()
+                if (event.key === 'Escape') {
+                  setEditedTitle(activeConvTitle)
+                  setIsEditing(false)
+                }
+              }}
+              disabled={savingTitle}
+              aria-label="Conversation title"
+              className="w-full max-w-xl rounded-lg border border-brand-accent bg-brand-bg px-2 py-1 font-serif text-lg font-semibold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent disabled:opacity-60"
+              autoFocus
             />
-          </span>
-          <span className="text-xs font-medium text-brand-ink">Public case law</span>
-        </button>
+          ) : (
+            <h1 className="min-w-0 truncate font-serif text-lg font-semibold text-brand-ink sm:text-xl">
+              {canEditTitle ? (
+                <button
+                  type="button"
+                  onClick={handleTitleEdit}
+                  className="max-w-full truncate rounded-md text-left hover:text-brand-accent-2"
+                  title="Rename conversation"
+                >
+                  {activeConvTitle}
+                </button>
+              ) : (
+                activeConvTitle || 'Start a conversation'
+              )}
+            </h1>
+          )}
+        </div>
+      </div>
 
-        {/* Menu */}
-        <div className="relative group">
+      <div className="flex flex-shrink-0 items-center gap-1.5 sm:gap-2">
+        <div
+          className="hidden items-center gap-1.5 rounded-full border border-brand-accent/20 bg-brand-accent/10 px-2.5 py-1 text-[11px] font-semibold text-brand-accent-2 sm:flex"
+          title="Assistant work should be verified before it is relied upon"
+        >
+          <ShieldCheck size={14} aria-hidden="true" />
+          <span>Review required</span>
+        </div>
+
+        <div className="relative" ref={settingsRef}>
           <button
-            onClick={() => setShowMenu(!showMenu)}
-            className="p-2 text-brand-muted hover:text-brand-ink hover:bg-brand-line/40 rounded transition-all"
-            title="More options"
+            type="button"
+            onClick={() => {
+              setShowSettings((open) => !open)
+              setShowMenu(false)
+            }}
+            aria-label="Response settings"
+            aria-haspopup="dialog"
+            aria-expanded={showSettings}
+            className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-2.5 text-xs font-semibold ${
+              showSettings
+                ? 'border-brand-ink bg-brand-ink text-white'
+                : 'border-brand-line bg-brand-surface text-brand-ink hover:bg-brand-bg-soft'
+            }`}
           >
-            <MoreVertical size={16} />
+            <Settings2 size={16} aria-hidden="true" />
+            <span className="hidden md:inline">{usePremium ? 'Premium' : 'Standard'}</span>
+            <ChevronDown size={13} className="hidden md:block" aria-hidden="true" />
+          </button>
+
+          {showSettings && (
+            <div
+              role="dialog"
+              aria-label="Response settings"
+              className="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-xl"
+            >
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-brand-muted">
+                  Response model
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {[
+                    {
+                      value: false,
+                      label: 'Standard',
+                      description: 'Everyday research and drafting',
+                    },
+                    {
+                      value: true,
+                      label: 'Premium',
+                      description: 'More complex analysis',
+                    },
+                  ].map((option) => {
+                    const selected = usePremium === option.value
+                    return (
+                      <button
+                        key={option.label}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setUsePremium(option.value)}
+                        className={`rounded-xl border p-3 text-left ${
+                          selected
+                            ? 'border-brand-accent bg-brand-accent/10'
+                            : 'border-brand-line hover:bg-brand-bg-soft'
+                        }`}
+                      >
+                        <span className="flex items-center justify-between gap-2 text-sm font-semibold text-brand-ink">
+                          {option.label}
+                          {selected && <Check size={15} className="text-brand-accent-2" />}
+                        </span>
+                        <span className="mt-1 block text-[11px] leading-snug text-brand-muted">
+                          {option.description}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-brand-line pt-4">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={includePublic}
+                  onClick={() => setIncludePublic((value) => !value)}
+                  className="flex w-full items-center justify-between gap-4 rounded-xl text-left"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-brand-ink">Public case law</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-brand-muted">
+                      Include available public authorities alongside firm and matter sources.
+                    </span>
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      includePublic ? 'bg-brand-accent' : 'bg-brand-line-2'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                        includePublic ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="relative" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowMenu((open) => !open)
+              setShowSettings(false)
+            }}
+            className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink"
+            aria-label="Conversation options"
+            aria-haspopup="menu"
+            aria-expanded={showMenu}
+          >
+            <MoreVertical size={18} />
           </button>
           {showMenu && (
-            <div className="absolute right-0 mt-2 w-48 bg-brand-surface border border-brand-line shadow-lg z-30 rounded-lg overflow-hidden animate-scale-in">
+            <div
+              role="menu"
+              className="absolute right-0 mt-2 w-52 overflow-hidden rounded-xl border border-brand-line bg-brand-surface py-1 shadow-lg"
+            >
               {onSearchMessages && (
                 <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     onSearchMessages()
                     setShowMenu(false)
                   }}
-                  className="w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors"
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-brand-ink hover:bg-brand-bg-soft"
                 >
-                  <Search size={14} /> Search messages
+                  <Search size={15} /> Search messages
                 </button>
               )}
               <button
+                type="button"
+                role="menuitem"
                 onClick={() => {
                   onExportConversation?.()
                   setShowMenu(false)
                 }}
-                className={`w-full text-left px-4 py-2.5 hover:bg-brand-line/40 text-sm text-brand-ink flex items-center gap-2 transition-colors ${onSearchMessages ? 'border-t border-brand-line' : ''}`}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-brand-ink hover:bg-brand-bg-soft"
               >
-                <Download size={14} /> Export conversation
+                <Download size={15} /> Export conversation
               </button>
-{/* Admin button moved to AppShell header */}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </header>
   )
 }

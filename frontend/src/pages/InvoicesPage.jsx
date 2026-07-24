@@ -1,241 +1,349 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus } from 'lucide-react'
-import { getInvoices, generateInvoice, getMattersV2 } from '../api'
+import { Plus, Receipt, RefreshCw } from 'lucide-react'
+import { generateInvoice, getInvoices, getMattersV2 } from '../api'
+import {
+  AlertBanner,
+  EmptyState,
+  FilterToolbar,
+  MetricStrip,
+  SegmentedControl,
+  Spinner,
+  WorkspacePage,
+  WorkspacePageHeader,
+} from '../components/ui'
 
-const QBO_GREEN = '#2CA01C'
-
-const STATUS_COLORS = {
-  draft: { bg: '#EFE8DA', color: '#2D3F55' },
-  sent: { bg: '#E7EDE7', color: '#426146' },
-  invoiced: { bg: '#E7EDE7', color: '#426146' },
-  paid: { bg: '#E7EDE7', color: '#426146' },
-  partially_paid: { bg: '#F5E9CE', color: '#8A6220' },
-  overdue: { bg: '#F6E4E0', color: '#9C4F3F' },
-  void: { bg: '#EFE8DA', color: '#6A7587' },
-  written_off: { bg: '#EFE8DA', color: '#6A7587' },
+const STATUS_STYLES = {
+  draft: 'border-brand-line bg-brand-bg-soft text-brand-ink-2',
+  sent: 'border-brand-accent/20 bg-brand-accent/10 text-brand-accent-2',
+  invoiced: 'border-brand-accent/20 bg-brand-accent/10 text-brand-accent-2',
+  paid: 'border-brand-green/20 bg-brand-green/10 text-brand-green',
+  partially_paid: 'border-brand-amber/20 bg-brand-amber/10 text-brand-amber',
+  overdue: 'border-brand-rose/20 bg-brand-rose/10 text-brand-rose',
+  void: 'border-brand-line bg-brand-bg-soft text-brand-muted',
+  written_off: 'border-brand-line bg-brand-bg-soft text-brand-muted',
 }
 
 const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'draft', label: 'Draft' },
-  { key: 'sent', label: 'Sent' },
-  { key: 'partially_paid', label: 'Partially Paid' },
-  { key: 'paid', label: 'Paid' },
-  { key: 'overdue', label: 'Overdue' },
+  { value: 'all', label: 'All' },
+  { value: 'draft', label: 'Draft' },
+  { value: 'sent', label: 'Sent' },
+  { value: 'partially_paid', label: 'Part paid' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'overdue', label: 'Overdue' },
 ]
+
+const money = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+})
+
+function InvoiceStatus({ status }) {
+  const normalized = status || 'draft'
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+      STATUS_STYLES[normalized] || STATUS_STYLES.draft
+    }`}>
+      {normalized.replaceAll('_', ' ')}
+    </span>
+  )
+}
+
+function QboStatus({ invoice }) {
+  const synced = invoice.qbo_sync_status === 'synced'
+  return (
+    <span
+      title={synced
+        ? `Synced to QuickBooks${invoice.qbo_invoice_id ? ` (${invoice.qbo_invoice_id})` : ''}`
+        : `QuickBooks ${invoice.qbo_sync_status || 'not synced'}`}
+      className={`inline-flex items-center gap-1.5 text-xs ${synced ? 'text-brand-green' : 'text-brand-muted'}`}
+    >
+      <span className={`h-2 w-2 rounded-full ${synced ? 'bg-brand-green' : 'bg-brand-line-2'}`} />
+      <span className="hidden xl:inline">{synced ? 'Synced' : 'Not synced'}</span>
+    </span>
+  )
+}
 
 export default function InvoicesPage() {
   const navigate = useNavigate()
   const [invoices, setInvoices] = useState([])
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [showGenerate, setShowGenerate] = useState(false)
+  const [generating, setGenerating] = useState(false)
   const [generateForm, setGenerateForm] = useState({ matter_id: '' })
   const [generateError, setGenerateError] = useState(null)
 
   const loadData = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      setLoading(true)
       const params = {}
       if (filter === 'overdue') params.overdue_only = true
       else if (filter !== 'all') params.status = filter
-      const [invData, mattersData] = await Promise.all([
+      const [invoiceData, matterData] = await Promise.all([
         getInvoices(params),
         getMattersV2({ page_size: 200 }),
       ])
-      setInvoices(invData.items || invData)
-      setMatters(mattersData.items || [])
-    } catch (err) {
-      console.error('Failed to load invoices', err)
+      setInvoices(invoiceData.items || invoiceData || [])
+      setMatters(matterData.items || matterData || [])
+    } catch (error) {
+      console.error('Failed to load invoices', error)
+      setLoadError(error?.response?.data?.detail || 'Invoices could not be loaded.')
     } finally {
       setLoading(false)
     }
   }, [filter])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
-  const handleGenerate = async (e) => {
-    e.preventDefault()
+  const handleGenerate = async (event) => {
+    event.preventDefault()
     setGenerateError(null)
+    setGenerating(true)
     try {
-      const inv = await generateInvoice({ matter_id: generateForm.matter_id })
+      const invoice = await generateInvoice({ matter_id: generateForm.matter_id })
       setShowGenerate(false)
       setGenerateForm({ matter_id: '' })
-      // Land on the new draft so it can be reviewed and sent
-      navigate(`/invoices/${inv.id}`)
-    } catch (err) {
-      const detail = err?.response?.data?.detail
-      setGenerateError(typeof detail === 'string' ? detail : 'Failed to generate invoice. Check that the matter has unbilled time entries.')
+      navigate(`/invoices/${invoice.id}`)
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setGenerateError(
+        typeof detail === 'string'
+          ? detail
+          : 'The draft could not be generated. Check that the matter has unbilled time entries.',
+      )
+    } finally {
+      setGenerating(false)
     }
   }
 
   const totalOutstanding = invoices
-    .filter((i) => ['sent', 'partially_paid'].includes(i.status))
-    .reduce((s, i) => s + Number(i.balance_due ?? i.total ?? 0), 0)
-  const overdueCount = invoices.filter((i) => i.is_overdue).length
+    .filter((invoice) => ['sent', 'partially_paid'].includes(invoice.status) || invoice.is_overdue)
+    .reduce((sum, invoice) => sum + Number(invoice.balance_due ?? invoice.total ?? 0), 0)
+  const overdueCount = invoices.filter((invoice) => invoice.is_overdue).length
+  const draftCount = invoices.filter((invoice) => invoice.status === 'draft').length
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Invoices</h1>
-          <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
-            {invoices.length} invoices · ${Number(totalOutstanding).toFixed(2)} outstanding
-            {overdueCount > 0 && (
-              <span style={{ color: '#9C4F3F' }}> · {overdueCount} overdue</span>
-            )}
-          </p>
-        </div>
-        <button
-          onClick={() => setShowGenerate(!showGenerate)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '8px 16px', background: '#426146', color: '#fff',
-            border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13,
-          }}
-        >
-          <Plus size={16} /> Generate Invoice
-        </button>
-      </div>
+    <WorkspacePage width="wide">
+      <WorkspacePageHeader
+        eyebrow="Billing"
+        icon={Receipt}
+        title="Invoices"
+        description="Generate drafts from unbilled work, review balances, and track payment status."
+        meta={<span>{invoices.length} invoice{invoices.length !== 1 ? 's' : ''} in this view</span>}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={loading}
+              className="btn-secondary inline-flex items-center gap-2"
+            >
+              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowGenerate((open) => !open)
+                setGenerateError(null)
+              }}
+              aria-expanded={showGenerate}
+              className="btn-primary inline-flex items-center gap-2"
+            >
+              <Plus size={16} /> Generate invoice
+            </button>
+          </>
+        }
+      />
 
-      {/* Generate form */}
+      <MetricStrip
+        className="mb-6"
+        items={[
+          { label: 'Outstanding', value: money.format(totalOutstanding) },
+          {
+            label: 'Overdue',
+            value: overdueCount,
+            className: overdueCount ? 'text-brand-rose' : 'text-brand-ink',
+          },
+          { label: 'Drafts to review', value: draftCount },
+        ]}
+      />
+
       {showGenerate && (
         <form
           onSubmit={handleGenerate}
-          style={{
-            background: '#FBF8F2', border: '1px solid #E1D9C9', borderRadius: 8,
-            padding: 16, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12,
-          }}
+          className="mb-6 rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm sm:p-5"
         >
-          {generateError && (
-            <div style={{
-              padding: '8px 12px', background: '#FBF1EF', border: '1px solid #EDC9C0',
-              borderRadius: 6, color: '#9C4F3F', fontSize: 13,
-            }}>
-              {generateError}
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-brand-ink">Generate a draft invoice</h2>
+              <p className="mt-1 text-sm text-brand-muted">
+                Pull unbilled time and expenses into a draft for review before it is sent.
+              </p>
             </div>
+          </div>
+          {generateError && (
+            <AlertBanner type="error" title="Draft was not generated" className="mt-4">
+              {generateError}
+            </AlertBanner>
           )}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
-            <div style={{ flex: 1 }}>
-              <label htmlFor="invoicespage-matter" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
-              <select id="invoicespage-matter"
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <label htmlFor="invoicespage-matter" className="mb-1.5 block text-xs font-semibold text-brand-ink">
+                Matter
+              </label>
+              <select
+                id="invoicespage-matter"
                 value={generateForm.matter_id}
-                onChange={(e) => setGenerateForm({ matter_id: e.target.value })}
+                onChange={(event) => setGenerateForm({ matter_id: event.target.value })}
                 required
-                style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
+                className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent"
               >
-                <option value="">Select matter...</option>
-                {matters.map((m) => (
-                  <option key={m.id} value={m.id}>{m.matter_name}</option>
+                <option value="">Select a matter</option>
+                {matters.map((matter) => (
+                  <option key={matter.id} value={matter.id}>{matter.matter_name}</option>
                 ))}
               </select>
             </div>
             <button
               type="submit"
-              style={{
-                padding: '6px 16px', background: '#5A7A5C', color: '#fff',
-                border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13,
-              }}
+              disabled={generating}
+              className="btn-primary inline-flex min-h-11 items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Generate Draft
+              {generating && <RefreshCw size={15} className="animate-spin" />}
+              {generating ? 'Generating draft' : 'Generate draft'}
             </button>
           </div>
-          <p style={{ margin: 0, fontSize: 12, color: '#6A7587' }}>
-            Pulls all unbilled time entries and expenses for the matter into a draft invoice you can review before sending.
-          </p>
         </form>
       )}
 
-      {/* Status filter */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            style={{
-              padding: '4px 12px', fontSize: 12, borderRadius: 12,
-              border: '1px solid #CFC4AE', cursor: 'pointer',
-              background: filter === f.key ? '#E1D9C9' : '#fff',
-            }}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      <FilterToolbar ariaLabel="Invoice status filters">
+        <SegmentedControl
+          items={FILTERS}
+          value={filter}
+          onChange={setFilter}
+          label="Filter invoices by status"
+        />
+      </FilterToolbar>
 
-      {/* Invoices table */}
-      {loading ? (
-        <p style={{ color: '#6A7587', fontSize: 13 }}>Loading...</p>
+      {loadError ? (
+        <AlertBanner
+          type="error"
+          title="Invoices could not be loaded"
+          actionLabel="Retry"
+          onAction={loadData}
+        >
+          {loadError}
+        </AlertBanner>
+      ) : loading ? (
+        <Spinner />
       ) : invoices.length === 0 ? (
-        <p style={{ color: '#6A7587', fontSize: 13 }}>No invoices yet. Generate a draft from unbilled time entries.</p>
+        <EmptyState
+          icon={Receipt}
+          title={filter === 'all' ? 'No invoices yet' : `No ${FILTERS.find((item) => item.value === filter)?.label.toLowerCase()} invoices`}
+          actionLabel="Generate invoice"
+          onAction={() => setShowGenerate(true)}
+          secondaryActionLabel={filter !== 'all' ? 'Show all invoices' : undefined}
+          onSecondaryAction={() => setFilter('all')}
+        >
+          {filter === 'all'
+            ? 'Generate a draft from a matter with unbilled time or expenses.'
+            : 'Choose another status or return to all invoices.'}
+        </EmptyState>
       ) : (
-        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #E1D9C9', textAlign: 'left' }}>
-              <th style={{ padding: 8 }}>Invoice #</th>
-              <th style={{ padding: 8 }}>Matter</th>
-              <th style={{ padding: 8 }}>Issue Date</th>
-              <th style={{ padding: 8 }}>Due Date</th>
-              <th style={{ padding: 8 }}>Total</th>
-              <th style={{ padding: 8 }}>Balance</th>
-              <th style={{ padding: 8 }}>Status</th>
-              <th style={{ padding: 8, textAlign: 'center' }} title="QuickBooks sync status">QBO</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoices.map((inv) => {
-              const displayStatus = inv.is_overdue ? 'overdue' : inv.status
-              const cs = STATUS_COLORS[displayStatus] || STATUS_COLORS.draft
-              const qboSynced = inv.qbo_sync_status === 'synced'
+        <>
+          <div className="space-y-3 md:hidden">
+            {invoices.map((invoice) => {
+              const displayStatus = invoice.is_overdue ? 'overdue' : invoice.status
               return (
-                <tr
-                  key={inv.id}
-                  style={{ borderBottom: '1px solid #EFE8DA' }}
+                <Link
+                  key={invoice.id}
+                  to={`/invoices/${invoice.id}`}
+                  className="block rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm hover:border-brand-line-2"
                 >
-                  <td style={{ padding: '0 8px', color: '#426146', fontWeight: 500 }}>
-                    <Link
-                      to={`/invoices/${inv.id}`}
-                      className="flex min-h-11 items-center rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent"
-                    >
-                      {inv.invoice_number}
-                    </Link>
-                  </td>
-                  <td style={{ padding: 8, color: '#6A7587' }}>{inv.matter_name || '—'}</td>
-                  <td style={{ padding: 8 }}>{inv.issue_date}</td>
-                  <td style={{ padding: 8, color: inv.is_overdue ? '#9C4F3F' : undefined }}>{inv.due_date}</td>
-                  <td style={{ padding: 8, fontWeight: 600 }}>${Number(inv.total).toFixed(2)}</td>
-                  <td style={{ padding: 8, fontWeight: 600, color: Number(inv.balance_due) > 0 ? '#9C4F3F' : '#5A7A5C' }}>
-                    ${Number(inv.balance_due ?? inv.total).toFixed(2)}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    <span style={{
-                      fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                      background: cs.bg, color: cs.color,
-                    }}>
-                      {displayStatus.replace('_', ' ')}
-                    </span>
-                  </td>
-                  <td style={{ padding: 8, textAlign: 'center' }}>
-                    <span
-                      title={qboSynced ? `Synced to QBO (ID: ${inv.qbo_invoice_id})` : `Not synced (${inv.qbo_sync_status || 'pending'})`}
-                      style={{
-                        display: 'inline-block',
-                        width: 10, height: 10, borderRadius: '50%',
-                        background: qboSynced ? QBO_GREEN : '#CFC4AE',
-                      }}
-                    />
-                  </td>
-                </tr>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-brand-accent-2">{invoice.invoice_number}</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-brand-ink">
+                        {invoice.matter_name || 'Matter unavailable'}
+                      </p>
+                    </div>
+                    <InvoiceStatus status={displayStatus} />
+                  </div>
+                  <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-brand-line pt-3">
+                    <div>
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-brand-muted">Balance</dt>
+                      <dd className={`mt-1 text-sm font-semibold ${Number(invoice.balance_due) > 0 ? 'text-brand-rose' : 'text-brand-green'}`}>
+                        {money.format(Number(invoice.balance_due ?? invoice.total ?? 0))}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-brand-muted">Due</dt>
+                      <dd className={`mt-1 text-sm ${invoice.is_overdue ? 'font-semibold text-brand-rose' : 'text-brand-ink'}`}>
+                        {invoice.due_date || 'Not set'}
+                      </dd>
+                    </div>
+                  </dl>
+                </Link>
               )
             })}
-          </tbody>
-        </table>
-        </div>
+          </div>
+
+          <div className="hidden overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm md:block">
+            <div className="overflow-x-auto">
+              <table className="min-w-[860px] w-full border-collapse text-left text-sm">
+                <thead className="border-b border-brand-line bg-brand-bg-soft/60">
+                  <tr>
+                    {['Invoice', 'Matter', 'Issued', 'Due', 'Total', 'Balance', 'Status', 'QuickBooks'].map((heading) => (
+                      <th key={heading} scope="col" className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted">
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-line">
+                  {invoices.map((invoice) => {
+                    const displayStatus = invoice.is_overdue ? 'overdue' : invoice.status
+                    return (
+                      <tr key={invoice.id} className="hover:bg-brand-bg-soft/50">
+                        <td className="px-4 py-3">
+                          <Link
+                            to={`/invoices/${invoice.id}`}
+                            className="inline-flex min-h-10 items-center font-semibold text-brand-accent-2 hover:underline"
+                          >
+                            {invoice.invoice_number}
+                          </Link>
+                        </td>
+                        <td className="max-w-64 truncate px-4 py-3 text-brand-ink" title={invoice.matter_name || ''}>
+                          {invoice.matter_name || '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{invoice.issue_date || '—'}</td>
+                        <td className={`whitespace-nowrap px-4 py-3 ${invoice.is_overdue ? 'font-semibold text-brand-rose' : 'text-brand-muted'}`}>
+                          {invoice.due_date || '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-semibold text-brand-ink">
+                          {money.format(Number(invoice.total || 0))}
+                        </td>
+                        <td className={`whitespace-nowrap px-4 py-3 font-semibold ${Number(invoice.balance_due) > 0 ? 'text-brand-rose' : 'text-brand-green'}`}>
+                          {money.format(Number(invoice.balance_due ?? invoice.total ?? 0))}
+                        </td>
+                        <td className="px-4 py-3"><InvoiceStatus status={displayStatus} /></td>
+                        <td className="px-4 py-3"><QboStatus invoice={invoice} /></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
-    </div>
+    </WorkspacePage>
   )
 }

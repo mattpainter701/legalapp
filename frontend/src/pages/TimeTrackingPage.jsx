@@ -1,44 +1,77 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Clock, Plus, Trash2, Play, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Clock, Play, Plus, Square, Trash2, X } from 'lucide-react'
 import { useAuth } from '../App'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 import { useToast } from '../components/toast/useToast'
 import {
-  getTimeEntries,
+  AlertBanner,
+  EmptyState,
+  FilterToolbar,
+  MetricStrip,
+  SegmentedControl,
+  Spinner,
+  WorkspacePage,
+  WorkspacePageHeader,
+} from '../components/ui'
+import {
+  cancelTimer,
   createTimeEntry,
   deleteTimeEntry,
+  getActiveTimer,
   getMattersV2,
+  getTimeEntries,
   startTimer,
   stopTimer,
-  getActiveTimer,
-  cancelTimer,
 } from '../api'
+
+const FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'draft', label: 'Unbilled' },
+  { value: 'invoiced', label: 'Invoiced' },
+]
+
+const money = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+})
 
 function formatElapsed(startedAt) {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
-  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainingSeconds = seconds % 60
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
+}
+
+function EntryStatus({ status }) {
+  const invoiced = status === 'invoiced'
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+      invoiced
+        ? 'border-brand-green/20 bg-brand-green/10 text-brand-green'
+        : 'border-brand-amber/20 bg-brand-amber/10 text-brand-amber'
+    }`}>
+      {invoiced ? 'Invoiced' : 'Unbilled'}
+    </span>
+  )
 }
 
 export default function TimeTrackingPage() {
   const confirmAction = useConfirm()
   const toast = useToast()
-  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const preselectedMatterId = searchParams.get('matter_id') || ''
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
   const [entries, setEntries] = useState([])
   const [matters, setMatters] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(!!preselectedMatterId)
+  const [loadError, setLoadError] = useState(null)
+  const [showForm, setShowForm] = useState(Boolean(preselectedMatterId))
   const [filter, setFilter] = useState('all')
   const [activeTimer, setActiveTimer] = useState(null)
   const [timerBusy, setTimerBusy] = useState(false)
-  const [, setTick] = useState(0) // re-render each second while a timer runs
+  const [, setTick] = useState(0)
   const [form, setForm] = useState({
     matter_id: preselectedMatterId,
     description: '',
@@ -50,36 +83,37 @@ export default function TimeTrackingPage() {
   const [saving, setSaving] = useState(false)
 
   const matterNames = useMemo(
-    () => Object.fromEntries(matters.map((m) => [m.id, m.matter_name])),
-    [matters]
+    () => Object.fromEntries(matters.map((matter) => [matter.id, matter.matter_name])),
+    [matters],
   )
 
   const loadData = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
     try {
-      setLoading(true)
       const params = filter !== 'all' ? { status: filter } : {}
-      await Promise.all([
-        getTimeEntries(params)
-          .then(data => setEntries(data.items || data))
-          .catch(() => {}),
-        getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
-          .then(data => setMatters(data.items || []))
-          .catch(() => {}),
-        getActiveTimer()
-          .then(data => setActiveTimer(data || null))
-          .catch(() => {}),
+      const [entryData, matterData, timerData] = await Promise.all([
+        getTimeEntries(params),
+        getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' }),
+        getActiveTimer(),
       ])
+      setEntries(entryData.items || entryData || [])
+      setMatters(matterData.items || matterData || [])
+      setActiveTimer(timerData || null)
+    } catch (error) {
+      setLoadError(error?.response?.data?.detail || 'Time entries could not be loaded.')
     } finally {
       setLoading(false)
     }
   }, [filter])
 
-  useEffect(() => { loadData() }, [loadData])
-
-  // Tick every second while a timer is running so the elapsed display updates
   useEffect(() => {
-    if (!activeTimer) return
-    const id = setInterval(() => setTick(t => t + 1), 1000)
+    loadData()
+  }, [loadData])
+
+  useEffect(() => {
+    if (!activeTimer) return undefined
+    const id = setInterval(() => setTick((tick) => tick + 1), 1000)
     return () => clearInterval(id)
   }, [activeTimer])
 
@@ -97,10 +131,11 @@ export default function TimeTrackingPage() {
         description: form.description.trim() || 'Timer session',
       })
       setActiveTimer(timer)
-      setForm({ ...form, description: '' })
-    } catch (err) {
-      const detail = err?.response?.data?.detail
-      setFormError(typeof detail === 'string' ? detail : 'Failed to start timer.')
+      setForm((current) => ({ ...current, description: '' }))
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setFormError(typeof detail === 'string' ? detail : 'The timer could not be started.')
+      setShowForm(true)
     } finally {
       setTimerBusy(false)
     }
@@ -111,44 +146,52 @@ export default function TimeTrackingPage() {
     try {
       await stopTimer({})
       setActiveTimer(null)
-      loadData()
-    } catch (err) {
-      console.error('Failed to stop timer', err)
+      await loadData()
+    } catch (error) {
+      toast.error('Timer was not stopped', {
+        message: error?.response?.data?.detail || 'Please try again.',
+      })
     } finally {
       setTimerBusy(false)
     }
   }
 
   const handleDiscardTimer = async () => {
-    if (!await confirmAction({ title: 'Discard running timer?', message: 'The elapsed time will not be logged.', confirmLabel: 'Discard timer', destructive: true })) return
+    const confirmed = await confirmAction({
+      title: 'Discard running timer?',
+      message: 'The elapsed time will not be logged.',
+      confirmLabel: 'Discard timer',
+      destructive: true,
+    })
+    if (!confirmed) return
     setTimerBusy(true)
     try {
       await cancelTimer()
       setActiveTimer(null)
-      loadData()
-    } catch (err) {
-      toast.error('Timer was not discarded', { message: err?.response?.data?.detail || 'Please try again.' })
+      await loadData()
+    } catch (error) {
+      toast.error('Timer was not discarded', {
+        message: error?.response?.data?.detail || 'Please try again.',
+      })
     } finally {
       setTimerBusy(false)
     }
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
     setFormError(null)
-
-    // Client-side validation
     if (!form.matter_id) {
-      setFormError('Please select a matter.')
+      setFormError('Select a matter.')
       return
     }
-    const hoursNum = parseFloat(form.hours)
-    if (!form.hours || isNaN(hoursNum) || hoursNum <= 0) {
-      setFormError('Please enter a valid number of hours (minimum 0.25).')
+    const hours = Number.parseFloat(form.hours)
+    if (!form.hours || Number.isNaN(hours) || hours <= 0) {
+      setFormError('Enter a valid number of hours (minimum 0.25).')
       return
     }
     if (!form.description.trim()) {
-      setFormError('Please enter a description.')
+      setFormError('Enter a description.')
       return
     }
 
@@ -157,13 +200,13 @@ export default function TimeTrackingPage() {
       const payload = {
         matter_id: form.matter_id,
         description: form.description.trim(),
-        hours: hoursNum,
+        hours,
         date: form.date,
         is_billable: true,
       }
       if (form.hourly_rate) {
-        const rateNum = parseFloat(form.hourly_rate)
-        if (!isNaN(rateNum) && rateNum > 0) payload.hourly_rate = rateNum
+        const hourlyRate = Number.parseFloat(form.hourly_rate)
+        if (!Number.isNaN(hourlyRate) && hourlyRate > 0) payload.hourly_rate = hourlyRate
       }
       await createTimeEntry(payload)
       setShowForm(false)
@@ -174,261 +217,340 @@ export default function TimeTrackingPage() {
         hourly_rate: user?.default_billing_rate || '',
         date: new Date().toISOString().slice(0, 10),
       })
-      loadData()
-    } catch (err) {
-      const detail = err?.response?.data?.detail
-      setFormError(typeof detail === 'string' ? detail : 'Failed to create time entry. Please check your inputs and try again.')
+      await loadData()
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setFormError(
+        typeof detail === 'string'
+          ? detail
+          : 'The time entry could not be saved. Check the fields and try again.',
+      )
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id) => {
-    if (!await confirmAction({ title: 'Delete time entry?', message: 'This time entry will be permanently removed.', confirmLabel: 'Delete entry', destructive: true })) return
+    const confirmed = await confirmAction({
+      title: 'Delete time entry?',
+      message: 'This time entry will be permanently removed.',
+      confirmLabel: 'Delete entry',
+      destructive: true,
+    })
+    if (!confirmed) return
     try {
       await deleteTimeEntry(id)
-      loadData()
-    } catch (err) {
-      toast.error('Time entry was not deleted', { message: err?.response?.data?.detail || 'Please try again.' })
+      await loadData()
+    } catch (error) {
+      toast.error('Time entry was not deleted', {
+        message: error?.response?.data?.detail || 'Please try again.',
+      })
     }
   }
 
-  const visibleEntries = entries.filter((e) => e.status !== 'running')
-  const totalHours = visibleEntries.reduce((s, e) => s + Number(e.hours || 0), 0)
-  const totalAmount = visibleEntries.reduce((s, e) => s + Number(e.amount || 0), 0)
+  const visibleEntries = entries.filter((entry) => entry.status !== 'running')
+  const totalHours = visibleEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)
+  const totalAmount = visibleEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
   const unbilledAmount = visibleEntries
-    .filter((e) => e.status === 'draft' || !e.invoice_id)
-    .reduce((s, e) => s + Number(e.amount || 0), 0)
+    .filter((entry) => entry.status === 'draft' || !entry.invoice_id)
+    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+  const fieldClass = 'min-h-11 w-full rounded-xl border border-brand-line bg-brand-surface px-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-accent'
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 22 }}>Time Tracking</h1>
-          <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
-            {totalHours.toFixed(1)}h logged · ${Number(totalAmount).toFixed(2)} billed · ${unbilledAmount.toFixed(2)} unbilled
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {!activeTimer && (
+    <WorkspacePage width="wide">
+      <WorkspacePageHeader
+        eyebrow="Billing activity"
+        icon={Clock}
+        title="Time tracking"
+        description="Capture work as it happens, then keep unbilled and invoiced activity easy to distinguish."
+        meta={<span>{visibleEntries.length} entr{visibleEntries.length === 1 ? 'y' : 'ies'} in this view</span>}
+        actions={
+          <>
+            {!activeTimer && (
+              <button
+                type="button"
+                onClick={handleStartTimer}
+                disabled={timerBusy}
+                title={form.matter_id ? 'Start a live timer for the selected matter' : 'Select a matter in the entry panel first'}
+                className="btn-secondary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Play size={16} /> Start timer
+              </button>
+            )}
             <button
-              onClick={handleStartTimer}
-              disabled={timerBusy}
-              title={form.matter_id ? 'Start a live timer for the selected matter' : 'Select a matter below, then start the timer'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 16px', background: '#5A7A5C', color: '#fff',
-                border: 'none', borderRadius: 6, cursor: timerBusy ? 'wait' : 'pointer', fontSize: 13,
+              type="button"
+              onClick={() => {
+                setShowForm((open) => !open)
+                setFormError(null)
               }}
+              aria-expanded={showForm}
+              className="btn-primary inline-flex items-center gap-2"
             >
-              <Play size={16} /> Start Timer
+              <Plus size={16} /> Add entry
             </button>
-          )}
-          <button
-            onClick={() => setShowForm(!showForm)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '8px 16px', background: '#426146', color: '#fff',
-              border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13,
-            }}
-          >
-            <Plus size={16} /> Add Entry
-          </button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      {/* Running timer bar */}
+      <MetricStrip
+        className="mb-6"
+        items={[
+          { label: 'Hours logged', value: `${totalHours.toFixed(1)}h` },
+          { label: 'Recorded value', value: money.format(totalAmount) },
+          {
+            label: 'Unbilled value',
+            value: money.format(unbilledAmount),
+            className: unbilledAmount > 0 ? 'text-brand-amber' : 'text-brand-ink',
+          },
+        ]}
+      />
+
       {activeTimer && (
-        <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-          background: '#F1F5F1', border: '1px solid #6ee7b7', borderRadius: 8,
-          padding: '12px 16px', marginBottom: 20,
-        }}>
-          <Clock size={18} color="#5A7A5C" />
-          <span style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 700, color: '#426146' }}>
-            {formatElapsed(activeTimer.timer_started_at)}
+        <section
+          aria-label="Running timer"
+          className="mb-6 flex flex-col gap-4 rounded-2xl border border-brand-green/30 bg-brand-green/10 p-4 shadow-sm sm:flex-row sm:items-center"
+        >
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-surface text-brand-green shadow-sm">
+            <Clock size={20} />
           </span>
-          <span style={{ fontSize: 13, color: '#426146', flex: 1 }}>
-            {matterNames[activeTimer.matter_id] || 'Matter'} — {activeTimer.description}
-          </span>
-          <button
-            onClick={handleStopTimer}
-            disabled={timerBusy}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', background: '#5A7A5C', color: '#fff',
-              border: 'none', borderRadius: 6, cursor: timerBusy ? 'wait' : 'pointer', fontSize: 13,
-            }}
-          >
-            <Square size={14} /> Stop & Log
-          </button>
-          <button
-            onClick={handleDiscardTimer}
-            disabled={timerBusy}
-            title="Discard without logging time"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              padding: '6px 10px', background: 'none', color: '#6A7587',
-              border: '1px solid #CFC4AE', borderRadius: 6, cursor: 'pointer', fontSize: 13,
-            }}
-          >
-            <X size={14} /> Discard
-          </button>
-        </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-green">Timer running</p>
+            <p className="mt-1 font-mono text-2xl font-bold text-brand-ink">{formatElapsed(activeTimer.timer_started_at)}</p>
+            <p className="mt-1 truncate text-sm text-brand-ink-2">
+              {matterNames[activeTimer.matter_id] || 'Matter'} · {activeTimer.description}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleStopTimer}
+              disabled={timerBusy}
+              className="btn-primary inline-flex items-center gap-2 disabled:opacity-60"
+            >
+              <Square size={14} /> Stop & log
+            </button>
+            <button
+              type="button"
+              onClick={handleDiscardTimer}
+              disabled={timerBusy}
+              className="btn-secondary inline-flex items-center gap-2 text-brand-muted disabled:opacity-60"
+            >
+              <X size={14} /> Discard
+            </button>
+          </div>
+        </section>
       )}
 
-      {/* Quick-add form */}
       {(showForm || (!activeTimer && formError)) && (
         <form
           onSubmit={handleSubmit}
-          style={{
-            background: '#FBF8F2', border: '1px solid #E1D9C9', borderRadius: 8,
-            padding: 16, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12,
-          }}
+          className="mb-6 rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm sm:p-5"
         >
+          <div>
+            <h2 className="text-lg font-semibold text-brand-ink">Add billable time</h2>
+            <p className="mt-1 text-sm text-brand-muted">Record a completed entry or select a matter before starting a live timer.</p>
+          </div>
           {formError && (
-            <div style={{
-              padding: '8px 12px', background: '#FBF1EF', border: '1px solid #EDC9C0',
-              borderRadius: 6, color: '#9C4F3F', fontSize: 13,
-            }}>
+            <AlertBanner type="error" title="Time was not recorded" className="mt-4">
               {formError}
-            </div>
+            </AlertBanner>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, alignItems: 'end' }}>
-          <div>
-            <label htmlFor="timetrackingpage-matter" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Matter</label>
-            <select id="timetrackingpage-matter"
-              value={form.matter_id}
-              onChange={(e) => setForm({ ...form, matter_id: e.target.value })}
-              required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
-            >
-              <option value="">Select matter...</option>
-              {matters.map((m) => (
-                <option key={m.id} value={m.id}>{m.matter_name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="timetrackingpage-description" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Description</label>
-            <input id="timetrackingpage-description"
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              required
-              placeholder="Work description"
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
-            />
-          </div>
-          <div>
-            <label htmlFor="timetrackingpage-hours" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Hours</label>
-            <input id="timetrackingpage-hours"
-              type="number" step="0.25" min="0.25"
-              value={form.hours}
-              onChange={(e) => setForm({ ...form, hours: e.target.value })}
-              required
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
-            />
-          </div>
-          <div>
-            <label htmlFor="timetrackingpage-rate" style={{ fontSize: 12, color: '#6A7587', display: 'block' }}>Rate ($)</label>
-            <input id="timetrackingpage-rate"
-              type="number" step="1" min="0"
-              value={form.hourly_rate}
-              onChange={(e) => setForm({ ...form, hourly_rate: e.target.value })}
-              placeholder={user?.default_billing_rate ? String(user.default_billing_rate) : '0'}
-              style={{ width: '100%', padding: '6px 8px', border: '1px solid #CFC4AE', borderRadius: 4, fontSize: 13 }}
-            />
-          </div>
-          <div>
-            <button
-              type="submit"
-              disabled={saving}
-              style={{
-                padding: '6px 16px', background: saving ? '#6A7587' : '#5A7A5C', color: '#fff',
-                border: 'none', borderRadius: 4, cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13,
-              }}
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="sm:col-span-2 lg:col-span-1">
+              <label htmlFor="timetrackingpage-matter" className="mb-1.5 block text-xs font-semibold text-brand-ink">Matter</label>
+              <select
+                id="timetrackingpage-matter"
+                value={form.matter_id}
+                onChange={(event) => setForm({ ...form, matter_id: event.target.value })}
+                required
+                className={fieldClass}
+              >
+                <option value="">Select a matter</option>
+                {matters.map((matter) => (
+                  <option key={matter.id} value={matter.id}>{matter.matter_name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="timetrackingpage-description" className="mb-1.5 block text-xs font-semibold text-brand-ink">Description</label>
+              <input
+                id="timetrackingpage-description"
+                value={form.description}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+                required
+                placeholder="Work performed"
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="timetrackingpage-hours" className="mb-1.5 block text-xs font-semibold text-brand-ink">Hours</label>
+              <input
+                id="timetrackingpage-hours"
+                type="number"
+                step="0.25"
+                min="0.25"
+                value={form.hours}
+                onChange={(event) => setForm({ ...form, hours: event.target.value })}
+                required
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="timetrackingpage-date" className="mb-1.5 block text-xs font-semibold text-brand-ink">Date</label>
+              <input
+                id="timetrackingpage-date"
+                type="date"
+                value={form.date}
+                onChange={(event) => setForm({ ...form, date: event.target.value })}
+                required
+                className={fieldClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="timetrackingpage-rate" className="mb-1.5 block text-xs font-semibold text-brand-ink">Rate</label>
+              <input
+                id="timetrackingpage-rate"
+                type="number"
+                step="1"
+                min="0"
+                value={form.hourly_rate}
+                onChange={(event) => setForm({ ...form, hourly_rate: event.target.value })}
+                placeholder={user?.default_billing_rate ? String(user.default_billing_rate) : '0'}
+                className={fieldClass}
+              />
+            </div>
+            <div className="flex items-end sm:col-span-2 lg:col-span-4">
+              <button
+                type="submit"
+                disabled={saving}
+                className="btn-primary inline-flex min-h-11 items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Saving entry' : 'Save entry'}
+              </button>
+            </div>
           </div>
         </form>
       )}
 
-      {/* Filter */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {['all', 'draft', 'invoiced'].map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '4px 12px', fontSize: 12, borderRadius: 12,
-              border: '1px solid #CFC4AE', cursor: 'pointer',
-              background: filter === f ? '#E1D9C9' : '#fff',
-            }}
-          >
-            {f === 'all' ? 'All' : f}
-          </button>
-        ))}
-      </div>
+      <FilterToolbar ariaLabel="Time entry status filters">
+        <SegmentedControl
+          items={FILTERS}
+          value={filter}
+          onChange={setFilter}
+          label="Filter time entries by billing status"
+        />
+      </FilterToolbar>
 
-      {/* Entries table */}
-      {loading ? (
-        <p style={{ color: '#6A7587', fontSize: 13 }}>Loading...</p>
+      {loadError ? (
+        <AlertBanner
+          type="error"
+          title="Time entries could not be loaded"
+          actionLabel="Retry"
+          onAction={loadData}
+        >
+          {loadError}
+        </AlertBanner>
+      ) : loading ? (
+        <Spinner />
       ) : visibleEntries.length === 0 ? (
-        <p style={{ color: '#6A7587', fontSize: 13 }}>No time entries found.</p>
+        <EmptyState
+          icon={Clock}
+          title={filter === 'all' ? 'No time entries yet' : `No ${FILTERS.find((item) => item.value === filter)?.label.toLowerCase()} entries`}
+          actionLabel="Add time entry"
+          onAction={() => setShowForm(true)}
+          secondaryActionLabel={filter !== 'all' ? 'Show all entries' : undefined}
+          onSecondaryAction={() => setFilter('all')}
+        >
+          {filter === 'all'
+            ? 'Record completed work or start a timer after selecting a matter.'
+            : 'Choose another billing status or return to all time entries.'}
+        </EmptyState>
       ) : (
-        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #E1D9C9', textAlign: 'left' }}>
-              <th style={{ padding: 8 }}>Date</th>
-              <th style={{ padding: 8 }}>Matter</th>
-              <th style={{ padding: 8 }}>Description</th>
-              <th style={{ padding: 8 }}>Hours</th>
-              <th style={{ padding: 8 }}>Amount</th>
-              <th style={{ padding: 8 }}>Status</th>
-              <th style={{ padding: 8, width: 40 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {visibleEntries.map((e) => (
-              <tr key={e.id} style={{ borderBottom: '1px solid #EFE8DA' }}>
-                <td style={{ padding: 8 }}>{e.date}</td>
-                <td style={{ padding: 8, color: '#6A7587' }}>{matterNames[e.matter_id] || '—'}</td>
-                <td style={{ padding: 8 }}>
-                  <span style={{ cursor: 'pointer', color: '#426146' }}>
-                    {e.description}
-                  </span>
-                </td>
-                <td style={{ padding: 8 }}>{e.hours}h</td>
-                <td style={{ padding: 8, fontWeight: 600 }}>${Number(e.amount).toFixed(2)}</td>
-                <td style={{ padding: 8 }}>
-                  <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                    background: e.status === 'invoiced' ? '#E7EDE7' : '#F5E9CE',
-                    color: e.status === 'invoiced' ? '#426146' : '#8A6220',
-                  }}>
-                    {e.status}
-                  </span>
-                </td>
-                <td style={{ padding: 8 }}>
-                  {e.status !== 'invoiced' && (
-                    <button
-                      onClick={() => handleDelete(e.id)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B5604E', padding: 4 }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </td>
-              </tr>
+        <>
+          <div className="space-y-3 md:hidden">
+            {visibleEntries.map((entry) => (
+              <article key={entry.id} className="rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-brand-ink">{entry.description}</p>
+                    <p className="mt-1 truncate text-xs text-brand-muted">{matterNames[entry.matter_id] || 'Matter unavailable'}</p>
+                  </div>
+                  <EntryStatus status={entry.status} />
+                </div>
+                <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-brand-line pt-3">
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-wide text-brand-muted">Date</dt>
+                    <dd className="mt-1 text-xs text-brand-ink">{entry.date}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-wide text-brand-muted">Hours</dt>
+                    <dd className="mt-1 text-xs font-semibold text-brand-ink">{entry.hours}h</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-wide text-brand-muted">Value</dt>
+                    <dd className="mt-1 text-xs font-semibold text-brand-ink">{money.format(Number(entry.amount || 0))}</dd>
+                  </div>
+                </dl>
+                {entry.status !== 'invoiced' && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(entry.id)}
+                    className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl px-2 text-xs font-semibold text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose"
+                  >
+                    <Trash2 size={14} /> Delete entry
+                  </button>
+                )}
+              </article>
             ))}
-          </tbody>
-        </table>
-        </div>
+          </div>
+
+          <div className="hidden overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm md:block">
+            <div className="overflow-x-auto">
+              <table className="min-w-[760px] w-full border-collapse text-left text-sm">
+                <thead className="border-b border-brand-line bg-brand-bg-soft/60">
+                  <tr>
+                    {['Date', 'Matter', 'Description', 'Hours', 'Value', 'Status', ''].map((heading) => (
+                      <th key={heading} scope="col" className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted">
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-line">
+                  {visibleEntries.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-brand-bg-soft/50">
+                      <td className="whitespace-nowrap px-4 py-3 text-brand-muted">{entry.date}</td>
+                      <td className="max-w-56 truncate px-4 py-3 text-brand-muted" title={matterNames[entry.matter_id] || ''}>
+                        {matterNames[entry.matter_id] || '—'}
+                      </td>
+                      <td className="max-w-80 truncate px-4 py-3 font-medium text-brand-ink" title={entry.description}>
+                        {entry.description}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-brand-ink">{entry.hours}h</td>
+                      <td className="whitespace-nowrap px-4 py-3 font-semibold text-brand-ink">
+                        {money.format(Number(entry.amount || 0))}
+                      </td>
+                      <td className="px-4 py-3"><EntryStatus status={entry.status} /></td>
+                      <td className="px-4 py-3 text-right">
+                        {entry.status !== 'invoiced' && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(entry.id)}
+                            className="tap-target rounded-xl text-brand-muted hover:bg-brand-rose/10 hover:text-brand-rose"
+                            aria-label={`Delete ${entry.description}`}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
-    </div>
+    </WorkspacePage>
   )
 }
