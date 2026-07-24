@@ -1575,9 +1575,7 @@ async def update_template(
             status_code=422,
             detail="A source-backed DOCX template cannot be converted to another format in place.",
         )
-    if current_format == "docx" and (
-        "body" in updates or "variable_schema" in updates
-    ):
+    if current_format == "docx" and ("body" in updates or "variable_schema" in updates):
         raise HTTPException(
             status_code=422,
             detail="Upload a new Word source to change a DOCX template body or field map.",

@@ -1071,9 +1071,7 @@ async def recent_callers(
                 has_transcript=bool(
                     provider_transcript_text or provider_transcript_url
                 ),
-                can_view_confidential_call_content=(
-                    can_view_confidential_call_content
-                ),
+                can_view_confidential_call_content=(can_view_confidential_call_content),
                 call_summary=(
                     provider_call_summary
                     if can_view_confidential_call_content

@@ -122,7 +122,9 @@ def fill_docx_template(
             raise TemplateDocxError("The stored Word field mapping is invalid.")
         name = str(field.get("name") or "").strip()
         if not name or name in by_name:
-            raise TemplateDocxError("The stored Word field mapping contains duplicates.")
+            raise TemplateDocxError(
+                "The stored Word field mapping contains duplicates."
+            )
         by_name[name] = field
 
     unknown = set(variables) - set(by_name)
@@ -169,7 +171,9 @@ def fill_docx_template(
     except TemplateDocxError:
         raise
     except Exception as exc:
-        raise TemplateDocxError("The generated Word document could not be finalized.") from exc
+        raise TemplateDocxError(
+            "The generated Word document could not be finalized."
+        ) from exc
     return output.getvalue()
 
 
