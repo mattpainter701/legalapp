@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getPlugins, getPluginProfile, executeSkill, getPluginSetup, savePluginSetup, getMattersV2 } from '../api'
+import { getPlugins, getPluginProfile, executeSkill, extractSkillInput, getPluginSetup, savePluginSetup, getMattersV2 } from '../api'
 import ColdStartInterview from '../components/ColdStartInterview'
 import SkillOutput from '../components/SkillOutput'
 import {
-  ArrowLeft, ClipboardList, FileUp, Settings2, Play
+  ArrowLeft, Bot, ClipboardList, FileUp, Settings2, Play
 } from 'lucide-react'
 
 // ── Extra fields per skill ────────────────────────────────────────────────────
@@ -249,6 +249,8 @@ export default function PluginPage() {
   const [output, setOutput] = useState(null)
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadNotice, setUploadNotice] = useState(null)
   const fileInputRef = useRef(null)
 
   // Reset skill/output/error state when the plugin route param changes so
@@ -261,6 +263,7 @@ export default function PluginPage() {
     setInputText('')
     setExtraFields({})
     setShowExtra(false)
+    setUploadNotice(null)
   }, [pluginName])
 
   useEffect(() => {
@@ -289,15 +292,47 @@ export default function PluginPage() {
       .catch(() => setMatters([]))
   }, [pluginName])
 
-  const handleFileUpload = (e) => {
+  // PDF and DOCX are binary: reading them in the browser produced garbage
+  // input. The backend extracts text (with OCR fallback for scanned PDFs).
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      setInputText(ev.target.result || '')
-    }
-    reader.readAsText(file)
     e.target.value = ''
+    if (!file) return
+    setUploading(true)
+    setUploadNotice(null)
+    setRunError(null)
+    try {
+      const result = await extractSkillInput(file)
+      setInputText(result.text || '')
+      const notes = []
+      if (result.ocr_used) {
+        notes.push(
+          `Scanned document — text recovered by OCR${
+            result.pages_analyzed ? ` from ${result.pages_analyzed} page(s)` : ''
+          }. Check it against the original before relying on it.`
+        )
+      }
+      if (result.truncated) {
+        notes.push('The document was long and has been truncated.')
+      }
+      setUploadNotice({
+        tone: notes.length ? 'warn' : 'info',
+        text: [
+          `${result.filename}: ${result.characters.toLocaleString()} characters extracted.`,
+          ...notes,
+        ].join(' '),
+      })
+    } catch (err) {
+      setUploadNotice({
+        tone: 'error',
+        text:
+          err?.response?.data?.detail ||
+          err?.message ||
+          'That file could not be read. Paste the text directly instead.',
+      })
+    } finally {
+      setUploading(false)
+    }
   }
 
   const handleRunSkill = async () => {
@@ -441,6 +476,7 @@ export default function PluginPage() {
                   setRunError(null)
                   setExtraFields({})
                   setShowExtra(false)
+                  setUploadNotice(null)
                 }}
                 className={`w-full flex items-center text-left px-3 py-2.5 rounded-lg text-sm font-sans transition-all relative ${
                   selectedSkill?.id === skill.id
@@ -507,19 +543,35 @@ export default function PluginPage() {
                     <input id="pluginpage-input-materials"
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,.docx,.txt,.doc"
+                      accept=".pdf,.docx,.doc,.txt,.md"
                       className="hidden"
                       onChange={handleFileUpload}
                     />
                     <button
                       onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-sans font-medium text-brand-muted border border-brand-line rounded-lg hover:border-brand-ink hover:text-brand-ink transition-colors"
+                      disabled={uploading || running}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-sans font-medium text-brand-muted border border-brand-line rounded-lg hover:border-brand-ink hover:text-brand-ink transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <FileUp size={14} />
-                      Upload File
+                      {uploading ? 'Reading file…' : 'Upload File'}
                     </button>
                   </div>
                 </div>
+
+                {uploadNotice && (
+                  <div
+                    role="status"
+                    className={`mb-5 rounded-xl border px-4 py-3 text-[13px] font-sans ${
+                      uploadNotice.tone === 'error'
+                        ? 'bg-red-50 border-red-200 text-red-700'
+                        : uploadNotice.tone === 'warn'
+                          ? 'bg-brand-amber/10 border-brand-amber/20 text-brand-amber'
+                          : 'bg-brand-bg border-brand-line text-brand-muted'
+                    }`}
+                  >
+                    {uploadNotice.text}
+                  </div>
+                )}
 
                 <div className="mb-5">
                   <label htmlFor="pluginpage-matter-context" className="block text-xs font-semibold text-brand-ink uppercase tracking-wide mb-2">

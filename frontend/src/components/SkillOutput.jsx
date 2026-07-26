@@ -11,6 +11,7 @@ export default function SkillOutput({ result }) {
   const {
     memo,
     gates_triggered = [],
+    flags = [],
     requires_attorney_review = false,
     tokens_used,
     model_used,
@@ -40,6 +41,17 @@ export default function SkillOutput({ result }) {
             <div key={i} className="flex items-start gap-2.5 text-brand-rose">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <p className="text-[14px] font-sans font-medium">{gate}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {flags.length > 0 && (
+        <div className="bg-brand-amber/10 border-b border-brand-amber/20 px-6 py-4 space-y-2">
+          {flags.map((flag, i) => (
+            <div key={i} className="flex items-start gap-2.5 text-brand-amber">
+              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+              <p className="text-[14px] font-sans font-medium">{flag}</p>
             </div>
           ))}
         </div>

@@ -26,6 +26,22 @@ SKILL_PROMPT_MAP: dict[str, dict[str, str]] = {}
 for (plugin, skill), prompt in ALL_DEFAULT_PROMPTS.items():
     SKILL_PROMPT_MAP.setdefault(plugin, {})[skill] = prompt
 
+GENERIC_TEMPLATE_FLAG = (
+    "This workflow has no specialised template yet, so the output is "
+    "general-purpose rather than tuned to this practice area. Treat it as a "
+    "starting point and review it closely."
+)
+
+
+def has_specialised_prompt(plugin: str, skill: str) -> bool:
+    """Whether a curated template backs this skill.
+
+    Advertised skills without a template silently fell through to the generic
+    "you are a legal assistant" prompt, so a paid add-on could return
+    unspecialised output with no signal to the user.
+    """
+    return (plugin, skill) in ALL_DEFAULT_PROMPTS
+
 
 class PluginExecutor:
     def __init__(self, llm_service: LLMService, resolver: PromptResolver | None = None):
@@ -215,13 +231,19 @@ class PluginExecutor:
             else None,
         )
 
+        flags: list[str] = []
+        if skill != "cold-start-interview" and not (
+            resolved_prompt or has_specialised_prompt(plugin, skill)
+        ):
+            flags.append(GENERIC_TEMPLATE_FLAG)
+
         return {
             "skill": skill,
             "plugin": plugin,
             "memo": cleaned_response,
             "findings": [],
             "gates_triggered": [],
-            "flags": [],
+            "flags": flags,
             "requires_attorney_review": True,
             "tokens_used": tokens_in + tokens_out,
             "tokens_in": tokens_in,

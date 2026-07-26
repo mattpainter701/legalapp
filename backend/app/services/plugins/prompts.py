@@ -4874,6 +4874,10 @@ ALL_DEFAULT_PROMPTS: dict[tuple[str, str], str] = {
     ("privacy-legal", "dsar-response"): PRIVACY_DSAR_PROMPT,
     ("privacy-legal", "pia-generation"): PRIVACY_PIA_PROMPT,
     ("privacy-legal", "policy-monitor"): PRIVACY_POLICY_MONITOR_PROMPT,
+    # Privacy advertises reg-gap-analysis and shares the regulatory template.
+    # Without this entry the skill silently fell through to the generic
+    # "you are a legal assistant" fallback.
+    ("privacy-legal", "reg-gap-analysis"): REGULATORY_GAP_ANALYSIS_PROMPT,
     ("privacy-legal", "cold-start-interview"): COLD_START_INTERVIEW_PROMPT,
     # litigation-legal
     ("litigation-legal", "matter-intake"): LITIGATION_MATTER_INTAKE_PROMPT,
@@ -5110,6 +5114,11 @@ PLUGIN_SKILLS = {
         "matter-close",
         "matter-update",
         "oc-status",
+        # Both templates were written and registered but never advertised, so
+        # no UI could reach them — even though the manifest description sells
+        # "legal holds" and "portfolio status".
+        "legal-hold",
+        "portfolio-status",
         "cold-start-interview",
     ],
     "corporate-legal": [
@@ -5120,6 +5129,7 @@ PLUGIN_SKILLS = {
         "tabular-review",
         "material-contract-schedule",
         "deal-team-summary",
+        "closing-checklist",
         "cold-start-interview",
     ],
     "employment-legal": [
@@ -5150,6 +5160,7 @@ PLUGIN_SKILLS = {
         "clause-review",
         "invention-intake",
         "portfolio",
+        "cnd-triage",
         "cold-start-interview",
     ],
     "ai-governance-legal": [
@@ -5166,6 +5177,7 @@ PLUGIN_SKILLS = {
         "policy-diff",
         "policy-redraft",
         "comments",
+        "nprm-comment",
         "gap-surfacer",
         "reg-feed-watcher",
         "cold-start-interview",

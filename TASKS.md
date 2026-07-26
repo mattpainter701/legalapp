@@ -1,5 +1,145 @@
 # TASKS.md
 
+## Add-on Modules Customer Review — Sprint A: Stop The Bleeding — 2026-07-26 (DONE)
+
+**Goal:** Walk the whole `/plugins` add-on surface as a paying attorney and as a
+legal secretary, then fix everything that breaks the primary path before any
+feature work. Sprint A is the crash, the corrupted input, the unenforced
+purchase model, and the catalog mismatches — plus the gates that would have
+caught them.
+
+- [x] Fix `PluginPage.jsx` rendering `<Bot />` without importing it — every
+      successful skill run on the 9 prompt-only add-ons threw a
+      `ReferenceError` into the error boundary *after* billing the tokens
+- [x] Add `PluginPage.test.jsx` and `SkillOutput.test.jsx`; prove the
+      regression test fails against the original bug before landing the fix
+- [x] Add `eslint-plugin-react` and enable `react/jsx-no-undef`; re-enable
+      `no-undef` (error) and `no-unused-vars` (warn)
+- [x] Replace `FileReader.readAsText` with server-side extraction via
+      `POST /api/plugins/documents/extract`, reusing `utils/text_processing.py`
+      with an OCR fallback for scanned PDFs
+- [x] Enforce add-on entitlement, trial expiry and revoked states on skill
+      execution and cold-start; surface expired trials in the catalog
+- [x] Register the missing `privacy-legal:reg-gap-analysis` prompt
+- [x] Advertise the 5 written-but-unreachable templates (`legal-hold`,
+      `portfolio-status`, `closing-checklist`, `nprm-comment`, `cnd-triage`)
+- [x] Flag generic-template runs to the user instead of silently serving
+      unspecialised output under a paid add-on
+- [x] Add catalog/prompt coverage tests so the mismatch cannot recur
+
+Summary: the add-on surface demos well and broke on contact. The headline
+defect was a one-line missing import: `PluginPage.jsx:662` rendered `<Bot />`
+from a five-icon import list that did not include it, and because the output
+block only mounts once a run returns, *every* successful skill run on the nine
+prompt-only add-ons crashed to `AppErrorBoundary` with the LLM spend already
+committed. It shipped because `eslint.config.js` disabled `no-undef` and
+`no-unused-vars` and no test file existed for any add-on page. Note that
+`no-undef` alone would not have caught it — the base rule does not see JSX
+element names — so `eslint-plugin-react` was added for `react/jsx-no-undef`,
+which does. `no-unused-vars` is a warning rather than an error because the repo
+carries ~890 pre-existing instances; clearing those is separate work and the
+lint gate now passes clean at error level.
+
+Second: "Upload File" accepted `.pdf`/`.docx` but read them with
+`FileReader.readAsText`, so `%PDF-1.3...` and `PK\x03\x04...` were sent to the
+model as the contract text. Extraction moved server-side onto the existing
+`extract_text` helper, with an OCR fallback when a PDF yields almost no
+embedded text (scanned filings), a truncation notice, and an explicit warning
+that OCR output must be checked against the original.
+
+Third: `execute_skill` validated only that the plugin *name* existed, so the
+Purchased/Trial/Locked states in the UI carried no API weight and the stored
+`expires_at`/`seat_limit` were never read — a trial ran forever. Revoked
+add-ons now return 403 and lapsed ones 402, both before any model spend. The
+absent-row case stays permitted behind `PLUGIN_ENTITLEMENT_STRICT` (default
+false) deliberately: no tenant has ever been provisioned an entitlement row, so
+defaulting to strict would have revoked every add-on for every existing tenant
+on deploy. Flip it once tenants carry real entitlements.
+
+Fourth: the catalog and the prompt registry disagreed in both directions. Five
+written templates were registered but advertised nowhere, so no UI could reach
+them — including `legal-hold` and `portfolio-status`, which the Litigation
+manifest description actively sells. They are now advertised. Five advertised
+skills had no template and silently fell through to a generic "you are a legal
+assistant" prompt: `privacy-legal:reg-gap-analysis` was a genuine oversight and
+now shares the regulatory template, while all four Mediation skills remain
+without one. Rather than invent legal prompts for a paid practice-area add-on,
+those runs now carry an explicit flag telling the user the output is
+general-purpose. Authoring them with domain review is `BK18` below.
+
+Validation: `npm run check` green (lint 0 errors / 891 warnings, 94 tests
+across 24 files, build clean). Extraction was verified against real
+reportlab/python-docx output — the old path yielded `'%PDF-1.3\n%...'` and
+`'PK\x03\x04...'`, the new path yields clean text — and the catalog coverage
+assertions were verified against the live registry (104 advertised skills, 100
+curated templates). Backend pytest was NOT run: this environment has no Docker
+daemon and the suite requires PostgreSQL and Redis. The new backend tests in
+`tests/test_plugins.py` must be run before merge.
+
+## Add-on Modules Roadmap — Sprints B-F — 2026-07-26 (PLANNED)
+
+**Goal:** Close the value and stability gaps the customer review found. The
+add-ons demo well but the work product has nowhere to go: nothing is saved,
+reviewed, billed, or turned into a task or deadline. Sequenced attorney-trust
+first, because that is what makes the output defensible and sellable.
+
+### Sprint B — The work product becomes real
+- [ ] `skill_runs` table + migration (after `094_admin_conf_call_content`),
+      RLS-scoped: tenant, user, plugin, skill, matter, input digest, output,
+      model, tokens, cost, status, review state
+- [ ] Persist in `executor.execute()`; link the existing `UsageRecord` to the run
+- [ ] Populate `findings`/`citations` — `SkillFinding` and `CitationTag` in
+      `schemas/plugin.py` are fully defined and the executor hardcodes `[]`
+- [ ] Run history per add-on and per matter; re-open a past run
+- [ ] Save to matter (`services/matter_file_store.py`), export DOCX/PDF
+      (`services/docx_templates.py`, `invoice_pdf.py`), edit before save
+- [ ] Replace the raw model id in `SkillOutput.jsx` with a tier label
+
+### Sprint C — Two personas, one workflow
+- [ ] Seed `Attorney` and `Paralegal / Legal Assistant` roles in
+      `services/capabilities.py`; add `run_ai_skill`, `review_work_product`,
+      `manage_addons` capabilities
+- [ ] Retire the legacy `user.role != "admin"` check in `plugins.py`; gate
+      premium spend on `use_premium_ai` rather than `user.premium_ai_enabled`
+- [ ] Review workflow on `skill_runs`: draft → ready for review → reviewed by
+      {attorney, timestamp}; block export of unreviewed output
+- [ ] Assignment + notification on "ready for review"
+      (`services/task_notifications.py`)
+- [ ] Per-tenant/user AI spend caps with a pre-flight estimate and input ceiling
+
+### Sprint D — Add-ons join the practice
+- [ ] "Bill this" → draft time entry from a run (`routers/billing.py`)
+- [ ] "Create task" / "Calendar deadline" from a run and from every workspace
+- [ ] Deadline engine spike for Litigation and Family: rule-based dates off a
+      trigger event, written to Calendar + Tasks
+- [ ] Searchable matter picker replacing the 100-row `<select>`
+
+### Sprint E — Setup and shell a firm can survive
+- [ ] Replace `StructuredSetupModal`'s seven raw-JSON textareas with a guided
+      form; keep a JSON advanced tab
+- [ ] Render `PluginPage` inside `AppShell` so the app sidebar persists
+- [ ] Curated per-skill titles/descriptions — `skillLabel()` currently emits
+      "Nda Review", "Dsar Response", "Fto Analysis"
+- [ ] Remove CLI syntax from gate copy; rename "Legacy Interview"; settle on one
+      product name for plugin/add-on/module
+- [ ] `PLUGIN_ICONS` entries for `family-law`, `criminal-defense`,
+      `real-estate`; per-add-on icon on the detail page; real 404
+
+### Sprint F — Stability and reach
+- [ ] Move skill execution onto `services/durable_jobs.py` with progress,
+      timeout and cancel; today it is a long synchronous LLM call in the handler
+- [ ] Cache `list_plugin_manifests()`; split the 162 KB `prompts.py`
+- [ ] Add `test_estates_router.py`; extend e2e beyond first-customer
+- [ ] Ship the Word add-in properly (it hardcodes `http://localhost:8000/api`
+      and stores its token in `localStorage`) or archive it
+
+### Backlog
+- [ ] `BK18` Author the four Mediation prompt templates with domain review
+- [ ] `BK19` Child support beyond ND/TX — the engine is already pluggable
+- [ ] `BK20` Citation verification via the CourtListener sidecar in add-on output
+- [ ] `BK21` Self-serve Stripe purchase on the entitlement route
+- [ ] `BK22` Clear the ~890 `no-unused-vars` warnings and promote to error
+
 ## Recent Merge Review And Plan Integration — 2026-07-08 (DONE)
 
 **Goal:** Pull local state current, review the recent unmerged merge stack and

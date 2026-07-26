@@ -1,9 +1,15 @@
 """Tests for the legal practice plugin system."""
 
-from datetime import date, timedelta
+import uuid
+from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.models.plugin import TenantPluginEntitlement
 
 COMPLETE_PROFILE = """# Commercial Legal Practice Profile
 ## Liability Cap Position (Sales): 12 months of fees
@@ -170,3 +176,322 @@ async def test_renewal_urgency_low(client: AsyncClient):
     )
     assert resp.status_code == 201
     assert resp.json()["urgency"] == "low"
+
+
+# ── Skill input extraction ───────────────────────────────────────────────────
+#
+# The picker accepted .pdf/.docx but the browser read them with
+# FileReader.readAsText, so raw binary ("%PDF-1.7...", "PK\x03\x04...") was sent
+# to the model as the contract text. Extraction now happens server-side.
+
+
+def _text_pdf(body: str = "MUTUAL NON-DISCLOSURE AGREEMENT") -> bytes:
+    from reportlab.pdfgen import canvas
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(72, 720, body)
+    pdf.save()
+    return output.getvalue()
+
+
+def _text_docx(body: str = "MASTER SERVICES AGREEMENT") -> bytes:
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph(body)
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_extract_skill_input_reads_pdf_text(client: AsyncClient):
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={"file": ("nda.pdf", _text_pdf(), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "MUTUAL NON-DISCLOSURE AGREEMENT" in data["text"]
+    assert not data["text"].startswith("%PDF")
+    assert data["filename"] == "nda.pdf"
+    assert data["characters"] == len(data["text"])
+    assert data["ocr_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_extract_skill_input_reads_docx_text(client: AsyncClient):
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={
+            "file": (
+                "msa.docx",
+                _text_docx(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "MASTER SERVICES AGREEMENT" in data["text"]
+    assert "PK" not in data["text"][:2]
+
+
+@pytest.mark.asyncio
+async def test_extract_skill_input_rejects_unsupported_type(client: AsyncClient):
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={"file": ("book.epub", b"not a document", "application/epub+zip")},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_extract_skill_input_rejects_empty_file(client: AsyncClient):
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_extract_route_is_not_shadowed_by_the_skill_catch_all(
+    client: AsyncClient,
+):
+    """`documents` must not be parsed as a plugin name by POST /{plugin}/{skill}."""
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={"file": ("note.txt", b"plain text", "text/plain")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "plain text"
+
+
+# ── Entitlement enforcement ──────────────────────────────────────────────────
+#
+# execute_skill previously validated only that the plugin *name* existed, so the
+# Purchased/Trial/Locked states shown in the UI carried no API weight, and
+# expires_at/seat_limit were written but never read.
+
+
+async def _set_entitlement(
+    db_session: AsyncSession,
+    tenant_id,
+    plugin: str,
+    status: str,
+    expires_at: datetime | None = None,
+) -> None:
+    db_session.add(
+        TenantPluginEntitlement(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            plugin_name=plugin,
+            status=status,
+            starts_at=datetime.now(timezone.utc) - timedelta(days=30),
+            expires_at=expires_at,
+        )
+    )
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_locked_addon_cannot_run_a_skill(
+    client: AsyncClient, db_session: AsyncSession, test_tenant
+):
+    await _set_entitlement(db_session, test_tenant.id, "commercial-legal", "locked")
+
+    resp = await client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Mutual NDA."},
+    )
+    assert resp.status_code == 403
+    assert "turned off" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_expired_trial_cannot_run_a_skill(
+    client: AsyncClient, db_session: AsyncSession, test_tenant
+):
+    await _set_entitlement(
+        db_session,
+        test_tenant.id,
+        "commercial-legal",
+        "trial",
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+
+    resp = await client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Mutual NDA."},
+    )
+    assert resp.status_code == 402
+    assert "trial has ended" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_expired_trial_is_not_reported_as_active(
+    client: AsyncClient, db_session: AsyncSession, test_tenant
+):
+    await _set_entitlement(
+        db_session,
+        test_tenant.id,
+        "privacy-legal",
+        "trial",
+        expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    resp = await client.get("/api/plugins")
+    assert resp.status_code == 200
+    entry = next(
+        p for p in resp.json()["plugins"] if p["plugin_name"] == "privacy-legal"
+    )
+    assert entry["entitlement_status"] == "expired"
+    assert entry["is_trial"] is False
+    assert entry["is_purchased"] is False
+
+
+@pytest.mark.asyncio
+async def test_unexpired_trial_still_runs(
+    client: AsyncClient, db_session: AsyncSession, test_tenant, mock_llm
+):
+    await _set_entitlement(
+        db_session,
+        test_tenant.id,
+        "commercial-legal",
+        "trial",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+    )
+
+    resp = await client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Mutual NDA."},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_requires_an_explicit_entitlement(
+    client: AsyncClient, monkeypatch
+):
+    """Absent rows stay permitted by default so deploying does not revoke
+    every add-on for tenants that were never provisioned entitlements."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "PLUGIN_ENTITLEMENT_STRICT", True)
+
+    resp = await client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Mutual NDA."},
+    )
+    assert resp.status_code == 402
+    assert "not enabled for this firm" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_cold_start_is_gated_by_entitlement_too(
+    client: AsyncClient, db_session: AsyncSession, test_tenant
+):
+    await _set_entitlement(db_session, test_tenant.id, "ip-legal", "disabled")
+
+    resp = await client.post(
+        "/api/plugins/ip-legal/cold-start",
+        json={"input_text": "hello", "context": {}},
+    )
+    assert resp.status_code == 403
+
+
+# ── Catalog / prompt coverage ────────────────────────────────────────────────
+
+
+def test_every_advertised_skill_has_a_prompt_or_is_declared_generic():
+    """Advertised skills must have a curated template.
+
+    A skill with no template silently fell through to the generic
+    "you are a legal assistant" prompt, so a paid add-on could return
+    unspecialised output with no signal to the user. Anything genuinely still
+    awaiting a template must be listed here explicitly and will flag itself at
+    runtime via GENERIC_TEMPLATE_FLAG.
+    """
+    from app.services.plugins.executor import has_specialised_prompt
+    from app.services.plugins.manifest import list_plugin_manifests
+
+    # Mediation templates are still to be authored with domain review.
+    known_generic = {
+        ("mediation-legal", "mediation-intake"),
+        ("mediation-legal", "mediation-brief"),
+        ("mediation-legal", "settlement-agreement"),
+        ("mediation-legal", "caucus-summary"),
+    }
+
+    missing = {
+        (manifest.plugin_name, skill)
+        for manifest in list_plugin_manifests()
+        for skill in manifest.skills
+        if skill != "cold-start-interview"
+        and not has_specialised_prompt(manifest.plugin_name, skill)
+    }
+
+    assert missing == known_generic, (
+        "Advertised skills without a prompt template: "
+        f"{sorted(missing - known_generic)}"
+    )
+
+
+def test_no_prompt_template_is_unreachable():
+    """Every written template must be advertised by some add-on.
+
+    legal-hold, portfolio-status, closing-checklist, nprm-comment and
+    cnd-triage were all written and registered but listed in no catalog, so no
+    UI could invoke them.
+    """
+    from app.services.plugins.prompts import ALL_DEFAULT_PROMPTS
+    from app.services.plugins.manifest import list_plugin_manifests
+
+    advertised = {
+        (manifest.plugin_name, skill)
+        for manifest in list_plugin_manifests()
+        for skill in manifest.skills
+    }
+    unreachable = {
+        pair
+        for pair in ALL_DEFAULT_PROMPTS
+        if pair[1] != "cold-start-interview" and pair not in advertised
+    }
+    assert not unreachable, f"Prompt templates no UI can reach: {sorted(unreachable)}"
+
+
+@pytest.mark.asyncio
+async def test_generic_skill_run_is_flagged_to_the_user(
+    client: AsyncClient, mock_llm
+):
+    from app.services.plugins.executor import GENERIC_TEMPLATE_FLAG
+
+    await client.put(
+        "/api/plugins/mediation-legal/profile",
+        json={"profile_content": COMPLETE_PROFILE, "is_complete": True},
+    )
+    resp = await client.post(
+        "/api/plugins/mediation-legal/settlement-agreement",
+        json={"skill": "settlement-agreement", "input_text": "Terms agreed."},
+    )
+    assert resp.status_code == 200
+    assert GENERIC_TEMPLATE_FLAG in resp.json()["flags"]
+
+
+@pytest.mark.asyncio
+async def test_curated_skill_run_is_not_flagged_as_generic(
+    client: AsyncClient, mock_llm
+):
+    from app.services.plugins.executor import GENERIC_TEMPLATE_FLAG
+
+    await client.put(
+        "/api/plugins/commercial-legal/profile",
+        json={"profile_content": COMPLETE_PROFILE, "is_complete": True},
+    )
+    resp = await client.post(
+        "/api/plugins/commercial-legal/nda-review",
+        json={"skill": "nda-review", "input_text": "Mutual NDA."},
+    )
+    assert resp.status_code == 200
+    assert GENERIC_TEMPLATE_FLAG not in resp.json()["flags"]

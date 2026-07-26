@@ -25,13 +25,14 @@ POST /litigation/matters and POST /commercial/renewals are not swallowed by the 
 """
 
 import uuid
+import os
 import re
 import json
 import logging
 from datetime import date, datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +67,7 @@ from app.schemas.plugin import (
     RenewalCreate,
     RenewalResponse,
     RenewalUpdate,
+    SkillInputExtraction,
     SkillRequest,
     SkillResponse,
 )
@@ -86,7 +88,9 @@ from app.services.plugins.prompts import PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
 from app.services.rag import build_cloud_context
 from app.services.retrieval_planner import RetrievalPlanner
+from app.services.template_ocr import TemplateOcrError, ocr_pdf
 from app.utils.guardrails import prepare_provider_text
+from app.utils.text_processing import extract_text
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -201,14 +205,99 @@ def _validate_plugin(plugin: str) -> None:
         )
 
 
-def _entitlement_status(entitlement: TenantPluginEntitlement | None) -> str:
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a possibly naive timestamp so comparisons never raise."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _entitlement_is_lapsed(
+    entitlement: TenantPluginEntitlement | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when a trial or purchase has run past its expiry date."""
+    if entitlement is None:
+        return False
+    expires_at = _as_utc(entitlement.expires_at)
+    if expires_at is None:
+        return False
+    return expires_at <= (now or datetime.now(timezone.utc))
+
+
+def _entitlement_status(
+    entitlement: TenantPluginEntitlement | None,
+    *,
+    now: datetime | None = None,
+) -> str:
     if entitlement is None:
         return "available"
+    # An expired trial reads as "available" again rather than staying active
+    # forever: expires_at used to be stored and never enforced.
+    if _entitlement_is_lapsed(entitlement, now=now):
+        return "expired"
     return entitlement.status or "available"
 
 
 def _is_purchased_status(status: str) -> bool:
     return status in {"purchased", "included", "trial"}
+
+
+def _assert_addon_runnable(
+    plugin: str,
+    entitlement: TenantPluginEntitlement | None,
+) -> None:
+    """Fail closed on revoked and lapsed add-ons before any model spend.
+
+    Skill execution previously validated only that the plugin *name* existed,
+    so the Purchased/Trial/Locked states shown in the UI carried no API weight.
+    """
+    status = _entitlement_status(entitlement)
+    display = (
+        get_plugin_manifest(plugin).display_name
+        if get_plugin_manifest(plugin)
+        else plugin
+    )
+
+    if status in {"disabled", "locked"}:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"The {display} add-on is turned off for this firm. "
+                "An administrator can re-enable it in Add-on Modules."
+            ),
+        )
+    if status == "expired":
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"The {display} trial has ended. "
+                "Purchase the add-on in Add-on Modules to keep using it."
+            ),
+        )
+    if settings.PLUGIN_ENTITLEMENT_STRICT and not _is_purchased_status(status):
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"The {display} add-on is not enabled for this firm. "
+                "Start a trial or purchase it in Add-on Modules."
+            ),
+        )
+
+
+async def _load_entitlement(
+    db: AsyncSession, tenant_id, plugin: str
+) -> TenantPluginEntitlement | None:
+    result = await db.execute(
+        select(TenantPluginEntitlement).where(
+            TenantPluginEntitlement.tenant_id == tenant_id,
+            TenantPluginEntitlement.plugin_name == plugin,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 def _validate_entitlement_status(status: str) -> str:
@@ -425,6 +514,107 @@ async def _build_plugin_cloud_context(
         return await build_cloud_context(serializable_hits)
     except Exception:
         return ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 0 — Skill input extraction (registered before the /{plugin}/{skill}
+# catch-all so "documents" is never treated as a plugin name)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Skill inputs are prose for an LLM, not archival documents: nothing is stored.
+_SKILL_INPUT_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt", ".md")
+_SKILL_INPUT_MAX_CHARS = 400_000
+# Below this, a PDF is almost certainly scanned images rather than text.
+_SCANNED_PDF_CHAR_FLOOR = 40
+
+
+@router.post("/documents/extract", response_model=SkillInputExtraction)
+async def extract_skill_input(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extract plain text from an uploaded document for use as skill input.
+
+    Falls back to OCR when a PDF yields almost no embedded text, which is the
+    common case for scanned court filings and faxed agreements.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    filename = os.path.basename(file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename is required.")
+    if not filename.lower().endswith(_SKILL_INPUT_EXTENSIONS):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, DOCX, DOC, TXT, MD.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the maximum size of {settings.MAX_FILE_SIZE_MB}MB.",
+        )
+
+    try:
+        text = extract_text(file_bytes, file.content_type or "", filename)
+    except Exception:
+        logger.warning("Skill input extraction failed for %s", filename, exc_info=True)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This file could not be read. It may be corrupt or password "
+                "protected. Try exporting it again, or paste the text directly."
+            ),
+        )
+
+    ocr_used = False
+    pages_analyzed = None
+    is_pdf = filename.lower().endswith(".pdf")
+    if is_pdf and len(text.strip()) < _SCANNED_PDF_CHAR_FLOOR:
+        try:
+            ocr_result = ocr_pdf(file_bytes)
+        except TemplateOcrError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception:
+            logger.warning("OCR failed for %s", filename, exc_info=True)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This PDF has no selectable text and could not be scanned. "
+                    "Paste the text directly instead."
+                ),
+            )
+        text = ocr_result.text
+        ocr_used = True
+        pages_analyzed = ocr_result.pages_analyzed
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No readable text was found in this file. "
+                "Paste the text directly instead."
+            ),
+        )
+
+    truncated = len(text) > _SKILL_INPUT_MAX_CHARS
+    if truncated:
+        text = text[:_SKILL_INPUT_MAX_CHARS]
+
+    return SkillInputExtraction(
+        filename=filename,
+        text=text,
+        characters=len(text),
+        truncated=truncated,
+        ocr_used=ocr_used,
+        pages_analyzed=pages_analyzed,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1223,6 +1413,11 @@ async def cold_start_interview(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
+    # Setup also calls the model, so it is gated the same way as a skill run.
+    _assert_addon_runnable(
+        plugin, await _load_entitlement(db, user.tenant_id, plugin)
+    )
+
     # Load current profile/step
     result = await db.execute(
         select(PracticeProfile).where(
@@ -1345,6 +1540,11 @@ async def execute_skill(
 
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+
+    # Check entitlement before any model spend, not after.
+    _assert_addon_runnable(
+        plugin, await _load_entitlement(db, user.tenant_id, plugin)
+    )
 
     context = body.context or {}
     tenant_name = user.tenant.name if user.tenant else "Legal"

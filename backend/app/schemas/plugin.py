@@ -88,6 +88,21 @@ class SkillRequest(BaseModel):
     use_premium: bool = False
 
 
+class SkillInputExtraction(BaseModel):
+    """Text pulled out of an uploaded file so a skill can act on it.
+
+    The browser cannot read PDF/DOCX; it previously used FileReader.readAsText
+    and pushed raw binary into the skill input. Extraction happens here instead.
+    """
+
+    filename: str
+    text: str
+    characters: int
+    truncated: bool = False
+    ocr_used: bool = False
+    pages_analyzed: Optional[int] = None
+
+
 class CitationTag(BaseModel):
     text: str
     tag: str  # "settled", "verify", "model-knowledge", "web-search"

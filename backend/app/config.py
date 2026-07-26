@@ -176,6 +176,15 @@ class Settings(BaseSettings):
     MCP_DEFAULT_BURST_LIMIT_PER_MINUTE: int = 60
     MCP_MAX_BURST_LIMIT_PER_MINUTE: int = 600
 
+    # Per-add-on entitlement enforcement for /api/plugins skills.
+    #
+    # Explicitly revoked states (disabled/locked) and lapsed expiry dates are
+    # ALWAYS enforced. This flag governs only the absent-row case: no tenant
+    # has ever been provisioned an entitlement row, so defaulting to strict
+    # would revoke every add-on for every existing tenant on deploy. Turn it on
+    # once tenants carry real entitlements.
+    PLUGIN_ENTITLEMENT_STRICT: bool = False
+
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.
     # In prod behind nginx both URLs share the same domain so set this to
