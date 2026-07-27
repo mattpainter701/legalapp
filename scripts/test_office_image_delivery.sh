@@ -36,6 +36,18 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 
+health=starting
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  health="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER")"
+  [ "$health" = healthy ] && break
+  sleep 1
+done
+if [ "$health" != healthy ]; then
+  echo "ERROR: Office image health check is $health, expected healthy" >&2
+  docker inspect --format '{{json .State.Health}}' "$CONTAINER" >&2
+  exit 1
+fi
+
 for path in / /index.html /manifests/word-excel.xml /manifests/outlook.xml /icon-96x96.png; do
   code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$path")"
   if [ "$code" != 200 ]; then

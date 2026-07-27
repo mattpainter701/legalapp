@@ -231,12 +231,6 @@ services:
         VITE_OFFICE_API_SCOPE: ${OFFICE_ENTRA_API_AUDIENCE:-}/office.access
     # The task pane is reachable only through nginx at /office/.
     ports: []
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
     restart: unless-stopped
 
   nginx:
