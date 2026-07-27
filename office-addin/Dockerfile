@@ -20,3 +20,4 @@ FROM nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e
 COPY office-addin/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/office-addin/dist /usr/share/nginx/html
 EXPOSE 3001
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 CMD wget -qO- http://127.0.0.1:3001/ >/dev/null || exit 1
