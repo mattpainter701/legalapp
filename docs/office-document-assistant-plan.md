@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 
-**Status:** In progress — Slice 0 client foundation implemented
+**Status:** In progress — Slice 0 client and server foundations implemented
 
 **Decision:** Build a cross-host Office.js add-in with one shared task-pane application and host-specific Word, Excel, and Outlook adapters. Keep document mutations local to the Office host and require a visible user approval before every write.
 

@@ -201,6 +201,7 @@ class LLMService:
         customer_provider: str | None = None,
         customer_endpoint: str | None = None,
         gateway_metadata: dict | None = None,
+        system_prompt_override: str | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
@@ -213,7 +214,7 @@ class LLMService:
         tenant BYOK requests directly to the tenant's own provider account,
         bypassing the LiteLLM gateway (the tenant's key is not valid there).
         """
-        system_prompt = self._build_system_prompt(
+        system_prompt = system_prompt_override or self._build_system_prompt(
             tenant_name=tenant_name,
             context=context,
             memory_context=memory_context,

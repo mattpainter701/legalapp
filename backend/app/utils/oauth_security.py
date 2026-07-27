@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import secrets
+import uuid
 from typing import Optional
 
 import httpx
@@ -149,6 +150,72 @@ async def verify_microsoft_id_token(
         )
 
     _check_nonce(claims, expected_nonce, provider="Microsoft")
+    return claims
+
+
+async def verify_microsoft_access_token(
+    access_token: str,
+    *,
+    audience: str,
+    required_scope: str,
+    client_id: str,
+    tenant: str = "common",
+) -> dict:
+    """Verify an Entra v2 delegated API token used by Office NAA.
+
+    Signature, exact audience, tenant-specific issuer, immutable directory IDs,
+    delegated scope, and authorized client are all required before the token is
+    allowed to establish a Clarity cookie session.
+    """
+
+    if not audience or not required_scope or not client_id:
+        raise HTTPException(
+            status_code=503, detail="Office Entra API is not configured"
+        )
+
+    try:
+        segments = access_token.split(".")
+        header = _decode_jwt_segment(segments[0])
+        unverified = _decode_jwt_segment(segments[1])
+        tid = str(uuid.UUID(str(unverified.get("tid", ""))))
+        oid = str(uuid.UUID(str(unverified.get("oid", ""))))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401, detail="Invalid Microsoft access token"
+        ) from exc
+
+    if tenant not in ("", "common", "organizations") and tid != tenant:
+        raise HTTPException(status_code=401, detail="Microsoft tenant is not allowed")
+
+    jwks = await _fetch_jwks(_MICROSOFT_JWKS_URL_TMPL.format(tenant=tid))
+    matching_key = _find_jwk(jwks, header.get("kid"))
+    if matching_key is None:
+        raise HTTPException(
+            status_code=401, detail="No matching Microsoft public key for token kid"
+        )
+
+    issuer = f"https://login.microsoftonline.com/{tid}/v2.0"
+    try:
+        public_key = jwk.construct(matching_key, algorithm="RS256")
+        claims = jwt.decode(
+            access_token,
+            public_key,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=issuer,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401, detail="Microsoft access token verification failed"
+        ) from exc
+
+    scopes = set(str(claims.get("scp", "")).split())
+    if required_scope not in scopes:
+        raise HTTPException(status_code=403, detail="Office API scope is missing")
+    if claims.get("azp") != client_id:
+        raise HTTPException(status_code=401, detail="Office client is not authorized")
+    if claims.get("tid") != tid or claims.get("oid") != oid:
+        raise HTTPException(status_code=401, detail="Microsoft identity claims changed")
     return claims
 
 

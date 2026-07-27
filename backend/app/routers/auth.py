@@ -15,8 +15,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from jose import jwt
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
@@ -44,6 +45,7 @@ from app.utils.oauth_security import (
     is_oauth_client_configured,
     verify_google_id_token,
     verify_microsoft_id_token,
+    verify_microsoft_access_token,
 )
 from app.services.tenant_state import require_active_tenant
 
@@ -1101,6 +1103,90 @@ async def google_callback(
     await _save_callback_replay(request, state, code, jwt_token)
     callback_code = await _save_callback_token(request, jwt_token)
     return _frontend_callback_response(callback_code)
+
+
+@router.post("/office/exchange", response_model=TokenResponse)
+async def exchange_office_session(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Exchange one verified Office NAA token for hardened Clarity cookies.
+
+    This endpoint never provisions a tenant or user. It links only an existing
+    Microsoft OAuth identity, then persists the immutable Entra tenant/object
+    pair so later exchanges no longer depend on pairwise subject behavior.
+    """
+
+    if not settings.OFFICE_ASSISTANT_ENABLED:
+        raise HTTPException(status_code=404, detail="Office assistant is not enabled")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Microsoft access token required")
+    access_token = auth_header.split(" ", 1)[1].strip()
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Microsoft access token required")
+
+    claims = await verify_microsoft_access_token(
+        access_token,
+        audience=settings.OFFICE_ENTRA_API_AUDIENCE,
+        required_scope=settings.OFFICE_ENTRA_REQUIRED_SCOPE,
+        client_id=settings.OFFICE_ENTRA_CLIENT_ID or settings.MICROSOFT_CLIENT_ID,
+        tenant=settings.MICROSOFT_TENANT_ID,
+    )
+    entra_tenant_id = claims["tid"]
+    entra_object_id = claims["oid"]
+    legacy_subjects = {value for value in (claims.get("sub"), entra_object_id) if value}
+
+    await enable_rls_bypass(db)
+    user_result = await db.execute(
+        select(User)
+        .options(selectinload(User.tenant))
+        .where(
+            or_(
+                and_(
+                    User.entra_tenant_id == entra_tenant_id,
+                    User.entra_object_id == entra_object_id,
+                ),
+                and_(
+                    User.oauth_provider == "microsoft",
+                    User.oauth_subject.in_(legacy_subjects),
+                ),
+            )
+        )
+    )
+    users = user_result.scalars().unique().all()
+    if len(users) != 1:
+        raise HTTPException(
+            status_code=403,
+            detail="Office identity is not linked to exactly one Clarity user",
+        )
+
+    user = users[0]
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User account is inactive")
+    require_active_tenant(user.tenant)
+    if user.entra_tenant_id and user.entra_tenant_id != entra_tenant_id:
+        raise HTTPException(status_code=409, detail="Microsoft tenant link mismatch")
+    if user.entra_object_id and user.entra_object_id != entra_object_id:
+        raise HTTPException(status_code=409, detail="Microsoft object link mismatch")
+
+    if not user.entra_tenant_id or not user.entra_object_id:
+        user.entra_tenant_id = entra_tenant_id
+        user.entra_object_id = entra_object_id
+        await db.commit()
+
+    jwt_token = await _issue_access_token(db, user, user.tenant)
+    refresh_token = await _create_refresh_token(request, user)
+    _set_auth_cookies(response, jwt_token, refresh_token)
+    return TokenResponse(
+        user_id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        role=user.role,
+        email=user.email,
+        full_name=user.full_name,
+    )
 
 
 @router.post("/oauth/exchange", response_model=TokenResponse)

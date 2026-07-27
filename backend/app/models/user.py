@@ -24,6 +24,11 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+        UniqueConstraint(
+            "entra_tenant_id",
+            "entra_object_id",
+            name="uq_users_entra_identity",
+        ),
         Index("idx_users_tenant_id", "tenant_id"),
     )
 
@@ -43,6 +48,11 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oauth_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     oauth_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Immutable Microsoft Entra identity used by the Office NAA exchange.
+    # Kept separately from oauth_subject because the latter historically used
+    # the pairwise `sub` claim and can vary across app registrations.
+    entra_tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    entra_object_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )

@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List
 
@@ -61,6 +61,7 @@ from app.utils.guardrails import (
     validate_citation_confidence,
 )
 from app.services.error_tracker import capture_chat_error
+from app.services.usage_limits import check_token_budget
 
 logger = logging.getLogger(__name__)
 
@@ -536,36 +537,6 @@ async def _trigger_auto_memory_generation_bg(
                 logger.warning("Auto-memory generation failed", exc_info=True)
 
 
-async def _check_token_budget(db: AsyncSession, user) -> None:
-    """Raise HTTP 429 if the tenant has exhausted their daily token budget."""
-    from app.models.tenant import TenantSettings
-
-    settings_result = await db.execute(
-        select(TenantSettings).where(TenantSettings.tenant_id == user.tenant_id)
-    )
-    tenant_settings = settings_result.scalar_one_or_none()
-    if not tenant_settings or not tenant_settings.max_daily_tokens:
-        return
-
-    today_start = datetime.combine(date.today(), datetime.min.time()).replace(
-        tzinfo=timezone.utc
-    )
-    token_result = await db.execute(
-        select(
-            func.coalesce(func.sum(UsageRecord.tokens_in + UsageRecord.tokens_out), 0)
-        ).where(
-            UsageRecord.tenant_id == user.tenant_id,
-            UsageRecord.created_at >= today_start,
-        )
-    )
-    tokens_today = token_result.scalar() or 0
-    if tokens_today >= tenant_settings.max_daily_tokens:
-        raise HTTPException(
-            status_code=429,
-            detail="Daily token limit reached. Contact your administrator.",
-        )
-
-
 @router.get("", response_model=List[ConversationResponse])
 async def list_conversations(
     request: Request,
@@ -927,7 +898,7 @@ async def send_message(
     rag_scope_key = _rag_scope_key(effective_matter_id, effective_matter_cloud_folder)
 
     # 1a. Enforce daily token budget (fail fast before any work is done)
-    await _check_token_budget(db, user)
+    await check_token_budget(db, user)
 
     # 2. Check for PII in user input
     pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
@@ -1398,7 +1369,7 @@ async def stream_message(
 
     # 1a. Enforce daily token budget
     try:
-        await _check_token_budget(db, user)
+        await check_token_budget(db, user)
     except HTTPException as budget_exc:
         return StreamingResponse(
             _error_stream(budget_exc.detail),

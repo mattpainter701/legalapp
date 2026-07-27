@@ -19,8 +19,13 @@ export class OfficeApi {
       },
     })
     if (!response.ok) {
-      const detail = await response.json().catch(() => null) as { detail?: string } | null
-      throw new Error(detail?.detail || `Office assistant request failed (${response.status})`)
+      const payload = await response.json().catch(() => null) as {
+        detail?: string | { code?: string; message?: string }
+      } | null
+      const detail = typeof payload?.detail === 'string'
+        ? payload.detail
+        : payload?.detail?.message
+      throw new Error(detail || `Office assistant request failed (${response.status})`)
     }
     return response
   }

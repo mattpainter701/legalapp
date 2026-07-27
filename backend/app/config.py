@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     MICROSOFT_CLIENT_SECRET: str = ""
     MICROSOFT_TENANT_ID: str = "common"
 
+    # Microsoft 365 Office add-in. Fail closed until the Entra exposed API
+    # scope and production manifests are configured.
+    OFFICE_ASSISTANT_ENABLED: bool = False
+    OFFICE_ENTRA_CLIENT_ID: str = ""
+    OFFICE_ENTRA_API_AUDIENCE: str = ""
+    OFFICE_ENTRA_REQUIRED_SCOPE: str = "office.access"
+    OFFICE_PLAN_TTL_SECONDS: int = 300
+    OFFICE_MAX_WORD_CHARACTERS: int = 50_000
+    OFFICE_MAX_EXCEL_CELLS: int = 2_500
+    OFFICE_MAX_OUTLOOK_CHARACTERS: int = 50_000
+
     # ── Microsoft Teams ──────────────────────────────────────────────────────
     # Master feature flag for Teams collaboration features (channel linking,
     # outbound Adaptive Card notifications). When False the Teams admin tab and

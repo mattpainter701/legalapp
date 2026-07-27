@@ -40,4 +40,6 @@ This package is the shared Microsoft 365 task pane for Word, Excel, and Outlook.
 - Keep Graph mail/file scopes out of the first release; active-item access comes from Office.js.
 - Deploy `word-excel.xml` and `outlook.xml` independently so Outlook client compatibility does not constrain Word/Excel.
 
-The backend endpoints described in `docs/office-document-assistant-plan.md` remain feature-gated until their session-exchange, policy, plan-generation, and metadata-only audit implementation lands.
+The server foundation is feature-gated with `OFFICE_ASSISTANT_ENABLED=false` by default. Before enabling it, apply migration `095_office_assistant`, then configure `OFFICE_ENTRA_CLIENT_ID`, `OFFICE_ENTRA_API_AUDIENCE`, and `OFFICE_ENTRA_REQUIRED_SCOPE`. The exchange endpoint never creates users; each person must already have a linked Microsoft Clarity identity.
+
+The current server exposes `/api/auth/office/exchange`, `/api/office/policy`, `/api/office/plans`, and `/api/office/plans/{plan_id}/result`. Plan and result audits persist keyed digests and operational metadata only—not instructions, selected content, replacement text, email bodies, cell values, or formulas.
