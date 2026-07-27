@@ -16,9 +16,7 @@ ENV VITE_OFFICE_ENTRA_AUTHORITY=$VITE_OFFICE_ENTRA_AUTHORITY
 ENV VITE_OFFICE_API_SCOPE=$VITE_OFFICE_API_SCOPE
 RUN npm run build
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
-WORKDIR /app
-RUN apk add --no-cache curl && npm install -g serve@14.2.6
-COPY --from=build /app/office-addin/dist ./dist
+FROM nginx:alpine@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
+COPY office-addin/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/office-addin/dist /usr/share/nginx/html
 EXPOSE 3001
-CMD ["serve", "--no-port-switching", "-s", "dist", "-l", "3001"]
