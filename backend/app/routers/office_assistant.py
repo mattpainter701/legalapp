@@ -13,6 +13,10 @@ from app.schemas.office_assistant import (
     OfficePolicyResponse,
     OfficeResultAcknowledgement,
 )
+from app.services.office_access import (
+    require_office_globally_enabled,
+    require_office_pilot_tenant,
+)
 from app.services.office_action_policy import ALLOWED_ACTIONS, OfficePolicyError
 from app.services.office_assistant import (
     OfficeGenerationError,
@@ -24,8 +28,7 @@ router = APIRouter(prefix="/api/office", tags=["office-assistant"])
 
 
 def _require_office_enabled() -> None:
-    if not settings.OFFICE_ASSISTANT_ENABLED:
-        raise HTTPException(status_code=404, detail="Office assistant is not enabled")
+    require_office_globally_enabled()
 
 
 def _policy_error(exc: OfficePolicyError) -> HTTPException:
@@ -48,6 +51,7 @@ async def get_office_policy(
 ):
     _require_office_enabled()
     user = await get_current_user(request, db)
+    require_office_pilot_tenant(user.tenant_id)
     await set_tenant_context(db, str(user.tenant_id))
     return OfficePolicyResponse(
         enabled=True,
@@ -67,6 +71,7 @@ async def create_office_plan(
 ):
     _require_office_enabled()
     user = await get_current_user(request, db)
+    require_office_pilot_tenant(user.tenant_id)
     await set_tenant_context(db, str(user.tenant_id))
     try:
         return await office_assistant_service.create_plan(db, user, body)
@@ -99,6 +104,7 @@ async def record_office_result(
             },
         )
     user = await get_current_user(request, db)
+    require_office_pilot_tenant(user.tenant_id)
     await set_tenant_context(db, str(user.tenant_id))
     try:
         run = await office_assistant_service.record_result(db, user, body)

@@ -23,6 +23,10 @@ from app.config import get_settings
 from app.database import enable_rls_bypass, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.services.module_visibility import resolve_enabled_modules, resolve_plan_meta
+from app.services.office_access import (
+    require_office_globally_enabled,
+    require_office_pilot_tenant,
+)
 from app.models.tenant import Tenant
 from app.models.tenant_credential import TenantCredential
 from app.models.user_oauth_token import UserOAuthToken
@@ -1118,8 +1122,7 @@ async def exchange_office_session(
     pair so later exchanges no longer depend on pairwise subject behavior.
     """
 
-    if not settings.OFFICE_ASSISTANT_ENABLED:
-        raise HTTPException(status_code=404, detail="Office assistant is not enabled")
+    require_office_globally_enabled()
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -1167,6 +1170,7 @@ async def exchange_office_session(
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
     require_active_tenant(user.tenant)
+    require_office_pilot_tenant(user.tenant_id)
     if user.entra_tenant_id and user.entra_tenant_id != entra_tenant_id:
         raise HTTPException(status_code=409, detail="Microsoft tenant link mismatch")
     if user.entra_object_id and user.entra_object_id != entra_object_id:

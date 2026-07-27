@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+**/node_modules
+**/dist
+**/coverage
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+.env
+.env.*
+!.env.prod.example
+uploads
+backups
+*.log

@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Microsoft 365 Office add-in. Fail closed until the Entra exposed API
     # scope and production manifests are configured.
     OFFICE_ASSISTANT_ENABLED: bool = False
+    # Comma-separated Clarity tenant UUIDs. Empty or malformed denies every
+    # tenant even when the global switch is enabled.
+    OFFICE_ASSISTANT_PILOT_TENANT_IDS: str = ""
     OFFICE_ENTRA_CLIENT_ID: str = ""
     OFFICE_ENTRA_API_AUDIENCE: str = ""
     OFFICE_ENTRA_REQUIRED_SCOPE: str = "office.access"

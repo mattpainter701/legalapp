@@ -2,6 +2,7 @@
 
 import json
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
@@ -120,6 +121,26 @@ def test_policy_rejects_external_or_volatile_excel_formula():
     assert exc.value.code == "unsafe_formula"
 
 
+def test_office_pilot_allowlist_is_exact_and_fail_closed(monkeypatch):
+    from app.services import office_access
+
+    tenant_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    monkeypatch.setattr(office_access.settings, "OFFICE_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(
+        office_access.settings,
+        "OFFICE_ASSISTANT_PILOT_TENANT_IDS",
+        f"not-a-uuid,{tenant_id}",
+    )
+    with pytest.raises(HTTPException) as malformed:
+        office_access.require_office_pilot_tenant(UUID(tenant_id))
+    assert malformed.value.status_code == 404
+
+    monkeypatch.setattr(
+        office_access.settings, "OFFICE_ASSISTANT_PILOT_TENANT_IDS", tenant_id
+    )
+    office_access.require_office_pilot_tenant(UUID(tenant_id))
+
+
 @pytest.mark.asyncio
 async def test_office_access_token_requires_delegated_scope_and_client():
     tenant_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -183,6 +204,16 @@ async def test_office_policy_is_feature_gated(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_office_policy_requires_explicit_pilot_tenant(client, monkeypatch):
+    from app.routers import office_assistant as office_router
+
+    monkeypatch.setattr(office_router.settings, "OFFICE_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(office_router.settings, "OFFICE_ASSISTANT_PILOT_TENANT_IDS", "")
+    response = await client.get("/api/office/policy")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_plan_and_result_store_metadata_only(
     client,
     db_session,
@@ -193,6 +224,11 @@ async def test_plan_and_result_store_metadata_only(
     from app.services import office_assistant as office_service_module
 
     monkeypatch.setattr(office_router.settings, "OFFICE_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(
+        office_router.settings,
+        "OFFICE_ASSISTANT_PILOT_TENANT_IDS",
+        str(test_user.tenant_id),
+    )
     route = LLMRoute(
         requested_route="standard",
         resolved_route="standard",
@@ -273,6 +309,11 @@ async def test_office_exchange_links_existing_microsoft_user(
     await db_session.commit()
 
     monkeypatch.setattr(auth_router.settings, "OFFICE_ASSISTANT_ENABLED", True)
+    monkeypatch.setattr(
+        auth_router.settings,
+        "OFFICE_ASSISTANT_PILOT_TENANT_IDS",
+        str(test_user.tenant_id),
+    )
     monkeypatch.setattr(auth_router.settings, "OFFICE_ENTRA_API_AUDIENCE", "api://test")
     monkeypatch.setattr(auth_router.settings, "OFFICE_ENTRA_CLIENT_ID", "office-client")
     verify = AsyncMock(
