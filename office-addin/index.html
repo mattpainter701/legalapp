@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Clarity Legal for Microsoft 365</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <header class="masthead">
+        <span class="mark" aria-hidden="true">C</span>
+        <div>
+          <h1>Clarity Legal</h1>
+          <p id="host-label">Connecting to Microsoft 365…</p>
+        </div>
+      </header>
+
+      <section id="unsupported" class="card hidden" role="alert">
+        <h2>This Office host is not supported</h2>
+        <p id="unsupported-detail"></p>
+      </section>
+
+      <section id="workspace" class="hidden">
+        <div class="card context-card">
+          <div class="row between">
+            <div>
+              <span class="eyebrow">Current context</span>
+              <h2 id="context-title">No context captured</h2>
+            </div>
+            <button id="capture" class="secondary" type="button">Use current selection</button>
+          </div>
+          <p id="context-summary" class="muted">Clarity sends only the selection or range you explicitly capture.</p>
+        </div>
+
+        <form id="request-form" class="card">
+          <label for="instruction">What should Clarity do?</label>
+          <textarea id="instruction" rows="4" maxlength="4000" placeholder="Rewrite the selected clause more narrowly…" required></textarea>
+          <div class="row between wrap">
+            <span class="privacy-note">Nothing is changed until you review and approve it.</span>
+            <button id="propose" class="primary" type="submit" disabled>Propose changes</button>
+          </div>
+        </form>
+
+        <section id="preview" class="card hidden">
+          <span class="eyebrow">Review before applying</span>
+          <h2 id="plan-summary"></h2>
+          <ul id="plan-warnings" class="warnings"></ul>
+          <div id="changes" class="changes"></div>
+          <div class="row end wrap">
+            <button id="reject" class="secondary" type="button">Reject</button>
+            <button id="apply" class="primary" type="button">Apply approved change</button>
+          </div>
+        </section>
+      </section>
+
+      <p id="status" class="status" role="status"></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

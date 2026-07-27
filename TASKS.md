@@ -2161,3 +2161,15 @@ and `POST /api/templates/{id}/smart-fill-preview` for deterministic suggestions
 from matter, linked client contact, attorney, and current user context. Native
 e-sign now supports multiple signers, signer roles, sequential signing,
 expiration, reminder metadata, decline/void reasons, and portal decline.
+
+### BK18. Office document assistant integration (P0, LARGE)
+
+Planning doc: `docs/office-document-assistant-plan.md`.
+
+- [ ] Slice 0: replace the localhost Word prototype foundation with a tested TypeScript/Vite Office add-in, shared host contracts, NAA/session exchange, capability detection, action validation, preview, stale-anchor protection, and metadata-only audit
+- [ ] Slice 1: ship Word selection-scoped explain/rewrite/redline/insert workflows with explicit preview and approval, supported formatting, content-control anchors, and matter capture
+- [ ] Slice 2: ship Outlook read/compose summarization, approved reply insertion, and explicit matter correspondence capture without send automation or broad mailbox permissions
+- [ ] Slice 3: ship Excel selected-range/table analysis and bounded value/formula updates with cell-level preview and formula safety rules
+- [ ] Slice 4: evaluate Word document-open helpers, Outlook Smart Alerts, deterministic content-control smart fill, and a unified Microsoft 365 manifest only after host MVP evidence
+- [ ] Slice 5: complete centralized deployment, rollback, kill switches, support matrix, privacy/scope justification, and Marketplace readiness
+- [ ] Keep all Office writes schema-allowlisted, fingerprint-bound, previewed, explicitly approved, tenant/capability-gated, and audited without raw document content by default
