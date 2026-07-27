@@ -1414,9 +1414,7 @@ async def cold_start_interview(
     await set_tenant_context(db, str(user.tenant_id))
 
     # Setup also calls the model, so it is gated the same way as a skill run.
-    _assert_addon_runnable(
-        plugin, await _load_entitlement(db, user.tenant_id, plugin)
-    )
+    _assert_addon_runnable(plugin, await _load_entitlement(db, user.tenant_id, plugin))
 
     # Load current profile/step
     result = await db.execute(
@@ -1542,9 +1540,7 @@ async def execute_skill(
     await set_tenant_context(db, str(user.tenant_id))
 
     # Check entitlement before any model spend, not after.
-    _assert_addon_runnable(
-        plugin, await _load_entitlement(db, user.tenant_id, plugin)
-    )
+    _assert_addon_runnable(plugin, await _load_entitlement(db, user.tenant_id, plugin))
 
     context = body.context or {}
     tenant_name = user.tenant.name if user.tenant else "Legal"
