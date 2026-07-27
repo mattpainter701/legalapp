@@ -186,11 +186,12 @@ async def test_renewal_urgency_low(client: AsyncClient):
 
 
 def _text_pdf(body: str = "MUTUAL NON-DISCLOSURE AGREEMENT") -> bytes:
-    """A PDF with real embedded text.
+    """A PDF with real embedded text on a single page.
 
-    The body must clear _SCANNED_PDF_CHAR_FLOOR, otherwise the endpoint
-    correctly treats it as a scan and falls back to OCR — which is a different
-    code path than the one these tests are exercising.
+    Detection is per page (`_PAGE_TEXT_MIN_CHARS`), so this reads as a text
+    page rather than a scan. Several lines keeps the fixture representative of
+    a real document; the endpoint no longer requires that, because a flat
+    document-wide floor was the bug — it sent short-but-real PDFs to OCR.
     """
     from reportlab.pdfgen import canvas
 
