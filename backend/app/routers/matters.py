@@ -41,6 +41,7 @@ from app.schemas.matter import (
     MatterCloudFolderRenameRequest,
     MatterCloudFolderStatus,
     MatterCreate,
+    MatterFieldOptions,
     MatterListResponse,
     MatterMemoryResponse,
     MatterMemoryUpdate,
@@ -599,6 +600,58 @@ async def list_matters(
         )
 
     return MatterListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+async def _matter_field_values(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    column,
+    *,
+    limit: int = 100,
+) -> list[str]:
+    """Return trimmed, case-insensitively unique tenant values for a field."""
+    rows = (
+        await db.execute(
+            select(column)
+            .where(
+                Matter.tenant_id == tenant_id,
+                column.is_not(None),
+                func.length(func.trim(column)) > 0,
+            )
+            .distinct()
+            .order_by(column)
+            .limit(limit)
+        )
+    ).scalars()
+
+    values: list[str] = []
+    seen: set[str] = set()
+    for raw_value in rows:
+        value = raw_value.strip()
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(value)
+    return values
+
+
+@router.get("/field-options", response_model=MatterFieldOptions)
+async def get_matter_field_options(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> MatterFieldOptions:
+    """List firm-used values for matter fields that also accept new values."""
+    user = await get_current_user(request, db)
+    tenant_id = user.tenant_id
+    await set_tenant_context(db, str(tenant_id))
+
+    return MatterFieldOptions(
+        matter_types=await _matter_field_values(db, tenant_id, Matter.matter_type),
+        roles=await _matter_field_values(db, tenant_id, Matter.role),
+        jurisdictions=await _matter_field_values(db, tenant_id, Matter.jurisdiction),
+        counterparties=await _matter_field_values(db, tenant_id, Matter.counterparty),
+    )
 
 
 @router.post("", status_code=201, response_model=MatterResponse)

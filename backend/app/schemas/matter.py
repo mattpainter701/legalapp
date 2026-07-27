@@ -250,6 +250,15 @@ class MatterListResponse(BaseModel):
     page_size: int
 
 
+class MatterFieldOptions(BaseModel):
+    """Previously used values for select-or-create matter fields."""
+
+    matter_types: list[str] = []
+    roles: list[str] = []
+    jurisdictions: list[str] = []
+    counterparties: list[str] = []
+
+
 class MatterSummaryMyMatters(MatterSummary):
     """Matter summary enriched with the current user's context."""
 

@@ -4,6 +4,8 @@ import { getLeads, createLead, updateLead, convertLead } from '../api'
 import { Filter, Plus, ChevronRight, DollarSign, User } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { useAuth } from '../App'
+import CreatableCombobox from '../components/CreatableCombobox'
+import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
 
 const STAGES = [
   { key: 'new', label: 'New' },
@@ -32,6 +34,7 @@ function StageBadge({ status }) {
 }
 
 function ConvertModal({ lead, onClose, onConverted }) {
+  const fieldOptions = useMatterFieldOptions()
   const [form, setForm] = useState({
     matter_name: `${lead.contact?.display_name || ''} Matter`,
     matter_type: lead.practice_area || 'litigation',
@@ -73,25 +76,26 @@ function ConvertModal({ lead, onClose, onConverted }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="intake-matter-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
-              <input id="intake-matter-type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
-                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+              <CreatableCombobox id="intake-matter-type" value={form.matter_type} onChange={value => set('matter_type', value)}
+                options={fieldOptions.matter_types} placeholder="Select or enter a matter type" />
             </div>
             <div>
               <label htmlFor="intake-role" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
-              <input id="intake-role" value={form.role} onChange={e => set('role', e.target.value)}
-                className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+              <CreatableCombobox id="intake-role" value={form.role} onChange={value => set('role', value)}
+                options={fieldOptions.roles} placeholder="Select or enter a role" />
             </div>
           </div>
           <div>
             <label htmlFor="intake-jurisdiction" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
-            <input id="intake-jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
-              className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
+            <CreatableCombobox id="intake-jurisdiction" value={form.jurisdiction} onChange={value => set('jurisdiction', value)}
+              options={fieldOptions.jurisdictions} placeholder="Select or enter a jurisdiction" required />
           </div>
           <div>
             <label htmlFor="intake-counterparty" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
-            <input id="intake-counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
-              className="w-full px-3 py-2 border border-brand-line rounded text-sm" placeholder="Opposing party name" />
+            <CreatableCombobox id="intake-counterparty" value={form.counterparty} onChange={value => set('counterparty', value)}
+              options={fieldOptions.counterparties} placeholder="Select or enter an opposing party" />
           </div>
+          <p className="text-[11px] text-brand-muted -mt-1">Choose a firm-used value, or type a new one to add it to this matter.</p>
           {error && <p role="alert" className="text-sm text-brand-rose">{error}</p>}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-brand-muted hover:text-brand-ink">Cancel</button>

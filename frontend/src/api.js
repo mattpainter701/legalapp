@@ -1421,6 +1421,8 @@ export const getMatterBudget = (matterId) =>
 // ── Matters V2 ─────────────────────────────────────────────────────────────────
 export const getMattersV2 = (params) =>
   api.get('/matters', { params }).then(r => r.data)
+export const getMatterFieldOptions = () =>
+  api.get('/matters/field-options').then(r => r.data)
 export const createMatterV2 = (data) =>
   api.post('/matters', data).then(r => r.data)
 export const getMatterV2 = (id) =>

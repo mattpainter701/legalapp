@@ -18,6 +18,8 @@ import {
 import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
+import CreatableCombobox from '../components/CreatableCombobox'
+import useMatterFieldOptions from '../hooks/useMatterFieldOptions'
 import { useAuth } from '../App'
 import {
   AlertBanner,
@@ -498,6 +500,7 @@ function QualifyIntakeModal({ task, onClose, onQualified }) {
 
 function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
   const dialogRef = useDialogFocus(onClose)
+  const fieldOptions = useMatterFieldOptions()
   const leadId = leadIdFromTaskRef(task)
   const [lead, setLead] = useState(null)
   const [loadingLead, setLoadingLead] = useState(true)
@@ -606,28 +609,29 @@ function OpenMatterFromIntakeModal({ task, currentUser, onClose, onOpened }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="taskspage-matter-type" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Matter Type</label>
-                <input id="taskspage-matter-type" aria-label="Matter type" value={form.matter_type} onChange={e => set('matter_type', e.target.value)}
-                  className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+                <CreatableCombobox id="taskspage-matter-type" value={form.matter_type} onChange={value => set('matter_type', value)}
+                  options={fieldOptions.matter_types} placeholder="Select or enter a matter type" />
               </div>
               <div>
                 <label htmlFor="taskspage-our-role" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Our Role</label>
-                <input id="taskspage-our-role" aria-label="Our role" value={form.role} onChange={e => set('role', e.target.value)}
-                  className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+                <CreatableCombobox id="taskspage-our-role" value={form.role} onChange={value => set('role', value)}
+                  options={fieldOptions.roles} placeholder="Select or enter a role" />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="taskspage-jurisdiction" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Jurisdiction *</label>
-                <input id="taskspage-jurisdiction" aria-label="Jurisdiction" value={form.jurisdiction} onChange={e => set('jurisdiction', e.target.value)}
-                  className="w-full px-3 py-2 border border-brand-line rounded text-sm" required />
+                <CreatableCombobox id="taskspage-jurisdiction" value={form.jurisdiction} onChange={value => set('jurisdiction', value)}
+                  options={fieldOptions.jurisdictions} placeholder="Select or enter a jurisdiction" required />
               </div>
               <div>
                 <label htmlFor="taskspage-counterparty" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Counterparty</label>
-                <input id="taskspage-counterparty" aria-label="Counterparty" value={form.counterparty} onChange={e => set('counterparty', e.target.value)}
-                  className="w-full px-3 py-2 border border-brand-line rounded text-sm" />
+                <CreatableCombobox id="taskspage-counterparty" value={form.counterparty} onChange={value => set('counterparty', value)}
+                  options={fieldOptions.counterparties} placeholder="Select or enter an opposing party" />
               </div>
             </div>
+            <p className="text-[11px] text-brand-muted -mt-1">Choose a firm-used value, or type a new one to add it to this matter.</p>
 
             <div>
               <label htmlFor="taskspage-case-description-intake-notes" className="block text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1">Case Description / Intake Notes</label>

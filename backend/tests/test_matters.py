@@ -68,6 +68,37 @@ async def test_create_matter_rebinds_tenant_context_before_post_commit_refresh(
 
 
 @pytest.mark.asyncio
+async def test_matter_field_options_returns_unique_firm_used_values(client):
+    for payload in (
+        {
+            "matter_name": "Smith Family Matter",
+            "matter_type": "Family Law",
+            "role": "Petitioner",
+            "jurisdiction": "North Dakota",
+            "counterparty": "Acme Holdings",
+        },
+        {
+            "matter_name": "Jones Family Matter",
+            "matter_type": "family law",
+            "role": "Respondent",
+            "jurisdiction": "Minnesota",
+            "counterparty": "Beta LLC",
+        },
+    ):
+        created = await client.post("/api/matters", json=payload)
+        assert created.status_code == 201, created.text
+
+    response = await client.get("/api/matters/field-options")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len([value for value in data["matter_types"] if value.lower() == "family law"]) == 1
+    assert data["roles"] == ["Petitioner", "Respondent"]
+    assert data["jurisdictions"] == ["Minnesota", "North Dakota"]
+    assert data["counterparties"] == ["Acme Holdings", "Beta LLC"]
+
+
+@pytest.mark.asyncio
 async def test_email_client_failure_is_http_error_but_attempt_remains_recorded(
     client, db_session, test_tenant, monkeypatch
 ):

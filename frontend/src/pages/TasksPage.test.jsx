@@ -31,6 +31,7 @@ vi.mock('../api', () => ({
   searchUsers: vi.fn(),
   getLead: vi.fn(),
   convertLead: vi.fn(),
+  getMatterFieldOptions: vi.fn(() => Promise.resolve({})),
   getContacts: vi.fn(),
 }))
 
