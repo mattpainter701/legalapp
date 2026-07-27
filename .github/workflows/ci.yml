@@ -208,6 +208,9 @@ jobs:
         working-directory: office-addin
         run: npm run check
 
+      - name: Verify production Office image delivery
+        run: sh scripts/test_office_image_delivery.sh
+
   # Real-browser proof of the sold first-customer workflow. Unlike the Vitest
   # suite, this launches the actual Vite and FastAPI processes and persists the
   # intake/task records in a disposable PostgreSQL service database.
