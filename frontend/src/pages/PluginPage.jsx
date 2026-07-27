@@ -312,6 +312,14 @@ export default function PluginPage() {
           }. Check it against the original before relying on it.`
         )
       }
+      // Analysing a filing the model only partly saw is the dangerous case,
+      // so missing pages are always called out.
+      if (result.pages_omitted > 0) {
+        notes.push(
+          `${result.pages_omitted} of ${result.pages_total} page(s) produced no text and are NOT included. ` +
+            'Any analysis will be based on an incomplete document.'
+        )
+      }
       if (result.truncated) {
         notes.push('The document was long and has been truncated.')
       }
@@ -543,7 +551,7 @@ export default function PluginPage() {
                     <input id="pluginpage-input-materials"
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,.docx,.doc,.txt,.md"
+                      accept=".pdf,.docx,.txt,.md"
                       className="hidden"
                       onChange={handleFileUpload}
                     />

@@ -101,6 +101,11 @@ class SkillInputExtraction(BaseModel):
     truncated: bool = False
     ocr_used: bool = False
     pages_analyzed: Optional[int] = None
+    pages_total: Optional[int] = None
+    # Pages that contributed no text: either beyond the OCR page ceiling, or
+    # image-only pages in a document read as text. The caller must say so —
+    # silently analysing a partial filing is the dangerous outcome.
+    pages_omitted: int = 0
 
 
 class CitationTag(BaseModel):

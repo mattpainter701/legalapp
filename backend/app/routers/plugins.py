@@ -24,13 +24,15 @@ NOTE: Static resource routes are registered before the /{plugin}/{skill} catch-a
 POST /litigation/matters and POST /commercial/renewals are not swallowed by the dynamic route.
 """
 
+import asyncio
 import uuid
+import io
 import os
 import re
 import json
 import logging
-from datetime import date, datetime, timezone
-from typing import List
+from datetime import date, datetime, timedelta, timezone
+from typing import List, NamedTuple
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
@@ -522,10 +524,60 @@ async def _build_plugin_cloud_context(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Skill inputs are prose for an LLM, not archival documents: nothing is stored.
-_SKILL_INPUT_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt", ".md")
+#
+# `.doc` is deliberately absent: `extract_text` routes it to python-docx, which
+# reads OOXML packages, not the legacy binary Word format. Advertising it would
+# hand the user a guaranteed "unreadable file" error.
+_SKILL_INPUT_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
 _SKILL_INPUT_MAX_CHARS = 400_000
-# Below this, a PDF is almost certainly scanned images rather than text.
-_SCANNED_PDF_CHAR_FLOOR = 40
+# A page carrying real text yields hundreds of characters; a scanned page yields
+# nothing, or a few stray artifacts. Judging the document as a whole is wrong in
+# both directions — a flat floor sends short-but-real documents (a signature
+# page) to OCR, and a text cover sheet on an otherwise-scanned filing suppresses
+# OCR for every page behind it. So classify page by page.
+_PAGE_TEXT_MIN_CHARS = 24
+# Above this share of image-only pages, read the document through OCR instead.
+_SCANNED_PAGE_RATIO = 0.5
+
+
+class _PdfTextProfile(NamedTuple):
+    text: str
+    pages_total: int
+    pages_with_text: int
+
+    @property
+    def sparse_ratio(self) -> float:
+        if not self.pages_total:
+            return 0.0
+        return 1.0 - (self.pages_with_text / self.pages_total)
+
+    @property
+    def looks_scanned(self) -> bool:
+        if self.pages_with_text == 0:
+            return True
+        return self.sparse_ratio >= _SCANNED_PAGE_RATIO
+
+
+def _profile_pdf_text(content: bytes) -> _PdfTextProfile:
+    """Extract PDF text and record how many pages actually carried any."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(content))
+    parts: list[str] = []
+    pages_with_text = 0
+    pages_total = 0
+    for page in reader.pages:
+        pages_total += 1
+        page_text = page.extract_text() or ""
+        if len(page_text.strip()) >= _PAGE_TEXT_MIN_CHARS:
+            pages_with_text += 1
+        if page_text.strip():
+            parts.append(page_text)
+    return _PdfTextProfile(
+        text="\n\n".join(parts),
+        pages_total=max(1, pages_total),
+        pages_with_text=pages_with_text,
+    )
 
 
 @router.post("/documents/extract", response_model=SkillInputExtraction)
@@ -536,8 +588,9 @@ async def extract_skill_input(
 ):
     """Extract plain text from an uploaded document for use as skill input.
 
-    Falls back to OCR when a PDF yields almost no embedded text, which is the
-    common case for scanned court filings and faxed agreements.
+    Falls back to OCR when a PDF's pages carry no embedded text, which is the
+    common case for scanned court filings and faxed agreements. Parsing and OCR
+    are CPU-bound, so both run off the event loop.
     """
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -548,7 +601,7 @@ async def extract_skill_input(
     if not filename.lower().endswith(_SKILL_INPUT_EXTENSIONS):
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: PDF, DOCX, DOC, TXT, MD.",
+            detail="Unsupported file type. Allowed: PDF, DOCX, TXT, MD.",
         )
 
     file_bytes = await file.read()
@@ -561,8 +614,22 @@ async def extract_skill_input(
             detail=f"File exceeds the maximum size of {settings.MAX_FILE_SIZE_MB}MB.",
         )
 
+    is_pdf = filename.lower().endswith(".pdf")
+    ocr_used = False
+    pages_analyzed: int | None = None
+    pages_total: int | None = None
+    pages_omitted = 0
+
     try:
-        text = extract_text(file_bytes, file.content_type or "", filename)
+        if is_pdf:
+            profile = await asyncio.to_thread(_profile_pdf_text, file_bytes)
+            text = profile.text
+            pages_total = profile.pages_total
+        else:
+            text = await asyncio.to_thread(
+                extract_text, file_bytes, file.content_type or "", filename
+            )
+            profile = None
     except Exception:
         logger.warning("Skill input extraction failed for %s", filename, exc_info=True)
         raise HTTPException(
@@ -573,12 +640,9 @@ async def extract_skill_input(
             ),
         )
 
-    ocr_used = False
-    pages_analyzed = None
-    is_pdf = filename.lower().endswith(".pdf")
-    if is_pdf and len(text.strip()) < _SCANNED_PDF_CHAR_FLOOR:
+    if profile is not None and profile.looks_scanned:
         try:
-            ocr_result = ocr_pdf(file_bytes)
+            ocr_result = await asyncio.to_thread(ocr_pdf, file_bytes)
         except TemplateOcrError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         except Exception:
@@ -590,9 +654,23 @@ async def extract_skill_input(
                     "Paste the text directly instead."
                 ),
             )
-        text = ocr_result.text
-        ocr_used = True
-        pages_analyzed = ocr_result.pages_analyzed
+        # A mixed PDF already yielded real text from its cover pages. If OCR
+        # comes back with less than that, keep what we had rather than trading
+        # good text for a worse scan.
+        if len(ocr_result.text.strip()) >= len(profile.text.strip()):
+            text = ocr_result.text
+            ocr_used = True
+            pages_analyzed = ocr_result.pages_analyzed
+            pages_total = ocr_result.pages_total
+            # ocr_pdf stops at its page ceiling. Saying "text recovered"
+            # without saying "and 15 pages were dropped" would invite legal
+            # analysis of a document the model only partly saw.
+            pages_omitted = max(0, ocr_result.pages_total - ocr_result.pages_analyzed)
+        else:
+            pages_omitted = max(0, profile.pages_total - profile.pages_with_text)
+    elif profile is not None:
+        # Read as text, but some pages were image-only and contributed nothing.
+        pages_omitted = max(0, profile.pages_total - profile.pages_with_text)
 
     if not text.strip():
         raise HTTPException(
@@ -614,6 +692,8 @@ async def extract_skill_input(
         truncated=truncated,
         ocr_used=ocr_used,
         pages_analyzed=pages_analyzed,
+        pages_total=pages_total,
+        pages_omitted=pages_omitted,
     )
 
 
@@ -1140,13 +1220,22 @@ async def upsert_plugin_entitlement(
         )
         db.add(entitlement)
 
+    now = datetime.now(timezone.utc)
     entitlement.status = status
     entitlement.source = body.source or "admin"
     entitlement.seat_limit = body.seat_limit
     entitlement.config = body.config or {}
-    entitlement.expires_at = body.expires_at
-    entitlement.starts_at = entitlement.starts_at or datetime.now(timezone.utc)
-    entitlement.updated_at = datetime.now(timezone.utc)
+    # The product UI starts a trial by posting only {status, source}, so an
+    # unbounded expires_at would make every trial started through the app run
+    # forever — which is exactly what expiry enforcement is meant to prevent.
+    if status == "trial" and body.expires_at is None:
+        entitlement.expires_at = now + timedelta(
+            days=settings.PLUGIN_TRIAL_DEFAULT_DAYS
+        )
+    else:
+        entitlement.expires_at = body.expires_at
+    entitlement.starts_at = entitlement.starts_at or now
+    entitlement.updated_at = now
 
     await db.commit()
     await db.refresh(entitlement)

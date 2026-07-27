@@ -184,6 +184,9 @@ class Settings(BaseSettings):
     # would revoke every add-on for every existing tenant on deploy. Turn it on
     # once tenants carry real entitlements.
     PLUGIN_ENTITLEMENT_STRICT: bool = False
+    # Trials started from the product UI carry no expiry in the request, so the
+    # server assigns one. Without this every UI-started trial runs forever.
+    PLUGIN_TRIAL_DEFAULT_DAYS: int = 14
 
     FRONTEND_URL: str = "http://localhost:3000"
     # OAuth callbacks must point to the backend, not the frontend.

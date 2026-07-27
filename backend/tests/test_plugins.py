@@ -195,6 +195,23 @@ def _text_pdf(body: str = "MUTUAL NON-DISCLOSURE AGREEMENT") -> bytes:
     return output.getvalue()
 
 
+def _mixed_pdf(cover: str, image_only_pages: int) -> bytes:
+    """A text cover sheet followed by pages with no extractable text.
+
+    This is the scanned-filing shape: a generated cover page in front of a
+    stack of scan images.
+    """
+    from reportlab.pdfgen import canvas
+
+    output = BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(72, 720, cover)
+    for _ in range(image_only_pages):
+        pdf.showPage()
+    pdf.save()
+    return output.getvalue()
+
+
 def _text_docx(body: str = "MASTER SERVICES AGREEMENT") -> bytes:
     from docx import Document
 
@@ -217,7 +234,10 @@ async def test_extract_skill_input_reads_pdf_text(client: AsyncClient):
     assert not data["text"].startswith("%PDF")
     assert data["filename"] == "nda.pdf"
     assert data["characters"] == len(data["text"])
+    # A short but genuinely text-bearing PDF must be read, not sent to OCR:
+    # a flat character floor used to steal signature pages and cover letters.
     assert data["ocr_used"] is False
+    assert data["pages_omitted"] == 0
 
 
 @pytest.mark.asyncio
@@ -245,6 +265,43 @@ async def test_extract_skill_input_rejects_unsupported_type(client: AsyncClient)
         files={"file": ("book.epub", b"not a document", "application/epub+zip")},
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_extract_skill_input_rejects_legacy_doc(client: AsyncClient):
+    """`.doc` must not be advertised: extract_text routes it to python-docx,
+    which reads OOXML packages, not the legacy binary Word format, so accepting
+    it would guarantee an unreadable-file error."""
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={"file": ("old.doc", b"\xd0\xcf\x11\xe0legacy", "application/msword")},
+    )
+    assert resp.status_code == 400
+    assert ".doc" not in resp.json()["detail"].replace(".docx", "")
+
+
+@pytest.mark.asyncio
+async def test_mixed_pdf_with_text_cover_sheet_still_reaches_ocr(
+    client: AsyncClient,
+):
+    """A text cover sheet must not suppress OCR for the scanned pages behind
+    it — the document-wide threshold used to hand the model the cover sheet
+    alone, with no warning."""
+    resp = await client.post(
+        "/api/plugins/documents/extract",
+        files={
+            "file": (
+                "filing.pdf",
+                _mixed_pdf("IN THE DISTRICT COURT OF THE COUNTY " * 4, 9),
+                "application/pdf",
+            )
+        },
+    )
+    assert resp.status_code in (200, 422)
+    if resp.status_code == 200:
+        data = resp.json()
+        # Either OCR ran, or the omission is reported. Silence is the failure.
+        assert data["ocr_used"] is True or data["pages_omitted"] > 0
 
 
 @pytest.mark.asyncio
@@ -462,9 +519,7 @@ def test_no_prompt_template_is_unreachable():
 
 
 @pytest.mark.asyncio
-async def test_generic_skill_run_is_flagged_to_the_user(
-    client: AsyncClient, mock_llm
-):
+async def test_generic_skill_run_is_flagged_to_the_user(client: AsyncClient, mock_llm):
     from app.services.plugins.executor import GENERIC_TEMPLATE_FLAG
 
     await client.put(
@@ -495,3 +550,42 @@ async def test_curated_skill_run_is_not_flagged_as_generic(
     )
     assert resp.status_code == 200
     assert GENERIC_TEMPLATE_FLAG not in resp.json()["flags"]
+
+
+@pytest.mark.asyncio
+async def test_ui_started_trial_gets_a_server_assigned_expiry(client: AsyncClient):
+    """PluginsPage starts a trial by posting only {status, source}. Without a
+    server-assigned expiry every trial started through the product UI would run
+    forever, defeating expiry enforcement entirely."""
+    resp = await client.put(
+        "/api/plugins/employment-legal/entitlement",
+        json={"status": "trial", "source": "admin"},
+    )
+    assert resp.status_code == 200
+    expires_at = resp.json()["expires_at"]
+    assert expires_at is not None
+
+    parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    assert parsed > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_purchase_is_not_given_an_artificial_expiry(client: AsyncClient):
+    resp = await client.put(
+        "/api/plugins/employment-legal/entitlement",
+        json={"status": "purchased", "source": "admin"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["expires_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_trial_expiry_is_respected(client: AsyncClient):
+    explicit = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    resp = await client.put(
+        "/api/plugins/product-legal/entitlement",
+        json={"status": "trial", "source": "admin", "expires_at": explicit},
+    )
+    assert resp.status_code == 200
+    returned = datetime.fromisoformat(resp.json()["expires_at"].replace("Z", "+00:00"))
+    assert abs((returned - datetime.fromisoformat(explicit)).total_seconds()) < 5
