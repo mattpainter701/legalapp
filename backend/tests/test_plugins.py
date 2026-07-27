@@ -598,3 +598,18 @@ async def test_explicit_trial_expiry_is_respected(client: AsyncClient):
     assert resp.status_code == 200
     returned = datetime.fromisoformat(resp.json()["expires_at"].replace("Z", "+00:00"))
     assert abs((returned - datetime.fromisoformat(explicit)).total_seconds()) < 5
+
+
+@pytest.mark.asyncio
+async def test_cold_start_accepts_the_payload_the_frontend_sends(
+    client: AsyncClient, mock_llm
+):
+    """`runColdStart` posts only {input_text, context}. `skill` was a required
+    field on SkillRequest even though neither endpoint reads it — both take the
+    skill from the path — so every cold-start interview returned 422 and the
+    setup interview never worked."""
+    resp = await client.post(
+        "/api/plugins/employment-legal/cold-start",
+        json={"input_text": "", "context": {"setup_step": 1}},
+    )
+    assert resp.status_code == 200, resp.text

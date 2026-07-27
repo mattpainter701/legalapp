@@ -81,7 +81,10 @@ class PluginEntitlementResponse(BaseModel):
 
 
 class SkillRequest(BaseModel):
-    skill: str  # e.g. "vendor-agreement-review"
+    # Vestigial: both endpoints take the skill from the path, and neither reads
+    # this field. It was required, which made every cold-start interview 422 —
+    # `runColdStart` posts only input_text and context.
+    skill: Optional[str] = None
     input_text: str  # Contract text, question, etc.
     context: Optional[dict] = None  # Extra structured context
     matter_id: Optional[str] = None
