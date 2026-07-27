@@ -558,6 +558,14 @@ export const runColdStart = (plugin, message, step) =>
     input_text: message || '',
     context: { setup_step: step },
   }).then((r) => r.data)
+// Browsers cannot read PDF/DOCX text, so extraction happens server-side.
+export const extractSkillInput = (file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post('/plugins/documents/extract', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((r) => r.data)
+}
 export const executeSkill = (plugin, skill, data = {}) => {
   const {
     text,

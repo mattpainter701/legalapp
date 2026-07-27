@@ -81,11 +81,34 @@ class PluginEntitlementResponse(BaseModel):
 
 
 class SkillRequest(BaseModel):
-    skill: str  # e.g. "vendor-agreement-review"
+    # Vestigial: both endpoints take the skill from the path, and neither reads
+    # this field. It was required, which made every cold-start interview 422 —
+    # `runColdStart` posts only input_text and context.
+    skill: Optional[str] = None
     input_text: str  # Contract text, question, etc.
     context: Optional[dict] = None  # Extra structured context
     matter_id: Optional[str] = None
     use_premium: bool = False
+
+
+class SkillInputExtraction(BaseModel):
+    """Text pulled out of an uploaded file so a skill can act on it.
+
+    The browser cannot read PDF/DOCX; it previously used FileReader.readAsText
+    and pushed raw binary into the skill input. Extraction happens here instead.
+    """
+
+    filename: str
+    text: str
+    characters: int
+    truncated: bool = False
+    ocr_used: bool = False
+    pages_analyzed: Optional[int] = None
+    pages_total: Optional[int] = None
+    # Pages that contributed no text: either beyond the OCR page ceiling, or
+    # image-only pages in a document read as text. The caller must say so —
+    # silently analysing a partial filing is the dangerous outcome.
+    pages_omitted: int = 0
 
 
 class CitationTag(BaseModel):

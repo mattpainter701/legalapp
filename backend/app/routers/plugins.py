@@ -24,14 +24,17 @@ NOTE: Static resource routes are registered before the /{plugin}/{skill} catch-a
 POST /litigation/matters and POST /commercial/renewals are not swallowed by the dynamic route.
 """
 
+import asyncio
 import uuid
+import io
+import os
 import re
 import json
 import logging
-from datetime import date, datetime, timezone
-from typing import List
+from datetime import date, datetime, timedelta, timezone
+from typing import List, NamedTuple
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +69,7 @@ from app.schemas.plugin import (
     RenewalCreate,
     RenewalResponse,
     RenewalUpdate,
+    SkillInputExtraction,
     SkillRequest,
     SkillResponse,
 )
@@ -86,7 +90,9 @@ from app.services.plugins.prompts import PLUGIN_SKILLS
 from app.services.plugins.prompt_resolver import PromptResolver
 from app.services.rag import build_cloud_context
 from app.services.retrieval_planner import RetrievalPlanner
+from app.services.template_ocr import TemplateOcrError, ocr_pdf
 from app.utils.guardrails import prepare_provider_text
+from app.utils.text_processing import extract_text
 
 settings = get_settings()
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -201,14 +207,99 @@ def _validate_plugin(plugin: str) -> None:
         )
 
 
-def _entitlement_status(entitlement: TenantPluginEntitlement | None) -> str:
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a possibly naive timestamp so comparisons never raise."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _entitlement_is_lapsed(
+    entitlement: TenantPluginEntitlement | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when a trial or purchase has run past its expiry date."""
+    if entitlement is None:
+        return False
+    expires_at = _as_utc(entitlement.expires_at)
+    if expires_at is None:
+        return False
+    return expires_at <= (now or datetime.now(timezone.utc))
+
+
+def _entitlement_status(
+    entitlement: TenantPluginEntitlement | None,
+    *,
+    now: datetime | None = None,
+) -> str:
     if entitlement is None:
         return "available"
+    # An expired trial reads as "available" again rather than staying active
+    # forever: expires_at used to be stored and never enforced.
+    if _entitlement_is_lapsed(entitlement, now=now):
+        return "expired"
     return entitlement.status or "available"
 
 
 def _is_purchased_status(status: str) -> bool:
     return status in {"purchased", "included", "trial"}
+
+
+def _assert_addon_runnable(
+    plugin: str,
+    entitlement: TenantPluginEntitlement | None,
+) -> None:
+    """Fail closed on revoked and lapsed add-ons before any model spend.
+
+    Skill execution previously validated only that the plugin *name* existed,
+    so the Purchased/Trial/Locked states shown in the UI carried no API weight.
+    """
+    status = _entitlement_status(entitlement)
+    display = (
+        get_plugin_manifest(plugin).display_name
+        if get_plugin_manifest(plugin)
+        else plugin
+    )
+
+    if status in {"disabled", "locked"}:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"The {display} add-on is turned off for this firm. "
+                "An administrator can re-enable it in Add-on Modules."
+            ),
+        )
+    if status == "expired":
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"The {display} trial has ended. "
+                "Purchase the add-on in Add-on Modules to keep using it."
+            ),
+        )
+    if settings.PLUGIN_ENTITLEMENT_STRICT and not _is_purchased_status(status):
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"The {display} add-on is not enabled for this firm. "
+                "Start a trial or purchase it in Add-on Modules."
+            ),
+        )
+
+
+async def _load_entitlement(
+    db: AsyncSession, tenant_id, plugin: str
+) -> TenantPluginEntitlement | None:
+    result = await db.execute(
+        select(TenantPluginEntitlement).where(
+            TenantPluginEntitlement.tenant_id == tenant_id,
+            TenantPluginEntitlement.plugin_name == plugin,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 def _validate_entitlement_status(status: str) -> str:
@@ -425,6 +516,185 @@ async def _build_plugin_cloud_context(
         return await build_cloud_context(serializable_hits)
     except Exception:
         return ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 0 — Skill input extraction (registered before the /{plugin}/{skill}
+# catch-all so "documents" is never treated as a plugin name)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Skill inputs are prose for an LLM, not archival documents: nothing is stored.
+#
+# `.doc` is deliberately absent: `extract_text` routes it to python-docx, which
+# reads OOXML packages, not the legacy binary Word format. Advertising it would
+# hand the user a guaranteed "unreadable file" error.
+_SKILL_INPUT_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
+_SKILL_INPUT_MAX_CHARS = 400_000
+# A page carrying real text yields hundreds of characters; a scanned page yields
+# nothing, or a few stray artifacts. Judging the document as a whole is wrong in
+# both directions — a flat floor sends short-but-real documents (a signature
+# page) to OCR, and a text cover sheet on an otherwise-scanned filing suppresses
+# OCR for every page behind it. So classify page by page.
+_PAGE_TEXT_MIN_CHARS = 24
+# Above this share of image-only pages, read the document through OCR instead.
+_SCANNED_PAGE_RATIO = 0.5
+
+
+class _PdfTextProfile(NamedTuple):
+    text: str
+    pages_total: int
+    pages_with_text: int
+
+    @property
+    def sparse_ratio(self) -> float:
+        if not self.pages_total:
+            return 0.0
+        return 1.0 - (self.pages_with_text / self.pages_total)
+
+    @property
+    def looks_scanned(self) -> bool:
+        if self.pages_with_text == 0:
+            return True
+        return self.sparse_ratio >= _SCANNED_PAGE_RATIO
+
+
+def _profile_pdf_text(content: bytes) -> _PdfTextProfile:
+    """Extract PDF text and record how many pages actually carried any."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(content))
+    parts: list[str] = []
+    pages_with_text = 0
+    pages_total = 0
+    for page in reader.pages:
+        pages_total += 1
+        page_text = page.extract_text() or ""
+        if len(page_text.strip()) >= _PAGE_TEXT_MIN_CHARS:
+            pages_with_text += 1
+        if page_text.strip():
+            parts.append(page_text)
+    return _PdfTextProfile(
+        text="\n\n".join(parts),
+        pages_total=max(1, pages_total),
+        pages_with_text=pages_with_text,
+    )
+
+
+@router.post("/documents/extract", response_model=SkillInputExtraction)
+async def extract_skill_input(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extract plain text from an uploaded document for use as skill input.
+
+    Falls back to OCR when a PDF's pages carry no embedded text, which is the
+    common case for scanned court filings and faxed agreements. Parsing and OCR
+    are CPU-bound, so both run off the event loop.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    filename = os.path.basename(file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename is required.")
+    if not filename.lower().endswith(_SKILL_INPUT_EXTENSIONS):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, DOCX, TXT, MD.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the maximum size of {settings.MAX_FILE_SIZE_MB}MB.",
+        )
+
+    is_pdf = filename.lower().endswith(".pdf")
+    ocr_used = False
+    pages_analyzed: int | None = None
+    pages_total: int | None = None
+    pages_omitted = 0
+
+    try:
+        if is_pdf:
+            profile = await asyncio.to_thread(_profile_pdf_text, file_bytes)
+            text = profile.text
+            pages_total = profile.pages_total
+        else:
+            text = await asyncio.to_thread(
+                extract_text, file_bytes, file.content_type or "", filename
+            )
+            profile = None
+    except Exception:
+        logger.warning("Skill input extraction failed for %s", filename, exc_info=True)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This file could not be read. It may be corrupt or password "
+                "protected. Try exporting it again, or paste the text directly."
+            ),
+        )
+
+    if profile is not None and profile.looks_scanned:
+        try:
+            ocr_result = await asyncio.to_thread(ocr_pdf, file_bytes)
+        except TemplateOcrError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception:
+            logger.warning("OCR failed for %s", filename, exc_info=True)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This PDF has no selectable text and could not be scanned. "
+                    "Paste the text directly instead."
+                ),
+            )
+        # A mixed PDF already yielded real text from its cover pages. If OCR
+        # comes back with less than that, keep what we had rather than trading
+        # good text for a worse scan.
+        if len(ocr_result.text.strip()) >= len(profile.text.strip()):
+            text = ocr_result.text
+            ocr_used = True
+            pages_analyzed = ocr_result.pages_analyzed
+            pages_total = ocr_result.pages_total
+            # ocr_pdf stops at its page ceiling. Saying "text recovered"
+            # without saying "and 15 pages were dropped" would invite legal
+            # analysis of a document the model only partly saw.
+            pages_omitted = max(0, ocr_result.pages_total - ocr_result.pages_analyzed)
+        else:
+            pages_omitted = max(0, profile.pages_total - profile.pages_with_text)
+    elif profile is not None:
+        # Read as text, but some pages were image-only and contributed nothing.
+        pages_omitted = max(0, profile.pages_total - profile.pages_with_text)
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No readable text was found in this file. "
+                "Paste the text directly instead."
+            ),
+        )
+
+    truncated = len(text) > _SKILL_INPUT_MAX_CHARS
+    if truncated:
+        text = text[:_SKILL_INPUT_MAX_CHARS]
+
+    return SkillInputExtraction(
+        filename=filename,
+        text=text,
+        characters=len(text),
+        truncated=truncated,
+        ocr_used=ocr_used,
+        pages_analyzed=pages_analyzed,
+        pages_total=pages_total,
+        pages_omitted=pages_omitted,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -950,13 +1220,22 @@ async def upsert_plugin_entitlement(
         )
         db.add(entitlement)
 
+    now = datetime.now(timezone.utc)
     entitlement.status = status
     entitlement.source = body.source or "admin"
     entitlement.seat_limit = body.seat_limit
     entitlement.config = body.config or {}
-    entitlement.expires_at = body.expires_at
-    entitlement.starts_at = entitlement.starts_at or datetime.now(timezone.utc)
-    entitlement.updated_at = datetime.now(timezone.utc)
+    # The product UI starts a trial by posting only {status, source}, so an
+    # unbounded expires_at would make every trial started through the app run
+    # forever — which is exactly what expiry enforcement is meant to prevent.
+    if status == "trial" and body.expires_at is None:
+        entitlement.expires_at = now + timedelta(
+            days=settings.PLUGIN_TRIAL_DEFAULT_DAYS
+        )
+    else:
+        entitlement.expires_at = body.expires_at
+    entitlement.starts_at = entitlement.starts_at or now
+    entitlement.updated_at = now
 
     await db.commit()
     await db.refresh(entitlement)
@@ -1223,6 +1502,9 @@ async def cold_start_interview(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
+    # Setup also calls the model, so it is gated the same way as a skill run.
+    _assert_addon_runnable(plugin, await _load_entitlement(db, user.tenant_id, plugin))
+
     # Load current profile/step
     result = await db.execute(
         select(PracticeProfile).where(
@@ -1345,6 +1627,9 @@ async def execute_skill(
 
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
+
+    # Check entitlement before any model spend, not after.
+    _assert_addon_runnable(plugin, await _load_entitlement(db, user.tenant_id, plugin))
 
     context = body.context or {}
     tenant_name = user.tenant.name if user.tenant else "Legal"
