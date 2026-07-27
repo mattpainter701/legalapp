@@ -186,11 +186,19 @@ async def test_renewal_urgency_low(client: AsyncClient):
 
 
 def _text_pdf(body: str = "MUTUAL NON-DISCLOSURE AGREEMENT") -> bytes:
+    """A PDF with real embedded text.
+
+    The body must clear _SCANNED_PDF_CHAR_FLOOR, otherwise the endpoint
+    correctly treats it as a scan and falls back to OCR — which is a different
+    code path than the one these tests are exercising.
+    """
     from reportlab.pdfgen import canvas
 
     output = BytesIO()
     pdf = canvas.Canvas(output)
     pdf.drawString(72, 720, body)
+    pdf.drawString(72, 700, "This Agreement is entered into by the parties below.")
+    pdf.drawString(72, 680, "Confidential Information is defined in Section 1.")
     pdf.save()
     return output.getvalue()
 
