@@ -219,12 +219,34 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  office-addin:
+    build:
+      context: .
+      dockerfile: office-addin/Dockerfile
+      args:
+        OFFICE_ADDIN_ORIGIN: https://${DOMAIN}
+        VITE_API_BASE: /api
+        VITE_OFFICE_ENTRA_CLIENT_ID: ${OFFICE_ENTRA_CLIENT_ID:-}
+        VITE_OFFICE_ENTRA_AUTHORITY: ${OFFICE_ENTRA_AUTHORITY:-https://login.microsoftonline.com/common}
+        VITE_OFFICE_API_SCOPE: ${OFFICE_ENTRA_API_AUDIENCE:-}/office.access
+    # The task pane is reachable only through nginx at /office/.
+    ports: []
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
   nginx:
     build:
       context: ./nginx
       dockerfile: Dockerfile.local
     depends_on:
       frontend:
+        condition: service_healthy
+      office-addin:
         condition: service_healthy
       backend:
         condition: service_healthy
