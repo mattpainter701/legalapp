@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+  xsi:type="TaskPaneApp">
+  <Id>f4a8c2e1-3b7d-4f9a-8c5e-2d1f6a0b9e34</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>Clarity Legal</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Clarity Legal" />
+  <Description DefaultValue="Review and apply bounded, attorney-controlled changes in Word and Excel." />
+  <IconUrl DefaultValue="__APP_ORIGIN__/office/icon-96x96.png" />
+  <HighResolutionIconUrl DefaultValue="__APP_ORIGIN__/office/icon-128x128.png" />
+  <SupportUrl DefaultValue="__APP_ORIGIN__/support" />
+  <AppDomains>
+    <AppDomain>__APP_ORIGIN__</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Document" />
+    <Host Name="Workbook" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="__APP_ORIGIN__/office/index.html" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ClarityLegal.Word.Group">
+                <Label resid="Group.Label" />
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16" />
+                  <bt:Image size="32" resid="Icon.32" />
+                  <bt:Image size="80" resid="Icon.80" />
+                </Icon>
+                <Control xsi:type="Button" id="ClarityLegal.Word.Open">
+                  <Label resid="Open.Label" />
+                  <Supertip><Title resid="Open.Label" /><Description resid="Open.Description" /></Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16" />
+                    <bt:Image size="32" resid="Icon.32" />
+                    <bt:Image size="80" resid="Icon.80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ClarityLegal.Taskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+      <Host xsi:type="Workbook">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ClarityLegal.Excel.Group">
+                <Label resid="Group.Label" />
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16" />
+                  <bt:Image size="32" resid="Icon.32" />
+                  <bt:Image size="80" resid="Icon.80" />
+                </Icon>
+                <Control xsi:type="Button" id="ClarityLegal.Excel.Open">
+                  <Label resid="Open.Label" />
+                  <Supertip><Title resid="Open.Label" /><Description resid="Open.Description" /></Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16" />
+                    <bt:Image size="32" resid="Icon.32" />
+                    <bt:Image size="80" resid="Icon.80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ClarityLegal.Taskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16" DefaultValue="__APP_ORIGIN__/office/icon-96x96.png" />
+        <bt:Image id="Icon.32" DefaultValue="__APP_ORIGIN__/office/icon-96x96.png" />
+        <bt:Image id="Icon.80" DefaultValue="__APP_ORIGIN__/office/icon-96x96.png" />
+      </bt:Images>
+      <bt:Urls><bt:Url id="Taskpane.Url" DefaultValue="__APP_ORIGIN__/office/index.html" /></bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Group.Label" DefaultValue="Clarity Legal" />
+        <bt:String id="Open.Label" DefaultValue="Open Clarity Legal" />
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="Open.Description" DefaultValue="Review the current selection and apply an approved change." />
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

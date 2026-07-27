@@ -90,6 +90,7 @@ from app.models.rbac import Role, UserRole
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.operator_audit import OperatorAuditLog
 from app.models.durable_job import DurableJob
+from app.models.office_action_run import OfficeActionRun
 
 __all__ = [
     "Tenant",
@@ -180,4 +181,5 @@ __all__ = [
     "MCPUsageEvent",
     "OperatorAuditLog",
     "DurableJob",
+    "OfficeActionRun",
 ]

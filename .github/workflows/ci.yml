@@ -185,6 +185,29 @@ jobs:
       - name: Verify nginx webhook ingress and API security headers
         run: sh scripts/test_nginx_webhook_ingress.sh
 
+  test-office-addin:
+    name: Office add-in - Test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: office-addin/package-lock.json
+
+      - name: Install Office add-in dependencies
+        working-directory: office-addin
+        run: npm ci
+
+      - name: Test, typecheck, and build Office add-in
+        working-directory: office-addin
+        run: npm run check
+
   # Real-browser proof of the sold first-customer workflow. Unlike the Vitest
   # suite, this launches the actual Vite and FastAPI processes and persists the
   # intake/task records in a disposable PostgreSQL service database.

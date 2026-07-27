@@ -14,12 +14,14 @@ playwright-report/
 test-results/
 package-lock.json
 !frontend/package-lock.json
+!office-addin/package-lock.json
 
 # Env / secrets
 .env
 .env.prod
 *.env
 .env.*
+!office-addin/.env.example
 !.env.hypervisor     # tracked template — no real secrets, safe to commit
 
 # Claude Code session memory (local only)
