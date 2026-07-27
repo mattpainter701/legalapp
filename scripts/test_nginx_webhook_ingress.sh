@@ -114,6 +114,7 @@ docker run --rm --entrypoint sh \
 docker run --rm \
   --add-host backend:127.0.0.1 \
   --add-host frontend:127.0.0.1 \
+  --add-host office-addin:127.0.0.1 \
   -v "$CERT_VOLUME:/etc/nginx/ssl:ro" \
   "$PROD_IMAGE" nginx -t
 docker run --rm \
@@ -141,7 +142,7 @@ create_trusted_test_network() {
 
 create_trusted_test_network
 
-# One disposable container provides both upstream names required by the
+# One disposable container provides all upstream names required by the
 # production nginx config. Python is already present through the pinned
 # certbot package in the production image. The backend path returns 200 so the
 # runtime checks prove normal API inheritance, not only error responses.
@@ -149,6 +150,7 @@ docker run -d --name "$MOCK_CONTAINER" \
   --network "$TEST_NETWORK" \
   --network-alias backend \
   --network-alias frontend \
+  --network-alias office-addin \
   --entrypoint sh \
   "$PROD_IMAGE" \
   -c 'set -eu
@@ -158,6 +160,9 @@ docker run -d --name "$MOCK_CONTAINER" \
       printf "%s\n" "<html><head><title>Privacy Summary | Clarity Legal</title><link rel=\"canonical\" href=\"https://headers.test/privacy\"></head><body>Privacy summary</body></html>" > /tmp/frontend/privacy/index.html
       printf "%s\n" "<html><head><title>Service Summary | Clarity Legal</title><link rel=\"canonical\" href=\"https://headers.test/terms\"></head><body>Service summary</body></html>" > /tmp/frontend/terms/index.html
       python3 -m http.server 8000 --directory /tmp/backend &
+      mkdir -p /tmp/office
+      printf Office-task-pane > /tmp/office/index.html
+      python3 -m http.server 3001 --directory /tmp/office &
       exec python3 -m http.server 3000 --directory /tmp/frontend' >/dev/null
 
 docker run -d --name "$PROD_CONTAINER" \
@@ -357,6 +362,35 @@ assert_header_exactly_once "$local_tls" "local TLS" \
   "Strict-Transport-Security" "max-age=63072000; includeSubDomains"
 assert_plain_redirect "$plain_http" "/api/version" "plain HTTP /api/version"
 
+for transport in edge tls; do
+  office_response=""
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$transport" = edge ]; then
+      office_response="$(http_request "/office/index.html" "https" "$MOCK_CONTAINER" "$PROD_CONTAINER" 2>/dev/null || true)"
+      office_label="edge HTTPS Office task pane"
+    else
+      office_response="$(tls_request "/office/index.html" 2>/dev/null || true)"
+      office_label="local TLS Office task pane"
+    fi
+    if [ "$(response_status "$office_response")" = 200 ]; then
+      break
+    fi
+    sleep 1
+  done
+  assert_status "$office_response" "$office_label" 200
+  printf '%s' "$office_response" | grep -Fq 'Office-task-pane' || {
+    echo "ERROR: $office_label did not reach the Office upstream" >&2
+    exit 1
+  }
+  assert_header_absent "$office_response" "$office_label" "X-Frame-Options"
+  assert_header_contains_once "$office_response" "$office_label" \
+    "Content-Security-Policy" "frame-ancestors 'self' https://*.office.com"
+  assert_header_exactly_once "$office_response" "$office_label" \
+    "Referrer-Policy" "no-referrer"
+  assert_header_exactly_once "$office_response" "$office_label" \
+    "X-Robots-Tag" "noindex, nofollow, noarchive"
+done
+
 for public_path in /privacy /privacy/ /terms /terms/; do
   public_name="$(printf '%s' "$public_path" | cut -d/ -f2)"
   if [ "$public_name" = privacy ]; then
@@ -405,6 +439,7 @@ for direct_path in \
   /openapi.json \
   /redoc \
   /assets/app.js \
+  /office/index.html \
   /privacy \
   /privacy/ \
   /terms \
