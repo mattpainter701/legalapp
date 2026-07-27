@@ -2,19 +2,42 @@ import { getRouteMeta } from './config.js'
 
 const LEGAL_SHELLS = Object.freeze({
   '/privacy': {
-    heading: 'Privacy summary',
+    heading: 'Privacy Policy',
     lead:
-      'Clarity Legal processes account and workspace data to provide the service. Firm data is isolated by tenant. Model-provider data handling depends on the provider and tenant configuration selected by your organization. Your firm administrator controls connected services and available retention settings.',
+      'This Privacy Policy explains how Clarity Legal handles information when firms, legal professionals, and authorized users access the service.',
+    otherPath: '/terms',
+    otherLabel: 'Terms of Use',
+    sections: [
+      { id: 'scope', heading: 'Scope and roles', body: 'This policy covers the Clarity Legal website and service. A subscribing organization generally controls the matter, client, and workspace information its users submit; users should also review their organization\u2019s own privacy notices and instructions.' },
+      { id: 'information', heading: 'Information we handle', body: 'We may handle account and contact details, authentication and device information, service usage and support communications, billing records, and documents or other workspace content submitted by authorized users or connected services.' },
+      { id: 'use', heading: 'How information is used', body: 'Information is used to provide, secure, maintain, troubleshoot, and improve the service; administer accounts and subscriptions; respond to requests; meet legal obligations; and prevent misuse. Workspace content is used to perform the features requested by authorized users.' },
+      { id: 'ai-integrations', heading: 'AI features and connected services', body: 'When an organization enables an AI provider or third-party integration, relevant information may be sent to that provider to complete the requested task. Provider handling, retention, and training terms depend on the provider, agreement, and tenant configuration selected by the organization.' },
+      { id: 'sharing', heading: 'Sharing and disclosures', body: 'Information may be disclosed to service providers supporting hosting, security, communications, payments, and enabled integrations; to the subscribing organization and its authorized administrators; or when required for legal compliance, safety, or a business transaction. Provider-specific processing is also governed by the provider’s terms and the configuration selected by the organization.' },
+      { id: 'retention-security', heading: 'Retention and security', body: 'Retention depends on the type of information, tenant settings, contractual requirements, and legal obligations. Clarity Legal uses administrative, technical, and organizational safeguards, including tenant isolation, but no system can guarantee absolute security.' },
+      { id: 'choices', heading: 'Choices and privacy requests', body: 'Users may update certain account information through the service. Requests concerning workspace content should usually be directed to the subscribing organization. Other access, correction, deletion, or objection rights may apply based on location and can be submitted using the contact information below.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to contact@perevagagroup.com.' },
+    ],
   },
   '/terms': {
-    heading: 'Service summary',
+    heading: 'Terms of Use',
     lead:
-      'This page is a product summary, not a contract. Use of Clarity Legal is governed by the subscription agreement provided to your organization. The service assists legal professionals but does not replace professional judgment, source verification, or your firm\u2019s compliance obligations.',
+      'These Terms of Use govern access to Clarity Legal unless a separate written agreement with the subscribing organization controls.',
+    otherPath: '/privacy',
+    otherLabel: 'Privacy Policy',
+    sections: [
+      { id: 'agreement', heading: 'Agreement and eligibility', body: 'By accessing the service, you agree to these terms and confirm that you are authorized by the subscribing organization. If that organization has a subscription agreement with us, that agreement controls in the event of a conflict.' },
+      { id: 'service', heading: 'The service and professional responsibility', body: 'Clarity Legal provides law-practice workflow and AI-assisted tools. It is not a law firm and does not provide legal advice. Users remain responsible for professional judgment, source verification, court and client obligations, filings, deadlines, and the accuracy and suitability of all work product.' },
+      { id: 'accounts', heading: 'Accounts and administration', body: 'Users must provide accurate account information, protect credentials, and promptly report suspected unauthorized access. Organization administrators control user access, connected services, tenant configuration, and available retention settings.' },
+      { id: 'acceptable-use', heading: 'Acceptable use', body: 'Users may not violate law or third-party rights; access another tenant without authorization; upload malicious code; disrupt or probe the service; bypass access controls or usage limits; or use the service to create or distribute unlawful, deceptive, or harmful material.' },
+      { id: 'content-integrations', heading: 'Content, AI features, and integrations', body: 'The subscribing organization retains its rights in submitted content and grants the permissions needed to operate the service. Outputs may be incomplete or incorrect and require review. Third-party services and AI providers are governed by their own terms and the organization\u2019s configuration.' },
+      { id: 'availability', heading: 'Availability and changes', body: 'Features may evolve, and access may be limited for maintenance, security, legal compliance, nonpayment, or misuse. Subscription fees, support commitments, service levels, and termination rights are governed by the applicable subscription agreement.' },
+      { id: 'disclaimers', heading: 'Disclaimers and liability', body: 'Except for express commitments in an applicable organization agreement, the public website and service are provided on an “as available” basis to the extent permitted by law. AI-assisted output, third-party content, citations, integrations, and connected services are not guaranteed to be error-free, complete, current, or continuously available.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update these terms and will post the revised date here. Changes to an organization’s controlling subscription or data-processing terms are handled under those agreements. Questions may be sent to contact@perevagagroup.com.' },
+    ],
   },
 })
 
-const SHARED_NOTICE =
-  'The controlling subscription terms and, where applicable, data-processing agreement are provided by your organization. Contact your firm administrator for those documents, the applicable retention policy, subprocessors, and workspace-specific privacy terms.'
+const LAST_UPDATED = 'July 27, 2026'
 
 function escapeHtml(value) {
   return String(value)
@@ -52,12 +75,34 @@ function replaceRootContents(html, contents) {
 
 function legalShellMarkup(pathname) {
   const route = LEGAL_SHELLS[pathname]
+  const contents = route.sections
+    .map((section) => `            <li><a href="#${escapeHtml(section.id)}">${escapeHtml(section.heading)}</a></li>`)
+    .join('\n')
+  const sections = route.sections
+    .map((section) => `          <section id="${escapeHtml(section.id)}">
+            <h2>${escapeHtml(section.heading)}</h2>
+            <p>${escapeHtml(section.body)}</p>
+          </section>`)
+    .join('\n')
   return `      <main class="server-legal">
-        <article class="server-legal__card">
-          <a class="server-legal__brand" href="/">Clarity Legal</a>
-          <h1>${escapeHtml(route.heading)}</h1>
-          <p>${escapeHtml(route.lead)}</p>
-          <p>${escapeHtml(SHARED_NOTICE)}</p>
+        <article class="server-legal__article">
+          <header class="server-legal__header">
+            <a class="server-legal__brand" href="/">Clarity Legal</a>
+            <h1>${escapeHtml(route.heading)}</h1>
+            <p class="server-legal__lead">${escapeHtml(route.lead)}</p>
+            <p class="server-legal__updated">Last updated: <time datetime="2026-07-27">${LAST_UPDATED}</time></p>
+          </header>
+          <nav class="server-legal__contents" aria-label="On this page">
+            <h2>On this page</h2>
+            <ol>
+${contents}
+            </ol>
+          </nav>
+${sections}
+          <footer class="server-legal__footer">
+            <p>The controlling subscription agreement and, where applicable, data-processing agreement are available from your organization. Contact your firm administrator for workspace-specific terms.</p>
+            <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or email <a href="mailto:contact@perevagagroup.com">contact@perevagagroup.com</a>.</p>
+          </footer>
         </article>
       </main>`
 }

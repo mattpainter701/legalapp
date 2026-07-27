@@ -1,5 +1,6 @@
 import React from 'react'
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import HomePage from './HomePage'
@@ -49,5 +50,46 @@ describe('HomePage launch routing and claims', () => {
       'href',
       expect.stringMatching(/^(https:\/\/|mailto:)/),
     )
+  })
+})
+
+describe('marketing add-on workflows', () => {
+  afterEach(() => cleanup())
+
+  it('opens, switches, and closes the module workflow disclosures', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    const estateButton = screen.getByRole('button', { name: /trust & estate management/i })
+    const mediationButton = screen.getByRole('button', { name: /mediation management/i })
+    const estatePanel = document.getElementById(estateButton.getAttribute('aria-controls'))
+    const mediationPanel = document.getElementById(mediationButton.getAttribute('aria-controls'))
+
+    expect(estateButton).toHaveAttribute('aria-expanded', 'false')
+    expect(mediationButton).toHaveAttribute('aria-expanded', 'false')
+    expect(estatePanel).not.toBeVisible()
+    expect(mediationPanel).not.toBeVisible()
+
+    await user.click(estateButton)
+    expect(estateButton).toHaveAttribute('aria-expanded', 'true')
+    expect(estatePanel).toBeVisible()
+    expect(screen.getByText('Hamilton Family Estate')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Build the inventory' })).toBeVisible()
+
+    await user.click(mediationButton)
+    expect(estateButton).toHaveAttribute('aria-expanded', 'false')
+    expect(mediationButton).toHaveAttribute('aria-expanded', 'true')
+    expect(estatePanel).not.toBeVisible()
+    expect(mediationPanel).toBeVisible()
+    expect(screen.getByText('Rivera v. Northwind')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Work the issue board' })).toBeVisible()
+
+    await user.click(mediationButton)
+    expect(mediationButton).toHaveAttribute('aria-expanded', 'false')
+    expect(mediationPanel).not.toBeVisible()
   })
 })

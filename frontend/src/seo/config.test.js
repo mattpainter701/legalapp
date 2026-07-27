@@ -18,7 +18,7 @@ describe('SEO configuration', () => {
     expect(html).not.toContain('<div id="root"></div>')
   })
 
-  it('indexes only the substantiated public marketing and legal-summary routes', () => {
+  it('indexes only the substantiated public marketing and legal-policy routes', () => {
     expect(getRouteMeta('/').indexable).toBe(true)
     expect(getRouteMeta('/privacy/').canonicalPath).toBe('/privacy')
     expect(getRouteMeta('/terms').indexable).toBe(true)
@@ -74,9 +74,9 @@ describe('SEO configuration', () => {
   })
 
   it.each([
-    ['/privacy', 'Privacy Summary | Clarity Legal', 'Privacy summary'],
-    ['/terms', 'Service Summary | Clarity Legal', 'Service summary'],
-  ])('builds route-correct no-JavaScript HTML for %s', (route, title, heading) => {
+    ['/privacy', 'Privacy Policy | Clarity Legal', 'Privacy Policy', 'Terms of Use'],
+    ['/terms', 'Terms of Use | Clarity Legal', 'Terms of Use', 'Privacy Policy'],
+  ])('builds substantive route-correct no-JavaScript HTML for %s', (route, title, heading, otherPolicy) => {
     const base = readFileSync('index.html', 'utf8')
     const html = buildPublicRouteHtml(base, route, 'https://clarity.example')
 
@@ -84,7 +84,27 @@ describe('SEO configuration', () => {
     expect(html).toContain(`rel="canonical" href="https://clarity.example${route}"`)
     expect(html).toContain(`property="og:url" content="https://clarity.example${route}"`)
     expect(html).toContain(`<h1>${heading}</h1>`)
+    expect(html).toContain('<article class="server-legal__article">')
+    expect(html).toContain('<nav class="server-legal__contents" aria-label="On this page">')
+    expect(html).toContain('<ol>')
+    expect(html).toContain('<time datetime="2026-07-27">July 27, 2026</time>')
+    expect(html.match(/<section id=/g)).toHaveLength(8)
+    expect(html).toContain(`>${otherPolicy}</a>`)
+    expect(html).toContain('mailto:contact@perevagagroup.com')
     expect(html).not.toContain('Start focused with a dependable intake workflow.')
     expect(html).toContain('<script type="module" src="/src/main.jsx"></script>')
+  })
+
+  it('keeps each legal shell specific to its policy', () => {
+    const base = readFileSync('index.html', 'utf8')
+    const privacy = buildPublicRouteHtml(base, '/privacy')
+    const terms = buildPublicRouteHtml(base, '/terms')
+
+    expect(privacy).toContain('How information is used')
+    expect(privacy).toContain('Choices and privacy requests')
+    expect(privacy).not.toContain('Acceptable use')
+    expect(terms).toContain('Acceptable use')
+    expect(terms).toContain('Disclaimers and liability')
+    expect(terms).not.toContain('Choices and privacy requests')
   })
 })

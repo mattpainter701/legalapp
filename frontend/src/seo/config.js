@@ -15,16 +15,16 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
   },
   '/privacy': {
-    title: 'Privacy Summary | Clarity Legal',
+    title: 'Privacy Policy | Clarity Legal',
     description:
-      'Read how Clarity Legal handles account and workspace data, tenant isolation, connected services, and provider-specific data processing.',
+      'Read the Clarity Legal Privacy Policy, including how account and workspace data is collected, used, shared, retained, and protected.',
     canonicalPath: '/privacy',
     indexable: true,
   },
   '/terms': {
-    title: 'Service Summary | Clarity Legal',
+    title: 'Terms of Use | Clarity Legal',
     description:
-      'Read the Clarity Legal service summary and important guidance for professional judgment, source verification, and firm compliance.',
+      'Read the Clarity Legal Terms of Use, including service responsibilities, acceptable use, AI-assisted features, and account administration.',
     canonicalPath: '/terms',
     indexable: true,
   },

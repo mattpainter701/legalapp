@@ -1,10 +1,10 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ShieldCheck, BadgeCheck, Scale, Lock, Landmark, Building2, UserCircle,
   Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
   Gavel, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
-  PhoneIncoming, ListChecks, CheckCircle2, Clock3,
+  PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
 } from 'lucide-react'
 import balancedAccessImg from '../assets/home/balanced-access-record-editorial-v1-1280.webp'
 import balancedAccessSmallImg from '../assets/home/balanced-access-record-editorial-v1-720.webp'
@@ -25,14 +25,36 @@ const SKILLS = [
 
 const ADDONS = [
   {
+    id: 'estate',
     icon: Vault,
     name: 'Trust & Estate management',
     description: 'Estate portfolios with role-aware access for trustees, grantors, and beneficiaries \u2014 asset tracking, tax analysis, and probate records organized for review.',
+    example: 'Hamilton Family Estate',
+    status: 'Attorney review',
+    roles: ['Attorney \u00b7 full review', 'Trustee \u00b7 update assets', 'Beneficiary \u00b7 view approved'],
+    steps: [
+      { title: 'Open the estate', body: 'Capture fiduciaries, beneficiaries, key dates, and the source documents in one record.' },
+      { title: 'Build the inventory', body: 'Organize assets, liabilities, valuations, ownership, and the supporting evidence.' },
+      { title: 'Review tax & probate', body: 'Surface filing tasks, open questions, and attorney checkpoints before work advances.' },
+      { title: 'Share the approved record', body: 'Prepare a beneficiary-ready report from the information the firm has reviewed.' },
+    ],
+    outcomes: ['One current asset record', 'Role-aware updates', 'Reviewable reporting trail'],
   },
   {
+    id: 'mediation',
     icon: Handshake,
     name: 'Mediation management',
     description: 'A neutral two-party workspace \u2014 intake, briefs, settlement drafting, and case tracking with balanced access for each side.',
+    example: 'Rivera v. Northwind',
+    status: 'Proposal pending',
+    roles: ['Mediator \u00b7 neutral view', 'Party A \u00b7 private workspace', 'Party B \u00b7 private workspace'],
+    steps: [
+      { title: 'Bring in both sides', body: 'Collect party details, scheduling context, conflicts, and the issues in dispute.' },
+      { title: 'Organize private briefs', body: 'Keep each side\u2019s submissions and supporting material in the right access boundary.' },
+      { title: 'Work the issue board', body: 'Track shared facts, open issues, calculations, and mediator notes without losing context.' },
+      { title: 'Record the resolution', body: 'Draft proposals, capture approvals, and preserve the path to the final agreement.' },
+    ],
+    outcomes: ['Balanced party access', 'Visible issue status', 'Recorded approval trail'],
   },
 ]
 
@@ -87,6 +109,139 @@ const FEATURES = [
   },
 ]
 
+function AddonDisclosureButton({ addon, isOpen, onToggle }) {
+  const { id, icon: Icon, name, description } = addon
+  const buttonId = id + '-workflow-toggle'
+  const panelId = id + '-workflow-panel'
+
+  return (
+    <button
+      id={buttonId}
+      type="button"
+      aria-expanded={isOpen}
+      aria-controls={panelId}
+      onClick={onToggle}
+      className={
+        'group w-full rounded-2xl border bg-brand-surface p-6 text-left shadow-sm transition-all md:order-none ' +
+        'motion-reduce:transition-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent-2 ' +
+        (id === 'estate' ? 'order-1 ' : 'order-3 ') +
+        (isOpen
+          ? 'border-brand-line-2 shadow-md'
+          : 'border-brand-line hover:-translate-y-0.5 hover:border-brand-line-2 hover:shadow-md motion-reduce:hover:translate-y-0')
+      }
+    >
+      <div className="flex items-start gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-brand-line bg-brand-bg-soft text-brand-accent-2">
+          <Icon size={24} strokeWidth={1.5} aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="font-serif text-[18px] font-bold leading-tight">{name}</h3>
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-bg-soft text-brand-accent-2">
+              <ChevronDown
+                size={16}
+                aria-hidden="true"
+                className={'transition-transform motion-reduce:transition-none ' + (isOpen ? 'rotate-180' : '')}
+              />
+            </span>
+          </div>
+          <p className="mt-1.5 font-sans text-[14px] leading-relaxed text-brand-ink-2">{description}</p>
+          <span className="mt-4 inline-flex items-center gap-2 font-sans text-[11px] font-bold uppercase tracking-[0.12em] text-brand-accent-2">
+            <span className="h-px w-5 bg-brand-accent-2/50" aria-hidden="true" />
+            {isOpen ? 'Close workflow' : 'Explore workflow'}
+          </span>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function AddonWorkflowPanel({ addon, isOpen }) {
+  const { id, name, example, status, roles, steps, outcomes } = addon
+
+  return (
+    <div
+      id={id + '-workflow-panel'}
+      role="region"
+      aria-labelledby={id + '-workflow-toggle'}
+      hidden={!isOpen}
+      className={id === 'estate'
+        ? 'order-2 md:order-none md:col-span-2'
+        : 'order-4 md:order-none md:col-span-2'}
+    >
+      <div className="relative overflow-hidden rounded-3xl border border-brand-ink/10 bg-brand-ink p-1 shadow-xl">
+        <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brand-gold/20 blur-3xl" aria-hidden="true" />
+        <div className="absolute -bottom-24 -left-16 h-56 w-56 rounded-full bg-brand-green/20 blur-3xl" aria-hidden="true" />
+        <div className="relative overflow-hidden rounded-[20px] bg-brand-surface">
+          <div className="flex flex-col gap-4 bg-brand-ink px-5 py-5 text-white sm:flex-row sm:items-center sm:justify-between sm:px-7">
+            <div>
+              <p className="font-sans text-[10px] font-bold uppercase tracking-[0.18em] text-white/55">
+                Illustrative {name} workflow
+              </p>
+              <p className="mt-1.5 font-serif text-[21px] font-bold">{example}</p>
+            </div>
+            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 font-sans text-[11px] font-bold text-white">
+              <span className="h-2 w-2 rounded-full bg-brand-gold shadow-[0_0_0_4px_rgba(184,150,90,0.15)]" aria-hidden="true" />
+              {status}
+            </span>
+          </div>
+
+          <div className="p-5 sm:p-7">
+            <div className="flex flex-col gap-3 border-b border-brand-line pb-5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-sans text-[11px] font-bold uppercase tracking-[0.14em] text-brand-muted">
+                Access follows the work
+              </p>
+              <div className="flex flex-wrap gap-2" aria-label="Workflow roles">
+                {roles.map((role) => (
+                  <span key={role} className="rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1 font-sans text-[10.5px] font-semibold text-brand-ink-2">
+                    {role}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <ol className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label={name + ' stages'}>
+              {steps.map((step, index) => (
+                <li key={step.title} className="relative rounded-2xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand-ink font-serif text-[12px] font-bold text-white">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <span className="font-sans text-[9px] font-bold uppercase tracking-[0.15em] text-brand-accent-2">
+                      Stage
+                    </span>
+                  </div>
+                  <h4 className="mt-4 font-serif text-[15px] font-bold leading-tight text-brand-ink">{step.title}</h4>
+                  <p className="mt-2 font-sans text-[12px] leading-relaxed text-brand-ink-2">{step.body}</p>
+                  {index < steps.length - 1 && (
+                    <span className="absolute -right-[13px] top-1/2 z-10 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-brand-line bg-white text-brand-gold shadow-sm lg:flex" aria-hidden="true">
+                      <ArrowRight size={13} />
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-brand-green/20 bg-brand-green/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-sans text-[10px] font-bold uppercase tracking-[0.15em] text-brand-green">
+                What stays visible
+              </p>
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {outcomes.map((outcome) => (
+                  <span key={outcome} className="inline-flex items-center gap-1.5 font-sans text-[11.5px] font-semibold text-brand-ink-2">
+                    <CheckCircle2 size={14} className="text-brand-green" aria-hidden="true" />
+                    {outcome}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Logo({ size = 32 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -97,6 +252,7 @@ function Logo({ size = 32 }) {
 }
 
 export default function HomePage() {
+  const [expandedAddon, setExpandedAddon] = useState(null)
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
   const intakeStartUrl = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
     ? '/signup?plan=intake-only'
@@ -366,19 +522,21 @@ export default function HomePage() {
             access for clients and parties. Add those surfaces only when the work calls for them.
           </p>
         </div>
-        <div className="grid md:grid-cols-2 gap-6">
-          {ADDONS.map(({ icon: Icon, name, description }) => (
-            <div key={name} className="bg-brand-surface border border-brand-line rounded-2xl p-7 hover:shadow-md hover:border-brand-line-2 transition-all">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-accent-2 shrink-0">
-                  <Icon size={24} strokeWidth={1.5} />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="font-serif font-bold text-[18px] leading-tight mb-1.5">{name}</h3>
-                  <p className="text-brand-ink-2 font-sans text-[14px] leading-relaxed">{description}</p>
-                </div>
-              </div>
-            </div>
+        <div className="grid md:grid-cols-2 gap-6 items-start">
+          {ADDONS.map((addon) => (
+            <AddonDisclosureButton
+              key={addon.id}
+              addon={addon}
+              isOpen={expandedAddon === addon.id}
+              onToggle={() => setExpandedAddon(expandedAddon === addon.id ? null : addon.id)}
+            />
+          ))}
+          {ADDONS.map((addon) => (
+            <AddonWorkflowPanel
+              key={addon.id + '-panel'}
+              addon={addon}
+              isOpen={expandedAddon === addon.id}
+            />
           ))}
         </div>
       </section>
