@@ -93,6 +93,10 @@ PUBLIC_ROUTES: dict[tuple[frozenset[str], str], str] = {
         frozenset({"POST"}),
         "/api/auth/oauth/exchange",
     ): "exchanges a short-lived server-issued code",
+    (
+        frozenset({"POST"}),
+        "/api/auth/office/exchange",
+    ): "authenticated by a verified Microsoft NAA delegated access token",
     (frozenset({"GET"}), "/api/auth/google/login"): "redirects to Google; no app data",
     (
         frozenset({"GET"}),
