@@ -4,6 +4,11 @@
 **Status:** Preliminary screening. **Not legal clearance.**
 **Supersedes:** nothing. Companion to `brand-name-research-2026-07-27.md` (batches 1–3), which is not present in this clone.
 
+> **Post-merge note (2026-07-28):** This file is preserved as the source snapshot from
+> `claude/clarity-legal-name-eval-1f74mj`. The reconciled ranking, live RDAP corrections,
+> and combined decision record are in `brand-name-master-analysis-2026-07-27.md`.
+> Where the two documents differ, use the master analysis.
+
 ---
 
 ## Scope and method
