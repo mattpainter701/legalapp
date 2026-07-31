@@ -67,6 +67,18 @@ def call_tool(body: ToolCallRequest):
                     date_to=args.get("date_to"),
                     query_embedding=query_embedder.embed_query(query),
                 )
+            elif body.name == "search_legal_authorities":
+                query = args.get("query", "")
+                result = repo.search_legal_authorities(
+                    query=query,
+                    top_k=int(args.get("top_k", 8)),
+                    jurisdiction=args.get("jurisdiction"),
+                    source_keys=args.get("source_keys") or [],
+                    authority_tiers=args.get("authority_tiers") or [],
+                    document_types=args.get("document_types") or [],
+                    effective_on=args.get("effective_on"),
+                    query_embedding=query_embedder.embed_query(query),
+                )
             elif body.name == "get_case_details":
                 result = repo.case_details(args.get("opinion_id"), args.get("cluster_id"))
             elif body.name == "get_full_opinion":

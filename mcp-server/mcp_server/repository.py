@@ -37,7 +37,9 @@ class CourtListenerRepository:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> tuple[list[str], list[Any]]:
-        filters = ["TRUE"]
+        # Versioned authority adapters retain prior releases for auditability.
+        # Normal chat/search must not mix superseded text with current law.
+        filters = ["d.document_status = 'current'", "s.enabled = TRUE"]
         params: list[Any] = []
         if jurisdiction:
             filters.append("(oc.court_id = %s OR c.jurisdiction = %s)")
@@ -75,6 +77,146 @@ class CourtListenerRepository:
             date_from=date_from,
             date_to=date_to,
         )
+
+    def search_legal_authorities(
+        self,
+        query: str,
+        top_k: int = 8,
+        jurisdiction: str | None = None,
+        source_keys: list[str] | None = None,
+        authority_tiers: list[str] | None = None,
+        document_types: list[str] | None = None,
+        effective_on: str | None = None,
+        query_embedding: list[float] | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = ["TRUE"]
+        filter_params: list[Any] = []
+        if jurisdiction:
+            filters.append("d.jurisdiction = %s")
+            filter_params.append(jurisdiction)
+        if source_keys:
+            filters.append("d.source_key = ANY(%s)")
+            filter_params.append(source_keys)
+        if authority_tiers:
+            filters.append("d.authority_tier = ANY(%s)")
+            filter_params.append(authority_tiers)
+        if document_types:
+            filters.append("d.document_type = ANY(%s)")
+            filter_params.append(document_types)
+        if effective_on:
+            filters.extend(
+                [
+                    "(d.effective_date IS NULL OR d.effective_date <= %s)",
+                    "(d.termination_date IS NULL OR d.termination_date >= %s)",
+                ]
+            )
+            filter_params.extend([effective_on, effective_on])
+
+        where = " AND ".join(filters)
+        if not query_embedding:
+            sql = f"""
+                SELECT c.id::text AS chunk_id, d.id::text AS document_id,
+                       d.source_key, s.display_name AS source_name,
+                       s.official_status, d.document_type, d.title, d.citation,
+                       d.jurisdiction, d.authority_tier, d.document_status,
+                       d.publication_date, d.effective_date, d.termination_date,
+                       d.canonical_url AS source_url, d.retrieved_at,
+                       s.last_successful_sync_at, c.chunk_index, c.content,
+                       ts_rank_cd(c.fts, websearch_to_tsquery('english', %s)) AS rank,
+                       ts_rank_cd(c.fts, websearch_to_tsquery('english', %s)) AS keyword_rank,
+                       NULL::float AS similarity, 'fts' AS search_source
+                FROM legal_document_chunks c
+                JOIN legal_documents d ON d.id = c.document_id
+                JOIN legal_sources s ON s.source_key = d.source_key
+                WHERE c.fts @@ websearch_to_tsquery('english', %s)
+                  AND {where}
+                ORDER BY rank DESC, d.effective_date DESC NULLS LAST
+                LIMIT %s
+            """
+            params = [query, query, query, *filter_params, top_k]
+        else:
+            vector = format_vector_literal(query_embedding)
+            candidate_limit = min(max(top_k * 4, 20), 200)
+            sql = f"""
+                WITH filtered AS (
+                    SELECT c.id::text AS chunk_id, d.id::text AS document_id,
+                           d.source_key, s.display_name AS source_name,
+                           s.official_status, d.document_type, d.title, d.citation,
+                           d.jurisdiction, d.authority_tier, d.document_status,
+                           d.publication_date, d.effective_date, d.termination_date,
+                           d.canonical_url AS source_url, d.retrieved_at,
+                           s.last_successful_sync_at, c.chunk_index, c.content,
+                           c.fts, c.embedding
+                    FROM legal_document_chunks c
+                    JOIN legal_documents d ON d.id = c.document_id
+                    JOIN legal_sources s ON s.source_key = d.source_key
+                    WHERE {where}
+                ),
+                dense AS (
+                    SELECT *, row_number() OVER (ORDER BY embedding <=> %s::vector) AS dense_rank,
+                           1 - (embedding <=> %s::vector) AS similarity,
+                           NULL::bigint AS fts_rank, NULL::float AS keyword_rank
+                    FROM filtered
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                ),
+                keyword AS (
+                    SELECT *, NULL::bigint AS dense_rank, NULL::float AS similarity,
+                           row_number() OVER (
+                               ORDER BY ts_rank_cd(fts, websearch_to_tsquery('english', %s)) DESC
+                           ) AS fts_rank,
+                           ts_rank_cd(fts, websearch_to_tsquery('english', %s)) AS keyword_rank
+                    FROM filtered
+                    WHERE fts @@ websearch_to_tsquery('english', %s)
+                    ORDER BY keyword_rank DESC
+                    LIMIT %s
+                ),
+                combined AS (
+                    SELECT * FROM dense
+                    UNION ALL
+                    SELECT * FROM keyword
+                )
+                SELECT chunk_id, document_id, source_key, source_name,
+                       official_status, document_type, title, citation, jurisdiction,
+                       authority_tier, document_status, publication_date, effective_date,
+                       termination_date, source_url, retrieved_at, last_successful_sync_at,
+                       chunk_index, content,
+                       COALESCE(MAX(similarity), 0.0) AS similarity,
+                       COALESCE(MAX(keyword_rank), 0.0) AS keyword_rank,
+                       (
+                           COALESCE(0.6 / (60 + MIN(dense_rank)), 0.0) +
+                           COALESCE(0.4 / (60 + MIN(fts_rank)), 0.0)
+                       ) AS rank,
+                       CASE
+                           WHEN MIN(dense_rank) IS NOT NULL AND MIN(fts_rank) IS NOT NULL THEN 'hybrid'
+                           WHEN MIN(dense_rank) IS NOT NULL THEN 'vector'
+                           ELSE 'fts'
+                       END AS search_source
+                FROM combined
+                GROUP BY chunk_id, document_id, source_key, source_name,
+                         official_status, document_type, title, citation, jurisdiction,
+                         authority_tier, document_status, publication_date, effective_date,
+                         termination_date, source_url, retrieved_at, last_successful_sync_at,
+                         chunk_index, content
+                ORDER BY rank DESC, similarity DESC, effective_date DESC NULLS LAST
+                LIMIT %s
+            """
+            params = [
+                *filter_params,
+                vector,
+                vector,
+                vector,
+                candidate_limit,
+                query,
+                query,
+                query,
+                candidate_limit,
+                top_k,
+            ]
+        with self.conn.cursor() as cur:
+            cur.execute(sql, params)
+            return dict_rows(cur)
 
     def _search_fts(
         self,
@@ -531,14 +673,56 @@ class CourtListenerRepository:
                 """
             )
             ingest_runs = dict_rows(cur)
-            cur.execute("SELECT COUNT(*) AS embedded_chunks FROM opinion_chunks WHERE embedding IS NOT NULL")
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NOT NULL)
+                  + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NOT NULL)
+                    AS embedded_chunks
+                """
+            )
             embedded = dict_rows(cur)
-            cur.execute("SELECT COUNT(*) AS pending_chunks FROM opinion_chunks WHERE embedding IS NULL")
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL)
+                  + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NULL)
+                    AS pending_chunks
+                """
+            )
             pending = dict_rows(cur)
+            cur.execute(
+                """
+                SELECT source_key, display_name, description, publisher, source_type,
+                       jurisdiction, court_id, canonical_url, authority_tier,
+                       official_status, ingestion_mode, storage_policy, access_type,
+                       license_status, terms_url, sync_frequency, data_format,
+                       corpus_table, enabled, priority, coverage_start, coverage_end,
+                       coverage_kind,
+                       last_attempted_at, last_successful_sync_at, item_count,
+                       chunk_count, embedded_chunk_count, parser_version,
+                       embedding_model, embedding_version, current_error, metadata
+                FROM legal_sources
+                ORDER BY source_key
+                """
+            )
+            sources = dict_rows(cur)
+            cur.execute(
+                """
+                SELECT source_key, partition_key, checkpoint_at, cursor_url, status,
+                       last_attempted_at, last_successful_sync_at, rows_processed,
+                       chunks_created, last_error, metadata
+                FROM source_sync_states
+                ORDER BY source_key, partition_key
+                """
+            )
+            source_partitions = dict_rows(cur)
         return {
             "ingest_runs": ingest_runs,
             "embedded_chunks": embedded[0]["embedded_chunks"] if embedded else 0,
             "pending_chunks": pending[0]["pending_chunks"] if pending else 0,
+            "sources": sources,
+            "source_partitions": source_partitions,
         }
 
     def corpus_status(self) -> dict[str, Any]:
@@ -552,6 +736,11 @@ class CourtListenerRepository:
                     (SELECT COUNT(*) FROM opinions) AS opinions,
                     (SELECT COUNT(*) FROM opinion_chunks) AS chunks,
                     (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NOT NULL) AS embedded_chunks,
+                    (SELECT COUNT(*) FROM legal_sources) AS legal_sources,
+                    (SELECT COUNT(*) FROM legal_documents) AS legal_documents,
+                    (SELECT COUNT(*) FROM legal_document_chunks) AS legal_document_chunks,
+                    (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NOT NULL)
+                        AS embedded_legal_document_chunks,
                     (SELECT MIN(date_filed) FROM opinion_clusters) AS first_date,
                     (SELECT MAX(date_filed) FROM opinion_clusters) AS last_date
                 """

@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS opinions (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE opinions ADD COLUMN IF NOT EXISTS source_created_at timestamptz;
+ALTER TABLE opinions ADD COLUMN IF NOT EXISTS source_modified_at timestamptz;
+ALTER TABLE opinions ADD COLUMN IF NOT EXISTS content_hash text;
+ALTER TABLE opinions ADD COLUMN IF NOT EXISTS last_synced_at timestamptz;
+ALTER TABLE opinions ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS opinion_citations (
     id bigserial PRIMARY KEY,
     citing_opinion_id bigint REFERENCES opinions(opinion_id),
@@ -81,6 +87,120 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
     errors jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS legal_sources (
+    source_key text PRIMARY KEY,
+    display_name text,
+    description text,
+    publisher text NOT NULL,
+    source_type text NOT NULL,
+    jurisdiction text,
+    court_id text,
+    canonical_url text NOT NULL,
+    authority_tier text NOT NULL DEFAULT 'secondary',
+    official_status text NOT NULL DEFAULT 'aggregator',
+    ingestion_mode text NOT NULL DEFAULT 'manual',
+    storage_policy text NOT NULL DEFAULT 'metadata_only',
+    access_type text NOT NULL DEFAULT 'public_web',
+    license_status text NOT NULL DEFAULT 'review_required',
+    terms_url text,
+    sync_frequency text,
+    data_format text,
+    corpus_table text,
+    enabled boolean NOT NULL DEFAULT false,
+    priority integer NOT NULL DEFAULT 100,
+    coverage_start date,
+    coverage_end date,
+    coverage_kind text NOT NULL DEFAULT 'bounded',
+    last_attempted_at timestamptz,
+    last_successful_sync_at timestamptz,
+    item_count bigint NOT NULL DEFAULT 0,
+    chunk_count bigint NOT NULL DEFAULT 0,
+    embedded_chunk_count bigint NOT NULL DEFAULT 0,
+    parser_version text,
+    embedding_model text,
+    embedding_version integer,
+    current_error text,
+    licensing_notes text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS display_name text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS authority_tier text NOT NULL DEFAULT 'secondary';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS official_status text NOT NULL DEFAULT 'aggregator';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS ingestion_mode text NOT NULL DEFAULT 'manual';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS storage_policy text NOT NULL DEFAULT 'metadata_only';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS access_type text NOT NULL DEFAULT 'public_web';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS license_status text NOT NULL DEFAULT 'review_required';
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS terms_url text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS sync_frequency text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS data_format text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS corpus_table text;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE legal_sources ADD COLUMN IF NOT EXISTS priority integer NOT NULL DEFAULT 100;
+
+CREATE TABLE IF NOT EXISTS source_sync_states (
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE CASCADE,
+    partition_key text NOT NULL,
+    checkpoint_at timestamptz,
+    cursor_url text,
+    status text NOT NULL DEFAULT 'idle',
+    last_attempted_at timestamptz,
+    last_successful_sync_at timestamptz,
+    rows_processed bigint NOT NULL DEFAULT 0,
+    chunks_created bigint NOT NULL DEFAULT 0,
+    last_error text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_key, partition_key)
+);
+
+CREATE TABLE IF NOT EXISTS legal_documents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_key text NOT NULL REFERENCES legal_sources(source_key) ON DELETE RESTRICT,
+    external_id text NOT NULL,
+    document_type text NOT NULL,
+    title text NOT NULL,
+    citation text,
+    jurisdiction text,
+    authority_tier text NOT NULL,
+    document_status text NOT NULL DEFAULT 'current',
+    publication_date date,
+    effective_date date,
+    termination_date date,
+    canonical_url text NOT NULL,
+    source_modified_at timestamptz,
+    retrieved_at timestamptz NOT NULL DEFAULT now(),
+    content_hash text,
+    raw_media_type text,
+    raw_storage_uri text,
+    parser_version text,
+    text_content text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (source_key, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS legal_document_chunks (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id uuid NOT NULL REFERENCES legal_documents(id) ON DELETE CASCADE,
+    chunk_index integer NOT NULL,
+    heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
+    content text NOT NULL,
+    content_hash text NOT NULL,
+    token_count integer,
+    fts tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+    embedding vector(1024),
+    embedding_model text NOT NULL DEFAULT 'mixedbread-ai/mxbai-embed-large-v1',
+    embedding_version integer NOT NULL DEFAULT 0,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (document_id, chunk_index)
+);
+
 CREATE TABLE IF NOT EXISTS embedding_jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     worker_id integer NOT NULL,
@@ -96,6 +216,14 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
 
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_court ON opinion_chunks(court_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_version ON opinion_chunks(embedding_version);
+CREATE INDEX IF NOT EXISTS ix_opinions_source_modified_at ON opinions(source_modified_at);
+CREATE INDEX IF NOT EXISTS ix_source_sync_states_status ON source_sync_states(status, updated_at);
+CREATE INDEX IF NOT EXISTS ix_legal_sources_priority ON legal_sources(enabled, priority, source_key);
+CREATE INDEX IF NOT EXISTS ix_legal_documents_source ON legal_documents(source_key, document_type);
+CREATE INDEX IF NOT EXISTS ix_legal_documents_citation ON legal_documents(citation) WHERE citation IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_legal_documents_effective ON legal_documents(jurisdiction, effective_date);
+CREATE INDEX IF NOT EXISTS ix_legal_document_chunks_fts ON legal_document_chunks USING gin(fts);
+CREATE INDEX IF NOT EXISTS ix_legal_document_chunks_embedding_hnsw ON legal_document_chunks USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_fts ON opinion_chunks USING gin(fts);
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_hnsw ON opinion_chunks USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_citing ON opinion_citations(citing_opinion_id);

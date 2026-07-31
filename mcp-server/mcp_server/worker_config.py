@@ -27,13 +27,32 @@ class WorkerConfig:
             raise ValueError("mxbai CourtListener embeddings must be 1024-dimensional")
 
 
-def partition_sql() -> str:
-    return """
-        SELECT id, content
-        FROM opinion_chunks
-        WHERE embedding IS NULL
-          AND ABS(HASHTEXT(id::text)) %% %s = %s
-        ORDER BY created_at, id
-        LIMIT %s
-        FOR UPDATE SKIP LOCKED
-    """
+def partition_sql(corpus: str = "opinion_chunks") -> str:
+    if corpus == "opinion_chunks":
+        return """
+            SELECT id, content
+            FROM opinion_chunks
+            WHERE embedding IS NULL
+              AND ABS(HASHTEXT(id::text)) %% %s = %s
+            ORDER BY created_at, id
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+        """
+    if corpus == "legal_document_chunks":
+        return """
+            SELECT c.id,
+                   CONCAT(
+                       '[', COALESCE(d.jurisdiction, 'unknown'), '] ',
+                       '[', d.authority_tier, '] ', d.title, E'\n', c.content
+                   ) AS content
+            FROM legal_document_chunks c
+            JOIN legal_documents d ON d.id = c.document_id
+            JOIN legal_sources s ON s.source_key = d.source_key
+            WHERE c.embedding IS NULL
+              AND s.storage_policy IN ('mirror', 'normalized_text')
+              AND ABS(HASHTEXT(c.id::text)) %% %s = %s
+            ORDER BY c.created_at, c.id
+            LIMIT %s
+            FOR UPDATE OF c SKIP LOCKED
+        """
+    raise ValueError(f"unsupported embedding corpus: {corpus}")

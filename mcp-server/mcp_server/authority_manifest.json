@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "manifest_updated": "2026-07-31",
+  "documents": [
+    {
+      "source_key": "cms:medicaid-estate-recovery",
+      "external_id": "medicaid-estate-recovery-overview",
+      "document_type": "agency_guidance",
+      "title": "Medicaid Estate Recovery",
+      "canonical_url": "https://www.medicaid.gov/medicaid/eligibility-policy/estate-recovery",
+      "jurisdiction": "US",
+      "authority_tier": "agency_guidance",
+      "parser": "html_main_text",
+      "practice_areas": ["medicaid", "estate_planning", "probate", "elder_law"]
+    },
+    {
+      "source_key": "irs:estate-gift-forms",
+      "external_id": "estate-gift-forms-index",
+      "document_type": "forms_guidance",
+      "title": "Forms and Publications: Estate and Gift Tax",
+      "canonical_url": "https://www.irs.gov/businesses/small-businesses-self-employed/forms-and-publications-estate-and-gift-tax",
+      "jurisdiction": "US",
+      "authority_tier": "official_form",
+      "parser": "html_main_text",
+      "practice_areas": ["tax", "estate_planning", "probate"]
+    },
+    {
+      "source_key": "cms:internet-only-manuals",
+      "external_id": "internet-only-manuals-index",
+      "document_type": "agency_manual_index",
+      "title": "CMS Internet-Only Manuals",
+      "canonical_url": "https://www.cms.gov/medicare/regulations-guidance/manuals/internet-only-manuals-ioms",
+      "jurisdiction": "US",
+      "authority_tier": "agency_guidance",
+      "parser": "html_main_text",
+      "practice_areas": ["medicare", "health_law"]
+    }
+  ]
+}

@@ -11,13 +11,22 @@ import psycopg2.extras
 from .database import connect
 from .worker_config import DEFAULT_MODEL, WorkerConfig, partition_sql
 
-UPDATE_SQL = """
-    UPDATE opinion_chunks
-    SET embedding = %s::vector,
-        embedding_model = %s,
-        embedding_version = 1
-    WHERE id = %s
-"""
+# The reviewed authority corpus is small and high-value for chat. Drain it before
+# returning to the much larger CourtListener opinion backlog.
+CORPORA = ("legal_document_chunks", "opinion_chunks")
+
+
+def update_sql(corpus: str) -> str:
+    if corpus not in CORPORA:
+        raise ValueError(f"unsupported embedding corpus: {corpus}")
+    updated_at = ",\n            updated_at = now()" if corpus == "legal_document_chunks" else ""
+    return f"""
+        UPDATE {corpus}
+        SET embedding = %s::vector,
+            embedding_model = %s,
+            embedding_version = 1{updated_at}
+        WHERE id = %s
+    """
 
 
 def format_embedding(values: Iterable[float]) -> str:
@@ -49,27 +58,34 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
 def process_once(config: WorkerConfig, model) -> int:
     config.validate()
     with connect(config.db_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute("BEGIN")
-            cur.execute(partition_sql(), [config.total_workers, config.worker_id, config.batch_size])
-            rows = cur.fetchall()
-            if not rows:
-                conn.rollback()
-                return 0
-            ids = [row[0] for row in rows]
-            texts = [row[1] for row in rows]
-            vectors = embed_batch(model, texts, config.batch_size)
-            updates = [
-                (format_embedding(vector), config.model, chunk_id)
-                for chunk_id, vector in zip(ids, vectors)
-            ]
-            psycopg2.extras.execute_batch(cur, UPDATE_SQL, updates, page_size=100)
-            conn.commit()
-            return len(updates)
+        for corpus in CORPORA:
+            with conn.cursor() as cur:
+                cur.execute("BEGIN")
+                cur.execute(
+                    partition_sql(corpus),
+                    [config.total_workers, config.worker_id, config.batch_size],
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    conn.rollback()
+                    continue
+                ids = [row[0] for row in rows]
+                texts = [row[1] for row in rows]
+                vectors = embed_batch(model, texts, config.batch_size)
+                updates = [
+                    (format_embedding(vector), config.model, chunk_id)
+                    for chunk_id, vector in zip(ids, vectors)
+                ]
+                psycopg2.extras.execute_batch(
+                    cur, update_sql(corpus), updates, page_size=100
+                )
+                conn.commit()
+                return len(updates)
+        return 0
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="CourtListener mxbai embedding worker")
+    parser = argparse.ArgumentParser(description="Public legal-authority mxbai embedding worker")
     parser.add_argument("--worker-id", type=int, required=True)
     parser.add_argument("--total-workers", type=int, required=True)
     parser.add_argument("--batch-size", type=int, default=32)

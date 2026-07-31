@@ -114,6 +114,22 @@ cd /home/varta/legalapp
 docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --env-file .env up -d courtlistener-db courtlistener-mcp
 ```
 
+Official non-case-law authorities run in the same private pgvector database through a
+separate profile. Configure `LEGAL_SOURCE_USER_AGENT`, the Ohio crawler contact and
+authorization-basis variables, then start the overlap-protected daily scheduler:
+
+```bash
+docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --env-file .env \
+  --profile authority-sync up -d --build legal-authority-sync
+docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml logs -f legal-authority-sync
+```
+
+For a bounded preflight before enabling the scheduler, run an adapter with `--preview`
+inside the image. Production syncs seed the source catalog and schema, upsert by stable
+source identity, invalidate changed chunks for re-embedding, checkpoint interrupted
+runs, retain prior statute/regulation releases as `superseded`, and expose only current
+authority versions through normal retrieval.
+
 Current MVP filter behavior:
 
 - State focus: ND, MT, MN, SD.

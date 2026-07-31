@@ -52,7 +52,13 @@ def release_lock(conn, lock_id: int) -> None:
 
 def unembedded_chunk_count(conn) -> int:
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL")
+        cur.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL)
+              + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NULL)
+            """
+        )
         row = cur.fetchone()
         return int(row[0] if row else 0)
 

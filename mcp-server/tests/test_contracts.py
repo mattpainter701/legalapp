@@ -228,6 +228,7 @@ def test_manifest_exposes_domain_scoped_legal_tools():
     assert names == TOOL_NAMES
     assert names == [
         "search_caselaw",
+        "search_legal_authorities",
         "get_case_details",
         "get_full_opinion",
         "find_similar_cases",
@@ -312,9 +313,49 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
     sql = conn.cursor_obj.sql
 
     assert "embedding <=>" not in sql
+    assert "d.document_status = 'current'" in sql
+    assert "s.enabled = TRUE" in sql
     assert "websearch_to_tsquery" in sql
     assert "source_url" in sql
     assert "{0,cite}" in sql
+
+
+def test_repository_searches_general_authority_with_effective_date_filters():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).search_legal_authorities(
+        "estate recovery",
+        top_k=6,
+        jurisdiction="US",
+        source_keys=["cms:medicaid-estate-recovery"],
+        authority_tiers=["agency_guidance"],
+        effective_on="2026-07-31",
+        query_embedding=None,
+    )
+
+    sql = conn.cursor_obj.sql
+    assert "legal_document_chunks" in sql
+    assert "legal_documents" in sql
+    assert "websearch_to_tsquery" in sql
+    assert "termination_date" in sql
+    assert "embedding <=>" not in sql
+
+
+def test_repository_uses_hybrid_search_for_general_authority():
+    conn = RecordingConnection()
+
+    CourtListenerRepository(conn).search_legal_authorities(
+        "estate tax portability",
+        top_k=4,
+        jurisdiction="US",
+        query_embedding=[0.001] * 1024,
+    )
+
+    sql = conn.cursor_obj.sql
+    assert "legal_document_chunks" in sql
+    assert "embedding <=>" in sql
+    assert "dense_rank" in sql
+    assert "fts_rank" in sql
 
 
 def test_repository_normalizes_messy_citation_before_lookup():
@@ -487,6 +528,10 @@ def test_worker_config_locks_mxbai_1024_and_partition_query():
     assert "opinion_chunks" in partition_sql()
     assert "embedding IS NULL" in partition_sql()
     assert "ABS(HASHTEXT(id::text)) %% %s = %s" in partition_sql()
+    authority_sql = partition_sql("legal_document_chunks")
+    assert "legal_document_chunks" in authority_sql
+    assert "legal_documents" in authority_sql
+    assert "authority_tier" in authority_sql
 
 
 def test_dispatcher_supports_indexed_jetson_env(monkeypatch):

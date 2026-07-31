@@ -2,6 +2,7 @@ from __future__ import annotations
 
 TOOL_NAMES = [
     "search_caselaw",
+    "search_legal_authorities",
     "get_case_details",
     "get_full_opinion",
     "find_similar_cases",
@@ -56,6 +57,27 @@ def build_tool_manifest() -> dict:
                     "jurisdiction": {"type": "string"},
                     "date_from": {"type": "string", "format": "date"},
                     "date_to": {"type": "string", "format": "date"},
+                },
+                ["query"],
+            ),
+        },
+        {
+            "name": "search_legal_authorities",
+            "description": "Hybrid search across locally reviewed statutes, regulations, court rules, forms, agency manuals, and official guidance.",
+            "inputSchema": _schema(
+                {
+                    "query": {"type": "string"},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 8,
+                    },
+                    "jurisdiction": {"type": "string"},
+                    "source_keys": {"type": "array", "items": {"type": "string"}},
+                    "authority_tiers": {"type": "array", "items": {"type": "string"}},
+                    "document_types": {"type": "array", "items": {"type": "string"}},
+                    "effective_on": {"type": "string", "format": "date"},
                 },
                 ["query"],
             ),

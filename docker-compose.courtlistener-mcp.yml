@@ -59,7 +59,44 @@ services:
     environment:
       VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
       COURTLISTENER_API_KEY: ${COURTLISTENER_API_KEY:-}
-    command: ["python", "-m", "mcp_server.sync", "--interval-seconds", "${COURTLISTENER_SYNC_INTERVAL_SECONDS:-3600}"]
+      COURTLISTENER_SYNC_COURT_IDS: ${COURTLISTENER_SYNC_COURT_IDS:-}
+      COURTLISTENER_SYNC_BASELINE_START: ${COURTLISTENER_SYNC_BASELINE_START:-2015-01-01}
+      COURTLISTENER_SYNC_OVERLAP_HOURS: ${COURTLISTENER_SYNC_OVERLAP_HOURS:-48}
+      COURTLISTENER_SYNC_TIMEOUT_SECONDS: ${COURTLISTENER_SYNC_TIMEOUT_SECONDS:-30}
+      COURTLISTENER_SYNC_MAX_PAGES: ${COURTLISTENER_SYNC_MAX_PAGES:-}
+    command: ["python", "-m", "mcp_server.sync", "--interval-seconds", "${COURTLISTENER_SYNC_INTERVAL_SECONDS:-86400}"]
+
+  legal-authority-sync:
+    build: ./mcp-server
+    profiles: ["authority-sync"]
+    restart: unless-stopped
+    depends_on:
+      courtlistener-db:
+        condition: service_healthy
+    environment:
+      VECTORDB_URL: postgresql://${COURTLISTENER_DB_USER:-courtlistener}:${COURTLISTENER_DB_PASSWORD:?Set COURTLISTENER_DB_PASSWORD in .env}@courtlistener-db:5432/${COURTLISTENER_DB_NAME:-courtlistener}
+      LEGAL_SOURCE_USER_AGENT: ${LEGAL_SOURCE_USER_AGENT:?Set a descriptive legal-source contact User-Agent in .env}
+      LEGAL_AUTHORITY_SYNC_INTERVAL_SECONDS: ${LEGAL_AUTHORITY_SYNC_INTERVAL_SECONDS:-86400}
+      LEGAL_AUTHORITY_JOB_TIMEOUT_SECONDS: ${LEGAL_AUTHORITY_JOB_TIMEOUT_SECONDS:-21600}
+      LEGAL_AUTHORITY_USCODE_ENABLED: ${LEGAL_AUTHORITY_USCODE_ENABLED:-true}
+      LEGAL_AUTHORITY_USCODE_TITLES: ${LEGAL_AUTHORITY_USCODE_TITLES:-11,15,26,28,29,31,42}
+      LEGAL_AUTHORITY_ECFR_ENABLED: ${LEGAL_AUTHORITY_ECFR_ENABLED:-true}
+      LEGAL_AUTHORITY_ECFR_TITLES: ${LEGAL_AUTHORITY_ECFR_TITLES:-26,42}
+      LEGAL_AUTHORITY_CMS_ENABLED: ${LEGAL_AUTHORITY_CMS_ENABLED:-true}
+      LEGAL_AUTHORITY_BENEFITS_ENABLED: ${LEGAL_AUTHORITY_BENEFITS_ENABLED:-true}
+      LEGAL_AUTHORITY_IRS_ENABLED: ${LEGAL_AUTHORITY_IRS_ENABLED:-true}
+      LEGAL_AUTHORITY_IRS_DAILY_LIMIT: ${LEGAL_AUTHORITY_IRS_DAILY_LIMIT:-12}
+      LEGAL_AUTHORITY_OHIO_ENABLED: ${LEGAL_AUTHORITY_OHIO_ENABLED:-true}
+      LEGAL_AUTHORITY_ND_ENABLED: ${LEGAL_AUTHORITY_ND_ENABLED:-false}
+      OHIO_COURTS_CRAWLER_CONTACT: ${OHIO_COURTS_CRAWLER_CONTACT:?Set the Ohio crawler contact email in .env}
+      OHIO_COURTS_AUTHORIZATION_BASIS: ${OHIO_COURTS_AUTHORIZATION_BASIS:-Direct crawl permission reported by the LegalApp operator; retain correspondence in the production compliance record}
+      OHIO_COURT_CRAWL_DELAY_SECONDS: ${OHIO_COURT_CRAWL_DELAY_SECONDS:-2}
+      OHIO_COURT_MAX_DOWNLOAD_BYTES: ${OHIO_COURT_MAX_DOWNLOAD_BYTES:-52428800}
+      ND_AUTHORITY_CRAWLER_CONTACT: ${ND_AUTHORITY_CRAWLER_CONTACT:-}
+      ND_AUTHORITY_CRAWL_DELAY_SECONDS: ${ND_AUTHORITY_CRAWL_DELAY_SECONDS:-2}
+    volumes:
+      - legal_authority_cache:/data/legal-authority
+    command: ["python", "-m", "mcp_server.authority_scheduler"]
 
   embedding-dispatcher:
     build: ./mcp-server
@@ -135,3 +172,4 @@ services:
 volumes:
   courtlistener_pgdata:
   courtlistener_bulk:
+  legal_authority_cache:

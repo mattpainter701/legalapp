@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<uscDoc xmlns="http://xml.house.gov/schemas/uslm/1.0">
+  <main>
+    <section identifier="/us/usc/t26/s1">
+      <num value="1">§ 1</num>
+      <heading>Tax imposed</heading>
+      <subsection><num>(a)</num><paragraph>There is hereby imposed a tax.</paragraph></subsection>
+    </section>
+    <section identifier="/us/usc/t26/s2A">
+      <num value="2A">§ 2A</num>
+      <heading>Example section</heading>
+      <subsection><paragraph>This is a fixture provision.</paragraph></subsection>
+    </section>
+  </main>
+</uscDoc>
