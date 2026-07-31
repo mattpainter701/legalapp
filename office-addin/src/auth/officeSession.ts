@@ -31,7 +31,7 @@ export class OfficeSession {
       headers: { Accept: 'application/json' },
     })
     if (response.status === 401) return null
-    if (!response.ok) throw new Error(`Clarity session check failed (${response.status})`)
+    if (!response.ok) throw new Error(`WellPled session check failed (${response.status})`)
     return response.json() as Promise<ClaritySessionUser>
   }
 
@@ -70,7 +70,7 @@ export class OfficeSession {
     if (existing) return existing
 
     if (!naaAvailable) {
-      throw new Error('Sign in to Clarity first, or open this add-in in an Office client that supports Nested App Authentication')
+      throw new Error('Sign in to WellPled first, or open this add-in in an Office client that supports Nested App Authentication')
     }
 
     const accessToken = await this.acquireAccessToken()
@@ -83,10 +83,10 @@ export class OfficeSession {
       },
     })
     if (!response.ok) {
-      throw new Error(`Office sign-in could not establish a Clarity session (${response.status})`)
+      throw new Error(`Office sign-in could not establish a WellPled session (${response.status})`)
     }
     const user = await this.currentUser()
-    if (!user) throw new Error('Office sign-in completed without a Clarity session')
+    if (!user) throw new Error('Office sign-in completed without a WellPled session')
     return user
   }
 }

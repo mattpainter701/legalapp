@@ -297,7 +297,7 @@ function AssistantWorkingState({ progress, compact = false }) {
           <Scale className="h-4 w-4 text-brand-gold" strokeWidth={2} />
         </div>
         <div className="min-w-0 text-left">
-          <p className="font-sans text-sm font-semibold text-brand-ink">Clarity Legal is working</p>
+          <p className="font-sans text-sm font-semibold text-brand-ink">WellPled is working</p>
           <p className="text-xs text-brand-muted">{status}</p>
         </div>
         <div className="ml-auto flex items-center gap-1.5" aria-label="Working">
@@ -385,7 +385,7 @@ export default function ChatMessage({ message }) {
         {/* Header */}
         <div className="flex items-center gap-2 mb-6 text-xs font-mono text-brand-muted uppercase tracking-wider border-b border-brand-line pb-4">
           <Scale className="w-4 h-4 text-brand-gold" strokeWidth={2} />
-          <span className="font-bold text-brand-ink">Clarity Legal Analysis</span>
+          <span className="font-bold text-brand-ink">WellPled Analysis</span>
           {timestamp && <span className="ml-auto">{timestamp}</span>}
           <button
             onClick={handleCopy}

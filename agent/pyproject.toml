@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "clarity-agent"
 version = "0.12.0"
-description = "Clarity Legal SMB File Share Relay Agent"
+description = "WellPled SMB File Share Relay Agent"
 requires-python = ">=3.11"
 dependencies = [
     "smbprotocol>=1.16.1",

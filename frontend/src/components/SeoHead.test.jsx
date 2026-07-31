@@ -45,7 +45,7 @@ describe('SeoHead', () => {
     vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
     renderAt('/portal/client/matter?token=do-not-publish')
 
-    await waitFor(() => expect(document.title).toBe('Secure client portal | Clarity Legal'))
+    await waitFor(() => expect(document.title).toBe('Secure client portal | WellPled'))
     expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('noindex'))
     expect(document.querySelector('link[rel="canonical"]')).not.toBeInTheDocument()
     expect(document.head.innerHTML).not.toContain('do-not-publish')

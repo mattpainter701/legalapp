@@ -61,7 +61,7 @@ async def _scan_share(share: dict, ledger: FileLedger, client: SaaSClient, smb_s
 
 async def run_daemon(config: AgentConfig) -> None:
     setup_logging(config.log_level)
-    logger.info("Clarity Agent v%s starting", __version__)
+    logger.info("WellPled Agent v%s starting", __version__)
 
     ledger = FileLedger(config.ledger_path)
     await ledger.init()
@@ -186,7 +186,7 @@ def cmd_status(args) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="clarity-agent", description="Clarity Legal SMB Relay Agent")
+    parser = argparse.ArgumentParser(prog="clarity-agent", description="WellPled SMB Relay Agent")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -194,7 +194,7 @@ def main():
     reg = sub.add_parser("register", help="Register agent with SaaS")
     reg.add_argument("--code", required=True, help="Pairing code from SaaS")
     reg.add_argument("--name", default="Unnamed Agent", help="Agent display name")
-    reg.add_argument("--url", default="https://app.clarity.legal", help="SaaS API URL")
+    reg.add_argument("--url", default="https://legalapp.perevagagroup.com", help="SaaS API URL")
     reg.add_argument("--smb-username", default="", help="SMB username")
     reg.add_argument("--smb-password", default="", help="SMB password")
     reg.add_argument("--smb-domain", default="", help="SMB domain")

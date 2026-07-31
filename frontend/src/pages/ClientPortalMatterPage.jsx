@@ -74,7 +74,7 @@ export default function ClientPortalMatterPage() {
         <div className="max-w-4xl mx-auto px-4 py-5 flex items-center gap-3">
           <ShieldCheck size={26} strokeWidth={1.5} />
           <div>
-            <p className="text-xs uppercase tracking-wide text-white/60 font-sans">Clarity Legal — Client Portal</p>
+            <p className="text-xs uppercase tracking-wide text-white/60 font-sans">WellPled — Client Portal</p>
             <h1 className="font-serif font-bold text-xl">{matter.matter_name}</h1>
           </div>
         </div>

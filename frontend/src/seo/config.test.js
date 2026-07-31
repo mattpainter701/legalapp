@@ -74,8 +74,8 @@ describe('SEO configuration', () => {
   })
 
   it.each([
-    ['/privacy', 'Privacy Policy | Clarity Legal', 'Privacy Policy', 'Terms of Use'],
-    ['/terms', 'Terms of Use | Clarity Legal', 'Terms of Use', 'Privacy Policy'],
+    ['/privacy', 'Privacy Policy | WellPled', 'Privacy Policy', 'Terms of Use'],
+    ['/terms', 'Terms of Use | WellPled', 'Terms of Use', 'Privacy Policy'],
   ])('builds substantive route-correct no-JavaScript HTML for %s', (route, title, heading, otherPolicy) => {
     const base = readFileSync('index.html', 'utf8')
     const html = buildPublicRouteHtml(base, route, 'https://clarity.example')

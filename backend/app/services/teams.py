@@ -264,7 +264,7 @@ async def create_channel(
     token = await _get_token(tenant_id, user_id)
     body = {
         "displayName": name[:50],
-        "description": description or f"Clarity Legal matter channel: {name[:50]}",
+        "description": description or f"WellPled matter channel: {name[:50]}",
         "membershipType": "standard",
     }
     resp = await _graph_request(
@@ -391,6 +391,6 @@ def build_matter_card(
     }
     if deep_link:
         card["actions"] = [
-            {"type": "Action.OpenUrl", "title": "Open in Clarity", "url": deep_link}
+            {"type": "Action.OpenUrl", "title": "Open in WellPled", "url": deep_link}
         ]
     return card

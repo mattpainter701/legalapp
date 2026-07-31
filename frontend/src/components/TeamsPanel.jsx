@@ -120,8 +120,8 @@ export default function TeamsPanel() {
         team_id: selTeam,
         display_name: displayName,
         description: selectedMatter
-          ? `Clarity Legal matter channel for ${matterLabel(selectedMatter)}`
-          : 'Clarity Legal matter channel',
+          ? `WellPled matter channel for ${matterLabel(selectedMatter)}`
+          : 'WellPled matter channel',
       })
       const nextChannels = [...channels.filter((c) => c.id !== channel.id), channel]
       setChannels(nextChannels)

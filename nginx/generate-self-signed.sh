@@ -25,7 +25,7 @@ echo "==> Generating self-signed certificate (RSA 2048, 365-day validity) …"
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout "$SSL_DIR/privkey.pem" \
     -out    "$SSL_DIR/fullchain.pem" \
-    -subj "/C=US/ST=Dev/L=Dev/O=Clarity LegalAI/CN=localhost"
+    -subj "/C=US/ST=Dev/L=Dev/O=WellPled/CN=localhost"
 
 chmod 600 "$SSL_DIR/privkey.pem"
 chmod 644 "$SSL_DIR/fullchain.pem"

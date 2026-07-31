@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from .jetson_worker import load_model
 from .worker_config import DEFAULT_MODEL
 
-app = FastAPI(title="Clarity CourtListener Query Embeddings", version="0.1.0")
+app = FastAPI(title="WellPled CourtListener Query Embeddings", version="0.1.0")
 
 
 class EmbedRequest(BaseModel):

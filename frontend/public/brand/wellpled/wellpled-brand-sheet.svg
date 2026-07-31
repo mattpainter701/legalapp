@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">WellPled brand system</title>
+  <desc id="desc">WellPled logo, palette, typography, messaging, and interface elements.</desc>
+  <defs>
+    <filter id="sheetGrain"><feTurbulence type="fractalNoise" baseFrequency=".82" numOctaves="2" seed="9"/><feComponentTransfer><feFuncA type="table" tableValues="0 .035"/></feComponentTransfer></filter>
+    <clipPath id="artClip"><rect x="1085" y="48" width="467" height="328" rx="16"/></clipPath>
+  </defs>
+  <rect width="1600" height="1000" fill="#F7F3EC"/>
+  <path d="M48 412H1552M48 738H1552M1037 48V952" fill="none" stroke="#D8CEBC"/>
+
+  <text x="48" y="79" fill="#5A7A5C" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3.4">WELLPLED · CORE IDENTITY</text>
+  <image href="wellpled-mark.svg" x="48" y="124" width="210" height="150"/>
+  <text x="286" y="235" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="112" letter-spacing="-4">WellPled</text>
+  <line x1="292" y1="280" x2="356" y2="280" stroke="#B8965A" stroke-width="4"/>
+  <text x="382" y="289" fill="#5A7A5C" font-family="Inter, Arial, sans-serif" font-size="30">Practice, well played.</text>
+  <text x="49" y="351" fill="#2D3F55" font-family="Inter, Arial, sans-serif" font-size="19">Warm authority. Exact context. Calm forward motion.</text>
+
+  <image href="wellpled-hero-editorial.png" x="1085" y="48" width="467" height="328" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>
+  <rect x="1085" y="48" width="467" height="328" rx="16" fill="none" stroke="#CFC4AE"/>
+
+  <text x="48" y="456" fill="#14253B" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">COLOR</text>
+  <g font-family="Inter, Arial, sans-serif">
+    <rect x="48" y="489" width="172" height="166" rx="12" fill="#14253B"/><text x="64" y="626" fill="#F7F3EC" font-size="16" font-weight="600">Midnight Ink</text><text x="64" y="648" fill="#F7F3EC" font-size="13" opacity=".72">#14253B</text>
+    <rect x="236" y="489" width="172" height="166" rx="12" fill="#5A7A5C"/><text x="252" y="626" fill="#FFFDF9" font-size="16" font-weight="600">Verified Sage</text><text x="252" y="648" fill="#FFFDF9" font-size="13" opacity=".78">#5A7A5C</text>
+    <rect x="424" y="489" width="172" height="166" rx="12" fill="#B8965A"/><text x="440" y="626" fill="#14253B" font-size="16" font-weight="600">Decisive Brass</text><text x="440" y="648" fill="#14253B" font-size="13" opacity=".74">#B8965A</text>
+    <rect x="612" y="489" width="172" height="166" rx="12" fill="#FFFDF9" stroke="#D8CEBC"/><text x="628" y="626" fill="#14253B" font-size="16" font-weight="600">Warm White</text><text x="628" y="648" fill="#6A7587" font-size="13">#FFFDF9</text>
+    <rect x="800" y="489" width="172" height="166" rx="12" fill="#E1D9C9"/><text x="816" y="626" fill="#14253B" font-size="16" font-weight="600">Pleading Line</text><text x="816" y="648" fill="#6A7587" font-size="13">#E1D9C9</text>
+  </g>
+
+  <text x="1085" y="456" fill="#14253B" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">MARK BEHAVIOR</text>
+  <rect x="1085" y="489" width="215" height="166" rx="12" fill="#FFFDF9" stroke="#D8CEBC"/>
+  <image href="wellpled-mark.svg" x="1122" y="526" width="141" height="101"/>
+  <rect x="1316" y="489" width="236" height="166" rx="12" fill="#14253B"/>
+  <image href="wellpled-mark-reversed.svg" x="1364" y="526" width="141" height="101"/>
+
+  <text x="48" y="785" fill="#14253B" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">VOICE + TYPE</text>
+  <text x="48" y="855" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="54" letter-spacing="-1.5">Prepared before it matters.</text>
+  <text x="49" y="902" fill="#2D3F55" font-family="Inter, Arial, sans-serif" font-size="19">SOURCE SERIF 4 · Headlines and decisions</text>
+  <text x="49" y="934" fill="#6A7587" font-family="Inter, Arial, sans-serif" font-size="16">Inter · Interface, evidence, ownership, and next actions</text>
+
+  <text x="1085" y="785" fill="#14253B" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">INTERFACE</text>
+  <rect x="1085" y="819" width="195" height="54" rx="10" fill="#14253B"/>
+  <text x="1182.5" y="853" text-anchor="middle" fill="#FFFDF9" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600">See it in practice</text>
+  <rect x="1296" y="819" width="184" height="54" rx="10" fill="#FFFDF9" stroke="#CFC4AE"/>
+  <text x="1388" y="853" text-anchor="middle" fill="#14253B" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600">View the matter</text>
+  <rect x="1085" y="899" width="467" height="53" rx="10" fill="#EFE8DA"/>
+  <rect x="1085" y="899" width="4" height="53" rx="2" fill="#5A7A5C"/>
+  <circle cx="1115" cy="925.5" r="6" fill="#B8965A"/>
+  <text x="1136" y="932" fill="#2D3F55" font-family="Inter, Arial, sans-serif" font-size="16">Every decision keeps its source.</text>
+
+  <rect width="1600" height="1000" fill="#14253B" filter="url(#sheetGrain)" pointer-events="none"/>
+  <rect x="1" y="1" width="1598" height="998" fill="none" stroke="#CFC4AE" stroke-width="2"/>
+</svg>

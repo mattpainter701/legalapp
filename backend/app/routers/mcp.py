@@ -1,4 +1,4 @@
-"""Clarity Legal MCP gateway and compatibility management routes.
+"""WellPled MCP gateway and compatibility management routes.
 
 The official SDK-backed Streamable HTTP transport is ``/api/mcp``. External
 traffic uses scoped ``X-MCP-API-Key`` product credentials; application JWTs are
@@ -107,7 +107,7 @@ def _public_manifest(tools: list[dict]) -> dict:
         "serverInfo": {
             "name": "clarity-legal",
             "version": "1.0.0",
-            "description": "Clarity Legal MCP gateway for legal research and practice tools",
+            "description": "WellPled MCP gateway for legal research and practice tools",
         },
         "capabilities": {"tools": {}},
         "tools": tools,

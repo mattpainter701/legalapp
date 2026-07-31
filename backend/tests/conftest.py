@@ -1,5 +1,5 @@
 """
-Test fixtures for Clarity Legal backend.
+Test fixtures for WellPled backend.
 """
 
 import asyncio

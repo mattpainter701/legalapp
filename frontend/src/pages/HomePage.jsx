@@ -10,6 +10,7 @@ import balancedAccessImg from '../assets/home/balanced-access-record-editorial-v
 import balancedAccessSmallImg from '../assets/home/balanced-access-record-editorial-v1-720.webp'
 import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.webp'
 import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
+import WellPledLogo from '../components/WellPledLogo'
 
 const SKILLS = [
   { icon: Scale, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
@@ -90,7 +91,7 @@ const FEATURES = [
   {
     icon: FolderInput,
     title: 'Drag, drop & file-share access',
-    body: 'Drag files in, or connect enterprise file shares so Clarity reads from the documents your firm already keeps.',
+    body: 'Drag files in, or connect enterprise file shares so WellPled reads from the documents your firm already keeps.',
   },
   {
     icon: ClipboardList,
@@ -242,15 +243,6 @@ function AddonWorkflowPanel({ addon, isOpen }) {
   )
 }
 
-function Logo({ size = 32 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z" fill="#14253B" />
-      <path d="M13 15l2 2 4-4" stroke="#F7F3EC" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
 export default function HomePage() {
   const [expandedAddon, setExpandedAddon] = useState(null)
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
@@ -273,13 +265,8 @@ export default function HomePage() {
       {/* ── Top nav ───────────────────────────────────────────────── */}
       <header className="sticky top-0 z-40 bg-brand-bg/85 backdrop-blur border-b border-brand-line">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <Link to="/" aria-label="Clarity Legal home" className="flex items-center gap-2.5 rounded-lg">
-            <div className="w-8 h-8 bg-brand-bg-soft border border-brand-line rounded-lg flex items-center justify-center shadow-sm">
-              <Logo size={16} />
-            </div>
-            <span className="font-serif font-bold text-[17px] tracking-tight">
-              Clarity <span className="hidden sm:inline">Legal</span>
-            </span>
+          <Link to="/" aria-label="WellPled home" className="rounded-lg">
+            <WellPledLogo compact />
           </Link>
           <nav aria-label="Marketing" className="hidden lg:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
             <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">How it works</a>
@@ -307,16 +294,15 @@ export default function HomePage() {
         <div className="grid lg:grid-cols-[1.02fr_0.98fr] gap-10 xl:gap-16 items-center">
           <div>
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">
-              Firm operations · review-first AI
+              Firm operations · source-aware AI
             </span>
             <h1 className="font-serif font-bold text-[42px] sm:text-[50px] md:text-[58px] leading-[1.02] tracking-tight mt-4">
-              Keep every matter moving—and every{' '}
-              <em className="italic text-brand-accent-2">lawyer in control.</em>
+              Practice,{' '}
+              <em className="italic text-brand-accent-2">well played.</em>
             </h1>
             <p className="text-brand-ink-2 font-sans text-[17px] sm:text-[18px] leading-relaxed mt-5 max-w-xl">
-              Clarity brings intake, matters, documents, tasks, billing, and source-aware
-              AI into one calm workspace—so your team knows what happened, what comes next,
-              and who owns it.
+              Every fact, document, deadline, decision, and next action held in context—so
+              your team can keep work moving without reconstructing the story.
             </p>
             <div className="grid sm:flex sm:flex-wrap items-center gap-3 mt-7">
               <a href={intakeStartUrl} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
@@ -339,7 +325,7 @@ export default function HomePage() {
             <div className="relative bg-brand-surface border border-brand-line rounded-2xl shadow-xl overflow-hidden">
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-brand-line bg-brand-bg-soft/40">
                 <div className="flex items-center gap-2">
-                  <Logo size={16} />
+                  <img src="/brand/wellpled/wellpled-mark.svg" alt="" aria-hidden="true" className="h-5 w-auto" />
                   <span className="font-serif font-semibold text-[14px]">Intake desk</span>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold bg-brand-green/10 text-brand-green border border-brand-green/20">
@@ -707,15 +693,12 @@ export default function HomePage() {
       {/* ── Footer ────────────────────────────────────────────────── */}
       <footer className="border-t border-brand-line">
         <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <Logo size={18} />
-            <span className="font-serif font-bold text-[15px]">Clarity Legal</span>
-          </div>
-          <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Built for deliberate legal work.</p>
+          <WellPledLogo compact />
+          <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Practice, well played.</p>
           <div className="flex items-center gap-4 text-brand-muted font-sans text-[12.5px]">
             <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
             <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
-            <span>© {new Date().getFullYear()} Clarity Legal</span>
+            <span>© {new Date().getFullYear()} WellPled</span>
           </div>
         </div>
       </footer>

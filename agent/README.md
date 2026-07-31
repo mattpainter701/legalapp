@@ -1,6 +1,6 @@
-# Clarity Legal SMB File Share Relay Agent
+# WellPled SMB File Share Relay Agent
 
-On-prem agent that runs on the customer's network, scans SMB/CIFS file shares, and syncs metadata to the Clarity Legal SaaS backend.
+On-prem agent that runs on the customer's network, scans SMB/CIFS file shares, and syncs metadata to the WellPled SaaS backend.
 
 ## Installation
 
@@ -11,7 +11,7 @@ pip install -e .
 ## Configuration
 
 ```bash
-clarity-agent register --code PAIRING_CODE --name "Office Server" --url https://app.clarity.legal
+clarity-agent register --code PAIRING_CODE --name "Office Server" --url https://legalapp.perevagagroup.com
 ```
 
 ## Usage

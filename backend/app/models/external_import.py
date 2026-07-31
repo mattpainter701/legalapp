@@ -162,7 +162,7 @@ class ExternalRawRow(Base):
 
 
 class ExternalRecordLink(Base):
-    """Idempotency/provenance link from a source row to a Clarity record."""
+    """Idempotency/provenance link from a source row to a WellPled record."""
 
     __tablename__ = "external_record_links"
     __table_args__ = (

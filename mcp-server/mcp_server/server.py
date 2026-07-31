@@ -11,7 +11,7 @@ from .query_embeddings import QueryEmbeddingClient
 from .repository import CourtListenerRepository
 from .tools import build_tool_manifest
 
-app = FastAPI(title="Clarity CourtListener MCP", version="0.1.0")
+app = FastAPI(title="WellPled CourtListener MCP", version="0.1.0")
 query_embedder = QueryEmbeddingClient.from_env()
 
 

@@ -51,6 +51,18 @@ describe('HomePage launch routing and claims', () => {
       expect.stringMatching(/^(https:\/\/|mailto:)/),
     )
   })
+
+  it('publishes the WellPled brand and positioning', () => {
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('heading', { level: 1, name: /practice, well played/i })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'WellPled home' })).toBeInTheDocument()
+    expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
+  })
 })
 
 describe('marketing add-on workflows', () => {

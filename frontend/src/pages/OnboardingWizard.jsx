@@ -246,7 +246,7 @@ export default function OnboardingWizard() {
             <div className="bg-brand-surface border border-brand-line rounded-2xl p-8 shadow-sm">
               <h2 className="text-brand-ink font-sans text-lg font-bold mb-1">Connect Your Firm</h2>
               <p className="text-brand-ink-2 font-sans text-sm mb-8">
-                Grant ClarityLegal access to your firm's directory so we can import users
+                Grant WellPled access to your firm's directory so we can import users
                 and sync email. This requires admin consent.
               </p>
 

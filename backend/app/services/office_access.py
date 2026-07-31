@@ -18,7 +18,7 @@ def require_office_globally_enabled() -> None:
 
 
 def require_office_pilot_tenant(tenant_id: UUID) -> None:
-    """Allow only explicitly listed Clarity tenants into the Office pilot.
+    """Allow only explicitly listed WellPled tenants into the Office pilot.
 
     An empty or malformed allowlist denies every tenant. This makes turning on
     the global deployment flag safe before a pilot tenant has been selected.

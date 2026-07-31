@@ -1,6 +1,6 @@
-# Clarity Legal
+# WellPled
 
-Clarity Legal is a multi-tenant, AI-assisted legal operations platform. It
+WellPled is a multi-tenant, AI-assisted legal operations platform. It
 combines caller intake, tasks, matters, document automation, billing, cloud
 integrations, and source-aware legal research in one web application.
 

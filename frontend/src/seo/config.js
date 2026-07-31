@@ -1,11 +1,11 @@
-export const SITE_NAME = 'Clarity Legal'
+export const SITE_NAME = 'WellPled'
 
-export const HOME_TITLE = 'Clarity Legal | Law Firm Operations & Legal AI'
+export const HOME_TITLE = 'WellPled | Law Firm Operations & Legal AI'
 export const HOME_DESCRIPTION =
-  'Clarity Legal helps law firms manage intake, matters, tasks, documents, billing, and source-aware AI-assisted work, with attorney review.'
+  'WellPled helps law firms manage intake, matters, tasks, documents, billing, and source-aware AI-assisted work, with attorney review.'
 
 export const PRIVATE_DESCRIPTION =
-  'Sign in to the private Clarity Legal workspace for your firm.'
+  'Sign in to the private WellPled workspace for your firm.'
 
 export const PUBLIC_ROUTE_META = Object.freeze({
   '/': {
@@ -15,16 +15,16 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
   },
   '/privacy': {
-    title: 'Privacy Policy | Clarity Legal',
+    title: 'Privacy Policy | WellPled',
     description:
-      'Read the Clarity Legal Privacy Policy, including how account and workspace data is collected, used, shared, retained, and protected.',
+      'Read the WellPled Privacy Policy, including how account and workspace data is collected, used, shared, retained, and protected.',
     canonicalPath: '/privacy',
     indexable: true,
   },
   '/terms': {
-    title: 'Terms of Use | Clarity Legal',
+    title: 'Terms of Use | WellPled',
     description:
-      'Read the Clarity Legal Terms of Use, including service responsibilities, acceptable use, AI-assisted features, and account administration.',
+      'Read the WellPled Terms of Use, including service responsibilities, acceptable use, AI-assisted features, and account administration.',
     canonicalPath: '/terms',
     indexable: true,
   },

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">WellPled social card</title>
+  <desc id="desc">WellPled social card with the headline Practice, well played.</desc>
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="2" seed="14" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0" result="mono"/>
+      <feComponentTransfer in="mono"><feFuncA type="table" tableValues="0 .045"/></feComponentTransfer>
+    </filter>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="white" stop-opacity="0"/>
+      <stop offset=".24" stop-color="white" stop-opacity=".15"/>
+      <stop offset=".52" stop-color="white" stop-opacity=".92"/>
+      <stop offset="1" stop-color="white"/>
+    </linearGradient>
+    <mask id="artFade"><rect width="1200" height="630" fill="url(#fade)"/></mask>
+  </defs>
+  <rect width="1200" height="630" fill="#F7F3EC"/>
+  <image href="wellpled-hero-editorial.png" x="455" y="0" width="745" height="630" preserveAspectRatio="xMidYMid slice" mask="url(#artFade)"/>
+  <path d="M0 528H1200M718 0V630M1110 0V630" fill="none" stroke="#D8CEBC" stroke-width="1" opacity=".75"/>
+  <rect x="72" y="56" width="82" height="59" fill="#F7F3EC" opacity=".96"/>
+  <image href="wellpled-mark.svg" x="72" y="58" width="82" height="59"/>
+  <text x="174" y="104" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="38" letter-spacing="-1.1">WellPled</text>
+  <text x="72" y="174" fill="#5A7A5C" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="3.6">LAW FIRM OPERATIONS · SOURCE-AWARE AI</text>
+  <line x1="72" y1="209" x2="142" y2="209" stroke="#B8965A" stroke-width="4"/>
+  <text x="72" y="343" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="82" letter-spacing="-2.5">Practice,</text>
+  <text x="72" y="435" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="82" letter-spacing="-2.5">well played.</text>
+  <text x="74" y="495" fill="#2D3F55" font-family="Inter, Arial, sans-serif" font-size="22">Work in context. Move with confidence.</text>
+  <rect width="1200" height="630" fill="#14253B" filter="url(#grain)" pointer-events="none"/>
+  <rect x="1" y="1" width="1198" height="628" fill="none" stroke="#CFC4AE" stroke-width="2"/>
+</svg>

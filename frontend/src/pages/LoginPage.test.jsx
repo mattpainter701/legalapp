@@ -25,6 +25,13 @@ describe('login', () => {
     expect(await axe(container)).toHaveNoViolations()
   })
 
+  it('presents WellPled as the firm source of truth', () => {
+    render(<MemoryRouter><LoginPage /></MemoryRouter>)
+    expect(screen.getByText('WellPled')).toBeInTheDocument()
+    expect(screen.getByText(/source of truth for matters/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
+  })
+
   it('does not misreport a service outage as bad credentials', async () => {
     login.mockRejectedValueOnce(new Error('Network Error'))
     const user = userEvent.setup()

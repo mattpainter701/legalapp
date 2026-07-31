@@ -77,7 +77,7 @@ send_error_notification() {
         {
             echo "To: $NOTIFY_EMAIL"
             echo "From: clarity-legal-noreply@localhost"
-            echo "Subject: [Clarity Legal] $subject"
+            echo "Subject: [WellPled] $subject"
             echo ""
             echo "$body"
             echo ""
@@ -107,7 +107,7 @@ trap cleanup EXIT
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-log_info "=== Clarity Legal Daily Update: $TODAY ==="
+log_info "=== WellPled Daily Update: $TODAY ==="
 
 # Create directories
 mkdir -p "$LOG_DIR" "$DOWNLOAD_DIR"

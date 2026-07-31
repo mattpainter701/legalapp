@@ -120,7 +120,7 @@ _BASE_HTML = """\
 <div class="wrapper">
   {content}
   <div class="footer">
-    Clarity Legal &bull; This is an automated notification &bull;
+    WellPled &bull; This is an automated notification &bull;
     {timestamp}
   </div>
 </div>
@@ -179,7 +179,7 @@ def _build_renewal_alert_html(alerts: List[dict]) -> str:
 
     content = f"""
     <div class="header">
-      <h1>Clarity Legal &mdash; Renewal Alerts</h1>
+      <h1>WellPled &mdash; Renewal Alerts</h1>
       <p>Contracts requiring attention within the next 90 days</p>
     </div>
     <div class="body">
@@ -220,7 +220,7 @@ def _build_agent_digest_html(agent_name: str, digest_markdown: str) -> str:
 
     content = f"""
     <div class="header">
-      <h1>Clarity Legal &mdash; {agent_name}</h1>
+      <h1>WellPled &mdash; {agent_name}</h1>
       <p>Automated digest &bull; Generated {now_str}</p>
     </div>
     <div class="body">
@@ -274,7 +274,7 @@ def _build_oc_status_html(
 
     content = f"""
     <div class="header">
-      <h1>Clarity Legal &mdash; Weekly Portfolio Status</h1>
+      <h1>WellPled &mdash; Weekly Portfolio Status</h1>
       <p>{tenant_name} &bull; {now_str}</p>
     </div>
     <div class="body">
@@ -490,7 +490,7 @@ class EmailService:
             logger.info("send_renewal_alert: no alerts to send to %s", recipient)
             return EmailDeliveryResult.NOT_REQUIRED
 
-        subject = f"Clarity Legal — {len(alerts)} Contract Renewal Alert(s)"
+        subject = f"WellPled — {len(alerts)} Contract Renewal Alert(s)"
         html_body = _build_renewal_alert_html(alerts)
         text_body = self._renewal_text_fallback(alerts)
 
@@ -503,7 +503,7 @@ class EmailService:
         Send an agent digest email.
         digest_html may be markdown text — it will be rendered to HTML.
         """
-        subject = f"Clarity Legal — {agent_name} Weekly Digest"
+        subject = f"WellPled — {agent_name} Weekly Digest"
         html_body = _build_agent_digest_html(agent_name, digest_html)
         text_body = f"{agent_name} Weekly Digest\n\n{digest_html}"
 
@@ -520,7 +520,7 @@ class EmailService:
         stale_matters: List[dict],
     ) -> EmailDeliveryResult:
         """Send weekly OC portfolio status email."""
-        subject = f"Clarity Legal — Weekly Portfolio Status: {tenant_name}"
+        subject = f"WellPled — Weekly Portfolio Status: {tenant_name}"
         html_body = _build_oc_status_html(
             tenant_name,
             total_active,
@@ -563,7 +563,7 @@ class EmailService:
         now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
         content = f"""
         <div class="header">
-          <h1>Clarity Legal &mdash; Task Reminder</h1>
+          <h1>WellPled &mdash; Task Reminder</h1>
           <p>This task is due soon &bull; {now_str}</p>
         </div>
         <div class="body">
@@ -630,7 +630,7 @@ class EmailService:
 
         content = f"""
         <div class="header">
-          <h1>Clarity Legal &mdash; Task Assigned</h1>
+          <h1>WellPled &mdash; Task Assigned</h1>
           <p>A task has been assigned to you &bull; {now_str}</p>
         </div>
         <div class="body">
@@ -655,7 +655,7 @@ class EmailService:
             </tbody>
           </table>
           <p style="margin-top:20px; font-size:13px; color:#555;">
-            Open Clarity Legal to review and complete this task.
+            Open WellPled to review and complete this task.
           </p>
         </div>
         """
@@ -730,7 +730,7 @@ class EmailService:
 
     @staticmethod
     def _renewal_text_fallback(alerts: List[dict]) -> str:
-        lines = ["Clarity Legal — Renewal Alerts\n"]
+        lines = ["WellPled — Renewal Alerts\n"]
         for a in alerts:
             lines.append(
                 f"  {a.get('contract_name', '?')} / {a.get('vendor', '?')} "
@@ -751,7 +751,7 @@ async def send_portal_invite(
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     content = f"""
     <div class="header">
-      <h1>Clarity Legal — Mediation Portal</h1>
+      <h1>WellPled — Mediation Portal</h1>
       <p>You've been invited to a secure mediation workspace</p>
     </div>
     <div class="body">
@@ -774,12 +774,12 @@ async def send_portal_invite(
     """
     html_body = _BASE_HTML.format(content=content, timestamp=now_str)
     text_body = (
-        f"You've been invited to the Clarity Legal mediation portal for "
+        f"You've been invited to the WellPled mediation portal for "
         f"'{case_name}'.\n\nAccess it here: {invite_url}\n"
     )
     return await email_service.send_email(
         to=[to_email],
-        subject=f"Clarity Legal — Mediation Portal Invitation: {case_name}",
+        subject=f"WellPled — Mediation Portal Invitation: {case_name}",
         html_body=html_body,
         text_body=text_body,
     )
@@ -792,7 +792,7 @@ async def send_client_portal_invite(
     now_str = datetime.now(timezone.utc).strftime("%B %d, %Y %H:%M UTC")
     content = f"""
     <div class="header">
-      <h1>Clarity Legal — Client Portal</h1>
+      <h1>WellPled — Client Portal</h1>
       <p>You've been invited to your secure matter workspace</p>
     </div>
     <div class="body">
@@ -815,12 +815,12 @@ async def send_client_portal_invite(
     """
     html_body = _BASE_HTML.format(content=content, timestamp=now_str)
     text_body = (
-        f"You've been invited to the Clarity Legal client portal for "
+        f"You've been invited to the WellPled client portal for "
         f"'{matter_name}'.\n\nAccess it here: {invite_url}\n"
     )
     return await email_service.send_email(
         to=[to_email],
-        subject=f"Clarity Legal — Client Portal Invitation: {matter_name}",
+        subject=f"WellPled — Client Portal Invitation: {matter_name}",
         html_body=html_body,
         text_body=text_body,
     )

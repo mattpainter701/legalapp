@@ -8,9 +8,9 @@
 
   <Id>f4a8c2e1-3b7d-4f9a-8c5e-2d1f6a0b9e34</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>Clarity Legal</ProviderName>
+  <ProviderName>WellPled</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="Clarity Legal" />
+  <DisplayName DefaultValue="WellPled" />
   <Description DefaultValue="AI-powered legal research and drafting assistant for Microsoft Word" />
   <IconUrl DefaultValue="https://localhost:3001/assets/icon-32.png" />
   <HighResolutionIconUrl DefaultValue="https://localhost:3001/assets/icon-64.png" />
@@ -82,14 +82,14 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3001/taskpane.html" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="Get started with Clarity Legal" />
-        <bt:String id="CommandsGroup.Label" DefaultValue="Clarity Legal" />
-        <bt:String id="OpenTaskpane.Label" DefaultValue="Open Clarity Legal" />
-        <bt:String id="OpenTaskpane.SupertipTitle" DefaultValue="Open Clarity Legal" />
+        <bt:String id="GetStarted.Title" DefaultValue="Get started with WellPled" />
+        <bt:String id="CommandsGroup.Label" DefaultValue="WellPled" />
+        <bt:String id="OpenTaskpane.Label" DefaultValue="Open WellPled" />
+        <bt:String id="OpenTaskpane.SupertipTitle" DefaultValue="Open WellPled" />
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="GetStarted.Description" DefaultValue="Use AI-powered legal research and drafting directly in Word." />
-        <bt:String id="OpenTaskpane.SupertipDescription" DefaultValue="Open the Clarity Legal panel for legal research and document drafting." />
+        <bt:String id="OpenTaskpane.SupertipDescription" DefaultValue="Open the WellPled panel for legal research and document drafting." />
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

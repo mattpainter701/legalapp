@@ -15,7 +15,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .masthead { display: flex; align-items: center; gap: 11px; margin-bottom: 16px; }
 .masthead h1 { margin: 0; font-family: Georgia, serif; font-size: 21px; }
 .masthead p { margin: 2px 0 0; color: #647068; font-size: 12px; }
-.mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: white; background: #173f35; font: 700 18px Georgia, serif; }
+.mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: #f7f3ec; background: #14253b; font: 700 12px Georgia, serif; letter-spacing: -.04em; }
 .card { margin: 0 0 12px; padding: 15px; border: 1px solid #d9d4c8; border-radius: 12px; background: #fffefa; box-shadow: 0 3px 14px rgba(31, 45, 38, .05); }
 .hidden { display: none !important; }
 .row { display: flex; align-items: center; gap: 10px; }

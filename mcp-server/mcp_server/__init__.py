@@ -1,4 +1,4 @@
-"""CourtListener-backed MCP server for Clarity Legal."""
+"""CourtListener-backed MCP server for WellPled."""
 
 __all__ = ["__version__"]
 

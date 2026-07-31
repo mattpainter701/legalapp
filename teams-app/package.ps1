@@ -1,10 +1,12 @@
 param(
   [string]$MicrosoftClientId = $env:MICROSOFT_CLIENT_ID,
-  [string]$TeamsAppId = "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22"
+  [string]$TeamsAppId = "b7aef9aa-6b66-4cde-8cf8-4a251e2f8f22",
+  [string]$PublicHost = "legalapp.perevagagroup.com"
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$AppOrigin = "https://$PublicHost"
 
 if (-not $MicrosoftClientId) {
   $envPath = Join-Path (Split-Path -Parent $Root) ".env"
@@ -27,17 +29,17 @@ $manifest = [ordered]@{
   id = $TeamsAppId
   developer = [ordered]@{
     name = "Perevaga Group"
-    websiteUrl = "https://legalapp.perevagagroup.com"
-    privacyUrl = "https://legalapp.perevagagroup.com/privacy"
-    termsOfUseUrl = "https://legalapp.perevagagroup.com/terms"
+    websiteUrl = $AppOrigin
+    privacyUrl = "$AppOrigin/privacy"
+    termsOfUseUrl = "$AppOrigin/terms"
   }
   name = [ordered]@{
-    short = "Clarity Legal"
-    full = "Clarity Legal"
+    short = "WellPled"
+    full = "WellPled"
   }
   description = [ordered]@{
-    short = "Clarity Legal workspace for Microsoft Teams."
-    full = "Clarity Legal matter, calendar, and channel workspace for Microsoft Teams."
+    short = "WellPled workspace for Microsoft Teams."
+    full = "WellPled matter, calendar, and channel workspace for Microsoft Teams."
   }
   icons = [ordered]@{
     color = "color.png"
@@ -47,23 +49,23 @@ $manifest = [ordered]@{
   staticTabs = @(
     [ordered]@{
       entityId = "clarity-legal-personal"
-      name = "Clarity Legal"
-      contentUrl = "https://legalapp.perevagagroup.com/teams"
-      websiteUrl = "https://legalapp.perevagagroup.com/teams"
+      name = "WellPled"
+      contentUrl = "$AppOrigin/teams"
+      websiteUrl = "$AppOrigin/teams"
       scopes = @("personal")
     }
   )
   configurableTabs = @(
     [ordered]@{
-      configurationUrl = "https://legalapp.perevagagroup.com/teams/config"
+      configurationUrl = "$AppOrigin/teams/config"
       canUpdateConfiguration = $true
       scopes = @("team")
     }
   )
-  validDomains = @("legalapp.perevagagroup.com")
+  validDomains = @($PublicHost)
   webApplicationInfo = [ordered]@{
     id = $MicrosoftClientId
-    resource = "api://legalapp.perevagagroup.com/$MicrosoftClientId"
+    resource = "api://$PublicHost/$MicrosoftClientId"
   }
 }
 
@@ -71,32 +73,24 @@ $manifest | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $Root "manif
 
 Add-Type -AssemblyName System.Drawing
 
-function New-TeamsIcon {
+function New-TeamsOutlineIcon {
   param(
     [string]$Path,
-    [int]$Size,
-    [bool]$Outline
+    [int]$Size
   )
   $bitmap = New-Object System.Drawing.Bitmap $Size, $Size
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
   $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $graphics.Clear([System.Drawing.Color]::Transparent)
 
-  if (-not $Outline) {
-    $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(31, 41, 55))
-    $graphics.FillRectangle($brush, 0, 0, $Size, $Size)
-    $brush.Dispose()
-    $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
-  } else {
-    $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
-  }
+  $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
 
-  $fontSize = [Math]::Floor($Size * 0.42)
-  $font = New-Object System.Drawing.Font "Arial", $fontSize, ([System.Drawing.FontStyle]::Bold), ([System.Drawing.GraphicsUnit]::Pixel)
+  $fontSize = [Math]::Floor($Size * 0.34)
+  $font = New-Object System.Drawing.Font "Georgia", $fontSize, ([System.Drawing.FontStyle]::Bold), ([System.Drawing.GraphicsUnit]::Pixel)
   $format = New-Object System.Drawing.StringFormat
   $format.Alignment = [System.Drawing.StringAlignment]::Center
   $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-  $graphics.DrawString("CL", $font, $textBrush, ([System.Drawing.RectangleF]::new(0, 0, $Size, $Size)), $format)
+  $graphics.DrawString("WP", $font, $textBrush, ([System.Drawing.RectangleF]::new(0, 0, $Size, $Size)), $format)
   $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
   $graphics.Dispose()
   $bitmap.Dispose()
@@ -104,10 +98,11 @@ function New-TeamsIcon {
   $textBrush.Dispose()
 }
 
-New-TeamsIcon -Path (Join-Path $Root "color.png") -Size 192 -Outline $false
-New-TeamsIcon -Path (Join-Path $Root "outline.png") -Size 32 -Outline $true
+$colorSource = Join-Path (Split-Path -Parent $Root) "frontend/public/icons/icon-192x192.png"
+Copy-Item -LiteralPath $colorSource -Destination (Join-Path $Root "color.png") -Force
+New-TeamsOutlineIcon -Path (Join-Path $Root "outline.png") -Size 32
 
-$zip = Join-Path $Root "clarity-legal-teams.zip"
+$zip = Join-Path $Root "wellpled-teams.zip"
 if (Test-Path $zip) {
   Remove-Item -LiteralPath $zip
 }

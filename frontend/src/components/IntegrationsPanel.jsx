@@ -135,7 +135,7 @@ function Tabs3ImportPanel() {
             className="w-full px-3 py-2 bg-brand-bg border border-brand-line rounded-lg text-brand-ink font-sans text-sm focus:outline-none focus:ring-2 focus:ring-brand-ink/20"
           >
             <option value="tabs3_reference">Tabs3 reference</option>
-            <option value="clarity_native">Clarity native</option>
+            <option value="clarity_native">WellPled native</option>
             <option value="qbo">QuickBooks Online</option>
           </select>
         </label>

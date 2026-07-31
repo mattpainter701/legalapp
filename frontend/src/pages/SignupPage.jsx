@@ -59,7 +59,7 @@ export default function SignupPage() {
             and Zoom Phone are configured before launch.
           </p>
           <a href={contactUrl} className="mt-6 inline-flex rounded-lg bg-brand-accent px-5 py-3 text-sm font-medium text-white hover:bg-brand-accent-2">
-            Contact the Clarity team
+            Contact the WellPled team
           </a>
           <p className="mt-5 text-sm text-brand-muted">
             Already have an account?{' '}

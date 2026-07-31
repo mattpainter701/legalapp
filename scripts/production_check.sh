@@ -311,10 +311,10 @@ if ! timeout 15 openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 
 fi
 
 if ((${#failures[@]})); then
-  message="Clarity Legal production check FAILED on $(hostname): $(IFS='; '; echo "${failures[*]}")"
+  message="WellPled production check FAILED on $(hostname): $(IFS='; '; echo "${failures[*]}")"
   state="failed"
 else
-  message="Clarity Legal production check recovered/healthy on $(hostname)."
+  message="WellPled production check recovered/healthy on $(hostname)."
   state="healthy"
 fi
 

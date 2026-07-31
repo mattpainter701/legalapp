@@ -53,7 +53,7 @@ def _decrypt(ciphertext: str) -> str:
 
 @dataclass
 class AgentConfig:
-    saas_url: str = "https://app.clarity.legal"
+    saas_url: str = "https://legalapp.perevagagroup.com"
     api_key: str = ""
     agent_id: str = ""
     smb_username: str = ""

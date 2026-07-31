@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { loginMicrosoft, loginGoogle, login } from '../api'
 import { useAuth } from '../App'
 import FormField from '../components/form/FormField'
+import WellPledLogo from '../components/WellPledLogo'
 
 function MicrosoftIcon() {
   return (
@@ -84,33 +85,9 @@ export default function LoginPage() {
       <div className="relative z-10 bg-brand-surface rounded-2xl shadow-xl border border-brand-line w-full max-w-md px-10 py-12">
         {/* Logo / Branding */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-brand-bg-soft border border-brand-line rounded-2xl mb-6 relative shadow-sm">
-            <svg
-              width="32"
-              height="32"
-              viewBox="0 0 32 32"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M16 4L6 8v8c0 5.55 4.27 10.74 10 12 5.73-1.26 10-6.45 10-12V8L16 4z"
-                fill="#14253B"
-              />
-              <path
-                d="M13 15l2 2 4-4"
-                stroke="#F7F3EC"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-brand-accent border-2 border-brand-surface rounded-full"></div>
-          </div>
-          <h1 className="text-3xl font-serif text-brand-ink tracking-tight mb-3">
-            Clarity Legal
-          </h1>
+          <WellPledLogo showTagline className="justify-center" />
           <p className="text-brand-ink-2 text-sm leading-relaxed font-sans max-w-[280px] mx-auto">
-            Warm, exact, and secure AI assistance for the modern law practice.
+            Your firm’s source of truth for matters, documents, deadlines, and next actions.
           </p>
         </div>
 
