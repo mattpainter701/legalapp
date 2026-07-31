@@ -44,7 +44,8 @@ def partition_sql(corpus: str = "opinion_chunks") -> str:
                    CONCAT(
                        '[', COALESCE(d.jurisdiction, 'unknown'), '] ',
                        '[', d.authority_tier, '] ', d.title, E'\n', c.content
-                   ) AS content
+                   ) AS content,
+                   d.source_key
             FROM legal_document_chunks c
             JOIN legal_documents d ON d.id = c.document_id
             JOIN legal_sources s ON s.source_key = d.source_key

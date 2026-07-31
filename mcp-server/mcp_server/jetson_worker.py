@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+from collections import Counter
 from typing import Iterable
 
 import psycopg2.extras
@@ -79,6 +80,17 @@ def process_once(config: WorkerConfig, model) -> int:
                 psycopg2.extras.execute_batch(
                     cur, update_sql(corpus), updates, page_size=100
                 )
+                if corpus == "legal_document_chunks":
+                    for source_key, embedded_count in Counter(
+                        row[2] for row in rows
+                    ).items():
+                        cur.execute(
+                            """UPDATE legal_sources
+                               SET embedded_chunk_count = embedded_chunk_count + %s,
+                                   updated_at = now()
+                               WHERE source_key = %s""",
+                            [embedded_count, source_key],
+                        )
                 conn.commit()
                 return len(updates)
         return 0
@@ -93,7 +105,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="mxbai")
     parser.add_argument("--dim", type=int, default=1024)
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--loop-interval", type=int, default=30)
+    parser.add_argument(
+        "--loop-interval",
+        type=int,
+        default=0,
+        help="Optional delay between successful batches; zero drains continuously",
+    )
     return parser.parse_args()
 
 
@@ -117,7 +134,8 @@ def main() -> None:
         print(f"worker={config.worker_id} embedded={count}", flush=True)
         if not args.loop or count == 0:
             break
-        time.sleep(args.loop_interval)
+        if args.loop_interval > 0:
+            time.sleep(args.loop_interval)
 
 
 if __name__ == "__main__":

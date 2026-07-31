@@ -532,6 +532,7 @@ def test_worker_config_locks_mxbai_1024_and_partition_query():
     assert "legal_document_chunks" in authority_sql
     assert "legal_documents" in authority_sql
     assert "authority_tier" in authority_sql
+    assert "d.source_key" in authority_sql
 
 
 def test_dispatcher_supports_indexed_jetson_env(monkeypatch):
