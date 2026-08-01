@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import UpgradeModal from './UpgradeModal'
 import { canAccessModuleList } from '../moduleAccess'
-import WellPledLogo from './WellPledLogo'
+import LawHandLogo from './LawHandLogo'
 
 const NAV_GROUPS = [
   {
@@ -181,8 +181,8 @@ export default function Sidebar({
         <div className={`h-16 flex items-center border-b border-brand-line shrink-0 ${
           desktopCollapsed ? 'px-4 lg:justify-center lg:px-2' : 'px-4'
         }`}>
-          <WellPledLogo markOnly className={`mr-2 ${desktopCollapsed ? 'lg:mr-0' : ''}`} />
-          <span className={`font-serif font-semibold text-lg tracking-tight text-brand-ink flex-1 ${desktopCollapsed ? 'lg:hidden' : ''}`}>WellPled</span>
+          <LawHandLogo markOnly className={`mr-2 ${desktopCollapsed ? 'lg:mr-0' : ''}`} />
+          <span className={`font-serif font-semibold text-lg tracking-tight text-brand-ink flex-1 ${desktopCollapsed ? 'lg:hidden' : ''}`}>LawHand</span>
           <button
             type="button"
             className="hidden lg:inline-flex tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink"

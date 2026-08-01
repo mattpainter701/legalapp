@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" role="img" aria-labelledby="title desc">
+  <title id="title">LawHand email header</title>
+  <desc id="desc">A restrained carbon LawHand email header.</desc>
+  <rect width="1200" height="280" fill="#161817"/>
+  <image href="lawhand-mark-reversed.svg" x="64" y="76" width="128" height="128"/>
+  <text x="224" y="169" fill="#F4F0E8" font-family="Manrope, Inter, Arial, sans-serif" font-size="82" font-weight="500" letter-spacing="-4">lawhand</text>
+  <text x="1136" y="154" fill="#F4F0E8" opacity=".62" font-family="Manrope, Inter, Arial, sans-serif" font-size="20" text-anchor="end">The whole matter, in hand.</text>
+</svg>

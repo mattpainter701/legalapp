@@ -10,22 +10,22 @@
                       "termsOfUseUrl":  "https://legalapp.perevagagroup.com/terms"
                   },
     "name":  {
-                 "short":  "WellPled",
-                 "full":  "WellPled"
+                 "short":  "LawHand",
+                 "full":  "LawHand"
              },
     "description":  {
-                        "short":  "WellPled workspace for Microsoft Teams.",
-                        "full":  "WellPled matter, calendar, and channel workspace for Microsoft Teams."
+                        "short":  "LawHand workspace for Microsoft Teams.",
+                        "full":  "LawHand matter, calendar, and channel workspace for Microsoft Teams."
                     },
     "icons":  {
                   "color":  "color.png",
                   "outline":  "outline.png"
               },
-    "accentColor":  "1F2937",
+    "accentColor":  "161817",
     "staticTabs":  [
                        {
                            "entityId":  "clarity-legal-personal",
-                           "name":  "WellPled",
+                           "name":  "LawHand",
                            "contentUrl":  "https://legalapp.perevagagroup.com/teams",
                            "websiteUrl":  "https://legalapp.perevagagroup.com/teams",
                            "scopes":  [

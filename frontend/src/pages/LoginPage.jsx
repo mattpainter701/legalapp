@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { loginMicrosoft, loginGoogle, login } from '../api'
 import { useAuth } from '../App'
 import FormField from '../components/form/FormField'
-import WellPledLogo from '../components/WellPledLogo'
+import LawHandLogo from '../components/LawHandLogo'
 
 function MicrosoftIcon() {
   return (
@@ -85,7 +85,7 @@ export default function LoginPage() {
       <div className="relative z-10 bg-brand-surface rounded-2xl shadow-xl border border-brand-line w-full max-w-md px-10 py-12">
         {/* Logo / Branding */}
         <div className="text-center mb-10">
-          <WellPledLogo showTagline className="justify-center" />
+          <LawHandLogo showTagline className="justify-center" />
           <p className="text-brand-ink-2 text-sm leading-relaxed font-sans max-w-[280px] mx-auto">
             Your firm’s source of truth for matters, documents, deadlines, and next actions.
           </p>

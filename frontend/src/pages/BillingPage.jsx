@@ -77,7 +77,7 @@ export default function BillingPage({ embedded = false }) {
           <div>
             <h1 className="text-2xl font-bold text-brand-ink font-serif">Subscription Billing</h1>
             <p className="text-sm text-brand-muted mt-1 font-sans">
-              Manage the firm's WellPled subscription and payment method.
+              Manage the firm's LawHand subscription and payment method.
             </p>
           </div>
           {!embedded && (

@@ -15,7 +15,7 @@ from app.database import Base
 
 
 class TeamsNotificationSetting(Base):
-    """Routes a WellPled event type to a Teams channel for a tenant.
+    """Routes a LawHand event type to a Teams channel for a tenant.
 
     A row with ``matter_id IS NULL`` is the default route for the event type
     (applies to all matters that have no matter-specific override). Tenant

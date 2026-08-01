@@ -56,7 +56,7 @@ describe('plan signup', () => {
     )
 
     expect(screen.getByRole('heading', { name: 'Request access' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Contact the WellPled team' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Contact the LawHand team' })).toHaveAttribute(
       'href',
       expect.stringMatching(/^(https:\/\/|mailto:)/),
     )

@@ -214,7 +214,7 @@ export default function PluginsPage() {
             Back to Chat
           </button>
           <div className="h-4 w-px bg-brand-line"></div>
-          <span className="font-serif font-semibold text-lg text-brand-ink">WellPled</span>
+          <span className="font-serif font-semibold text-lg text-brand-ink">LawHand</span>
         </div>
       </div>
 

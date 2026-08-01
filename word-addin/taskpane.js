@@ -1,5 +1,5 @@
 /**
- * WellPled - Word Add-in Task Pane
+ * LawHand - Word Add-in Task Pane
  * Vanilla JS implementation for Office.js
  */
 
@@ -428,7 +428,7 @@ function openAuthPopup(url) {
   var top = (screen.height - height) / 2;
   var popup = window.open(
     url,
-    'WellPledAuth',
+    'LawHandAuth',
     'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top
   );
 

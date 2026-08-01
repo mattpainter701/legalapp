@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # Microsoft 365 Office add-in. Fail closed until the Entra exposed API
     # scope and production manifests are configured.
     OFFICE_ASSISTANT_ENABLED: bool = False
-    # Comma-separated WellPled tenant UUIDs. Empty or malformed denies every
+    # Comma-separated LawHand tenant UUIDs. Empty or malformed denies every
     # tenant even when the global switch is enabled.
     OFFICE_ASSISTANT_PILOT_TENANT_IDS: str = ""
     OFFICE_ENTRA_CLIENT_ID: str = ""
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # outbound Adaptive Card notifications). When False the Teams admin tab and
     # all /api/integrations/teams endpoints are gated off regardless of consent.
     TEAMS_FEATURE_ENABLED: bool = True
-    # GUID of the published WellPled Teams app (manifest "id"). Used to
+    # GUID of the published LawHand Teams app (manifest "id"). Used to
     # build channel/tab deep links. Empty until the shared app is published.
     TEAMS_APP_ID: str = ""
 
@@ -234,7 +234,7 @@ class Settings(BaseSettings):
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
-    EMAIL_FROM: str = "noreply@wellpled.local"
+    EMAIL_FROM: str = "noreply@lawhand.local"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 
     # Never set True in production — enables /dev/* endpoints

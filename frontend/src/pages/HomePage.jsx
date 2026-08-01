@@ -1,19 +1,19 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  ShieldCheck, BadgeCheck, Scale, Lock, Landmark, Building2, UserCircle,
+  ShieldCheck, BadgeCheck, Files, Lock, Landmark, Building2, UserCircle,
   Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
-  Gavel, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
+  Search, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
   PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
 } from 'lucide-react'
 import balancedAccessImg from '../assets/home/balanced-access-record-editorial-v1-1280.webp'
 import balancedAccessSmallImg from '../assets/home/balanced-access-record-editorial-v1-720.webp'
 import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.webp'
 import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
-import WellPledLogo from '../components/WellPledLogo'
+import LawHandLogo from '../components/LawHandLogo'
 
 const SKILLS = [
-  { icon: Scale, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
+  { icon: Files, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
   { icon: Lock, name: 'Privacy Legal', description: 'DPA review, DSAR responses, Privacy Impact Assessments' },
   { icon: Landmark, name: 'Litigation Legal', description: 'Matter intake, portfolio management, demand letters, claim charts' },
   { icon: Building2, name: 'Corporate Legal', description: 'M&A diligence, closing checklists, entity compliance' },
@@ -79,7 +79,7 @@ const HOW = [
 
 const FEATURES = [
   {
-    icon: Gavel,
+    icon: Search,
     title: 'Source-linked legal research',
     body: 'When public-law sources are configured, research can include citations and confidence labels for attorney verification.',
   },
@@ -91,7 +91,7 @@ const FEATURES = [
   {
     icon: FolderInput,
     title: 'Drag, drop & file-share access',
-    body: 'Drag files in, or connect enterprise file shares so WellPled reads from the documents your firm already keeps.',
+    body: 'Drag files in, or connect enterprise file shares so LawHand reads from the documents your firm already keeps.',
   },
   {
     icon: ClipboardList,
@@ -246,9 +246,6 @@ function AddonWorkflowPanel({ addon, isOpen }) {
 export default function HomePage() {
   const [expandedAddon, setExpandedAddon] = useState(null)
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
-  const intakeStartUrl = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
-    ? '/signup?plan=intake-only'
-    : contactUrl
   const scrollTo = (id) => (e) => {
     e.preventDefault()
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -265,8 +262,8 @@ export default function HomePage() {
       {/* ── Top nav ───────────────────────────────────────────────── */}
       <header className="sticky top-0 z-40 bg-brand-bg/85 backdrop-blur border-b border-brand-line">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <Link to="/" aria-label="WellPled home" className="rounded-lg">
-            <WellPledLogo compact />
+          <Link to="/" aria-label="LawHand home" className="rounded-lg">
+            <LawHandLogo compact />
           </Link>
           <nav aria-label="Marketing" className="hidden lg:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
             <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">How it works</a>
@@ -279,10 +276,10 @@ export default function HomePage() {
               Sign in
             </Link>
             <a href={contactUrl} className="hidden sm:inline-flex min-h-11 items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
-              Request a walkthrough
+              Book a demo
             </a>
             <a href={contactUrl} className="inline-flex sm:hidden min-h-11 items-center px-3 py-2 bg-brand-ink text-white text-[13px] font-sans font-semibold rounded-xl">
-              Get started
+              Book demo
             </a>
           </div>
         </div>
@@ -294,28 +291,26 @@ export default function HomePage() {
         <div className="grid lg:grid-cols-[1.02fr_0.98fr] gap-10 xl:gap-16 items-center">
           <div>
             <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">
-              Firm operations · source-aware AI
+              One source of truth for every matter
             </span>
-            <h1 className="font-serif font-bold text-[42px] sm:text-[50px] md:text-[58px] leading-[1.02] tracking-tight mt-4">
-              Practice,{' '}
-              <em className="italic text-brand-accent-2">well played.</em>
+            <h1 className="max-w-xl font-serif font-medium text-[52px] sm:text-[64px] md:text-[76px] leading-[0.98] tracking-[-0.06em] mt-4">
+              The whole matter, in hand.
             </h1>
             <p className="text-brand-ink-2 font-sans text-[17px] sm:text-[18px] leading-relaxed mt-5 max-w-xl">
-              Every fact, document, deadline, decision, and next action held in context—so
-              your team can keep work moving without reconstructing the story.
+              Every fact, deadline, document, and decision—connected in one living record.
             </p>
             <div className="grid sm:flex sm:flex-wrap items-center gap-3 mt-7">
-              <a href={intakeStartUrl} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-ink text-white font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
-                Start with Call Intake <ArrowRight size={18} />
+              <a href={contactUrl} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-accent text-white font-sans font-semibold rounded-lg hover:bg-brand-accent-2 transition-all shadow-sm hover:-translate-y-[1px]">
+                Book a demo <ArrowRight size={18} />
               </a>
               <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3.5 bg-brand-surface border border-brand-line text-brand-ink font-sans font-semibold rounded-xl hover:border-brand-ink hover:bg-brand-bg-soft transition-all shadow-sm">
-                See the workflow
+                See how it works
               </a>
             </div>
             <div className="flex flex-col sm:flex-row sm:flex-wrap gap-x-6 gap-y-2 mt-7 text-[13px] font-sans text-brand-muted">
-              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent-2" /> Start with one workflow</span>
-              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent-2" /> Attorney-controlled review</span>
-              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent-2" /> Tenant-isolated workspace</span>
+              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent" /> Unify every source</span>
+              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent" /> Keep work moving</span>
+              <span className="inline-flex items-center gap-2"><CheckCircle2 size={15} className="text-brand-accent" /> Built for trust</span>
             </div>
           </div>
 
@@ -325,8 +320,8 @@ export default function HomePage() {
             <div className="relative bg-brand-surface border border-brand-line rounded-2xl shadow-xl overflow-hidden">
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-brand-line bg-brand-bg-soft/40">
                 <div className="flex items-center gap-2">
-                  <img src="/brand/wellpled/wellpled-mark.svg" alt="" aria-hidden="true" className="h-5 w-auto" />
-                  <span className="font-serif font-semibold text-[14px]">Intake desk</span>
+                  <img src="/brand/lawhand/lawhand-mark.svg" alt="" aria-hidden="true" className="h-5 w-5 rounded" />
+                  <span className="font-serif font-semibold text-[14px]">Matter record</span>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold bg-brand-green/10 text-brand-green border border-brand-green/20">
                   <span className="w-1.5 h-1.5 rounded-full bg-brand-green" /> Illustrative workflow
@@ -648,8 +643,8 @@ export default function HomePage() {
                   the broader workflows their tenant has licensed.
                 </p>
               </div>
-              <a href={intakeStartUrl} className="block w-full mt-7 py-3 rounded-xl text-center font-sans font-semibold text-[14px] bg-brand-ink text-white hover:bg-brand-ink-2 transition-all">
-                Request a Call Intake workspace
+              <a href={contactUrl} className="block w-full mt-7 py-3 rounded-lg text-center font-sans font-semibold text-[14px] bg-brand-accent text-white hover:bg-brand-accent-2 transition-all">
+                Book a demo
               </a>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
                 Questions about onboarding or commercial terms?{' '}
@@ -678,8 +673,8 @@ export default function HomePage() {
               broader matter platform when the workflow is right for your firm.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
-              <a href={intakeStartUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-xl hover:bg-brand-bg transition-all shadow-sm">
-                Start with Call Intake <ArrowRight size={18} />
+              <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-white text-brand-ink font-sans font-semibold rounded-lg hover:bg-brand-bg transition-all shadow-sm">
+                Book a demo <ArrowRight size={18} />
               </a>
               <a href={contactUrl} className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent border border-white/25 text-white font-sans font-semibold rounded-xl hover:bg-white/10 transition-all">
                 Request a 20-min walkthrough
@@ -693,12 +688,12 @@ export default function HomePage() {
       {/* ── Footer ────────────────────────────────────────────────── */}
       <footer className="border-t border-brand-line">
         <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <WellPledLogo compact />
-          <p className="text-brand-gold font-serif italic text-[14px] tracking-wide">Practice, well played.</p>
+          <LawHandLogo compact />
+          <p className="text-brand-muted font-sans text-[14px] tracking-wide">The whole matter, in hand.</p>
           <div className="flex items-center gap-4 text-brand-muted font-sans text-[12.5px]">
             <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
             <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
-            <span>© {new Date().getFullYear()} WellPled</span>
+            <span>© {new Date().getFullYear()} LawHand</span>
           </div>
         </div>
       </footer>

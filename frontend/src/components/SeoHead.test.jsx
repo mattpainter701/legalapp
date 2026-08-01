@@ -23,7 +23,7 @@ describe('SeoHead', () => {
     vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
     renderAt('/?campaign=ignored')
 
-    await waitFor(() => expect(document.title).toContain('Law Firm Operations'))
+    await waitFor(() => expect(document.title).toContain('The Whole Matter, in Hand'))
     expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('index, follow'))
     expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute('href', 'https://clarity.example/')
     expect(document.querySelector('meta[property="og:image"]')).toHaveAttribute('content', 'https://clarity.example/social-card-v2.png')
@@ -45,7 +45,7 @@ describe('SeoHead', () => {
     vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
     renderAt('/portal/client/matter?token=do-not-publish')
 
-    await waitFor(() => expect(document.title).toBe('Secure client portal | WellPled'))
+    await waitFor(() => expect(document.title).toBe('Secure client portal | LawHand'))
     expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('noindex'))
     expect(document.querySelector('link[rel="canonical"]')).not.toBeInTheDocument()
     expect(document.head.innerHTML).not.toContain('do-not-publish')

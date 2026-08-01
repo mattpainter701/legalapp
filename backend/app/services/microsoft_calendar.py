@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 # Fixed GUID namespace for the Graph single-value extended property that carries
-# the WellPled task id. Must never change, or dedupe lookups will break.
+# the LawHand task id. Must never change, or dedupe lookups will break.
 CLARITY_TASK_PROP_GUID = "b7d271f9-3a4e-4f6c-9d5a-2c8e1f0a6b3d"
 CLARITY_TASK_PROP_ID = f"String {{{CLARITY_TASK_PROP_GUID}}} Name clarity_task_id"
 

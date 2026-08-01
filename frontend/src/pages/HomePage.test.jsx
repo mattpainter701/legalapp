@@ -29,7 +29,7 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.queryByText(/\$5|\$20/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\bSSO\b|\bSLA\b/)).not.toBeInTheDocument()
 
-    for (const link of screen.getAllByRole('link', { name: 'Start with Call Intake' })) {
+    for (const link of screen.getAllByRole('link', { name: 'Book a demo' })) {
       expect(link).toHaveAttribute('href', expect.stringMatching(/^(https:\/\/|mailto:)/))
       expect(link).not.toHaveAttribute('href', '/signup?plan=intake-only')
     }
@@ -52,15 +52,15 @@ describe('HomePage launch routing and claims', () => {
     )
   })
 
-  it('publishes the WellPled brand and positioning', () => {
+  it('publishes the LawHand brand and positioning', () => {
     render(
       <MemoryRouter>
         <HomePage />
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('heading', { level: 1, name: /practice, well played/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'WellPled home' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: /the whole matter, in hand/i })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'LawHand home' })).toBeInTheDocument()
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })
 })

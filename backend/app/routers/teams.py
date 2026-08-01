@@ -253,7 +253,7 @@ async def send_test_message(
 ):
     user, tenant_id = await require_teams_enabled(request, db)
     card = teams_service.build_matter_card(
-        title="WellPled — Test Notification",
+        title="LawHand — Test Notification",
         matter_name=payload.matter_name or "Test Matter",
         fields={"Status": "Connected", "Source": "Admin test message"},
     )

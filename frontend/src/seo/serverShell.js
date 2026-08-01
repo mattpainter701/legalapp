@@ -4,16 +4,16 @@ const LEGAL_SHELLS = Object.freeze({
   '/privacy': {
     heading: 'Privacy Policy',
     lead:
-      'This Privacy Policy explains how WellPled handles information when firms, legal professionals, and authorized users access the service.',
+      'This Privacy Policy explains how LawHand handles information when firms, legal professionals, and authorized users access the service.',
     otherPath: '/terms',
     otherLabel: 'Terms of Use',
     sections: [
-      { id: 'scope', heading: 'Scope and roles', body: 'This policy covers the WellPled website and service. A subscribing organization generally controls the matter, client, and workspace information its users submit; users should also review their organization\u2019s own privacy notices and instructions.' },
+      { id: 'scope', heading: 'Scope and roles', body: 'This policy covers the LawHand website and service. A subscribing organization generally controls the matter, client, and workspace information its users submit; users should also review their organization\u2019s own privacy notices and instructions.' },
       { id: 'information', heading: 'Information we handle', body: 'We may handle account and contact details, authentication and device information, service usage and support communications, billing records, and documents or other workspace content submitted by authorized users or connected services.' },
       { id: 'use', heading: 'How information is used', body: 'Information is used to provide, secure, maintain, troubleshoot, and improve the service; administer accounts and subscriptions; respond to requests; meet legal obligations; and prevent misuse. Workspace content is used to perform the features requested by authorized users.' },
       { id: 'ai-integrations', heading: 'AI features and connected services', body: 'When an organization enables an AI provider or third-party integration, relevant information may be sent to that provider to complete the requested task. Provider handling, retention, and training terms depend on the provider, agreement, and tenant configuration selected by the organization.' },
       { id: 'sharing', heading: 'Sharing and disclosures', body: 'Information may be disclosed to service providers supporting hosting, security, communications, payments, and enabled integrations; to the subscribing organization and its authorized administrators; or when required for legal compliance, safety, or a business transaction. Provider-specific processing is also governed by the provider’s terms and the configuration selected by the organization.' },
-      { id: 'retention-security', heading: 'Retention and security', body: 'Retention depends on the type of information, tenant settings, contractual requirements, and legal obligations. WellPled uses administrative, technical, and organizational safeguards, including tenant isolation, but no system can guarantee absolute security.' },
+      { id: 'retention-security', heading: 'Retention and security', body: 'Retention depends on the type of information, tenant settings, contractual requirements, and legal obligations. LawHand uses administrative, technical, and organizational safeguards, including tenant isolation, but no system can guarantee absolute security.' },
       { id: 'choices', heading: 'Choices and privacy requests', body: 'Users may update certain account information through the service. Requests concerning workspace content should usually be directed to the subscribing organization. Other access, correction, deletion, or objection rights may apply based on location and can be submitted using the contact information below.' },
       { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to contact@perevagagroup.com.' },
     ],
@@ -21,12 +21,12 @@ const LEGAL_SHELLS = Object.freeze({
   '/terms': {
     heading: 'Terms of Use',
     lead:
-      'These Terms of Use govern access to WellPled unless a separate written agreement with the subscribing organization controls.',
+      'These Terms of Use govern access to LawHand unless a separate written agreement with the subscribing organization controls.',
     otherPath: '/privacy',
     otherLabel: 'Privacy Policy',
     sections: [
       { id: 'agreement', heading: 'Agreement and eligibility', body: 'By accessing the service, you agree to these terms and confirm that you are authorized by the subscribing organization. If that organization has a subscription agreement with us, that agreement controls in the event of a conflict.' },
-      { id: 'service', heading: 'The service and professional responsibility', body: 'WellPled provides law-practice workflow and AI-assisted tools. It is not a law firm and does not provide legal advice. Users remain responsible for professional judgment, source verification, court and client obligations, filings, deadlines, and the accuracy and suitability of all work product.' },
+      { id: 'service', heading: 'The service and professional responsibility', body: 'LawHand provides law-practice workflow and AI-assisted tools. It is not a law firm and does not provide legal advice. Users remain responsible for professional judgment, source verification, court and client obligations, filings, deadlines, and the accuracy and suitability of all work product.' },
       { id: 'accounts', heading: 'Accounts and administration', body: 'Users must provide accurate account information, protect credentials, and promptly report suspected unauthorized access. Organization administrators control user access, connected services, tenant configuration, and available retention settings.' },
       { id: 'acceptable-use', heading: 'Acceptable use', body: 'Users may not violate law or third-party rights; access another tenant without authorization; upload malicious code; disrupt or probe the service; bypass access controls or usage limits; or use the service to create or distribute unlawful, deceptive, or harmful material.' },
       { id: 'content-integrations', heading: 'Content, AI features, and integrations', body: 'The subscribing organization retains its rights in submitted content and grants the permissions needed to operate the service. Outputs may be incomplete or incorrect and require review. Third-party services and AI providers are governed by their own terms and the organization\u2019s configuration.' },
@@ -87,7 +87,7 @@ function legalShellMarkup(pathname) {
   return `      <main class="server-legal">
         <article class="server-legal__article">
           <header class="server-legal__header">
-            <a class="server-legal__brand" href="/">WellPled</a>
+            <a class="server-legal__brand" href="/">LawHand</a>
             <h1>${escapeHtml(route.heading)}</h1>
             <p class="server-legal__lead">${escapeHtml(route.lead)}</p>
             <p class="server-legal__updated">Last updated: <time datetime="2026-07-27">${LAST_UPDATED}</time></p>

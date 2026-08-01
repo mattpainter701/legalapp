@@ -1,7 +1,7 @@
 {
-  "name": "wellpled-word-addin",
+  "name": "lawhand-word-addin",
   "version": "0.1.0",
-  "description": "WellPled Word Add-in task pane",
+  "description": "LawHand matter intelligence and drafting workspace for Microsoft Word",
   "scripts": {
     "start": "npx http-server . -p 3001 --ssl --cert localhost.crt --key localhost.key"
   },

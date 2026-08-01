@@ -10,11 +10,11 @@ import {
 import { buildPublicRouteHtml } from './serverShell'
 
 describe('SEO configuration', () => {
-  it('ships useful Call Intake content in the server-delivered HTML', () => {
+  it('ships the LawHand value proposition in the server-delivered HTML', () => {
     const html = readFileSync('index.html', 'utf8')
 
-    expect(html).toContain('Start focused with a dependable intake workflow.')
-    expect(html).toContain('Request a Call Intake workspace')
+    expect(html).toContain('The whole matter, in hand.')
+    expect(html).toContain('Book a demo')
     expect(html).not.toContain('<div id="root"></div>')
   })
 
@@ -74,8 +74,8 @@ describe('SEO configuration', () => {
   })
 
   it.each([
-    ['/privacy', 'Privacy Policy | WellPled', 'Privacy Policy', 'Terms of Use'],
-    ['/terms', 'Terms of Use | WellPled', 'Terms of Use', 'Privacy Policy'],
+    ['/privacy', 'Privacy Policy | LawHand', 'Privacy Policy', 'Terms of Use'],
+    ['/terms', 'Terms of Use | LawHand', 'Terms of Use', 'Privacy Policy'],
   ])('builds substantive route-correct no-JavaScript HTML for %s', (route, title, heading, otherPolicy) => {
     const base = readFileSync('index.html', 'utf8')
     const html = buildPublicRouteHtml(base, route, 'https://clarity.example')
@@ -91,7 +91,7 @@ describe('SEO configuration', () => {
     expect(html.match(/<section id=/g)).toHaveLength(8)
     expect(html).toContain(`>${otherPolicy}</a>`)
     expect(html).toContain('mailto:contact@perevagagroup.com')
-    expect(html).not.toContain('Start focused with a dependable intake workflow.')
+    expect(html).not.toContain('The whole matter, in hand.')
     expect(html).toContain('<script type="module" src="/src/main.jsx"></script>')
   })
 

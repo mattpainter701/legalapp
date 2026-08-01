@@ -85,13 +85,13 @@ export default function SeoHead() {
     setMeta('property', 'og:image:type', 'image/png')
     setMeta('property', 'og:image:width', '1200')
     setMeta('property', 'og:image:height', '630')
-    setMeta('property', 'og:image:alt', 'WellPled law firm operations and legal AI workspace')
+    setMeta('property', 'og:image:alt', 'LawHand law firm operations and legal AI workspace')
 
     setMeta('name', 'twitter:card', 'summary_large_image')
     setMeta('name', 'twitter:title', socialTitle)
     setMeta('name', 'twitter:description', socialDescription)
     setMeta('name', 'twitter:image', `${siteOrigin}${SOCIAL_IMAGE_PATH}`)
-    setMeta('name', 'twitter:image:alt', 'WellPled law firm operations and legal AI workspace')
+    setMeta('name', 'twitter:image:alt', 'LawHand law firm operations and legal AI workspace')
 
     setStructuredData(pathname === '/' ? buildMarketingStructuredData(siteOrigin) : null)
   }, [pathname])

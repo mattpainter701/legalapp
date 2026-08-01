@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 200" role="img" aria-labelledby="title desc">
+  <title id="title">LawHand document header</title>
+  <desc id="desc">LawHand header for exported documents.</desc>
+  <rect width="1200" height="200" fill="#F4F0E8"/>
+  <image href="lawhand-mark.svg" x="56" y="52" width="96" height="96"/>
+  <text x="178" y="127" fill="#161817" font-family="Manrope, Inter, Arial, sans-serif" font-size="66" font-weight="500" letter-spacing="-3.5">lawhand</text>
+  <line x1="56" y1="176" x2="1144" y2="176" stroke="#DCD7CE"/>
+</svg>

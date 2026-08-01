@@ -8,9 +8,9 @@
 
   <Id>f4a8c2e1-3b7d-4f9a-8c5e-2d1f6a0b9e34</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>WellPled</ProviderName>
+  <ProviderName>LawHand</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="WellPled" />
+  <DisplayName DefaultValue="LawHand" />
   <Description DefaultValue="AI-powered legal research and drafting assistant for Microsoft Word" />
   <IconUrl DefaultValue="https://localhost:3001/assets/icon-32.png" />
   <HighResolutionIconUrl DefaultValue="https://localhost:3001/assets/icon-64.png" />
@@ -82,14 +82,14 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3001/taskpane.html" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="Get started with WellPled" />
-        <bt:String id="CommandsGroup.Label" DefaultValue="WellPled" />
-        <bt:String id="OpenTaskpane.Label" DefaultValue="Open WellPled" />
-        <bt:String id="OpenTaskpane.SupertipTitle" DefaultValue="Open WellPled" />
+        <bt:String id="GetStarted.Title" DefaultValue="Get started with LawHand" />
+        <bt:String id="CommandsGroup.Label" DefaultValue="LawHand" />
+        <bt:String id="OpenTaskpane.Label" DefaultValue="Open LawHand" />
+        <bt:String id="OpenTaskpane.SupertipTitle" DefaultValue="Open LawHand" />
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="GetStarted.Description" DefaultValue="Use AI-powered legal research and drafting directly in Word." />
-        <bt:String id="OpenTaskpane.SupertipDescription" DefaultValue="Open the WellPled panel for legal research and document drafting." />
+        <bt:String id="OpenTaskpane.SupertipDescription" DefaultValue="Open the LawHand panel for legal research and document drafting." />
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

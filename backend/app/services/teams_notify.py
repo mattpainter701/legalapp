@@ -1,6 +1,6 @@
 """Outbound Teams notification dispatch.
 
-Resolves the Teams channels a WellPled event should post to and sends an
+Resolves the Teams channels a LawHand event should post to and sends an
 Adaptive Card to each. Best-effort and fully isolated: it opens its own DB
 session (so it is safe to call from request handlers and from scheduler jobs
 that run under an RLS bypass), and never raises.

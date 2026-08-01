@@ -253,7 +253,7 @@ _docs_kwargs = (
 )
 
 app = FastAPI(
-    title="WellPled API",
+    title="LawHand API",
     version="1.0.0",
     description="Multi-tenant legal AI SaaS backend",
     lifespan=lifespan,

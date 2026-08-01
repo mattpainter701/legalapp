@@ -11,7 +11,7 @@ from app.database import Base
 
 
 class ScheduledEvent(Base):
-    """Matter-linked or standalone event created from the WellPled calendar."""
+    """Matter-linked or standalone event created from the LawHand calendar."""
 
     __tablename__ = "scheduled_events"
     __table_args__ = (

@@ -1,6 +1,6 @@
 import React from 'react'
 import { ArrowLeft, ArrowUp, Mail, ShieldCheck } from 'lucide-react'
-import WellPledLogo from '../components/WellPledLogo'
+import LawHandLogo from '../components/LawHandLogo'
 import { Link } from 'react-router-dom'
 
 const UPDATED = 'July 27, 2026'
@@ -8,7 +8,7 @@ const EMAIL = 'contact@perevagagroup.com'
 
 const privacySections = [
   ['organization-role', 'Your organization’s role', [
-    'WellPled workspaces are provided to firms and other organizations. When an organization provides your account, that organization administers the workspace, controls which modules and connected services are enabled, and may set workspace-specific retention and access policies. Its subscription agreement, data processing agreement, and privacy notices may provide additional or controlling terms for workspace data. Contact your organization’s administrator first if your request concerns information in its workspace.',
+    'LawHand workspaces are provided to firms and other organizations. When an organization provides your account, that organization administers the workspace, controls which modules and connected services are enabled, and may set workspace-specific retention and access policies. Its subscription agreement, data processing agreement, and privacy notices may provide additional or controlling terms for workspace data. Contact your organization’s administrator first if your request concerns information in its workspace.',
   ]],
   ['information-we-handle', 'Information we handle', [
     'The information we handle depends on how you and your organization configure and use the service. It may include:',
@@ -20,7 +20,7 @@ const privacySections = [
     'Communications you send to us, including access requests, support questions, and feedback.',
   ]],
   ['how-we-use-information', 'How we use information', [
-    'We use information to provide and support WellPled; authenticate users; enforce tenant, role, and module permissions; process workflows requested by authorized users; operate enabled integrations; administer subscriptions and payment features; maintain security; investigate errors or misuse; communicate about the service; and comply with legal and contractual obligations.',
+    'We use information to provide and support LawHand; authenticate users; enforce tenant, role, and module permissions; process workflows requested by authorized users; operate enabled integrations; administer subscriptions and payment features; maintain security; investigate errors or misuse; communicate about the service; and comply with legal and contractual obligations.',
   ]],
   ['ai-assisted-features', 'AI-assisted features', [
     'When an organization enables AI-assisted features, relevant prompts, documents, retrieved context, and outputs may be processed through the model provider configured for that workspace. Data handling can vary by provider, deployment, and tenant configuration. Your organization is responsible for approving the providers and workflows it enables. AI-assisted output requires professional review and should not be treated as verified legal advice.',
@@ -32,10 +32,10 @@ const privacySections = [
     'Retention depends on the type of information, the workspace configuration, the organization’s instructions, and applicable contractual or legal requirements. Workspace administrators may control available retention settings. Contact your organization’s administrator for the policy that applies to its workspace or to request deletion of workspace content. Information may remain where preservation is required for security, dispute resolution, legal compliance, or backup integrity.',
   ]],
   ['security', 'Security', [
-    'WellPled uses tenant-scoped access controls and is designed to isolate firm workspaces. The service uses short-lived access sessions, rotating refresh state, and application encryption for stored integration credentials. Storage, model-provider, and connected-service protections also depend on the infrastructure, provider, and tenant configuration selected for the workspace. No method of storage or transmission is completely secure.',
+    'LawHand uses tenant-scoped access controls and is designed to isolate firm workspaces. The service uses short-lived access sessions, rotating refresh state, and application encryption for stored integration credentials. Storage, model-provider, and connected-service protections also depend on the infrastructure, provider, and tenant configuration selected for the workspace. No method of storage or transmission is completely secure.',
   ]],
   ['choices-and-requests', 'Your choices and requests', [
-    'You may be able to update account information through the service or your workspace administrator. Depending on applicable law, you may have rights to request access, correction, deletion, restriction, objection, or portability. If your request concerns an organization-managed workspace, contact that organization first. For questions about this policy or information handled directly by WellPled, email contact@perevagagroup.com. We may need to verify a request before responding.',
+    'You may be able to update account information through the service or your workspace administrator. Depending on applicable law, you may have rights to request access, correction, deletion, restriction, objection, or portability. If your request concerns an organization-managed workspace, contact that organization first. For questions about this policy or information handled directly by LawHand, email contact@perevagagroup.com. We may need to verify a request before responding.',
   ]],
   ['policy-changes', 'Changes to this policy', [
     'We may update this Privacy Policy as the service, providers, or legal requirements change. We will post the revised policy on this page and update the date above. Organization-specific notice obligations remain governed by the applicable subscription agreement or data processing agreement.',
@@ -44,22 +44,22 @@ const privacySections = [
 
 const termsSections = [
   ['organization-agreements', 'Organization agreements control', [
-    'If you use WellPled through a firm or other organization, your access is also governed by that organization’s subscription agreement, order, data processing agreement, and applicable policies. Those organization-specific terms control if they conflict with these Terms. Commercial terms, enabled modules, support, retention, security commitments, and data processing obligations are established in those agreements, not on this public page.',
+    'If you use LawHand through a firm or other organization, your access is also governed by that organization’s subscription agreement, order, data processing agreement, and applicable policies. Those organization-specific terms control if they conflict with these Terms. Commercial terms, enabled modules, support, retention, security commitments, and data processing obligations are established in those agreements, not on this public page.',
   ]],
   ['authorized-use', 'Authorized use', [
-    'You may use WellPled only if you are authorized by the organization responsible for the workspace and only for that organization’s legitimate professional activities. You must provide accurate account information, protect your credentials, use only your own account, and promptly notify your administrator of suspected unauthorized access. Workspace administrators control user access, roles, modules, and connected services.',
+    'You may use LawHand only if you are authorized by the organization responsible for the workspace and only for that organization’s legitimate professional activities. You must provide accurate account information, protect your credentials, use only your own account, and promptly notify your administrator of suspected unauthorized access. Workspace administrators control user access, roles, modules, and connected services.',
   ]],
   ['the-service', 'The service', [
-    'WellPled can support caller intake, tasks, matters, documents, billing, cloud integrations, and source-aware legal research. Available features vary by subscription, tenant configuration, provider readiness, and controlled onboarding. Some features or integrations may be disabled or unavailable. Descriptions on the public website do not promise that every module, provider, or workflow is included in your organization’s service.',
+    'LawHand can support caller intake, tasks, matters, documents, billing, cloud integrations, and source-aware legal research. Available features vary by subscription, tenant configuration, provider readiness, and controlled onboarding. Some features or integrations may be disabled or unavailable. Descriptions on the public website do not promise that every module, provider, or workflow is included in your organization’s service.',
   ]],
   ['professional-responsibility', 'Professional responsibility and AI-assisted output', [
-    'WellPled assists legal professionals; it does not replace professional judgment. You are responsible for reviewing documents, deadlines, calculations, citations, research results, and other output before relying on or sharing them. AI-assisted content may be incomplete, inaccurate, or outdated. A citation, source label, or confidence cue is a review aid, not a guarantee that a source is accurate, complete, or still good law. WellPled does not provide legal advice and does not create an attorney-client relationship.',
+    'LawHand assists legal professionals; it does not replace professional judgment. You are responsible for reviewing documents, deadlines, calculations, citations, research results, and other output before relying on or sharing them. AI-assisted content may be incomplete, inaccurate, or outdated. A citation, source label, or confidence cue is a review aid, not a guarantee that a source is accurate, complete, or still good law. LawHand does not provide legal advice and does not create an attorney-client relationship.',
   ]],
   ['workspace-content', 'Workspace content', [
     'You and your organization are responsible for the legality, accuracy, and appropriateness of information submitted to the service and for having the rights and permissions needed to process it. You remain responsible for professional duties concerning confidentiality, privilege, client instructions, records management, and use of sensitive information. Organization-specific rights and obligations concerning workspace content are governed by the applicable subscription agreement and data processing agreement.',
   ]],
   ['connected-services', 'Connected services', [
-    'WellPled may connect with third-party services selected by your organization, including supported Microsoft, Google, Zoom, QuickBooks, Teams, email, file-storage, model-provider, and payment services. Your use of a connected service is also subject to that provider’s terms and permissions. WellPled is not responsible for a third-party service’s availability, changes, or independent handling of information. Disconnect integrations you no longer authorize.',
+    'LawHand may connect with third-party services selected by your organization, including supported Microsoft, Google, Zoom, QuickBooks, Teams, email, file-storage, model-provider, and payment services. Your use of a connected service is also subject to that provider’s terms and permissions. LawHand is not responsible for a third-party service’s availability, changes, or independent handling of information. Disconnect integrations you no longer authorize.',
   ]],
   ['acceptable-use', 'Acceptable use', ['You must not:'], [
     'Access a workspace, account, matter, document, or integration without authorization.',
@@ -70,7 +70,7 @@ const termsSections = [
     'Reverse engineer or attempt to derive non-public source code except where applicable law does not permit that restriction.',
   ]],
   ['ownership-and-feedback', 'Ownership and feedback', [
-    'WellPled and its licensors retain rights in the service, software, interface, and related materials. These Terms do not transfer ownership of workspace content to WellPled. If you provide product feedback, you allow us to use it to evaluate and improve the service without an obligation to compensate you. Any broader license or data-use terms are governed by the applicable organization agreement.',
+    'LawHand and its licensors retain rights in the service, software, interface, and related materials. These Terms do not transfer ownership of workspace content to LawHand. If you provide product feedback, you allow us to use it to evaluate and improve the service without an obligation to compensate you. Any broader license or data-use terms are governed by the applicable organization agreement.',
   ]],
   ['availability-and-changes', 'Availability and changes', [
     'We may maintain, update, secure, or change the public website and service. Access may be limited when needed to address security, legal, provider, or operational issues. Service levels, support commitments, notice requirements, and remedies—if any—are governed by the applicable organization agreement.',
@@ -82,7 +82,7 @@ const termsSections = [
     'Except for express commitments in an applicable organization agreement, the public website and service are provided on an “as available” basis to the extent permitted by law. We do not warrant that AI-assisted output, third-party content, citations, integrations, or connected services will be error-free, complete, current, or continuously available. Nothing in these Terms excludes a warranty or right that cannot lawfully be excluded.',
   ]],
   ['liability', 'Liability', [
-    'Liability between WellPled and an organization is governed by the applicable subscription agreement. To the extent these Terms apply independently and to the extent permitted by law, WellPled is not liable for indirect, incidental, special, consequential, or punitive damages, or for losses caused by reliance on unreviewed output, unauthorized use, or third-party services. Nothing in these Terms limits liability that cannot lawfully be limited.',
+    'Liability between LawHand and an organization is governed by the applicable subscription agreement. To the extent these Terms apply independently and to the extent permitted by law, LawHand is not liable for indirect, incidental, special, consequential, or punitive damages, or for losses caused by reliance on unreviewed output, unauthorized use, or third-party services. Nothing in these Terms limits liability that cannot lawfully be limited.',
   ]],
   ['terms-changes', 'Changes to these Terms', [
     'We may update these Terms to reflect changes to the service or legal requirements. We will post the revised Terms on this page and update the date above. Changes to an organization’s controlling subscription or data processing terms will be handled under those agreements.',
@@ -93,15 +93,15 @@ const notices = {
   privacy: {
     eyebrow: 'How information is handled',
     title: 'Privacy Policy',
-    intro: 'This Privacy Policy explains how WellPled handles personal information when you visit our public website, request access, or use a WellPled workspace. WellPled is a multi-tenant, AI-assisted legal operations platform for law firms and legal professionals.',
+    intro: 'This Privacy Policy explains how LawHand handles personal information when you visit our public website, request access, or use a LawHand workspace. LawHand is a multi-tenant, AI-assisted legal operations platform for law firms and legal professionals.',
     sections: privacySections,
     otherPath: '/terms',
     otherLabel: 'Terms of Use',
   },
   terms: {
-    eyebrow: 'Rules for using WellPled',
+    eyebrow: 'Rules for using LawHand',
     title: 'Terms of Use',
-    intro: 'These Terms of Use apply to the WellPled public website and to your access to a WellPled workspace. WellPled is a multi-tenant, AI-assisted legal operations platform for law firms and legal professionals.',
+    intro: 'These Terms of Use apply to the LawHand public website and to your access to a LawHand workspace. LawHand is a multi-tenant, AI-assisted legal operations platform for law firms and legal professionals.',
     sections: termsSections,
     otherPath: '/privacy',
     otherLabel: 'Privacy Policy',
@@ -151,8 +151,8 @@ export default function LegalNoticePage({ type }) {
 
       <header className='sticky top-0 z-40 border-b border-brand-line bg-brand-bg/90 backdrop-blur'>
         <div className='mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6'>
-          <Link to='/' aria-label='WellPled home' className='rounded-lg'>
-            <WellPledLogo compact />
+          <Link to='/' aria-label='LawHand home' className='rounded-lg'>
+            <LawHandLogo compact />
           </Link>
           <div className='flex items-center gap-2 sm:gap-4'>
             <Link to={notice.otherPath} aria-label={notice.otherLabel} className='inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-brand-ink-2 hover:text-brand-ink sm:px-2'>
@@ -213,7 +213,7 @@ export default function LegalNoticePage({ type }) {
 
       <footer className='border-t border-brand-line bg-brand-surface'>
         <div className='mx-auto flex max-w-6xl flex-col gap-5 px-5 py-8 sm:px-6 md:flex-row md:items-center md:justify-between'>
-          <WellPledLogo compact />
+          <LawHandLogo compact />
           <nav aria-label='Legal footer' className='flex flex-wrap items-center gap-x-5 font-sans text-sm text-brand-muted'>
             <Link to='/privacy' aria-current={type === 'privacy' ? 'page' : undefined} className='inline-flex min-h-11 items-center hover:text-brand-ink'>Privacy</Link>
             <Link to='/terms' aria-current={type === 'terms' ? 'page' : undefined} className='inline-flex min-h-11 items-center hover:text-brand-ink'>Terms</Link>

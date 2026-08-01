@@ -73,7 +73,7 @@ export default function TeamsTabConfigPage() {
           entityId: matterId,
           contentUrl: teamsUrl,
           websiteUrl: teamsUrl,
-          suggestedDisplayName: 'WellPled',
+          suggestedDisplayName: 'LawHand',
         })
       }
     } catch (err) {
@@ -109,7 +109,7 @@ export default function TeamsTabConfigPage() {
             <MessageSquare className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="font-serif font-semibold text-xl">WellPled</h1>
+            <h1 className="font-serif font-semibold text-xl">LawHand</h1>
             <p className="text-xs text-brand-muted">Teams channel setup</p>
           </div>
         </div>

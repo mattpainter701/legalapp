@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 420" role="img" aria-labelledby="title desc">
-  <title id="title">WellPled stacked logo</title>
-  <desc id="desc">WellPled stacked logo with the tagline Practice, well played.</desc>
-  <image href="wellpled-mark.svg" x="130" y="28" width="300" height="214"/>
-  <text x="280" y="315" text-anchor="middle" fill="#14253B" font-family="Georgia, 'Times New Roman', serif" font-size="84" letter-spacing="-2.7">WellPled</text>
-  <line x1="183" y1="344" x2="217" y2="344" stroke="#B8965A" stroke-width="3"/>
-  <text x="235" y="352" fill="#5A7A5C" font-family="Inter, Arial, sans-serif" font-size="22" letter-spacing=".2">Practice, well played.</text>
-</svg>

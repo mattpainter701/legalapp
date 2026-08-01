@@ -568,7 +568,7 @@ export default function ChatPage() {
     }
 
     const content = messages
-      .map((msg) => `**${msg.role === 'user' ? 'You' : 'WellPled'}:**\n\n${msg.content}`)
+      .map((msg) => `**${msg.role === 'user' ? 'You' : 'LawHand'}:**\n\n${msg.content}`)
       .join('\n\n---\n\n')
 
     const element = document.createElement('a')

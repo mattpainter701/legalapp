@@ -56,7 +56,7 @@ def generate_worksheet_pdf(calc) -> bytes:
         topMargin=MARGIN,
         bottomMargin=MARGIN,
         title="Child Support Worksheet",
-        author="WellPled",
+        author="LawHand",
     )
     styles = getSampleStyleSheet()
     title = ParagraphStyle(

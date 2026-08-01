@@ -1,5 +1,5 @@
 """
-Test fixtures for WellPled backend.
+Test fixtures for LawHand backend.
 """
 
 import asyncio

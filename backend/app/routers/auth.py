@@ -1115,7 +1115,7 @@ async def exchange_office_session(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """Exchange one verified Office NAA token for hardened WellPled cookies.
+    """Exchange one verified Office NAA token for hardened LawHand cookies.
 
     This endpoint never provisions a tenant or user. It links only an existing
     Microsoft OAuth identity, then persists the immutable Entra tenant/object
@@ -1163,7 +1163,7 @@ async def exchange_office_session(
     if len(users) != 1:
         raise HTTPException(
             status_code=403,
-            detail="Office identity is not linked to exactly one WellPled user",
+            detail="Office identity is not linked to exactly one LawHand user",
         )
 
     user = users[0]
@@ -1497,7 +1497,7 @@ async def forgot_password(
         safe_reset_url = escape(reset_url, quote=True)
         html_body = f"""
         <div style="font-family: Arial, Helvetica, sans-serif; color: #1f2937; line-height: 1.5;">
-          <h2 style="margin: 0 0 16px;">Reset your WellPled password</h2>
+          <h2 style="margin: 0 0 16px;">Reset your LawHand password</h2>
           <p>Use the secure link below to choose a new password. This link expires in 30 minutes.</p>
           <p style="margin: 24px 0;">
             <a href="{safe_reset_url}"
@@ -1510,14 +1510,14 @@ async def forgot_password(
         </div>
         """
         text_body = (
-            "Reset your WellPled password\n\n"
+            "Reset your LawHand password\n\n"
             "Use this link within 30 minutes:\n"
             f"{reset_url}\n\n"
             "If you did not request this, you can ignore this message."
         )
         sent = await email_service.send_email(
             [user.email],
-            "Reset your WellPled password",
+            "Reset your LawHand password",
             html_body,
             text_body,
         )

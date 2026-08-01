@@ -165,7 +165,7 @@ async def verify_microsoft_access_token(
 
     Signature, exact audience, tenant-specific issuer, immutable directory IDs,
     delegated scope, and authorized client are all required before the token is
-    allowed to establish a WellPled cookie session.
+    allowed to establish a LawHand cookie session.
     """
 
     if not audience or not required_scope or not client_id:

@@ -98,7 +98,7 @@ async function report(result: ActionExecutionResult): Promise<void> {
   } catch {
     // The local result remains authoritative for the active Office item. Audit
     // delivery failure is surfaced without retrying the document mutation.
-    setStatus('The Office change completed, but WellPled could not record its audit result.', true)
+    setStatus('The Office change completed, but LawHand could not record its audit result.', true)
   }
 }
 
@@ -112,7 +112,7 @@ async function capture(): Promise<void> {
   element('context-title').textContent = summary.title
   element('context-summary').textContent = summary.summary
   refreshProposeState()
-  setStatus('Context captured. Review the scope above before asking WellPled.')
+  setStatus('Context captured. Review the scope above before asking LawHand.')
 }
 
 async function propose(event: SubmitEvent): Promise<void> {
@@ -175,7 +175,7 @@ function wireEvents(): void {
 Office.onReady(async (info) => {
   adapter = createAdapter(info.host)
   if (!adapter) {
-    element('unsupported-detail').textContent = `WellPled cannot work in ${info.host || 'this Office application'}. Open it in Word, Excel, or Outlook.`
+    element('unsupported-detail').textContent = `LawHand cannot work in ${info.host || 'this Office application'}. Open it in Word, Excel, or Outlook.`
     setHidden('unsupported', false)
     return
   }
@@ -186,10 +186,10 @@ Office.onReady(async (info) => {
   wireEvents()
 
   try {
-    setStatus('Checking your WellPled session…')
+    setStatus('Checking your LawHand session…')
     const user = await session.ensure(capabilities.requirementSets.NestedAppAuth_1_1 === true)
     authenticated = true
-    setStatus(user.full_name ? `Signed in as ${user.full_name}.` : 'Signed in to WellPled.')
+    setStatus(user.full_name ? `Signed in as ${user.full_name}.` : 'Signed in to LawHand.')
   } catch (error) {
     authenticated = false
     setStatus(error instanceof Error ? error.message : 'Office sign-in failed', true)

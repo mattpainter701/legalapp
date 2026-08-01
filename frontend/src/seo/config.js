@@ -1,11 +1,11 @@
-export const SITE_NAME = 'WellPled'
+export const SITE_NAME = 'LawHand'
 
-export const HOME_TITLE = 'WellPled | Law Firm Operations & Legal AI'
+export const HOME_TITLE = 'LawHand | The Whole Matter, in Hand'
 export const HOME_DESCRIPTION =
-  'WellPled helps law firms manage intake, matters, tasks, documents, billing, and source-aware AI-assisted work, with attorney review.'
+  'LawHand connects every fact, deadline, document, and decision in one living matter record for modern legal teams.'
 
 export const PRIVATE_DESCRIPTION =
-  'Sign in to the private WellPled workspace for your firm.'
+  'Sign in to the private LawHand workspace for your firm.'
 
 export const PUBLIC_ROUTE_META = Object.freeze({
   '/': {
@@ -15,16 +15,16 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     indexable: true,
   },
   '/privacy': {
-    title: 'Privacy Policy | WellPled',
+    title: 'Privacy Policy | LawHand',
     description:
-      'Read the WellPled Privacy Policy, including how account and workspace data is collected, used, shared, retained, and protected.',
+      'Read the LawHand Privacy Policy, including how account and workspace data is collected, used, shared, retained, and protected.',
     canonicalPath: '/privacy',
     indexable: true,
   },
   '/terms': {
-    title: 'Terms of Use | WellPled',
+    title: 'Terms of Use | LawHand',
     description:
-      'Read the WellPled Terms of Use, including service responsibilities, acceptable use, AI-assisted features, and account administration.',
+      'Read the LawHand Terms of Use, including service responsibilities, acceptable use, AI-assisted features, and account administration.',
     canonicalPath: '/terms',
     indexable: true,
   },

@@ -1,13 +1,13 @@
 {
-  "name": "WellPled",
-  "short_name": "WellPled",
+  "name": "LawHand",
+  "short_name": "LawHand",
   "description": "Law firm operations and source-aware AI-assisted work, with attorney review.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "theme_color": "#1e3a5f",
-  "background_color": "#ffffff",
+  "theme_color": "#161817",
+  "background_color": "#F4F0E8",
   "orientation": "portrait-primary",
   "categories": ["productivity", "business"],
   "icons": [

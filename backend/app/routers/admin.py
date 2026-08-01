@@ -1649,11 +1649,11 @@ async def invite_user(
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <div style="background:#14253B;padding:24px 32px;border-radius:8px 8px 0 0;">
-        <h1 style="color:#fff;margin:0;font-size:20px;">You've been invited to WellPled</h1>
+        <h1 style="color:#fff;margin:0;font-size:20px;">You've been invited to LawHand</h1>
       </div>
       <div style="padding:24px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">
         <p>Hi{" " + body.full_name if body.full_name else ""},</p>
-        <p><strong>{admin.full_name or admin.email}</strong> has invited you to join their firm on WellPled.</p>
+        <p><strong>{admin.full_name or admin.email}</strong> has invited you to join their firm on LawHand.</p>
         <p style="margin:24px 0;">
           <a href="{invite_url}" style="background:#14253B;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;">
             Accept Invitation
@@ -1668,7 +1668,7 @@ async def invite_user(
         db=db,
         tenant_id=tenant_id,
         to_emails=[body.email],
-        subject="You've been invited to WellPled",
+        subject="You've been invited to LawHand",
         html_body=html_body,
     )
     if not delivery_result:

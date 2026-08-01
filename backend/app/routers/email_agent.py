@@ -38,7 +38,7 @@ async def scan_emails(
 
     llm = LLMService()
     tenant_name = getattr(user, "tenant", None)
-    tenant_name = tenant_name.name if tenant_name else "WellPled"
+    tenant_name = tenant_name.name if tenant_name else "LawHand"
     standard_route = await resolve_llm_route(db, tenant_id, use_premium=False)
     premium_route = await resolve_llm_route(db, tenant_id, use_premium=True)
 
@@ -88,7 +88,7 @@ async def draft_email_response(
     await set_tenant_context(db, tenant_id)
     llm = LLMService()
     tenant_name_obj = getattr(user, "tenant", None)
-    tenant_name = tenant_name_obj.name if tenant_name_obj else "WellPled"
+    tenant_name = tenant_name_obj.name if tenant_name_obj else "LawHand"
     premium_route = await resolve_llm_route(db, tenant_id, use_premium=True)
 
     draft = await email_agent.draft_response(

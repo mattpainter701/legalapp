@@ -1,0 +1,17 @@
+:root {
+  --lawhand-carbon: #161817;
+  --lawhand-carbon-soft: #343a37;
+  --lawhand-parchment: #f4f0e8;
+  --lawhand-parchment-soft: #ece7de;
+  --lawhand-white: #ffffff;
+  --lawhand-slate: #66706b;
+  --lawhand-line: #dcd7ce;
+  --lawhand-line-strong: #c8c1b5;
+  --lawhand-cobalt: #3157d5;
+  --lawhand-cobalt-dark: #2445b8;
+  --lawhand-font: Manrope, Inter, Arial, sans-serif;
+  --lawhand-radius-sm: 0.5rem;
+  --lawhand-radius-md: 0.75rem;
+  --lawhand-shadow: 0 16px 48px rgb(22 24 23 / 0.09);
+  --lawhand-focus-ring: 0 0 0 3px rgb(49 87 213 / 0.24);
+}

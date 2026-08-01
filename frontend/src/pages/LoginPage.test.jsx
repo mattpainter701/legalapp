@@ -25,9 +25,9 @@ describe('login', () => {
     expect(await axe(container)).toHaveNoViolations()
   })
 
-  it('presents WellPled as the firm source of truth', () => {
+  it('presents LawHand as the firm source of truth', () => {
     render(<MemoryRouter><LoginPage /></MemoryRouter>)
-    expect(screen.getByText('WellPled')).toBeInTheDocument()
+    expect(screen.getByText('lawhand')).toBeInTheDocument()
     expect(screen.getByText(/source of truth for matters/i)).toBeInTheDocument()
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })

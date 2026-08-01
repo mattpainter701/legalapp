@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">LawHand social card</title>
+  <desc id="desc">The whole matter, in hand.</desc>
+  <rect width="1200" height="630" fill="#F4F0E8"/>
+  <path d="M0 1h1200M0 629h1200M1 0v630M1199 0v630" stroke="#DCD7CE"/>
+  <g transform="translate(64 58)">
+    <rect width="66" height="66" rx="15" fill="#161817"/>
+    <text x="33" y="48" fill="#F4F0E8" font-family="Manrope, Inter, Arial, sans-serif" font-size="48" font-weight="500" letter-spacing="-4" text-anchor="middle">a</text>
+    <text x="86" y="50" fill="#161817" font-family="Manrope, Inter, Arial, sans-serif" font-size="50" font-weight="500" letter-spacing="-2.5">lawhand</text>
+  </g>
+  <text x="64" y="305" fill="#161817" font-family="Manrope, Inter, Arial, sans-serif" font-size="78" font-weight="500" letter-spacing="-4">
+    <tspan x="64" dy="0">The whole matter,</tspan><tspan x="64" dy="88">in hand.</tspan>
+  </text>
+  <text x="66" y="540" fill="#66706B" font-family="Manrope, Inter, Arial, sans-serif" font-size="25">Every fact, deadline, document, and decision—connected in one living record.</text>
+  <rect x="1094" y="58" width="42" height="42" rx="21" fill="#3157D5"/>
+</svg>

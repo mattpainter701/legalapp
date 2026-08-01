@@ -265,7 +265,7 @@ export default function ZoomPanel() {
             <SetupNotice
               tone="info"
               title="Authorization stays connected"
-              body="Zoom access tokens last about one hour, but WellPled uses the saved refresh token to get a new access token when syncing or testing. Re-authorize only if Zoom access is revoked, scopes change, or the grant goes unused long enough for Zoom to expire the refresh token."
+              body="Zoom access tokens last about one hour, but LawHand uses the saved refresh token to get a new access token when syncing or testing. Re-authorize only if Zoom access is revoked, scopes change, or the grant goes unused long enough for Zoom to expire the refresh token."
             />
           )}
           <ScopeChecklist

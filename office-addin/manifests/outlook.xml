@@ -7,9 +7,9 @@
   xsi:type="MailApp">
   <Id>e91adce2-b5ef-4de0-9b70-7b63f570d9c2</Id>
   <Version>0.1.0.0</Version>
-  <ProviderName>WellPled</ProviderName>
+  <ProviderName>LawHand</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="WellPled" />
+  <DisplayName DefaultValue="LawHand" />
   <Description DefaultValue="Review Outlook messages and apply approved changes to drafts." />
   <IconUrl DefaultValue="__APP_ORIGIN__/office/icon-96x96.png" />
   <HighResolutionIconUrl DefaultValue="__APP_ORIGIN__/office/icon-128x128.png" />
@@ -78,8 +78,8 @@
         <bt:Url id="Taskpane.Url" DefaultValue="__APP_ORIGIN__/office/index.html" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="Group.Label" DefaultValue="WellPled" />
-        <bt:String id="Open.Label" DefaultValue="Open WellPled" />
+        <bt:String id="Group.Label" DefaultValue="LawHand" />
+        <bt:String id="Open.Label" DefaultValue="Open LawHand" />
       </bt:ShortStrings>
       <bt:LongStrings><bt:String id="Open.Description" DefaultValue="Review this message or revise the current draft." /></bt:LongStrings>
     </Resources>

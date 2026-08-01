@@ -34,22 +34,22 @@ $manifest = [ordered]@{
     termsOfUseUrl = "$AppOrigin/terms"
   }
   name = [ordered]@{
-    short = "WellPled"
-    full = "WellPled"
+    short = "LawHand"
+    full = "LawHand"
   }
   description = [ordered]@{
-    short = "WellPled workspace for Microsoft Teams."
-    full = "WellPled matter, calendar, and channel workspace for Microsoft Teams."
+    short = "LawHand workspace for Microsoft Teams."
+    full = "LawHand matter, calendar, and channel workspace for Microsoft Teams."
   }
   icons = [ordered]@{
     color = "color.png"
     outline = "outline.png"
   }
-  accentColor = "1F2937"
+  accentColor = "161817"
   staticTabs = @(
     [ordered]@{
       entityId = "clarity-legal-personal"
-      name = "WellPled"
+      name = "LawHand"
       contentUrl = "$AppOrigin/teams"
       websiteUrl = "$AppOrigin/teams"
       scopes = @("personal")
@@ -86,11 +86,11 @@ function New-TeamsOutlineIcon {
   $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
 
   $fontSize = [Math]::Floor($Size * 0.34)
-  $font = New-Object System.Drawing.Font "Georgia", $fontSize, ([System.Drawing.FontStyle]::Bold), ([System.Drawing.GraphicsUnit]::Pixel)
+  $font = New-Object System.Drawing.Font "Arial", $fontSize, ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
   $format = New-Object System.Drawing.StringFormat
   $format.Alignment = [System.Drawing.StringAlignment]::Center
   $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-  $graphics.DrawString("WP", $font, $textBrush, ([System.Drawing.RectangleF]::new(0, 0, $Size, $Size)), $format)
+  $graphics.DrawString("a", $font, $textBrush, ([System.Drawing.RectangleF]::new(0, -1, $Size, $Size)), $format)
   $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
   $graphics.Dispose()
   $bitmap.Dispose()
@@ -102,7 +102,7 @@ $colorSource = Join-Path (Split-Path -Parent $Root) "frontend/public/icons/icon-
 Copy-Item -LiteralPath $colorSource -Destination (Join-Path $Root "color.png") -Force
 New-TeamsOutlineIcon -Path (Join-Path $Root "outline.png") -Size 32
 
-$zip = Join-Path $Root "wellpled-teams.zip"
+$zip = Join-Path $Root "lawhand-teams.zip"
 if (Test-Path $zip) {
   Remove-Item -LiteralPath $zip
 }

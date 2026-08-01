@@ -58,7 +58,7 @@ def build_certificate(
         c.drawString(inch, y, "Signature Acknowledgment Certificate")
         y -= 0.4 * inch
         c.setFont("Helvetica", 10)
-        c.drawString(inch, y, "WellPled — Electronic Signature")
+        c.drawString(inch, y, "LawHand — Electronic Signature")
         y -= 0.5 * inch
 
         c.setFont("Helvetica-Bold", 11)
@@ -127,7 +127,7 @@ def build_certificate(
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Certificate of Completion</title></head><body>
 <h1>Signature Acknowledgment Certificate</h1>
-<p>WellPled — Electronic Signature</p>
+<p>LawHand — Electronic Signature</p>
 <p><b>Matter:</b> {safe_matter_name}<br/><b>Document:</b> {safe_document_name}<br/>
 <b>Generated:</b> {generated}<br/><b>Request ID:</b> {safe_request_id}<br/>
 <b>Source SHA-256:</b> {safe_source_sha256}<br/>

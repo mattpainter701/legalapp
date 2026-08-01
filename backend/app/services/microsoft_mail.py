@@ -37,7 +37,7 @@ async def ms_read_mail_user(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     # The OAuth token is delegated for the signed-in Microsoft user. The local
-    # WellPled user_id is not an Entra/Graph user id, so use /me for mailbox reads.
+    # LawHand user_id is not an Entra/Graph user id, so use /me for mailbox reads.
     params = {
         "$filter": f"receivedDateTime ge {since}",
         "$top": max_results,

@@ -16,7 +16,7 @@ from app.database import Base
 
 
 class TeamsChannelLink(Base):
-    """Links a WellPled matter to a Microsoft Teams channel.
+    """Links a LawHand matter to a Microsoft Teams channel.
 
     Outbound notifications for a matter are posted to every active link's
     channel. Tenant-isolated via RLS (``tenant_isolation_teams_channel_links``).

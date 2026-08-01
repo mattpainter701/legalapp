@@ -1,6 +1,6 @@
-# WellPled SMB File Share Relay Agent
+# LawHand SMB File Share Relay Agent
 
-On-prem agent that runs on the customer's network, scans SMB/CIFS file shares, and syncs metadata to the WellPled SaaS backend.
+On-prem agent that runs on the customer's network, scans SMB/CIFS file shares, and syncs metadata to the LawHand SaaS backend.
 
 ## Installation
 

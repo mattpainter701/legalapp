@@ -61,7 +61,7 @@ async def _scan_share(share: dict, ledger: FileLedger, client: SaaSClient, smb_s
 
 async def run_daemon(config: AgentConfig) -> None:
     setup_logging(config.log_level)
-    logger.info("WellPled Agent v%s starting", __version__)
+    logger.info("LawHand Agent v%s starting", __version__)
 
     ledger = FileLedger(config.ledger_path)
     await ledger.init()
@@ -186,7 +186,7 @@ def cmd_status(args) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="clarity-agent", description="WellPled SMB Relay Agent")
+    parser = argparse.ArgumentParser(prog="clarity-agent", description="LawHand SMB Relay Agent")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True)

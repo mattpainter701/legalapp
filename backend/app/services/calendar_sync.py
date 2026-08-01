@@ -467,7 +467,7 @@ class CalendarSyncService:
                 if today <= d <= cutoff:
                     start_dt = datetime(d.year, d.month, d.day, 9, 0, 0)
                     end_dt = datetime(d.year, d.month, d.day, 9, 30, 0)
-                    subject = f"[WellPled] {label}: {matter.matter_name}"
+                    subject = f"[LawHand] {label}: {matter.matter_name}"
                     body = f"Matter: {matter.matter_name}\nType: {matter.matter_type}\nStatus: {matter.status}\nDeadline: {label}"
 
                     try:
