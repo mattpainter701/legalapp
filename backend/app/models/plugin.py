@@ -576,6 +576,11 @@ class MediationCase(Base):
     mediator: Mapped[str | None] = mapped_column(String(300), nullable=True)
     attorney: Mapped[str | None] = mapped_column(String(300), nullable=True)
     claim_value: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    jurisdiction: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    court: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    case_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    waiting_on: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    fixed_fee: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     scheduled_session: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -729,6 +729,9 @@ export const getMediationCase = (id) =>
 export const updateMediationCase = (id, data) =>
   api.patch(`/plugins/mediation/cases/${id}`, data).then(r => r.data)
 
+export const advanceMediationCase = (id, data) =>
+  api.post(`/plugins/mediation/cases/${id}/next-action`, data).then(r => r.data)
+
 export const addMediationEvent = (id, data) =>
   api.post(`/plugins/mediation/cases/${id}/events`, data).then(r => r.data)
 
@@ -930,6 +933,7 @@ export const getMcpProductKeys = () => api.get('/mcp/product-keys').then((r) => 
 export const createMcpProductKey = (data) => api.post('/mcp/product-keys', data).then((r) => r.data)
 export const revokeMcpProductKey = (keyId) => api.delete(`/mcp/product-keys/${keyId}`).then((r) => r.data)
 export const getMcpUsage = (days = 30) => api.get('/mcp/usage', { params: { days } }).then((r) => r.data)
+export const getLegalSourceHealth = () => api.get('/mcp/source-health').then((r) => r.data)
 
 // Platform (uses platform key header — passed explicitly)
 export const createPlatformSession = (bootstrapKey) =>

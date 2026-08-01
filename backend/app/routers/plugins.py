@@ -25,6 +25,7 @@ POST /litigation/matters and POST /commercial/renewals are not swallowed by the 
 """
 
 import asyncio
+import hashlib
 import uuid
 import io
 import os
@@ -51,6 +52,7 @@ from app.models.plugin import (
     TenantPluginSetup,
 )
 from app.models.tenant_credential import TenantCredential
+from app.models.plugin_skill_run import PluginSkillRun
 from app.schemas.plugin import (
     MatterCreate,
     MatterEventCreate,
@@ -1635,7 +1637,22 @@ async def execute_skill(
     tenant_name = user.tenant.name if user.tenant else "Legal"
     context["tenant_name"] = tenant_name
     matter_context = ""
+    matter_uuid = None
     if body.matter_id:
+        try:
+            matter_uuid = uuid.UUID(body.matter_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid matter_id")
+        linked_matter = (
+            await db.execute(
+                select(Matter.id).where(
+                    Matter.id == matter_uuid,
+                    Matter.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if linked_matter is None:
+            raise HTTPException(status_code=404, detail="Matter not found")
         (
             matter_context,
             _has_pii,
@@ -1717,7 +1734,27 @@ async def execute_skill(
         ip_address=request.client.host if request.client else None,
         user_agent=(request.headers.get("user-agent") or "")[:500] or None,
     )
-    db.add(usage)
+    run_id = uuid.uuid4()
+    skill_run = PluginSkillRun(
+        id=run_id,
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        matter_id=matter_uuid,
+        plugin_name=plugin,
+        skill_name=skill,
+        input_digest=hashlib.sha256(body.input_text.encode("utf-8")).hexdigest(),
+        memo=result_data.get("memo") or "",
+        findings=result_data.get("findings") or [],
+        gates_triggered=result_data.get("gates_triggered") or [],
+        flags=result_data.get("flags") or [],
+        model_used=model_used,
+        tokens_used=result_data.get("tokens_used") or 0,
+        requires_attorney_review=bool(
+            result_data.get("requires_attorney_review", True)
+        ),
+        review_status="draft",
+    )
+    db.add_all([usage, skill_run])
     await db.commit()
 
-    return SkillResponse(**result_data)
+    return SkillResponse(**result_data, run_id=str(run_id), review_status="draft")

@@ -23,6 +23,7 @@ _fallback_burst_hits: dict[str, tuple[int, float]] = {}
 
 DEFAULT_ALLOWED_TOOLS = [
     "search_caselaw",
+    "search_legal_authorities",
     "get_case_details",
     "get_full_opinion",
     "find_similar_cases",

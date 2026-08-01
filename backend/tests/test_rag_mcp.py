@@ -1,7 +1,95 @@
+import asyncio
+
 import pytest
 
 import app.services.rag as rag
 from app.services.cache import ExpertiseCacheManager
+
+
+@pytest.mark.asyncio
+async def test_hybrid_rag_runs_local_and_connected_retrieval_concurrently(monkeypatch):
+    started = set()
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait_for_peer(name, result, **kwargs):
+        started.add(name)
+        if len(started) == 2:
+            both_started.set()
+        await release.wait()
+        return result
+
+    async def local(**kwargs):
+        return await wait_for_peer("local", ("local context", [{"id": "local"}]))
+
+    async def connected(**kwargs):
+        return await wait_for_peer(
+            "connected", ("cloud context", [{"id": "cloud"}], "smb context")
+        )
+
+    monkeypatch.setattr(rag, "full_rag_query", local)
+    monkeypatch.setattr(rag, "_connected_source_query", connected)
+
+    task = asyncio.create_task(
+        rag.hybrid_rag_query(
+            db=object(),
+            embedding_service=object(),
+            question="contract indemnity",
+            tenant_id="00000000-0000-0000-0000-000000000001",
+        )
+    )
+    await asyncio.wait_for(both_started.wait(), timeout=0.25)
+    assert not task.done()
+
+    release.set()
+    context, chunks, cloud_hits = await task
+
+    assert "local context" in context
+    assert "cloud context" in context
+    assert "smb context" in context
+    assert chunks == [{"id": "local"}]
+    assert cloud_hits == [{"id": "cloud"}]
+
+
+@pytest.mark.asyncio
+async def test_connected_source_planner_timeout_is_additive(monkeypatch):
+    class Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class Planner:
+        async def plan(self, **kwargs):
+            await asyncio.sleep(0.1)
+            return {"should_search": True, "sources": ["google_drive"]}
+
+    async def fake_context(db, tenant_id):
+        return None
+
+    async def fake_providers(db, tenant_id, user_id):
+        return ["google"]
+
+    monkeypatch.setattr(rag, "async_session_maker", lambda: Session())
+    monkeypatch.setattr(rag, "set_tenant_context", fake_context)
+    monkeypatch.setattr(rag, "_connected_providers", fake_providers)
+    monkeypatch.setattr(rag.settings, "SMB_ENABLED", False)
+    monkeypatch.setattr(rag.settings, "CLOUD_RETRIEVAL_PLANNER_TIMEOUT_SECONDS", 0.01)
+
+    result = await rag._connected_source_query(
+        question="find client contract",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id=None,
+        cloud_search_service=object(),
+        retrieval_planner=Planner(),
+        tenant_name="Demo",
+        matter_context_str=None,
+        matter_id=None,
+        matter_cloud_folder=None,
+    )
+
+    assert result == ("", [], "")
 
 
 def test_mcp_json_items_extracts_tool_json_payloads():
@@ -78,6 +166,35 @@ def test_mcp_item_to_chunk_preserves_case_links():
 
     assert chunk["citation"] == "2024 ND 1"
     assert chunk["url"] == "https://www.courtlistener.com/opinion/123/state-v-example/"
+
+
+def test_mcp_authority_item_to_chunk_preserves_freshness_and_authority_type():
+    chunk = rag._mcp_authority_item_to_chunk(
+        {
+            "chunk_id": "rule-1",
+            "document_id": "doc-1",
+            "source_key": "cms:medicaid-estate-recovery",
+            "source_name": "Federal Medicaid estate recovery guidance",
+            "title": "Medicaid Estate Recovery",
+            "document_type": "agency_guidance",
+            "authority_tier": "agency_guidance",
+            "official_status": "official",
+            "effective_date": "2026-01-01",
+            "retrieved_at": "2026-07-31T12:00:00Z",
+            "last_successful_sync_at": "2026-07-31T12:00:00Z",
+            "source_url": "https://www.medicaid.gov/medicaid/eligibility-policy/estate-recovery",
+            "content": "States must seek recovery in specified circumstances.",
+            "similarity": 0.8,
+        },
+        0,
+    )
+
+    assert chunk["id"] == "authority:rule-1"
+    assert chunk["source"] == "legal_authority_mcp"
+    assert chunk["clause_type"] == "agency_guidance"
+    assert chunk["official_status"] == "official"
+    assert chunk["last_successful_sync_at"] == "2026-07-31T12:00:00Z"
+    assert chunk["url"].startswith("https://www.medicaid.gov/")
 
 
 @pytest.mark.asyncio

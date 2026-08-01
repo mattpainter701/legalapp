@@ -7,6 +7,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     DATABASE_URL: str
+    # Size these together with BACKEND_WORKERS. The production example keeps
+    # the total API + scheduler ceiling below PostgreSQL's common 100 clients.
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 5
+    DATABASE_POOL_TIMEOUT_SECONDS: float = 15.0
     REDIS_URL: str = "redis://redis:6379"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -251,6 +256,7 @@ class Settings(BaseSettings):
     CLOUD_SEARCH_MAX_HITS: int = 10  # Cap results per source
     CLOUD_SEARCH_HIT_CONTENT_CHARS: int = 2000  # Max chars per fetched hit
     CLOUD_SEARCH_CACHE_TTL: int = 300  # 5 min for search results
+    CLOUD_RETRIEVAL_PLANNER_TIMEOUT_SECONDS: float = 3.0
     CLOUD_METADATA_SYNC_INTERVAL_MIN: int = 15  # Cron interval
 
     # ── Email Correspondence Capture ─────────────────────────────────────────

@@ -714,7 +714,14 @@ export default function PluginPage() {
             {output && (
               <div>
                 <div className="flex items-center justify-between mb-4 px-1">
-                  <h3 className="font-serif font-bold text-xl text-brand-ink">Analysis Results</h3>
+                  <div>
+                    <h3 className="font-serif font-bold text-xl text-brand-ink">Analysis Results</h3>
+                    {output.run_id && (
+                      <p className="mt-1 text-xs font-medium text-brand-muted">
+                        Saved as a {output.review_status || 'draft'} work product{selectedMatterId ? ' on this matter' : ''} · Attorney review required
+                      </p>
+                    )}
+                  </div>
                   <button
                     onClick={handleContinueInChat}
                     className="flex items-center gap-2 px-4 py-2 bg-brand-bg text-brand-ink text-sm font-sans font-medium rounded-lg border border-brand-line hover:border-brand-ink transition-colors shadow-sm"

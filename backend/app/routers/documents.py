@@ -11,6 +11,8 @@ from fastapi import (
     File,
 )
 import asyncio
+import hashlib
+from datetime import datetime, timezone
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,6 +60,11 @@ def _document_to_response(doc: Document) -> DocumentResponse:
         status=doc.status,
         chunk_count=doc.chunk_count,
         created_at=doc.created_at,
+        indexed_at=doc.indexed_at,
+        source_modified_at=doc.source_modified_at,
+        embedding_model=doc.embedding_model,
+        embedding_version=doc.embedding_version,
+        indexing_error=doc.error_message if doc.status == "error" else None,
     )
 
 
@@ -98,6 +105,8 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
 
             # Update status to processing
             doc.status = "processing"
+            doc.error_message = None
+            doc.indexed_at = None
             await _commit_and_restore_tenant_context(db, tenant_id)
 
             # Read file bytes
@@ -124,6 +133,8 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
                 await db.commit()
                 return
 
+            doc.content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
             # Chunk text (CPU-bound) in thread pool
             chunks_text = await asyncio.to_thread(chunk_text, text, 500, 50)
 
@@ -135,6 +146,13 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
 
             # Embed chunks in batches
             embeddings = await embedding_service.embed_batch(chunks_text)
+            if len(embeddings) != len(chunks_text):
+                doc.status = "error"
+                doc.error_message = (
+                    "Embedding service returned an incomplete result; indexing was not saved"
+                )
+                await db.commit()
+                return
 
             # Insert chunks
             chunk_objects = []
@@ -156,6 +174,9 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             # Update document status
             doc.status = "ready"
             doc.chunk_count = len(chunk_objects)
+            doc.indexed_at = datetime.now(timezone.utc)
+            doc.embedding_model = embedding_service.model
+            doc.embedding_version = 1
             await db.commit()
 
         except Exception as exc:

@@ -20,6 +20,7 @@ from app.models.mediation import (
     MediationProposal,
 )
 from app.models.plugin import MediationCase, MediationCaseEvent
+from app.models.task import Task
 from app.schemas.mediation import (
     AssetResponse,
     DocumentResponse,
@@ -40,7 +41,9 @@ def hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def case_to_response(case: MediationCase) -> MediationCaseResponse:
+def case_to_response(
+    case: MediationCase, next_task: Task | None = None
+) -> MediationCaseResponse:
     return MediationCaseResponse(
         id=str(case.id),
         case_name=case.case_name or case.title,
@@ -52,6 +55,14 @@ def case_to_response(case: MediationCase) -> MediationCaseResponse:
         mediator=case.mediator,
         attorney=case.attorney,
         claim_value=case.claim_value,
+        jurisdiction=case.jurisdiction,
+        court=case.court,
+        case_number=case.case_number,
+        waiting_on=case.waiting_on,
+        fixed_fee=case.fixed_fee,
+        next_action=next_task.title if next_task else None,
+        next_action_due=next_task.due_date if next_task else None,
+        next_action_priority=next_task.priority if next_task else None,
         scheduled_session=case.scheduled_session,
         confidentiality_signed=bool(case.confidentiality_signed),
         status=case.status,

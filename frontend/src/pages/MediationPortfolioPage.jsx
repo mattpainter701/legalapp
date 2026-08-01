@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getMediationCases, createMediationCase } from '../api'
-import { useAuth } from '../App'
 import { Handshake, Plus, Search, Filter, X, Check } from 'lucide-react'
 
 const STATUS_OPTIONS = ['all', 'active', 'scheduled', 'settled', 'closed']
+const WORK_OPTIONS = ['all', 'due_soon', 'waiting', 'no_next_action']
 const DISPUTE_TYPES = ['domestic', 'family', 'divorce', 'custody', 'property', 'contract', 'employment', 'other']
 
 function StatusBadge({ status }) {
@@ -49,6 +49,25 @@ function DateCell({ dateStr }) {
   }
 }
 
+function ActionDueCell({ dateStr }) {
+  if (!dateStr) return <span className="text-brand-muted text-xs font-sans">No due date</span>
+  try {
+    const due = parseISO(dateStr)
+    const days = differenceInDays(due, new Date())
+    const tone = days < 0 ? 'text-brand-rose font-bold' : days <= 7 ? 'text-brand-amber font-bold' : 'text-brand-ink-2 font-medium'
+    const label = days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Today' : days <= 7 ? `${days}d left` : null
+    return <span className={`text-[13px] font-sans ${tone}`}>{format(due, 'MMM d')}{label && <span className="block text-[10px] uppercase tracking-wide">{label}</span>}</span>
+  } catch {
+    return <span className="text-brand-muted text-xs font-sans">{dateStr}</span>
+  }
+}
+
+function formatFee(value) {
+  if (value == null || value === '') return '—'
+  const amount = Number(value)
+  return Number.isFinite(amount) ? amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) : value
+}
+
 export function MediationCaseRow({ caseRecord: c }) {
   return (
     <tr className="group transition-colors hover:bg-brand-bg-soft">
@@ -59,19 +78,16 @@ export function MediationCaseRow({ caseRecord: c }) {
         >
           {c.case_name || '—'}
         </Link>
+        <div className="pb-3 text-[11px] font-normal text-brand-muted">{c.party_a || 'Party A'} v. {c.party_b || 'Party B'}</div>
       </td>
-      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.party_a || '—'} <span className="mx-1 text-brand-muted">v.</span> {c.party_b || '—'}</td>
-      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] text-brand-muted">{c.dispute_type || '—'}</td>
+      <td className="px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2"><span className="block">{c.court || 'Court not set'}</span><span className="block text-[11px] font-normal text-brand-muted">{c.case_number || c.jurisdiction || '—'}</span></td>
       <td className="px-5 py-4"><StageBadge stage={c.mediation_stage} /></td>
-      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.mediator || '—'}</td>
-      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-medium text-brand-ink-2">{c.claim_value || '—'}</td>
-      <td className="px-5 py-4"><StatusBadge status={c.status} /></td>
-      <td className="px-5 py-4">
-        {c.confidentiality_signed
-          ? <span className="inline-flex items-center gap-1.5 font-sans text-xs font-semibold text-brand-green"><span className="h-1.5 w-1.5 rounded-full bg-brand-green" /> Signed</span>
-          : <span className="inline-flex items-center gap-1.5 font-sans text-xs font-semibold text-brand-amber"><span className="h-1.5 w-1.5 rounded-full bg-brand-amber" /> Pending</span>}
-      </td>
+      <td className="min-w-52 px-5 py-4 font-sans text-[13px] font-semibold text-brand-ink">{c.next_action || <span className="font-medium text-brand-rose">Set next action</span>}</td>
+      <td className="px-5 py-4"><ActionDueCell dateStr={c.next_action_due} /></td>
+      <td className="max-w-48 px-5 py-4 font-sans text-[13px] text-brand-ink-2">{c.waiting_on || <span className="text-brand-muted">—</span>}</td>
+      <td className="whitespace-nowrap px-5 py-4 font-sans text-[13px] font-semibold text-brand-ink-2">{formatFee(c.fixed_fee)}</td>
       <td className="px-5 py-4"><DateCell dateStr={c.scheduled_session} /></td>
+      <td className="px-5 py-4"><StatusBadge status={c.status} /></td>
       <td className="px-5 py-4 pr-6 text-right">
         <span className="font-sans text-sm font-semibold text-brand-accent opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">View →</span>
       </td>
@@ -81,18 +97,20 @@ export function MediationCaseRow({ caseRecord: c }) {
 
 export default function MediationPortfolioPage() {
   const navigate = useNavigate()
-  const { user } = useAuth()
   const [cases, setCases] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
+  const [workFilter, setWorkFilter] = useState('all')
+  const [stageFilter, setStageFilter] = useState('all')
   const [search, setSearch] = useState('')
 
   // Create modal state
   const [showCreate, setShowCreate] = useState(false)
   const [newCase, setNewCase] = useState({
     case_name: '', party_a: '', party_b: '', dispute_type: 'domestic',
-    mediator: '', attorney: '', claim_value: '', summary: '',
+    mediator: '', attorney: '', claim_value: '', jurisdiction: 'Ohio', court: '', case_number: '',
+    fixed_fee: '', waiting_on: '', next_action: '', next_action_due: '', summary: '',
   })
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState(null)
@@ -114,31 +132,46 @@ export default function MediationPortfolioPage() {
 
   const stats = useMemo(() => ({
     active: cases.filter((c) => c.status?.toLowerCase() === 'active').length,
-    scheduled: cases.filter((c) => c.status?.toLowerCase() === 'scheduled').length,
-    pendingNda: cases.filter((c) => !c.confidentiality_signed).length,
-    upcoming: cases.filter((c) => {
-      if (!c.scheduled_session) return false
-      try { const d = differenceInDays(parseISO(c.scheduled_session), new Date()); return d >= 0 && d <= 7 }
+    dueSoon: cases.filter((c) => {
+      if (!c.next_action_due) return false
+      try { return differenceInDays(parseISO(c.next_action_due), new Date()) <= 7 }
       catch { return false }
     }).length,
+    waiting: cases.filter((c) => Boolean(c.waiting_on)).length,
+    missingNext: cases.filter((c) => !c.next_action && !['settled', 'closed'].includes(c.status?.toLowerCase())).length,
   }), [cases])
 
   const filtered = useMemo(() => {
     return cases.filter((c) => {
       if (statusFilter !== 'all' && c.status?.toLowerCase() !== statusFilter) return false
+      if (stageFilter !== 'all' && c.mediation_stage !== stageFilter) return false
+      if (workFilter === 'waiting' && !c.waiting_on) return false
+      if (workFilter === 'no_next_action' && c.next_action) return false
+      if (workFilter === 'due_soon') {
+        if (!c.next_action_due) return false
+        try { if (differenceInDays(parseISO(c.next_action_due), new Date()) > 7) return false } catch { return false }
+      }
       if (search && !c.case_name?.toLowerCase().includes(search.toLowerCase())) return false
       return true
+    }).sort((a, b) => {
+      if (!a.next_action_due && !b.next_action_due) return 0
+      if (!a.next_action_due) return 1
+      if (!b.next_action_due) return -1
+      return parseISO(a.next_action_due) - parseISO(b.next_action_due)
     })
-  }, [cases, statusFilter, search])
+  }, [cases, statusFilter, workFilter, stageFilter, search])
+
+  const stages = useMemo(() => [...new Set(cases.map((c) => c.mediation_stage).filter(Boolean))].sort(), [cases])
 
   const handleCreate = async () => {
     if (!newCase.case_name.trim()) return
     setCreating(true); setCreateError(null)
     try {
-      const result = await createMediationCase(newCase)
+      const payload = Object.fromEntries(Object.entries(newCase).map(([key, value]) => [key, value === '' ? null : value]))
+      const result = await createMediationCase(payload)
       const created = result.mediation || result
       setShowCreate(false)
-      setNewCase({ case_name: '', party_a: '', party_b: '', dispute_type: 'domestic', mediator: '', attorney: '', claim_value: '', summary: '' })
+      setNewCase({ case_name: '', party_a: '', party_b: '', dispute_type: 'domestic', mediator: '', attorney: '', claim_value: '', jurisdiction: 'Ohio', court: '', case_number: '', fixed_fee: '', waiting_on: '', next_action: '', next_action_due: '', summary: '' })
       navigate(`/plugins/mediation/cases/${created.id}`)
     } catch (err) {
       setCreateError(err?.response?.data?.detail || 'Failed to create case.')
@@ -183,9 +216,9 @@ export default function MediationPortfolioPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-10">
           {[
             { label: 'Active Cases', value: stats.active, dot: 'bg-brand-green' },
-            { label: 'Scheduled Sessions', value: stats.scheduled, dot: 'bg-blue-500' },
-            { label: 'Sessions ≤ 7 Days', value: stats.upcoming, dot: 'bg-brand-amber' },
-            { label: 'Pending NDAs', value: stats.pendingNda, dot: 'bg-brand-rose' },
+            { label: 'Due / Overdue', value: stats.dueSoon, dot: 'bg-brand-rose' },
+            { label: 'Waiting on Others', value: stats.waiting, dot: 'bg-brand-amber' },
+            { label: 'Missing Next Action', value: stats.missingNext, dot: 'bg-blue-500' },
           ].map((s, i) => (
             <div key={i} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:border-brand-line-2 transition-colors shadow-sm">
               <div className="flex items-center justify-between mb-3"><div className={`w-2.5 h-2.5 rounded-full ${s.dot}`}></div></div>
@@ -201,6 +234,17 @@ export default function MediationPortfolioPage() {
             <Filter size={14} className="text-brand-muted" />
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-6 cursor-pointer appearance-none" style={{ backgroundImage: 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\' viewBox=\'0 0 10 6\'><path fill=\'none\' stroke=\'%2314253B\' stroke-width=\'1.4\' d=\'M1 1l4 4 4-4\'/></svg>")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1.5">
+            <select value={workFilter} onChange={(e) => setWorkFilter(e.target.value)} aria-label="Work queue filter" className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-3 cursor-pointer">
+              {WORK_OPTIONS.map((option) => <option key={option} value={option}>{({ all: 'All Work', due_soon: 'Due / Overdue', waiting: 'Waiting on Others', no_next_action: 'Missing Next Action' })[option]}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1.5">
+            <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} aria-label="Mediation stage filter" className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-3 cursor-pointer">
+              <option value="all">All Stages</option>
+              {stages.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
             </select>
           </div>
           <div className="flex-1 min-w-64 relative">
@@ -225,12 +269,23 @@ export default function MediationPortfolioPage() {
                   { key: 'mediator', label: 'Mediator', placeholder: 'Assigned mediator name' },
                   { key: 'attorney', label: 'Attorney / Counsel' },
                   { key: 'claim_value', label: 'Claim Value', placeholder: 'e.g., $250,000' },
+                  { key: 'jurisdiction', label: 'Jurisdiction', placeholder: 'Ohio' },
+                  { key: 'court', label: 'Court', placeholder: 'e.g., Franklin County Court of Common Pleas' },
+                  { key: 'case_number', label: 'Court Case Number' },
+                  { key: 'fixed_fee', label: 'Fixed Fee', placeholder: 'e.g., 750' },
+                  { key: 'waiting_on', label: 'Waiting On', placeholder: 'e.g., Respondent financial affidavit' },
+                  { key: 'next_action', label: 'First Next Action', placeholder: 'e.g., Send scheduling options to counsel' },
                 ].map(({ key, label, placeholder }) => (
                   <div key={key}>
                     <label htmlFor={`mediation-create-${key}`} className={labelCls}>{label}</label>
                     <input id={`mediation-create-${key}`} type="text" value={newCase[key]} onChange={(e) => setNewCase((p) => ({ ...p, [key]: e.target.value }))} className={inputCls} placeholder={placeholder} />
                   </div>
                 ))}
+                <div>
+                  <label htmlFor="mediation-create-next-action-due" className={labelCls}>Next Action Due</label>
+                  <input id="mediation-create-next-action-due" type="date" value={newCase.next_action_due} onChange={(e) => setNewCase((p) => ({ ...p, next_action_due: e.target.value }))} className={inputCls} />
+                  <p className="mt-2 text-xs leading-5 text-brand-muted">Creating the case also creates its matter and first assigned task, so it appears in the firm-wide work queue.</p>
+                </div>
                 <div>
                   <label htmlFor="mediationportfoliopage-dispute-type" className={labelCls}>Dispute Type</label>
                   <select id="mediationportfoliopage-dispute-type" value={newCase.dispute_type} onChange={(e) => setNewCase((p) => ({ ...p, dispute_type: e.target.value }))} className={inputCls}>
@@ -268,7 +323,7 @@ export default function MediationPortfolioPage() {
               <table className="min-w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-brand-bg-soft/50 border-b border-brand-line">
-                    {['Case', 'Parties', 'Dispute Type', 'Stage', 'Mediator', 'Claim Value', 'Status', 'NDA', 'Next Session', ''].map((h, i) => (
+                    {['Case', 'Court / Docket', 'Stage', 'Next Action', 'Due', 'Waiting On', 'Fixed Fee', 'Next Session', 'Status', ''].map((h, i) => (
                       <th key={h} className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 9 ? 'pr-6' : ''}`}>{h}</th>
                     ))}
                   </tr>

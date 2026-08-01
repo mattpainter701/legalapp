@@ -111,6 +111,13 @@ class EstateResponse(BaseModel):
     client_contact_id: Optional[str]
     client_name: Optional[str]
     beneficiaries_count: int = 0
+    missing_facts: List[str] = []
+    unvalued_assets_count: int = 0
+    unresolved_claims_count: int = 0
+    pending_distributions_count: int = 0
+    overdue_deadlines_count: int = 0
+    attention_count: int = 0
+    next_action: Optional[str] = None
     next_key_date: Optional[date]
     key_dates: List[KeyDate] = []
     created_at: datetime

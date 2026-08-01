@@ -148,7 +148,7 @@ services:
     # All user traffic must traverse nginx. Operator diagnostics use
     # `docker compose exec` and never publish the API directly on the host.
     ports: []
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${BACKEND_WORKERS:-4}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, MessageSquare, Plus, Search, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Database, FileText, MessageSquare, Plus, Search, X } from 'lucide-react'
 import { useAppShell } from '../AppShell'
 import FileUpload from '../FileUpload'
 import ConversationItem from './ConversationItem'
@@ -24,6 +24,7 @@ export default function ChatRail({
   onDeleteConversation,
   onClose,
   isOpen = true,
+  sourceHealth = null,
 }) {
   const {
     conversations,
@@ -267,7 +268,9 @@ export default function ChatRail({
           role="tabpanel"
           className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3"
         >
-          <div className="rounded-xl border border-brand-line bg-brand-surface p-3">
+          <PublicSourceHealth health={sourceHealth} />
+
+          <div className="mt-3 rounded-xl border border-brand-line bg-brand-surface p-3">
             <p className="text-sm font-semibold text-brand-ink">Firm source library</p>
             <p className="mt-1 text-xs leading-relaxed text-brand-muted">
               Upload reference material that can be retrieved across assistant conversations.
@@ -295,5 +298,85 @@ export default function ChatRail({
         </div>
       )}
     </aside>
+  )
+}
+
+function formatHealthDate(value) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(parsed)
+}
+
+function PublicSourceHealth({ health }) {
+  if (!health) {
+    return (
+      <div className="rounded-xl border border-brand-line bg-brand-surface p-3" aria-label="Loading public authority status">
+        <p className="text-sm font-semibold text-brand-ink">Public legal authority</p>
+        <p className="mt-1 text-xs text-brand-muted">Checking coverage and freshness…</p>
+      </div>
+    )
+  }
+
+  const source = (health.sources || []).find((item) => item.jurisdiction === 'OH') || health.sources?.[0]
+  const attention = health.status === 'attention'
+  if (!health.available || !source) {
+    return (
+      <div className="rounded-xl border border-brand-line bg-brand-surface p-3">
+        <div className="flex items-start gap-2">
+          <Database size={16} className="mt-0.5 shrink-0 text-brand-muted" />
+          <div>
+            <p className="text-sm font-semibold text-brand-ink">Public legal authority</p>
+            <p className="mt-1 text-xs leading-relaxed text-brand-muted">
+              Local coverage details are unavailable. Research answers should be checked against linked authorities.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const coverageStart = formatHealthDate(source.coverage_start)
+  const coverageEnd = formatHealthDate(source.coverage_end)
+  const lastSync = formatHealthDate(source.last_successful_sync_at)
+  const chunks = Number(source.chunk_count || 0)
+  const embedded = Number(source.embedded_chunk_count || 0)
+  const itemCount = Number(source.item_count || 0)
+  const coverage = [coverageStart, coverageEnd].filter(Boolean).join('–')
+
+  return (
+    <details className="group rounded-xl border border-brand-line bg-brand-surface p-3">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+        <span className="flex min-w-0 items-start gap-2">
+          <Database size={16} className="mt-0.5 shrink-0 text-brand-accent-2" />
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-brand-ink">Ohio case-law coverage</span>
+            <span className="mt-1 block text-xs leading-relaxed text-brand-muted">
+              {itemCount.toLocaleString()} opinions{coverage ? ` · ${coverage}` : ''}
+            </span>
+          </span>
+        </span>
+        <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wide ${
+          attention ? 'bg-brand-amber/15 text-brand-amber' : 'bg-brand-accent/10 text-brand-accent-2'
+        }`}>
+          {attention ? <AlertTriangle size={11} /> : <CheckCircle2 size={11} />}
+          {attention ? 'Check status' : 'Synced'}
+        </span>
+      </summary>
+      <div className="mt-3 border-t border-brand-line pt-3 text-xs text-brand-muted">
+        <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5">
+          <dt>Local snapshot</dt><dd className="text-right text-brand-ink">{coverageEnd || 'Not reported'}</dd>
+          <dt>Last successful sync</dt><dd className="text-right text-brand-ink">{lastSync || 'Not reported'}</dd>
+          <dt>Search passages</dt><dd className="text-right text-brand-ink">{embedded.toLocaleString()} / {chunks.toLocaleString()} embedded</dd>
+        </dl>
+        <p className="mt-3 leading-relaxed">
+          Coverage is bounded and does not replace checking the linked court source or a citator.
+        </p>
+      </div>
+    </details>
   )
 }

@@ -50,7 +50,7 @@ services:
       - ${HOST_STATUS_HOST_DIR:?Set an absolute HOST_STATUS_HOST_DIR in .env}:/run/legalapp-host-status:ro
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000
-      --workers 4 --log-level info
+      --workers ${BACKEND_WORKERS:-4} --log-level info
     deploy:
       resources:
         limits:

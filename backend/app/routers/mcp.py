@@ -97,6 +97,16 @@ async def _proxied_tool_names(request: Request) -> list[str]:
     ]
 
 
+def _tool_json_payload(response: dict) -> dict:
+    content = response.get("content") if isinstance(response, dict) else None
+    if not isinstance(content, list):
+        return {}
+    for item in content:
+        if isinstance(item, dict) and isinstance(item.get("json"), dict):
+            return item["json"]
+    return {}
+
+
 # ── Auth helper (JWT or API key) ──────────────────────────────────────────────
 
 
@@ -162,6 +172,91 @@ async def mcp_manifest(request: Request):
             for tool in tools
         ]
     )
+
+
+@router.get("/source-health")
+async def source_health(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return sanitized public-authority freshness for authenticated app users."""
+    await _require_mcp_identity(request, db)
+    if not settings.MCP_SERVER_URL:
+        return {
+            "available": False,
+            "status": "unconfigured",
+            "sources": [],
+            "partitions": [],
+        }
+    try:
+        response = await _proxy_post(
+            "/api/mcp/tools/call",
+            request,
+            {"name": "sync_status", "arguments": {}},
+        )
+    except Exception:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "sources": [],
+            "partitions": [],
+        }
+
+    payload = _tool_json_payload(response)
+    sources = []
+    for source in payload.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        sources.append(
+            {
+                key: source.get(key)
+                for key in (
+                    "source_key",
+                    "publisher",
+                    "source_type",
+                    "jurisdiction",
+                    "canonical_url",
+                    "coverage_start",
+                    "coverage_end",
+                    "coverage_kind",
+                    "last_successful_sync_at",
+                    "item_count",
+                    "chunk_count",
+                    "embedded_chunk_count",
+                    "embedding_model",
+                    "embedding_version",
+                )
+            }
+            | {"status": "attention" if source.get("current_error") else "healthy"}
+        )
+    partitions = []
+    for partition in payload.get("source_partitions") or []:
+        if not isinstance(partition, dict):
+            continue
+        partitions.append(
+            {
+                key: partition.get(key)
+                for key in (
+                    "source_key",
+                    "partition_key",
+                    "checkpoint_at",
+                    "status",
+                    "last_attempted_at",
+                    "last_successful_sync_at",
+                    "rows_processed",
+                    "chunks_created",
+                )
+            }
+        )
+    has_attention = any(source["status"] == "attention" for source in sources) or any(
+        partition.get("status") == "failed" for partition in partitions
+    )
+    return {
+        "available": bool(sources),
+        "status": "attention" if has_attention else ("healthy" if sources else "empty"),
+        "sources": sources,
+        "partitions": partitions,
+    }
 
 
 # ── Tool invocation ───────────────────────────────────────────────────────────

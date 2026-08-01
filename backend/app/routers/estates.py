@@ -96,6 +96,9 @@ async def _get_estate_or_404(
             selectinload(Estate.events),
             selectinload(Estate.beneficiaries),
             selectinload(Estate.deadlines),
+            selectinload(Estate.assets),
+            selectinload(Estate.liabilities),
+            selectinload(Estate.distributions),
             selectinload(Estate.client),
         )
         .where(Estate.id == estate_id, Estate.tenant_id == tenant_id)
@@ -114,6 +117,48 @@ def _estate_to_response(estate: Estate) -> EstateResponse:
     )
     key_dates = [KeyDate(label=d.title, date=d.due_date) for d in open_deadlines[:6]]
     next_key_date = open_deadlines[0].due_date if open_deadlines else None
+    missing_candidates = {
+        "Representative type": estate.representative_type,
+        "Jurisdiction": estate.jurisdiction,
+        "Date of death": estate.date_of_death,
+        "Court": estate.court_name,
+        "Court case number": estate.case_number,
+    }
+    missing_facts = [label for label, value in missing_candidates.items() if not value]
+    unvalued_assets = sum(
+        1
+        for asset in (estate.assets or [])
+        if asset.date_of_death_value is None and asset.current_value is None
+    )
+    unresolved_claims = sum(
+        1
+        for claim in (estate.liabilities or [])
+        if claim.status not in {"paid", "rejected"}
+    )
+    pending_distributions = sum(
+        1
+        for distribution in (estate.distributions or [])
+        if distribution.status not in {"complete", "completed", "cancelled"}
+    )
+    overdue_deadlines = [
+        deadline
+        for deadline in open_deadlines
+        if deadline.due_date < date.today()
+    ]
+    if overdue_deadlines:
+        next_action = f"Complete overdue deadline: {overdue_deadlines[0].title}"
+    elif missing_facts:
+        next_action = f"Add missing opening fact: {missing_facts[0]}"
+    elif unvalued_assets:
+        next_action = f"Value {unvalued_assets} asset{'s' if unvalued_assets != 1 else ''}"
+    elif unresolved_claims:
+        next_action = f"Review {unresolved_claims} unresolved claim{'s' if unresolved_claims != 1 else ''}"
+    elif pending_distributions:
+        next_action = f"Review {pending_distributions} pending distribution{'s' if pending_distributions != 1 else ''}"
+    elif next_key_date:
+        next_action = f"Prepare for {open_deadlines[0].title}"
+    else:
+        next_action = None
 
     return EstateResponse(
         id=str(estate.id),
@@ -138,6 +183,19 @@ def _estate_to_response(estate: Estate) -> EstateResponse:
         ),
         client_name=_contact_name(estate.client),
         beneficiaries_count=len(estate.beneficiaries or []),
+        missing_facts=missing_facts,
+        unvalued_assets_count=unvalued_assets,
+        unresolved_claims_count=unresolved_claims,
+        pending_distributions_count=pending_distributions,
+        overdue_deadlines_count=len(overdue_deadlines),
+        attention_count=(
+            len(missing_facts)
+            + unvalued_assets
+            + unresolved_claims
+            + pending_distributions
+            + len(overdue_deadlines)
+        ),
+        next_action=next_action,
         next_key_date=next_key_date,
         key_dates=key_dates,
         created_at=estate.created_at,
@@ -180,6 +238,9 @@ async def list_estates(
             selectinload(Estate.events),
             selectinload(Estate.beneficiaries),
             selectinload(Estate.deadlines),
+            selectinload(Estate.assets),
+            selectinload(Estate.liabilities),
+            selectinload(Estate.distributions),
             selectinload(Estate.client),
         )
         .where(

@@ -45,6 +45,15 @@ class Document(Base):
     )
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_modified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    embedding_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Chat attachment linkage (Tier 1 — session attachments, see docs/ARCHITECTURE.md).
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

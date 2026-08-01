@@ -138,6 +138,8 @@ class SkillResponse(BaseModel):
     requires_attorney_review: bool = True
     tokens_used: int = 0
     model_used: str
+    run_id: Optional[str] = None
+    review_status: str = "draft"
 
 
 # ── Matters ───────────────────────────────────────────────────────────────────

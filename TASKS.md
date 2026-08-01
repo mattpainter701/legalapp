@@ -1,5 +1,41 @@
 # TASKS.md
 
+## Demo Polish Release — Ohio Authority And Practice Workflows — 2026-07-31 (IN PROGRESS)
+
+**Goal:** Ship one rehearsed polish release before the law-firm demonstrations: real
+firm-domain tenants, fast/source-transparent chat, bounded Ohio authority with a real
+CourtListener sync, a 40-case mediation matter-flow view, a clear probate command
+center, and an end-to-end corporate contract-review path.
+
+Planning doc: `docs/demo-polish-release-epic-2026-07-31.md`.
+
+- [ ] `BK23 / DP-01–02` Provision explicit firm-domain launch profiles and repeatable
+      persona fixtures without domain-based cross-tenant joining
+- [ ] `BK23 / DP-03–07` Add the source registry, bounded 2015+ Ohio appellate/Supreme
+      Court baseline, idempotent incremental reconciliation, reviewed Ohio mediation
+      source manifest, and coverage-aware live fallback
+- [ ] `BK23 / DP-08–10` Use a warmed paid demo route, instrument latency, show immediate
+      progress, bound/concurrently run retrieval, and expose compact source freshness
+- [ ] `BK23 / DP-11–14` Link mediation cases to matters/tasks, add the 40-case legal
+      Scrumban portfolio and starter workflow recipes, and close portal proposal/document
+      gaps
+- [ ] `BK23 / DP-15–17` Add probate Today/status polish and a persisted contract-review
+      path through matter task and renewal follow-through; standardize demonstrated
+      cross-module actions as schedule permits
+- [ ] `BK23 / DP-18–19` Deploy the exact release candidate to the larger guest and pass
+      migration, isolation, backup/restore, rollback, Ohio retrieval, latency, and four
+      persona smoke gates
+
+Implemented so far: resumable Ohio CourtListener sync/source registry and chat health;
+document indexing provenance; parallel bounded retrieval; mediation matter/task work
+queue; probate attention view; persisted add-on work products; and configurable API
+worker/database-pool budgets. Live Ohio ingestion, reviewed rule manifests, contract
+task/renewal follow-through, tenant provisioning, and target-host release gates remain.
+
+**Cut line:** DP-17, drag-and-drop, pre-2015 Ohio history, and CourtListener webhooks are
+the first deferrals. Tenant isolation, honest source coverage, attorney review,
+backup/restore, portal confidentiality, and target-server demo smokes may not be cut.
+
 ## Add-on Modules Customer Review — Sprint A: Stop The Bleeding — 2026-07-26 (DONE)
 
 **Goal:** Walk the whole `/plugins` add-on surface as a paying attorney and as a

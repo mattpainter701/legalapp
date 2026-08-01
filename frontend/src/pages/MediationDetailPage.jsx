@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import {
-  getMediationCase, updateMediationCase, addMediationEvent,
+  getMediationCase, updateMediationCase, advanceMediationCase, addMediationEvent,
   listMediationParties, createMediationParty, updateMediationParty, deleteMediationParty, inviteMediationParty,
   listMediationAssets, createMediationAsset, updateMediationAsset, deleteMediationAsset,
   approveMediationAsset, sendMediationAsset,
@@ -21,7 +21,12 @@ import {
 
 const SESSION_TYPES = ['opening', 'joint', 'caucus', 'shuttle', 'drafting', 'follow_up', 'other']
 const STATUS_OPTIONS = ['active', 'scheduled', 'settled', 'closed']
-const STAGE_OPTIONS = ['Pre-Session', 'Opening Statements', 'Joint Session', 'Caucus', 'Agreement Drafting', 'Concluded']
+const STAGE_OPTIONS = [
+  'New Referral', 'Conflict / Eligibility', 'Awaiting Parties', 'Scheduling',
+  'Intake Incomplete', 'Ready', 'Session Scheduled', 'Agreement / Report',
+  'Awaiting Signatures / Court Filing', 'Billing / Close',
+  'Pre-Session', 'Opening Statements', 'Joint Session', 'Caucus', 'Agreement Drafting', 'Concluded',
+]
 const PARTY_ROLES = ['our_client', 'opposing_party', 'mediator', 'attorney', 'other']
 
 const TABS = ['Overview', 'Parties', 'Assets', 'Documents', 'Proposals', 'Sessions']
@@ -109,6 +114,8 @@ export default function MediationDetailPage() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [nextAction, setNextAction] = useState({ title: '', due_date: '', priority: 'medium', waiting_on: '' })
+  const [advancing, setAdvancing] = useState(false)
 
   const [showAddSession, setShowAddSession] = useState(false)
   const [newSession, setNewSession] = useState({ session_type: 'caucus', title: '', content: '' })
@@ -136,7 +143,8 @@ export default function MediationDetailPage() {
     setSaving(true)
     setSaveError(null)
     try {
-      const updated = await updateMediationCase(id, editData)
+      const payload = { ...editData, fixed_fee: editData.fixed_fee === '' ? null : editData.fixed_fee }
+      const updated = await updateMediationCase(id, payload)
       setMediation(updated.mediation || updated)
       setEditing(false)
     } catch { setSaveError('Failed to save changes.') } finally { setSaving(false) }
@@ -146,6 +154,23 @@ export default function MediationDetailPage() {
     if (!await confirmAction({ title: 'Delete mediation case?', message: 'This case will be permanently deleted and cannot be restored.', confirmLabel: 'Delete case', destructive: true })) return
     setDeleting(true)
     try { await deleteMediationCase(id); navigate('/plugins/mediation/cases') } catch { setDeleting(false) }
+  }
+
+  const handleAdvance = async () => {
+    if (!nextAction.title.trim()) return
+    setAdvancing(true)
+    try {
+      const payload = { ...nextAction, due_date: nextAction.due_date || null, waiting_on: nextAction.waiting_on || null }
+      const updated = await advanceMediationCase(id, payload)
+      setMediation(updated.mediation || updated)
+      setEditData(updated.mediation || updated)
+      setNextAction({ title: '', due_date: '', priority: 'medium', waiting_on: '' })
+      toast.success('Work queue advanced')
+    } catch (error) {
+      toast.error('Next action was not saved', { message: error?.response?.data?.detail || 'Please try again.' })
+    } finally {
+      setAdvancing(false)
+    }
   }
 
   const handleAddSession = async () => {
@@ -386,6 +411,9 @@ export default function MediationDetailPage() {
                       { key: 'party_a', label: 'Party A' }, { key: 'party_b', label: 'Party B' },
                       { key: 'dispute_type', label: 'Dispute Type' }, { key: 'mediator', label: 'Mediator' },
                       { key: 'attorney', label: 'Attorney' }, { key: 'claim_value', label: 'Claim Value' },
+                      { key: 'jurisdiction', label: 'Jurisdiction' }, { key: 'court', label: 'Court' },
+                      { key: 'case_number', label: 'Court Case Number' }, { key: 'fixed_fee', label: 'Fixed Fee' },
+                      { key: 'waiting_on', label: 'Waiting On', full: true },
                       { key: 'scheduled_session', label: 'Next Session', type: 'datetime-local' },
                     ].map(({ key, label, type, full }) => (
                       <div key={key} className={full ? 'col-span-2' : ''}>
@@ -399,7 +427,7 @@ export default function MediationDetailPage() {
                     ))}
                     <div>
                       <label htmlFor="mediationdetailpage-stage" className={labelClasses}>Stage</label>
-                      <select id="mediationdetailpage-stage" value={editData.mediation_stage || 'Pre-Session'} onChange={(e) => setEditData((p) => ({ ...p, mediation_stage: e.target.value }))} className={inputClasses}>
+                      <select id="mediationdetailpage-stage" value={editData.mediation_stage || 'New Referral'} onChange={(e) => setEditData((p) => ({ ...p, mediation_stage: e.target.value }))} className={inputClasses}>
                         {STAGE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
@@ -422,6 +450,13 @@ export default function MediationDetailPage() {
                     <Field label="Mediator">{display.mediator}</Field>
                     <Field label="Attorney">{display.attorney}</Field>
                     <Field label="Claim Value" bold>{display.claim_value}</Field>
+                    <Field label="Court">{display.court}</Field>
+                    <Field label="Court Case Number">{display.case_number}</Field>
+                    <Field label="Jurisdiction">{display.jurisdiction}</Field>
+                    <Field label="Fixed Fee" bold>{display.fixed_fee ? Number(display.fixed_fee).toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : null}</Field>
+                    <Field label="Next Action" bold>{display.next_action}</Field>
+                    <Field label="Next Action Due">{display.next_action_due ? (() => { try { return format(parseISO(display.next_action_due), 'MMMM d, yyyy') } catch { return display.next_action_due } })() : null}</Field>
+                    <Field label="Waiting On">{display.waiting_on}</Field>
                     <Field label="Next Session">{display.scheduled_session ? (() => { try { return format(parseISO(display.scheduled_session), 'MMMM d, yyyy h:mm a') } catch { return display.scheduled_session } })() : null}</Field>
                     <Field label="Confidentiality">{display.confidentiality_signed ? <span className="text-brand-green font-medium flex items-center gap-1.5"><Check size={15} /> Signed</span> : <span className="text-brand-amber font-medium flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-brand-amber"></div> Pending</span>}</Field>
                     {display.parties_count !== undefined && <Field label="Parties">{display.parties_count}</Field>}
@@ -439,6 +474,35 @@ export default function MediationDetailPage() {
               </div>
             </div>
             <div className="lg:col-span-1">
+              <div className="mb-6 bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
+                <h2 className="font-serif font-bold text-xl text-brand-ink mb-2">Advance Work Queue</h2>
+                <p className="mb-4 text-xs leading-5 text-brand-muted">Completes the current task and assigns the next action to you.</p>
+                <div className="space-y-3">
+                  <div>
+                    <label htmlFor="mediation-next-action" className={labelClasses}>Next Action</label>
+                    <input id="mediation-next-action" value={nextAction.title} onChange={(e) => setNextAction((p) => ({ ...p, title: e.target.value }))} className={inputClasses} placeholder="Send proposed dates to counsel" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="mediation-next-due" className={labelClasses}>Due</label>
+                      <input id="mediation-next-due" type="date" value={nextAction.due_date} onChange={(e) => setNextAction((p) => ({ ...p, due_date: e.target.value }))} className={inputClasses} />
+                    </div>
+                    <div>
+                      <label htmlFor="mediation-next-priority" className={labelClasses}>Priority</label>
+                      <select id="mediation-next-priority" value={nextAction.priority} onChange={(e) => setNextAction((p) => ({ ...p, priority: e.target.value }))} className={inputClasses}>
+                        {['low', 'medium', 'high', 'urgent'].map((priority) => <option key={priority} value={priority}>{priority.charAt(0).toUpperCase() + priority.slice(1)}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="mediation-next-waiting" className={labelClasses}>Waiting On</label>
+                    <input id="mediation-next-waiting" value={nextAction.waiting_on} onChange={(e) => setNextAction((p) => ({ ...p, waiting_on: e.target.value }))} className={inputClasses} placeholder="Leave blank if internal" />
+                  </div>
+                  <button onClick={handleAdvance} disabled={advancing || !nextAction.title.trim()} className="w-full rounded-lg bg-brand-ink px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:opacity-50">
+                    {advancing ? 'Saving…' : 'Complete Current & Set Next'}
+                  </button>
+                </div>
+              </div>
               <div className="bg-brand-surface border border-brand-line rounded-2xl p-6 shadow-sm">
                 <h2 className="font-serif font-bold text-xl text-brand-ink mb-4 flex items-center gap-2"><Clock size={20} className="text-brand-accent" /> Recent Activity</h2>
                 {sessions.length === 0 ? (

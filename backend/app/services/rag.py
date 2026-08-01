@@ -320,6 +320,68 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     }
 
 
+def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
+    """Map a statute/rule/manual MCP hit to the shared chat/RAG contract."""
+    chunk_id = str(item.get("chunk_id") or item.get("id") or f"authority_{rank_index}")
+    rank_score = item.get("similarity", item.get("rank"))
+    try:
+        similarity = float(rank_score)
+    except (TypeError, ValueError):
+        similarity = 0.0
+    if similarity <= 0.0 or similarity > 1.0:
+        similarity = max(0.1, 1.0 - (rank_index * 0.05))
+    source_url = item.get("source_url") or item.get("canonical_url")
+    authority_tier = item.get("authority_tier") or "public_authority"
+    effective_date = item.get("effective_date") or item.get("publication_date")
+    return {
+        "id": f"authority:{chunk_id}",
+        "content": item.get("content") or "",
+        "case_name": item.get("title") or "Legal Authority",
+        "citation": item.get("citation") or "",
+        "court": item.get("source_name") or item.get("jurisdiction") or "",
+        "decision_date": str(effective_date) if effective_date else None,
+        "chunk_index": item.get("chunk_index") or 0,
+        "section_path": item.get("document_type") or authority_tier,
+        "clause_type": authority_tier,
+        "similarity": similarity,
+        "relevance_score": similarity,
+        "source": "legal_authority_mcp",
+        "retrieval_mode": item.get("search_source") or "unknown",
+        "document_id": item.get("document_id"),
+        "source_key": item.get("source_key"),
+        "official_status": item.get("official_status"),
+        "effective_date": item.get("effective_date"),
+        "retrieved_at": item.get("retrieved_at"),
+        "last_successful_sync_at": item.get("last_successful_sync_at"),
+        "url": source_url,
+        "source_url": source_url,
+    }
+
+
+async def _call_public_mcp_search(
+    client: httpx.AsyncClient,
+    url: str,
+    tool_name: str,
+    query: str,
+    top_k: int,
+) -> dict[str, Any] | None:
+    try:
+        response = await client.post(
+            url,
+            json={"name": tool_name, "arguments": {"query": query, "top_k": top_k}},
+            headers={"X-Clarity-Internal-Key": settings.MCP_UPSTREAM_API_KEY},
+        )
+        response.raise_for_status()
+        response_data = response.json()
+    except Exception:
+        logger.exception("Public legal MCP search failed for tool=%s", tool_name)
+        return None
+    if response_data.get("isError"):
+        logger.warning("Public legal MCP returned an error for tool=%s", tool_name)
+        return None
+    return response_data
+
+
 async def search_courtlistener_mcp(
     query: str,
     top_k: int = 8,
@@ -329,36 +391,31 @@ async def search_courtlistener_mcp(
         return []
 
     url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/mcp/tools/call"
-    payload = {
-        "name": "search_caselaw",
-        "arguments": {"query": query, "top_k": top_k},
-    }
     if not settings.MCP_UPSTREAM_API_KEY:
         logger.error("CourtListener MCP upstream authentication is not configured")
         return []
-    try:
-        timeout = httpx.Timeout(12.0, connect=3.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers={"X-Clarity-Internal-Key": settings.MCP_UPSTREAM_API_KEY},
-            )
-            response.raise_for_status()
-            response_data = response.json()
-    except Exception:
-        logger.exception("CourtListener MCP search failed")
-        return []
+    timeout = httpx.Timeout(12.0, connect=3.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        case_response, authority_response = await asyncio.gather(
+            _call_public_mcp_search(client, url, "search_caselaw", query, top_k),
+            _call_public_mcp_search(
+                client, url, "search_legal_authorities", query, top_k
+            ),
+        )
 
-    if response_data.get("isError"):
-        logger.warning("CourtListener MCP returned an error response")
-        return []
-
-    return [
+    case_chunks = [
         _mcp_item_to_chunk(item, index)
-        for index, item in enumerate(_mcp_json_items(response_data))
+        for index, item in enumerate(_mcp_json_items(case_response or {}))
         if item.get("content")
     ]
+    authority_chunks = [
+        _mcp_authority_item_to_chunk(item, index)
+        for index, item in enumerate(_mcp_json_items(authority_response or {}))
+        if item.get("content")
+    ]
+    combined = case_chunks + authority_chunks
+    combined.sort(key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True)
+    return combined[:top_k]
 
 
 async def build_rag_context(chunks: List[dict]) -> str:
@@ -547,6 +604,125 @@ def cloud_context_source_id(hit_dict: dict) -> str:
     )
 
 
+async def _connected_source_query(
+    *,
+    question: str,
+    tenant_id: str,
+    user_id: str | None,
+    cloud_search_service,
+    retrieval_planner,
+    tenant_name: str,
+    matter_context_str: str | None,
+    matter_id: str | None,
+    matter_cloud_folder: dict | None,
+) -> tuple[str, list[dict], str]:
+    """Search connected cloud/SMB sources using an independent DB session.
+
+    This path is additive. It must not delay or break local/public authority
+    retrieval when no provider is connected, the planner times out, or an
+    upstream provider is unavailable.
+    """
+    if not cloud_search_service or not retrieval_planner:
+        return "", [], ""
+
+    cloud_hits: list[dict] = []
+    cloud_context = ""
+    smb_context = ""
+    async with async_session_maker() as cloud_db:
+        await set_tenant_context(cloud_db, str(tenant_id))
+        connected = await _connected_providers(cloud_db, tenant_id, user_id)
+        smb_enabled = settings.SMB_ENABLED
+        if smb_enabled:
+            from app.models.smb_agent import SmbAgent
+
+            active_agents = await cloud_db.execute(
+                select(sa_func.count(SmbAgent.id)).where(
+                    SmbAgent.tenant_id == uuid.UUID(str(tenant_id)),
+                    SmbAgent.status == "active",
+                )
+            )
+            smb_enabled = active_agents.scalar_one() > 0
+
+        if not connected and not smb_enabled:
+            return "", [], ""
+
+        try:
+            plan = await asyncio.wait_for(
+                retrieval_planner.plan(
+                    user_question=question,
+                    db=cloud_db,
+                    tenant_id=tenant_id,
+                    tenant_name=tenant_name,
+                    matter_context=matter_context_str,
+                    active_providers=connected if connected else None,
+                    smb_enabled=smb_enabled,
+                ),
+                timeout=settings.CLOUD_RETRIEVAL_PLANNER_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.info("Connected-source retrieval planner timed out")
+            return "", [], ""
+        except Exception:
+            logger.exception("Connected-source retrieval planner failed")
+            return "", [], ""
+
+        if not plan or not plan.get("should_search"):
+            return "", [], ""
+        sources = plan.get("sources", [])
+
+        if settings.CLOUD_SEARCH_ENABLED:
+            cloud_sources = [source for source in sources if source != "smb"]
+            if cloud_sources and connected:
+                try:
+                    cloud_hits = await cloud_search_service.search(
+                        db=cloud_db,
+                        plan={**plan, "sources": cloud_sources},
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        matter_cloud_folder=matter_cloud_folder,
+                    )
+                    if cloud_hits:
+                        hits_with_content = await cloud_search_service.fetch_contents(
+                            db=cloud_db,
+                            hits=cloud_hits,
+                            tenant_id=tenant_id,
+                            max_chars=settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
+                            user_id=user_id,
+                        )
+                        cloud_context = await build_cloud_context(hits_with_content)
+                        cloud_hits = [
+                            {
+                                **(
+                                    item["hit"].to_dict()
+                                    if hasattr(item.get("hit"), "to_dict")
+                                    else dict(item.get("hit") or {})
+                                ),
+                                "_validation_content": item.get("content") or "",
+                            }
+                            for item in hits_with_content
+                        ]
+                except Exception:
+                    logger.exception("Connected cloud search failed")
+
+        if smb_enabled and "smb" in sources:
+            try:
+                from app.services.smb import smb_service
+
+                smb_results = await smb_service.search_files(
+                    db=cloud_db,
+                    tenant_id=tenant_id,
+                    query=" ".join(plan.get("keywords", [question])),
+                    matter_id=matter_id,
+                    limit=min(int(plan.get("max_hits", 10)), 10),
+                )
+                if smb_results:
+                    smb_context = await smb_service.build_smb_context(smb_results)
+            except Exception:
+                logger.exception("SMB search failed")
+
+    return cloud_context, cloud_hits, smb_context
+
+
 async def hybrid_rag_query(
     db: AsyncSession,
     embedding_service: EmbeddingService,
@@ -570,124 +746,42 @@ async def hybrid_rag_query(
     Returns (context_string, chunks_list, cloud_hits_list).
     The caller is responsible for merging context strings if both return results.
     """
-    # 1. Standard pgvector RAG (always run)
-    pgvector_context, chunks = await full_rag_query(
-        db=db,
-        embedding_service=embedding_service,
-        question=question,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        include_public=include_public,
+    local_result, connected_result = await asyncio.gather(
+        full_rag_query(
+            db=db,
+            embedding_service=embedding_service,
+            question=question,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            include_public=include_public,
+        ),
+        _connected_source_query(
+            question=question,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            cloud_search_service=cloud_search_service,
+            retrieval_planner=retrieval_planner,
+            tenant_name=tenant_name,
+            matter_context_str=matter_context_str,
+            matter_id=matter_id,
+            matter_cloud_folder=matter_cloud_folder,
+        ),
+        return_exceptions=True,
     )
 
-    # 2. Cloud search (only if services are wired and cloud search is enabled)
-    cloud_hits = []
-    cloud_context = ""
-    smb_context = ""
-    if cloud_search_service and retrieval_planner:
-        from app.config import get_settings as _get_settings
+    if isinstance(local_result, BaseException):
+        logger.error("Private/public RAG retrieval failed: %s", local_result)
+        pgvector_context, chunks = "", []
+    else:
+        pgvector_context, chunks = local_result
 
-        _settings = _get_settings()
-        # Determine which providers are connected for cloud search
-        connected = await _connected_providers(db, tenant_id, user_id)
+    if isinstance(connected_result, BaseException):
+        logger.error("Connected-source retrieval failed: %s", connected_result)
+        cloud_context, cloud_hits, smb_context = "", [], ""
+    else:
+        cloud_context, cloud_hits, smb_context = connected_result
 
-        # Check if SMB is enabled for this tenant
-        smb_enabled = _settings.SMB_ENABLED
-        if smb_enabled:
-            from app.models.smb_agent import SmbAgent
-
-            active_agents = await db.execute(
-                select(sa_func.count(SmbAgent.id)).where(
-                    SmbAgent.tenant_id == uuid.UUID(tenant_id)
-                    if isinstance(tenant_id, str)
-                    else SmbAgent.tenant_id,
-                    SmbAgent.status == "active",
-                )
-            )
-            if active_agents.scalar_one() == 0:
-                smb_enabled = False
-
-        plan = None
-        if connected or smb_enabled:
-            try:
-                plan = await retrieval_planner.plan(
-                    user_question=question,
-                    db=db,
-                    tenant_id=tenant_id,
-                    tenant_name=tenant_name,
-                    matter_context=matter_context_str,
-                    active_providers=connected if connected else None,
-                    smb_enabled=smb_enabled,
-                )
-            except Exception:
-                pass  # Non-fatal
-
-        if plan and plan.get("should_search"):
-            try:
-                sources = plan.get("sources", [])
-                # Cloud search (Google/Microsoft sources)
-                if _settings.CLOUD_SEARCH_ENABLED:
-                    cloud_sources = [s for s in sources if s not in ("smb",)]
-                    if cloud_sources and connected:
-                        cloud_plan = {**plan, "sources": cloud_sources}
-                        cloud_hits = await cloud_search_service.search(
-                            db=db,
-                            plan=cloud_plan,
-                            tenant_id=tenant_id,
-                            user_id=user_id,
-                            matter_cloud_folder=matter_cloud_folder,
-                        )
-                        if cloud_hits:
-                            hits_with_content = (
-                                await cloud_search_service.fetch_contents(
-                                    db=db,
-                                    hits=cloud_hits,
-                                    tenant_id=tenant_id,
-                                    max_chars=_settings.CLOUD_SEARCH_HIT_CONTENT_CHARS,
-                                    user_id=user_id,
-                                )
-                            )
-                            cloud_context = await build_cloud_context(
-                                hits_with_content,
-                            )
-                            # Preserve the exact provider-visible excerpt for
-                            # authoritative quote/source validation downstream.
-                            cloud_hits = [
-                                {
-                                    **(
-                                        item["hit"].to_dict()
-                                        if hasattr(item.get("hit"), "to_dict")
-                                        else dict(item.get("hit") or {})
-                                    ),
-                                    "_validation_content": item.get("content") or "",
-                                }
-                                for item in hits_with_content
-                            ]
-
-                # SMB search (on-prem file shares)
-                if _settings.SMB_ENABLED and "smb" in sources:
-                    try:
-                        from app.services.smb import smb_service
-
-                        smb_results = await smb_service.search_files(
-                            db=db,
-                            tenant_id=tenant_id,
-                            query=" ".join(plan.get("keywords", [question])),
-                            matter_id=matter_id,
-                            limit=plan.get("max_hits", 10),
-                        )
-                        if smb_results:
-                            smb_context = await smb_service.build_smb_context(
-                                smb_results
-                            )
-                    except Exception:
-                        pass  # SMB search is additive — failure must not break chat
-
-            except Exception:
-                # Cloud search is additive — failure must not break chat
-                pass
-
-    # 3. Merge contexts — cloud and SMB results after pgvector
+    # 2. Merge contexts — cloud and SMB results after pgvector
     parts = [pgvector_context] if pgvector_context else []
     if cloud_context:
         parts.append(f"--- Cloud Search Results ---\n\n{cloud_context}")

@@ -228,6 +228,61 @@ def test_mcp_messages_accepts_jsonrpc_tools_call_shape():
 
 
 @pytest.mark.asyncio
+async def test_source_health_sanitizes_operator_errors(monkeypatch):
+    async def require_identity(request, db):
+        return object(), object()
+
+    async def proxy(path, request, payload):
+        assert payload == {"name": "sync_status", "arguments": {}}
+        return {
+            "content": [
+                {
+                    "type": "json",
+                    "json": {
+                        "sources": [
+                            {
+                                "source_key": "courtlistener:ohio-caselaw",
+                                "publisher": "CourtListener",
+                                "source_type": "case_law",
+                                "jurisdiction": "OH",
+                                "coverage_start": "2015-01-01",
+                                "coverage_end": "2026-07-30",
+                                "last_successful_sync_at": "2026-07-31T10:00:00Z",
+                                "item_count": 1200,
+                                "chunk_count": 5000,
+                                "embedded_chunk_count": 4900,
+                                "current_error": "database password leaked here",
+                            }
+                        ],
+                        "source_partitions": [
+                            {
+                                "source_key": "courtlistener:ohio-caselaw",
+                                "partition_key": "ohio",
+                                "status": "failed",
+                                "last_error": "upstream token leaked here",
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021"
+    )
+    monkeypatch.setattr(mcp, "_require_mcp_identity", require_identity)
+    monkeypatch.setattr(mcp, "_proxy_post", proxy)
+
+    result = await mcp.source_health(SimpleNamespace(headers={}), object())
+
+    assert result["available"] is True
+    assert result["status"] == "attention"
+    assert result["sources"][0]["item_count"] == 1200
+    assert "current_error" not in result["sources"][0]
+    assert "last_error" not in result["partitions"][0]
+
+
+@pytest.mark.asyncio
 async def test_tenant_admin_can_create_product_key(monkeypatch):
     tenant_id = uuid.uuid4()
     user = SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id, role="admin")

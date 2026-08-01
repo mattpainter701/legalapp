@@ -11,6 +11,7 @@ response builders). Path prefix matches the existing frontend skeleton.
 import hashlib
 import os
 import secrets
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List
@@ -40,7 +41,8 @@ from app.models.mediation import (
     MediationParty,
     MediationProposal,
 )
-from app.models.plugin import MediationCase, MediationCaseEvent
+from app.models.plugin import Matter, MediationCase, MediationCaseEvent
+from app.models.task import Task
 from app.models.user import User
 from app.schemas.mediation import (
     AssetCreate,
@@ -50,6 +52,7 @@ from app.schemas.mediation import (
     InviteResponse,
     MediationCaseCreate,
     MediationCaseDetail,
+    MediationNextActionCreate,
     MediationCaseResponse,
     MediationCaseUpdate,
     MediationStats,
@@ -80,6 +83,76 @@ INVITE_TTL_DAYS = 14
 
 def _as_uuid(value: str | None) -> uuid.UUID | None:
     return uuid.UUID(value) if value else None
+
+
+def _matter_slug(name: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:80] or "mediation"
+    return f"{base}-{uuid.uuid4().hex[:8]}"
+
+
+async def _resolve_or_create_matter(
+    db: AsyncSession,
+    *,
+    user: User,
+    body: MediationCaseCreate,
+) -> Matter:
+    """Guarantee every mediation has a tenant-owned operational matter."""
+    if body.matter_id:
+        matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == _as_uuid(body.matter_id),
+                    Matter.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if matter is None:
+            raise HTTPException(status_code=404, detail="Matter not found")
+        return matter
+
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        slug=_matter_slug(body.case_name),
+        matter_name=body.case_name,
+        description=body.summary,
+        matter_type="mediation",
+        practice_area="Mediation",
+        primary_plugin="mediation-legal",
+        jurisdiction=body.jurisdiction,
+        court=body.court,
+        case_number=body.case_number,
+        counterparty=body.party_b,
+        stage=body.mediation_stage,
+        billing_method="flat_fee" if body.fixed_fee is not None else "hourly",
+        budget_amount=body.fixed_fee,
+        client_contact_id=_as_uuid(body.client_contact_id),
+    )
+    db.add(matter)
+    return matter
+
+
+async def _next_task_map(
+    db: AsyncSession, cases: list[MediationCase]
+) -> dict[uuid.UUID, Task]:
+    matter_ids = {case.matter_id for case in cases if case.matter_id}
+    if not matter_ids:
+        return {}
+    tasks = (
+        await db.execute(
+            select(Task)
+            .where(
+                Task.matter_id.in_(matter_ids),
+                Task.status.in_(("pending", "in_progress")),
+            )
+            .order_by(Task.due_date.asc().nullslast(), Task.created_at.asc())
+        )
+    ).scalars()
+    next_by_matter: dict[uuid.UUID, Task] = {}
+    for task in tasks:
+        next_by_matter.setdefault(task.matter_id, task)
+    return next_by_matter
 
 
 async def _get_case_or_404(
@@ -152,7 +225,9 @@ async def list_cases(request: Request, db: AsyncSession = Depends(get_db)):
         .where(MediationCase.tenant_id == user.tenant_id)
         .order_by(MediationCase.updated_at.desc())
     )
-    return [ms.case_to_response(c) for c in result.scalars().all()]
+    cases = list(result.scalars().all())
+    next_tasks = await _next_task_map(db, cases)
+    return [ms.case_to_response(c, next_tasks.get(c.matter_id)) for c in cases]
 
 
 @router.get("/cases/stats", response_model=MediationStats)
@@ -184,6 +259,8 @@ async def create_case(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
 
+    matter = await _resolve_or_create_matter(db, user=user, body=body)
+
     case = MediationCase(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -196,18 +273,37 @@ async def create_case(
         mediator=body.mediator,
         attorney=body.attorney,
         claim_value=body.claim_value,
+        jurisdiction=body.jurisdiction,
+        court=body.court,
+        case_number=body.case_number,
+        waiting_on=body.waiting_on,
+        fixed_fee=body.fixed_fee,
         scheduled_session=body.scheduled_session,
         confidentiality_signed=bool(body.confidentiality_signed),
         status="active",
         summary=body.summary,
-        matter_id=_as_uuid(body.matter_id),
+        matter_id=matter.id,
         client_contact_id=_as_uuid(body.client_contact_id),
     )
     db.add(case)
+    if body.next_action and body.next_action.strip():
+        db.add(
+            Task(
+                tenant_id=user.tenant_id,
+                title=body.next_action.strip(),
+                task_type="follow_up",
+                due_date=body.next_action_due,
+                matter_id=matter.id,
+                assigned_to_user_id=user.id,
+                created_by_user_id=user.id,
+                source="mediation_workflow",
+            )
+        )
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
     case = await _get_case_or_404(db, str(case.id), user.tenant_id)
-    return ms.case_to_response(case)
+    next_tasks = await _next_task_map(db, [case])
+    return ms.case_to_response(case, next_tasks.get(case.matter_id))
 
 
 @router.get("/cases/{case_id}", response_model=MediationCaseDetail)
@@ -215,11 +311,15 @@ async def get_case(case_id: str, request: Request, db: AsyncSession = Depends(ge
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     case = await _get_case_or_404(db, case_id, user.tenant_id)
+    next_tasks = await _next_task_map(db, [case])
     sessions = [
         ms.session_to_response(e)
         for e in sorted(case.events or [], key=lambda e: e.created_at)
     ]
-    return MediationCaseDetail(mediation=ms.case_to_response(case), sessions=sessions)
+    return MediationCaseDetail(
+        mediation=ms.case_to_response(case, next_tasks.get(case.matter_id)),
+        sessions=sessions,
+    )
 
 
 @router.patch("/cases/{case_id}", response_model=MediationCaseResponse)
@@ -237,16 +337,96 @@ async def update_case(
     for field in ("matter_id", "client_contact_id"):
         if field in update_data:
             update_data[field] = _as_uuid(update_data[field])
+    if update_data.get("matter_id"):
+        linked_matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == update_data["matter_id"],
+                    Matter.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if linked_matter is None:
+            raise HTTPException(status_code=404, detail="Matter not found")
     if update_data.get("case_name"):
         case.title = update_data["case_name"]
     for field, value in update_data.items():
         setattr(case, field, value)
     case.updated_at = datetime.now(timezone.utc)
 
+    if case.matter_id:
+        matter = (
+            await db.execute(
+                select(Matter).where(
+                    Matter.id == case.matter_id,
+                    Matter.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if matter:
+            matter.matter_name = case.case_name or case.title
+            matter.description = case.summary
+            matter.jurisdiction = case.jurisdiction
+            matter.court = case.court
+            matter.case_number = case.case_number
+            matter.counterparty = case.party_b
+            matter.stage = case.mediation_stage
+            matter.budget_amount = case.fixed_fee
+            matter.billing_method = "flat_fee" if case.fixed_fee is not None else matter.billing_method
+
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
     case = await _get_case_or_404(db, case_id, user.tenant_id)
-    return ms.case_to_response(case)
+    next_tasks = await _next_task_map(db, [case])
+    return ms.case_to_response(case, next_tasks.get(case.matter_id))
+
+
+@router.post("/cases/{case_id}/next-action", response_model=MediationCaseResponse)
+async def set_next_action(
+    case_id: str,
+    body: MediationNextActionCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Advance a mediation's work queue without leaving the case workspace."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    if not case.matter_id:
+        raise HTTPException(status_code=409, detail="Mediation is not linked to a matter")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Next action title is required")
+    if body.priority not in {"low", "medium", "high", "urgent"}:
+        raise HTTPException(status_code=400, detail="Invalid priority")
+
+    current_tasks = await _next_task_map(db, [case])
+    current = current_tasks.get(case.matter_id)
+    if current and body.complete_current:
+        current.status = "completed"
+        current.completed_at = datetime.now(timezone.utc)
+        current.closed_by_user_id = user.id
+        current.closed_reason = "Advanced from mediation work queue"
+
+    task = Task(
+        tenant_id=user.tenant_id,
+        title=title,
+        task_type="follow_up",
+        priority=body.priority,
+        due_date=body.due_date,
+        matter_id=case.matter_id,
+        assigned_to_user_id=user.id,
+        created_by_user_id=user.id,
+        source="mediation_workflow",
+    )
+    db.add(task)
+    case.waiting_on = body.waiting_on
+    case.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
+    case = await _get_case_or_404(db, case_id, user.tenant_id)
+    next_tasks = await _next_task_map(db, [case])
+    return ms.case_to_response(case, next_tasks.get(case.matter_id))
 
 
 @router.delete("/cases/{case_id}", status_code=204)

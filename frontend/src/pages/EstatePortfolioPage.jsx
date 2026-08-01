@@ -56,6 +56,7 @@ export default function EstatePortfolioPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [statusFilter, setStatusFilter] = useState('all')
+  const [attentionFilter, setAttentionFilter] = useState('all')
   const [search, setSearch] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
@@ -98,17 +99,20 @@ export default function EstatePortfolioPage() {
   const stats = useMemo(() => ({
     active: estates.filter((e) => e.status?.toLowerCase() === 'active').length,
     probate: estates.filter((e) => e.status?.toLowerCase() === 'in_probate').length,
-    draft: estates.filter((e) => e.status?.toLowerCase() === 'draft').length,
-    beneficiaries: estates.reduce((sum, e) => sum + (Number(e.beneficiaries_count) || 0), 0),
+    overdue: estates.reduce((sum, e) => sum + (Number(e.overdue_deadlines_count) || 0), 0),
+    missing: estates.filter((e) => (e.missing_facts?.length || 0) > 0).length,
   }), [estates])
 
   const filtered = useMemo(() => {
     return estates.filter((e) => {
       if (statusFilter !== 'all' && e.status?.toLowerCase() !== statusFilter) return false
+      if (attentionFilter === 'overdue' && !e.overdue_deadlines_count) return false
+      if (attentionFilter === 'missing' && !e.missing_facts?.length) return false
+      if (attentionFilter === 'claims' && !e.unresolved_claims_count) return false
       if (search && !e.estate_name?.toLowerCase().includes(search.toLowerCase())) return false
       return true
-    })
-  }, [estates, statusFilter, search])
+    }).sort((a, b) => (b.overdue_deadlines_count || 0) - (a.overdue_deadlines_count || 0) || (b.attention_count || 0) - (a.attention_count || 0))
+  }, [estates, statusFilter, attentionFilter, search])
 
   if (!loading && error) {
     return (
@@ -163,8 +167,8 @@ export default function EstatePortfolioPage() {
           {[
             { label: 'Active Plans', value: stats.active, dot: 'bg-brand-green' },
             { label: 'In Probate', value: stats.probate, dot: 'bg-brand-amber' },
-            { label: 'Draft Plans', value: stats.draft, dot: 'bg-blue-500' },
-            { label: 'Total Beneficiaries', value: stats.beneficiaries, dot: 'bg-brand-accent' },
+            { label: 'Overdue Deadlines', value: stats.overdue, dot: 'bg-brand-rose' },
+            { label: 'Missing Opening Facts', value: stats.missing, dot: 'bg-blue-500' },
           ].map((s, i) => (
             <div key={i} className="bg-brand-surface border border-brand-line rounded-2xl p-6 hover:border-brand-line-2 transition-colors shadow-sm">
               <div className="flex items-center justify-between mb-3">
@@ -190,6 +194,14 @@ export default function EstatePortfolioPage() {
                    <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ')}</option>
                  ))}
                </select>
+            </div>
+            <div className="flex items-center gap-2 bg-brand-bg-soft border border-brand-line rounded-lg pl-3 pr-1 py-1.5">
+              <select value={attentionFilter} onChange={(e) => setAttentionFilter(e.target.value)} aria-label="Estate attention filter" className="bg-transparent text-[13px] font-sans font-medium text-brand-ink focus:outline-none py-1 pr-3 cursor-pointer">
+                <option value="all">All Work</option>
+                <option value="overdue">Overdue Deadlines</option>
+                <option value="missing">Missing Facts</option>
+                <option value="claims">Unresolved Claims</option>
+              </select>
             </div>
           </div>
           <div className="flex-1 min-w-64 relative">
@@ -220,8 +232,8 @@ export default function EstatePortfolioPage() {
               <table className="min-w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-brand-bg-soft/50 border-b border-brand-line">
-                    {['Estate / Trust', 'Type', 'Client', 'Jurisdiction', 'Est. Value', 'Status', 'Beneficiaries', 'Next Key Date', ''].map((h, i) => (
-                      <th key={h} className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 8 ? 'pr-6' : ''}`}>
+                    {['Estate / Trust', 'Type', 'Client', 'Jurisdiction', 'Est. Value', 'Status', 'Needs Attention', 'Beneficiaries', 'Next Key Date', ''].map((h, i) => (
+                      <th key={h} className={`px-5 py-4 text-[11px] font-bold text-brand-muted uppercase tracking-widest font-sans whitespace-nowrap ${i === 0 ? 'pl-6' : ''} ${i === 9 ? 'pr-6' : ''}`}>
                         {h}
                       </th>
                     ))}
@@ -246,6 +258,7 @@ export default function EstatePortfolioPage() {
                       <td className="px-5 py-4 text-brand-muted font-sans text-[13px] whitespace-nowrap">{e.jurisdiction || '—'}</td>
                       <td className="px-5 py-4 text-brand-ink-2 font-sans font-medium text-[13px] whitespace-nowrap">{e.estimated_value || '—'}</td>
                       <td className="px-5 py-4"><StatusBadge status={e.status} /></td>
+                      <td className="min-w-64 px-5 py-4 font-sans"><span className={`block text-[13px] font-semibold ${e.overdue_deadlines_count ? 'text-brand-rose' : 'text-brand-ink-2'}`}>{e.next_action || 'No flagged action'}</span>{e.attention_count > 0 && <span className="mt-1 block text-[10px] font-bold uppercase tracking-wide text-brand-muted">{e.attention_count} open signal{e.attention_count === 1 ? '' : 's'}</span>}</td>
                       <td className="px-5 py-4 text-center text-brand-ink font-sans font-medium">{e.beneficiaries_count ?? '—'}</td>
                       <td className="px-5 py-4"><DateCell dateStr={e.next_key_date} /></td>
                       <td className="px-5 py-4 pr-6 text-right">

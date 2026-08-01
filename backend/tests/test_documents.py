@@ -39,6 +39,11 @@ async def test_upload_persistence_refreshes_before_commit_for_rls_context():
         status="pending",
         chunk_count=0,
         created_at=datetime.now(timezone.utc),
+        indexed_at=None,
+        source_modified_at=None,
+        embedding_model=None,
+        embedding_version=None,
+        error_message=None,
     )
 
     await _persist_uploaded_document(session, doc)

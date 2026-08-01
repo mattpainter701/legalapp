@@ -11,6 +11,11 @@ class DocumentResponse(BaseModel):
     status: str
     chunk_count: int
     created_at: datetime
+    indexed_at: datetime | None = None
+    source_modified_at: datetime | None = None
+    embedding_model: str | None = None
+    embedding_version: int | None = None
+    indexing_error: str | None = None
     processing_job_id: str | None = None
 
     model_config = {"from_attributes": True}

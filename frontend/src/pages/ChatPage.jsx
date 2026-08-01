@@ -12,6 +12,7 @@ import {
   updateConversation,
   uploadChatAttachment,
   getMattersV2,
+  getLegalSourceHealth,
 } from '../api'
 import { AlertBanner } from '../components/ui'
 import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
@@ -202,6 +203,7 @@ export default function ChatPage() {
   const [pendingAttachments, setPendingAttachments] = useState([])
   const [railOpen, setRailOpen] = useState(false)
   const [notice, setNotice] = useState(null)
+  const [sourceHealth, setSourceHealth] = useState(null)
   const fileInputRef = useRef(null)
   const matterPickerRef = useRef(null)
 
@@ -291,6 +293,9 @@ export default function ChatPage() {
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
       .then((data) => setMatters(Array.isArray(data) ? data : (data.items || [])))
       .catch(() => setMatters([]))
+    getLegalSourceHealth()
+      .then(setSourceHealth)
+      .catch(() => setSourceHealth({ available: false, status: 'unavailable', sources: [], partitions: [] }))
   }, [])
 
   useEffect(() => {
@@ -645,6 +650,7 @@ export default function ChatPage() {
         onNewConversation={handleNewConversation}
         onSelectConversation={handleRailSelectConversation}
         onDeleteConversation={handleRailDeleteConversation}
+        sourceHealth={sourceHealth}
       />
 
       {/* Mobile rail drawer */}
@@ -659,6 +665,7 @@ export default function ChatPage() {
         onNewConversation={() => { handleNewConversation(); setRailOpen(false) }}
         onSelectConversation={handleRailSelectConversation}
         onDeleteConversation={handleRailDeleteConversation}
+        sourceHealth={sourceHealth}
         onClose={() => setRailOpen(false)}
       />
 

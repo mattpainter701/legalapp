@@ -1,6 +1,6 @@
 """Pydantic schemas for the Mediation Platform module."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Optional
 
@@ -34,10 +34,17 @@ class MediationCaseCreate(BaseModel):
     party_a: Optional[str] = None
     party_b: Optional[str] = None
     dispute_type: Optional[str] = None
-    mediation_stage: Optional[str] = "Pre-Session"
+    mediation_stage: Optional[str] = "New Referral"
     mediator: Optional[str] = None
     attorney: Optional[str] = None
     claim_value: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    court: Optional[str] = None
+    case_number: Optional[str] = None
+    waiting_on: Optional[str] = None
+    fixed_fee: Optional[Decimal] = None
+    next_action: Optional[str] = None
+    next_action_due: Optional[date] = None
     scheduled_session: Optional[datetime] = None
     confidentiality_signed: Optional[bool] = False
     summary: Optional[str] = None
@@ -54,12 +61,25 @@ class MediationCaseUpdate(BaseModel):
     mediator: Optional[str] = None
     attorney: Optional[str] = None
     claim_value: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    court: Optional[str] = None
+    case_number: Optional[str] = None
+    waiting_on: Optional[str] = None
+    fixed_fee: Optional[Decimal] = None
     scheduled_session: Optional[datetime] = None
     confidentiality_signed: Optional[bool] = None
     status: Optional[str] = None
     summary: Optional[str] = None
     matter_id: Optional[str] = None
     client_contact_id: Optional[str] = None
+
+
+class MediationNextActionCreate(BaseModel):
+    title: str
+    due_date: Optional[date] = None
+    priority: str = "medium"
+    waiting_on: Optional[str] = None
+    complete_current: bool = True
 
 
 class MediationCaseResponse(BaseModel):
@@ -73,6 +93,14 @@ class MediationCaseResponse(BaseModel):
     mediator: Optional[str] = None
     attorney: Optional[str] = None
     claim_value: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    court: Optional[str] = None
+    case_number: Optional[str] = None
+    waiting_on: Optional[str] = None
+    fixed_fee: Optional[Decimal] = None
+    next_action: Optional[str] = None
+    next_action_due: Optional[date] = None
+    next_action_priority: Optional[str] = None
     scheduled_session: Optional[datetime] = None
     confidentiality_signed: bool = False
     status: str
