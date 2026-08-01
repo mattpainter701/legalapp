@@ -7,6 +7,7 @@ import time
 from collections import Counter
 from typing import Iterable
 
+import httpx
 import psycopg2.extras
 
 from .database import connect
@@ -34,7 +35,37 @@ def format_embedding(values: Iterable[float]) -> str:
     return "[" + ",".join(f"{float(v):.8f}" for v in values) + "]"
 
 
-def load_model(model_name: str):
+class OllamaEmbeddingModel:
+    """Small SentenceTransformer-compatible adapter for workstation failover."""
+
+    def __init__(self, base_url: str, model_name: str, timeout_seconds: float = 120.0):
+        self.model_name = model_name
+        self.client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_seconds)
+
+    def encode(self, texts: list[str], **_: object) -> list[list[float]]:
+        response = self.client.post(
+            "/api/embed",
+            json={"model": self.model_name, "input": texts, "keep_alive": "30m"},
+        )
+        response.raise_for_status()
+        vectors = response.json().get("embeddings", [])
+        if len(vectors) != len(texts):
+            raise RuntimeError(
+                f"Ollama returned {len(vectors)} embeddings for {len(texts)} inputs"
+            )
+        if any(len(vector) != 1024 for vector in vectors):
+            raise RuntimeError("Ollama mxbai embeddings must be 1024-dimensional")
+        return vectors
+
+
+def load_model(
+    model_name: str,
+    *,
+    ollama_url: str = "",
+    ollama_model: str = "mxbai-embed-large",
+):
+    if ollama_url:
+        return OllamaEmbeddingModel(ollama_url, ollama_model)
     try:
         from sentence_transformers import SentenceTransformer
         import torch
@@ -53,7 +84,7 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
         show_progress_bar=False,
         convert_to_numpy=True,
     )
-    return [vector.tolist() for vector in vectors]
+    return [vector.tolist() if hasattr(vector, "tolist") else list(vector) for vector in vectors]
 
 
 def process_once(config: WorkerConfig, model) -> int:
@@ -104,6 +135,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-url", default=os.environ.get("VECTORDB_URL") or os.environ.get("DATABASE_URL"))
     parser.add_argument("--model", default="mxbai")
     parser.add_argument("--dim", type=int, default=1024)
+    parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_EMBEDDING_URL", ""))
+    parser.add_argument(
+        "--ollama-model",
+        default=os.environ.get("OLLAMA_EMBEDDING_MODEL", "mxbai-embed-large"),
+    )
     parser.add_argument("--loop", action="store_true")
     parser.add_argument(
         "--loop-interval",
@@ -128,7 +164,11 @@ def main() -> None:
     if not config.db_url:
         raise SystemExit("--db-url, VECTORDB_URL, or DATABASE_URL is required")
     config.validate()
-    model = load_model(config.model)
+    model = load_model(
+        config.model,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+    )
     while True:
         count = process_once(config, model)
         print(f"worker={config.worker_id} embedded={count}", flush=True)
