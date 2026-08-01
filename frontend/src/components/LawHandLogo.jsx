@@ -2,6 +2,8 @@ const assetBase = '/brand/lawhand'
 
 /**
  * Shared LawHand logo lockup for product and marketing surfaces.
+ * The wordmark leads at normal sizes; the compact lh signature is reserved
+ * for constrained product surfaces such as the sidebar and app icon.
  */
 export default function LawHandLogo({
   className = '',
@@ -19,12 +21,12 @@ export default function LawHandLogo({
       className={`inline-flex items-center ${compact ? 'gap-2' : 'gap-3'} ${className}`}
       aria-label="LawHand"
     >
-      <img
+      {markOnly && <img
         src={`${assetBase}/${mark}`}
         alt=""
         aria-hidden="true"
         className={compact ? 'h-7 w-7' : 'h-10 w-10'}
-      />
+      />}
       {!markOnly && <span className="min-w-0">
         <span
           className={`block font-sans font-medium tracking-[-0.045em] leading-none ${inkClass} ${
