@@ -152,6 +152,13 @@ def _record_failure(conn: object, job_name: str, error: str) -> None:
                updated_at=now() WHERE source_key = ANY(%s)""",
             [error[-2000:], list(source_keys)],
         )
+    # The scheduler owns a session-level advisory lock, so committing here keeps
+    # overlap protection while releasing relation locks before the next adapter
+    # initializes its schema. Without this, one failed adapter can deadlock the
+    # remainder of the ingest cycle behind its uncommitted status update.
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
 
 
 def run_once(

@@ -56,7 +56,7 @@ def upsert_adapter_document(conn: Any, document: AdapterDocument) -> dict[str, A
                 authority_tier, document_status, publication_date, effective_date,
                 canonical_url, source_modified_at, retrieved_at, content_hash,
                 raw_media_type, parser_version, text_content, metadata
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s,now()),%s,%s,%s,%s::jsonb)
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s,now()),%s,%s,%s,%s,%s::jsonb)
             ON CONFLICT (source_key, external_id) DO UPDATE SET
                 document_type=EXCLUDED.document_type, title=EXCLUDED.title,
                 citation=EXCLUDED.citation, jurisdiction=EXCLUDED.jurisdiction,
