@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">LawHand</title>
+  <desc id="desc">A lowercase l and h in ivory on a carbon field.</desc>
+  <rect width="160" height="160" rx="34" fill="#161817"/>
+  <path fill="#F4F0E8" d="M30 27h17v59c0 11 5 16 14 16v17c-21 0-31-11-31-32V27Z"/>
+  <path fill="#F4F0E8" d="M62 27h17v41c7-9 16-14 28-14 18 0 29 12 29 32v33h-17V88c0-12-6-18-16-18-14 0-24 10-24 27v22H62V27Z"/>
+</svg>
