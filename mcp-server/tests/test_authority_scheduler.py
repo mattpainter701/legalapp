@@ -29,12 +29,13 @@ class Cursor:
 class Connection:
     def __init__(self, lock_available=True):
         self.cursor_obj = Cursor(lock_available)
+        self.commit_count = 0
 
     def cursor(self):
         return self.cursor_obj
 
     def commit(self):
-        pass
+        self.commit_count += 1
 
 
 def test_default_jobs_are_allowlisted_modules_with_expected_title_scope(monkeypatch):
@@ -94,6 +95,7 @@ def test_run_once_holds_lock_and_continues_after_failed_job():
     assert "pg_try_advisory_lock" in conn.cursor_obj.statements[0][0]
     assert "pg_advisory_unlock" in conn.cursor_obj.statements[-1][0]
     assert any("current_error" in sql for sql, _ in conn.cursor_obj.statements)
+    assert conn.commit_count == 2
 
 
 def test_run_once_skips_when_another_scheduler_holds_the_lock():
