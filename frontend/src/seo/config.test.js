@@ -22,6 +22,9 @@ describe('SEO configuration', () => {
     expect(getRouteMeta('/').indexable).toBe(true)
     expect(getRouteMeta('/privacy/').canonicalPath).toBe('/privacy')
     expect(getRouteMeta('/terms').indexable).toBe(true)
+    expect(getRouteMeta('/product/chat').indexable).toBe(true)
+    expect(getRouteMeta('/product/mcp/').canonicalPath).toBe('/product/mcp')
+    expect(getRouteMeta('/pricing').indexable).toBe(true)
 
     expect(getRouteMeta('/login').indexable).toBe(false)
     expect(getRouteMeta('/matters/customer-id').indexable).toBe(false)
@@ -51,6 +54,9 @@ describe('SEO configuration', () => {
     expect(sitemap).toContain(`<loc>${origin}/</loc>`)
     expect(sitemap).toContain(`<loc>${origin}/privacy</loc>`)
     expect(sitemap).toContain(`<loc>${origin}/terms</loc>`)
+    expect(sitemap).toContain(`<loc>${origin}/product/chat</loc>`)
+    expect(sitemap).toContain(`<loc>${origin}/product/mcp</loc>`)
+    expect(sitemap).toContain(`<loc>${origin}/pricing</loc>`)
     expect(sitemap).not.toContain('/login')
     expect(sitemap).not.toContain('/matters')
   })
@@ -106,5 +112,20 @@ describe('SEO configuration', () => {
     expect(terms).toContain('Acceptable use')
     expect(terms).toContain('Disclaimers and liability')
     expect(terms).not.toContain('Choices and privacy requests')
+  })
+
+  it.each([
+    ['/product/chat', 'Ask with the whole matter in hand.', 'matter-aware AI workspace'],
+    ['/product/mcp', 'Bring LawHand context into the tools you already use.', '$0.45 per tool call'],
+    ['/pricing', 'One clear platform price. Controlled expansion.', '$89 per user per month'],
+  ])('builds a substantive public product shell for %s', (route, heading, claim) => {
+    const base = readFileSync('index.html', 'utf8')
+    const html = buildPublicRouteHtml(base, route, 'https://lawhand.example')
+
+    expect(html).toContain(`rel="canonical" href="https://lawhand.example${route}"`)
+    expect(html).toContain(`<h1>${heading}</h1>`)
+    expect(html).toContain(claim)
+    expect(html).toContain('aria-label="LawHand product pages"')
+    expect(html).toContain('mailto:contact@perevagagroup.com')
   })
 })

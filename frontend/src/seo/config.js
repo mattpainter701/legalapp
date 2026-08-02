@@ -28,6 +28,27 @@ export const PUBLIC_ROUTE_META = Object.freeze({
     canonicalPath: '/terms',
     indexable: true,
   },
+  '/product/chat': {
+    title: 'Matter-Aware AI Chat for Legal Teams | LawHand',
+    description:
+      'Research, review, summarize, and draft with LawHand AI chat connected to the active matter and the sources your firm authorizes.',
+    canonicalPath: '/product/chat',
+    indexable: true,
+  },
+  '/product/mcp': {
+    title: 'LawHand MCP for Controlled Legal Integrations',
+    description:
+      'Connect approved systems to LawHand through MCP with scoped keys, explicit tool access, bounded usage, and administrative visibility.',
+    canonicalPath: '/product/mcp',
+    indexable: true,
+  },
+  '/pricing': {
+    title: 'Pricing | LawHand',
+    description:
+      'LawHand is $89 per user per month billed annually. LawHand MCP is in private preview at an intended public price of $0.45 per tool call.',
+    canonicalPath: '/pricing',
+    indexable: true,
+  },
 })
 
 const WORKSPACE_ROUTE_TITLES = [

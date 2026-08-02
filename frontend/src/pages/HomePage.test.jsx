@@ -63,12 +63,58 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.getByRole('link', { name: 'LawHand home' })).toBeInTheDocument()
     expect(screen.queryByText(/Clarity Legal/i)).not.toBeInTheDocument()
   })
+
+  it('publishes AI chat, MCP preview, and intended pricing paths', () => {
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Matter-aware AI chat' })).toBeInTheDocument()
+    expect(screen.getAllByText('$89')).not.toHaveLength(0)
+    expect(screen.getAllByText(/\$0\.45/)).not.toHaveLength(0)
+    expect(screen.getByRole('link', { name: /Explore LawHand Chat/i })).toHaveAttribute('href', '/product/chat')
+    expect(screen.getByRole('link', { name: /Explore the MCP preview/i })).toHaveAttribute('href', '/product/mcp')
+    expect(screen.getByRole('link', { name: 'View full pricing' })).toHaveAttribute('href', '/pricing')
+  })
 })
 
 describe('marketing add-on workflows', () => {
   afterEach(() => cleanup())
 
-  it('opens, switches, and closes the module workflow disclosures', async () => {
+  it('shows a concrete preview for every selectable practice skill', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    const commercialButton = screen.getByRole('button', { name: /commercial legal/i })
+    const privacyButton = screen.getByRole('button', { name: /privacy legal/i })
+    const commercialPanel = document.getElementById(commercialButton.getAttribute('aria-controls'))
+    const privacyPanel = document.getElementById(privacyButton.getAttribute('aria-controls'))
+
+    expect(commercialButton).toHaveAttribute('aria-expanded', 'true')
+    expect(commercialPanel).toBeVisible()
+    expect(screen.getByText('Apex Cloud · SaaS agreement')).toBeVisible()
+    expect(screen.getByText('Compare clauses to the firm playbook')).toBeVisible()
+
+    await user.click(privacyButton)
+    expect(commercialButton).toHaveAttribute('aria-expanded', 'false')
+    expect(privacyButton).toHaveAttribute('aria-expanded', 'true')
+    expect(commercialPanel).not.toBeVisible()
+    expect(privacyPanel).toBeVisible()
+    expect(screen.getByText('Atlas Analytics · privacy review')).toBeVisible()
+    expect(screen.getByText('Run DPA checks by jurisdiction and data type')).toBeVisible()
+
+    await user.click(privacyButton)
+    expect(privacyButton).toHaveAttribute('aria-expanded', 'false')
+    expect(privacyPanel).not.toBeVisible()
+  })
+
+  it('opens, switches, and closes the compact module details', async () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter>
@@ -90,7 +136,7 @@ describe('marketing add-on workflows', () => {
     expect(estateButton).toHaveAttribute('aria-expanded', 'true')
     expect(estatePanel).toBeVisible()
     expect(screen.getByText('Hamilton Family Estate')).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Build the inventory' })).toBeVisible()
+    expect(screen.getByText('Asset and liability inventory')).toBeVisible()
 
     await user.click(mediationButton)
     expect(estateButton).toHaveAttribute('aria-expanded', 'false')
@@ -98,7 +144,7 @@ describe('marketing add-on workflows', () => {
     expect(estatePanel).not.toBeVisible()
     expect(mediationPanel).toBeVisible()
     expect(screen.getByText('Rivera v. Northwind')).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Work the issue board' })).toBeVisible()
+    expect(screen.getByText('Shared issue and proposal tracking')).toBeVisible()
 
     await user.click(mediationButton)
     expect(mediationButton).toHaveAttribute('aria-expanded', 'false')

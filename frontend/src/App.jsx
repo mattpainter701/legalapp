@@ -15,6 +15,9 @@ const SignupPage = lazy(() => import('./pages/SignupPage'))
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'))
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'))
 const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
+const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
+const McpProductPage = lazy(() => import('./pages/McpProductPage'))
+const PricingPage = lazy(() => import('./pages/PricingPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 const AuthCallback = lazy(() => import('./pages/AuthCallback'))
@@ -198,6 +201,9 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/terms" element={<LegalNoticePage type="terms" />} />
         <Route path="/privacy" element={<LegalNoticePage type="privacy" />} />
+        <Route path="/product/chat" element={<ProductChatPage />} />
+        <Route path="/product/mcp" element={<McpProductPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/portal/accept" element={<PortalAcceptPage />} />
         <Route path="/portal/case" element={<PortalCasePage />} />

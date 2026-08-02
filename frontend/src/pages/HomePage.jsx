@@ -5,23 +5,78 @@ import {
   Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
   Search, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
   PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
+  MessageSquareText, KeyRound, Braces, AlertTriangle, Layers3,
 } from 'lucide-react'
-import balancedAccessImg from '../assets/home/balanced-access-record-editorial-v1-1280.webp'
-import balancedAccessSmallImg from '../assets/home/balanced-access-record-editorial-v1-720.webp'
+import balancedAccessImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-1280.webp'
+import balancedAccessSmallImg from '../assets/home/lawhand-controlled-handoff-editorial-v2-720.webp'
 import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.webp'
 import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
-import LawHandLogo from '../components/LawHandLogo'
+import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 
 const SKILLS = [
-  { icon: Files, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking' },
-  { icon: Lock, name: 'Privacy Legal', description: 'DPA review, DSAR responses, Privacy Impact Assessments' },
-  { icon: Landmark, name: 'Litigation Legal', description: 'Matter intake, portfolio management, demand letters, claim charts' },
-  { icon: Building2, name: 'Corporate Legal', description: 'M&A diligence, closing checklists, entity compliance' },
-  { icon: UserCircle, name: 'Employment Legal', description: 'Hire/termination review, worker classification, leave tracking' },
-  { icon: Rocket, name: 'Product Legal', description: 'Launch reviews, marketing claims check, regulatory triage' },
-  { icon: Lightbulb, name: 'IP Legal', description: 'Trademark clearance, freedom-to-operate, C&D letters' },
-  { icon: Bot, name: 'AI Governance', description: 'AI use-case triage, impact assessments, vendor AI review' },
-  { icon: ClipboardList, name: 'Regulatory Legal', description: 'Regulatory monitoring, policy gap analysis, NPRM comments' },
+  {
+    id: 'commercial', icon: Files, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking',
+    example: 'Apex Cloud · SaaS agreement', status: '2 items need review', signal: '14 clauses checked',
+    artifacts: [['Limitation of liability', 'Attorney review'], ['Data processing addendum', 'Playbook match'], ['Renewal terms', '45-day notice']],
+    features: ['Compare clauses to the firm playbook', 'Flag missing terms and material deviations', 'Capture obligations, owners, and renewal dates'],
+    language: 'Clause library · fallback language · approval thresholds',
+  },
+  {
+    id: 'privacy', icon: Lock, name: 'Privacy Legal', description: 'DPA review, DSAR responses, Privacy Impact Assessments',
+    example: 'Atlas Analytics · privacy review', status: 'Response due in 9 days', signal: '6 systems mapped',
+    artifacts: [['DPA transfer terms', 'Gap found'], ['DSAR identity check', 'Complete'], ['Processing inventory', '6 systems']],
+    features: ['Run DPA checks by jurisdiction and data type', 'Coordinate DSAR identity, search, and response steps', 'Keep PIA evidence and mitigation owners together'],
+    language: 'Data subjects · subprocessors · retention · transfer basis',
+  },
+  {
+    id: 'litigation', icon: Landmark, name: 'Litigation Legal', description: 'Matter intake, portfolio management, demand letters, claim charts',
+    example: 'Rivera v. Northwind · portfolio', status: 'Deadline in 4 days', signal: '8 claims mapped',
+    artifacts: [['Demand response', 'Draft ready'], ['Claim chart', '8 of 11 mapped'], ['Discovery cutoff', 'Oct 14']],
+    features: ['Move intake facts into a structured matter', 'Link allegations, evidence, and authority', 'Track portfolio posture, dates, and next actions'],
+    language: 'Claims · defenses · elements · evidence · deadlines',
+  },
+  {
+    id: 'corporate', icon: Building2, name: 'Corporate Legal', description: 'M&A diligence, closing checklists, entity compliance',
+    example: 'Project Juniper · acquisition', status: '78% closing ready', signal: '42 documents reviewed',
+    artifacts: [['Material contracts', '3 exceptions'], ['Closing checklist', '31 of 40'], ['Entity records', 'Current']],
+    features: ['Organize diligence findings by workstream', 'Turn issues into owners and closing conditions', 'Maintain entity records and recurring compliance'],
+    language: 'Diligence · disclosures · conditions · consents · filings',
+  },
+  {
+    id: 'employment', icon: UserCircle, name: 'Employment Legal', description: 'Hire/termination review, worker classification, leave tracking',
+    example: 'Workforce request · California', status: 'Classification review', signal: '3 decision checks',
+    artifacts: [['Role classification', 'Needs facts'], ['Termination packet', 'Review ready'], ['Leave timeline', '12 weeks']],
+    features: ['Route hire and separation facts through consistent checks', 'Document classification factors and decisions', 'Track leave events, notices, and return dates'],
+    language: 'Worker status · protected leave · notice · final pay',
+  },
+  {
+    id: 'product', icon: Rocket, name: 'Product Legal', description: 'Launch reviews, marketing claims check, regulatory triage',
+    example: 'Pulse AI · launch review', status: '2 launch blockers', signal: '5 teams aligned',
+    artifacts: [['Marketing claims', '2 need support'], ['Terms update', 'Approved'], ['Launch gate', 'Conditional']],
+    features: ['Collect one launch brief across product teams', 'Connect claims to substantiation and approvals', 'Route regulatory questions before release'],
+    language: 'Claims · audience · data use · disclosures · launch gate',
+  },
+  {
+    id: 'ip', icon: Lightbulb, name: 'IP Legal', description: 'Trademark clearance, freedom-to-operate, C&D letters',
+    example: 'Northstar · clearance search', status: 'Moderate conflict risk', signal: '27 records screened',
+    artifacts: [['Exact mark search', 'No match'], ['Similar marks', '4 for review'], ['Class coverage', '3 classes']],
+    features: ['Keep search strategy and results reviewable', 'Compare marks, classes, owners, and status', 'Move findings into advice or enforcement drafts'],
+    language: 'Similarity · classes · use evidence · claim scope',
+  },
+  {
+    id: 'ai-governance', icon: Bot, name: 'AI Governance', description: 'AI use-case triage, impact assessments, vendor AI review',
+    example: 'Support copilot · use-case review', status: 'Human oversight required', signal: 'Risk tier · medium',
+    artifacts: [['Data inputs', 'Restricted data'], ['Vendor controls', '1 gap'], ['Impact review', 'In progress']],
+    features: ['Triage use cases by people, data, and decision impact', 'Standardize impact assessments and control owners', 'Review vendor AI terms alongside technical claims'],
+    language: 'Use case · model role · oversight · testing · monitoring',
+  },
+  {
+    id: 'regulatory', icon: ClipboardList, name: 'Regulatory Legal', description: 'Regulatory monitoring, policy gap analysis, NPRM comments',
+    example: 'Consumer rules · monitoring file', status: 'Comment window open', signal: '12 obligations tagged',
+    artifacts: [['Rule change', 'Material'], ['Policy mapping', '3 gaps'], ['Comment draft', 'Due Sep 8']],
+    features: ['Turn regulatory developments into scoped impact reviews', 'Map requirements to policies, controls, and owners', 'Build comment records from evidence and stakeholder input'],
+    language: 'Authority · obligation · applicability · policy · comment',
+  },
 ]
 
 const ADDONS = [
@@ -33,13 +88,9 @@ const ADDONS = [
     example: 'Hamilton Family Estate',
     status: 'Attorney review',
     roles: ['Attorney \u00b7 full review', 'Trustee \u00b7 update assets', 'Beneficiary \u00b7 view approved'],
-    steps: [
-      { title: 'Open the estate', body: 'Capture fiduciaries, beneficiaries, key dates, and the source documents in one record.' },
-      { title: 'Build the inventory', body: 'Organize assets, liabilities, valuations, ownership, and the supporting evidence.' },
-      { title: 'Review tax & probate', body: 'Surface filing tasks, open questions, and attorney checkpoints before work advances.' },
-      { title: 'Share the approved record', body: 'Prepare a beneficiary-ready report from the information the firm has reviewed.' },
-    ],
-    outcomes: ['One current asset record', 'Role-aware updates', 'Reviewable reporting trail'],
+    metrics: [['24', 'Assets'], ['$4.8m', 'Gross estate'], ['3', 'Review items']],
+    activity: [['Residence valuation', 'Reviewed'], ['Family trust allocation', 'Open'], ['Probate inventory', 'Draft']],
+    features: ['Asset and liability inventory', 'Tax and probate checkpoints', 'Beneficiary-ready reporting'],
   },
   {
     id: 'mediation',
@@ -49,13 +100,9 @@ const ADDONS = [
     example: 'Rivera v. Northwind',
     status: 'Proposal pending',
     roles: ['Mediator \u00b7 neutral view', 'Party A \u00b7 private workspace', 'Party B \u00b7 private workspace'],
-    steps: [
-      { title: 'Bring in both sides', body: 'Collect party details, scheduling context, conflicts, and the issues in dispute.' },
-      { title: 'Organize private briefs', body: 'Keep each side\u2019s submissions and supporting material in the right access boundary.' },
-      { title: 'Work the issue board', body: 'Track shared facts, open issues, calculations, and mediator notes without losing context.' },
-      { title: 'Record the resolution', body: 'Draft proposals, capture approvals, and preserve the path to the final agreement.' },
-    ],
-    outcomes: ['Balanced party access', 'Visible issue status', 'Recorded approval trail'],
+    metrics: [['6', 'Open issues'], ['2', 'Proposals'], ['Sep 18', 'Next session']],
+    activity: [['Party A brief', 'Private'], ['Damages range', 'Shared'], ['Draft settlement terms', 'Waiting']],
+    features: ['Separate private submissions', 'Shared issue and proposal tracking', 'Settlement drafting and approvals'],
   },
 ]
 
@@ -110,131 +157,107 @@ const FEATURES = [
   },
 ]
 
-function AddonDisclosureButton({ addon, isOpen, onToggle }) {
-  const { id, icon: Icon, name, description } = addon
-  const buttonId = id + '-workflow-toggle'
-  const panelId = id + '-workflow-panel'
+function PracticeSkillCard({ skill, isOpen, onToggle }) {
+  const { id, icon: Icon, name, description, signal } = skill
 
   return (
     <button
-      id={buttonId}
+      id={id + '-skill-toggle'}
       type="button"
       aria-expanded={isOpen}
-      aria-controls={panelId}
+      aria-controls={id + '-skill-panel'}
       onClick={onToggle}
       className={
-        'group w-full rounded-2xl border bg-brand-surface p-6 text-left shadow-sm transition-all md:order-none ' +
+        'group relative w-full overflow-hidden rounded-2xl border p-5 text-left shadow-sm transition-all ' +
         'motion-reduce:transition-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent-2 ' +
-        (id === 'estate' ? 'order-1 ' : 'order-3 ') +
         (isOpen
-          ? 'border-brand-line-2 shadow-md'
-          : 'border-brand-line hover:-translate-y-0.5 hover:border-brand-line-2 hover:shadow-md motion-reduce:hover:translate-y-0')
+          ? 'border-brand-accent/40 bg-brand-surface shadow-md'
+          : 'border-brand-line bg-brand-surface hover:-translate-y-0.5 hover:border-brand-line-2 hover:shadow-md motion-reduce:hover:translate-y-0')
       }
     >
+      <div className={'absolute inset-x-0 top-0 h-1 bg-brand-accent transition-opacity ' + (isOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-40')} aria-hidden="true" />
       <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-brand-line bg-brand-bg-soft text-brand-accent-2">
-          <Icon size={24} strokeWidth={1.5} aria-hidden="true" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <h3 className="font-serif text-[18px] font-bold leading-tight">{name}</h3>
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-bg-soft text-brand-accent-2">
-              <ChevronDown
-                size={16}
-                aria-hidden="true"
-                className={'transition-transform motion-reduce:transition-none ' + (isOpen ? 'rotate-180' : '')}
-              />
-            </span>
-          </div>
-          <p className="mt-1.5 font-sans text-[14px] leading-relaxed text-brand-ink-2">{description}</p>
-          <span className="mt-4 inline-flex items-center gap-2 font-sans text-[11px] font-bold uppercase tracking-[0.12em] text-brand-accent-2">
-            <span className="h-px w-5 bg-brand-accent-2/50" aria-hidden="true" />
-            {isOpen ? 'Close workflow' : 'Explore workflow'}
+        <span className={'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors ' + (isOpen ? 'border-brand-accent bg-brand-accent text-white' : 'border-brand-line bg-brand-bg-soft text-brand-ink')}>
+          <Icon size={21} strokeWidth={1.6} aria-hidden="true" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-start justify-between gap-3">
+            <span className="font-serif text-[16px] font-bold leading-tight text-brand-ink">{name}</span>
+            <ChevronDown size={16} aria-hidden="true" className={'mt-0.5 shrink-0 text-brand-muted transition-transform ' + (isOpen ? 'rotate-180' : '')} />
           </span>
-        </div>
+          <span className="mt-1.5 block font-sans text-[13px] leading-relaxed text-brand-ink-2">{description}</span>
+        </span>
       </div>
+      <span className="mt-5 flex items-center justify-between gap-3 border-t border-brand-line pt-3.5">
+        <span className="inline-flex items-center gap-2 font-sans text-[10.5px] font-bold uppercase tracking-[0.12em] text-brand-accent-2">
+          <span className={'h-2 w-2 rounded-full ' + (isOpen ? 'bg-brand-accent' : 'bg-brand-green')} aria-hidden="true" />
+          {signal}
+        </span>
+        <span className="font-sans text-[10px] font-bold uppercase tracking-[0.12em] text-brand-muted">
+          {isOpen ? 'Close' : 'See inside'}
+        </span>
+      </span>
     </button>
   )
 }
 
-function AddonWorkflowPanel({ addon, isOpen }) {
-  const { id, name, example, status, roles, steps, outcomes } = addon
+function PracticeSkillPanel({ skill, isOpen }) {
+  const { id, name, example, status, artifacts, features, language } = skill
 
   return (
     <div
-      id={id + '-workflow-panel'}
+      id={id + '-skill-panel'}
       role="region"
-      aria-labelledby={id + '-workflow-toggle'}
+      aria-labelledby={id + '-skill-toggle'}
       hidden={!isOpen}
-      className={id === 'estate'
-        ? 'order-2 md:order-none md:col-span-2'
-        : 'order-4 md:order-none md:col-span-2'}
+      className="mt-6"
     >
       <div className="relative overflow-hidden rounded-3xl border border-brand-ink/10 bg-brand-ink p-1 shadow-xl">
-        <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brand-gold/20 blur-3xl" aria-hidden="true" />
-        <div className="absolute -bottom-24 -left-16 h-56 w-56 rounded-full bg-brand-green/20 blur-3xl" aria-hidden="true" />
-        <div className="relative overflow-hidden rounded-[20px] bg-brand-surface">
-          <div className="flex flex-col gap-4 bg-brand-ink px-5 py-5 text-white sm:flex-row sm:items-center sm:justify-between sm:px-7">
-            <div>
-              <p className="font-sans text-[10px] font-bold uppercase tracking-[0.18em] text-white/55">
-                Illustrative {name} workflow
-              </p>
-              <p className="mt-1.5 font-serif text-[21px] font-bold">{example}</p>
+        <div className="absolute -right-16 -top-24 h-64 w-64 rounded-full bg-brand-accent/35 blur-3xl" aria-hidden="true" />
+        <div className="relative grid overflow-hidden rounded-[20px] bg-brand-surface lg:grid-cols-[1.18fr_0.82fr]">
+          <div className="border-b border-brand-line bg-brand-bg-soft p-5 sm:p-7 lg:border-b-0 lg:border-r">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-sans text-[9px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">Illustrative {name} workspace</p>
+                <h3 className="mt-1.5 font-serif text-[20px] font-bold">{example}</h3>
+              </div>
+              <span className="inline-flex w-fit items-center gap-2 rounded-full border border-brand-amber/25 bg-brand-amber/10 px-3 py-1.5 font-sans text-[10.5px] font-bold text-brand-ink-2">
+                <AlertTriangle size={12} className="text-brand-amber" aria-hidden="true" /> {status}
+              </span>
             </div>
-            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 font-sans text-[11px] font-bold text-white">
-              <span className="h-2 w-2 rounded-full bg-brand-gold shadow-[0_0_0_4px_rgba(184,150,90,0.15)]" aria-hidden="true" />
-              {status}
-            </span>
+
+            <div className="mt-6 overflow-hidden rounded-2xl border border-brand-line bg-brand-surface shadow-sm">
+              <div className="grid grid-cols-[1fr_auto] border-b border-brand-line px-4 py-3 text-[9px] font-bold uppercase tracking-[0.14em] text-brand-muted">
+                <span>Review item</span><span>Status</span>
+              </div>
+              {artifacts.map(([item, itemStatus], index) => (
+                <div key={item} className={'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-4 py-3.5 ' + (index < artifacts.length - 1 ? 'border-b border-brand-line' : '')}>
+                  <span className="flex min-w-0 items-center gap-3 font-sans text-[12.5px] font-semibold text-brand-ink">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-bg-soft text-brand-accent-2"><FileText size={13} aria-hidden="true" /></span>
+                    <span className="truncate">{item}</span>
+                  </span>
+                  <span className="rounded-full border border-brand-line bg-brand-surface-2 px-2.5 py-1 font-sans text-[9.5px] font-bold text-brand-ink-2">{itemStatus}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="p-5 sm:p-7">
-            <div className="flex flex-col gap-3 border-b border-brand-line pb-5 sm:flex-row sm:items-center sm:justify-between">
-              <p className="font-sans text-[11px] font-bold uppercase tracking-[0.14em] text-brand-muted">
-                Access follows the work
-              </p>
-              <div className="flex flex-wrap gap-2" aria-label="Workflow roles">
-                {roles.map((role) => (
-                  <span key={role} className="rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1 font-sans text-[10.5px] font-semibold text-brand-ink-2">
-                    {role}
-                  </span>
-                ))}
-              </div>
+          <div className="flex flex-col p-5 sm:p-7">
+            <div className="flex items-center gap-2 text-brand-accent-2">
+              <Layers3 size={17} aria-hidden="true" />
+              <p className="font-sans text-[10px] font-bold uppercase tracking-[0.15em]">What the skill adds</p>
             </div>
-
-            <ol className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label={name + ' stages'}>
-              {steps.map((step, index) => (
-                <li key={step.title} className="relative rounded-2xl border border-brand-line bg-brand-surface-2 p-4 shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand-ink font-serif text-[12px] font-bold text-white">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="font-sans text-[9px] font-bold uppercase tracking-[0.15em] text-brand-accent-2">
-                      Stage
-                    </span>
-                  </div>
-                  <h4 className="mt-4 font-serif text-[15px] font-bold leading-tight text-brand-ink">{step.title}</h4>
-                  <p className="mt-2 font-sans text-[12px] leading-relaxed text-brand-ink-2">{step.body}</p>
-                  {index < steps.length - 1 && (
-                    <span className="absolute -right-[13px] top-1/2 z-10 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-brand-line bg-white text-brand-gold shadow-sm lg:flex" aria-hidden="true">
-                      <ArrowRight size={13} />
-                    </span>
-                  )}
+            <ul className="mt-5 space-y-4">
+              {features.map((feature) => (
+                <li key={feature} className="flex items-start gap-3 font-sans text-[13px] font-semibold leading-relaxed text-brand-ink-2">
+                  <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-brand-green" aria-hidden="true" />
+                  {feature}
                 </li>
               ))}
-            </ol>
-
-            <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-brand-green/20 bg-brand-green/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="font-sans text-[10px] font-bold uppercase tracking-[0.15em] text-brand-green">
-                What stays visible
-              </p>
-              <div className="flex flex-wrap gap-x-5 gap-y-2">
-                {outcomes.map((outcome) => (
-                  <span key={outcome} className="inline-flex items-center gap-1.5 font-sans text-[11.5px] font-semibold text-brand-ink-2">
-                    <CheckCircle2 size={14} className="text-brand-green" aria-hidden="true" />
-                    {outcome}
-                  </span>
-                ))}
-              </div>
+            </ul>
+            <div className="mt-6 rounded-2xl border border-brand-line bg-brand-bg-soft px-4 py-3.5 lg:mt-auto">
+              <p className="font-sans text-[9px] font-bold uppercase tracking-[0.14em] text-brand-muted">Feels native to the work</p>
+              <p className="mt-1.5 font-sans text-[11.5px] font-semibold leading-relaxed text-brand-ink-2">{language}</p>
             </div>
           </div>
         </div>
@@ -243,7 +266,90 @@ function AddonWorkflowPanel({ addon, isOpen }) {
   )
 }
 
+function AddonCard({ addon, isOpen, onToggle }) {
+  const { id, icon: Icon, name, description, example, status, roles, metrics, activity, features } = addon
+
+  return (
+    <article className={'overflow-hidden rounded-3xl border bg-brand-surface shadow-sm transition-shadow ' + (isOpen ? 'border-brand-line-2 shadow-lg' : 'border-brand-line')}>
+      <button
+        id={id + '-workflow-toggle'}
+        type="button"
+        aria-expanded={isOpen}
+        aria-controls={id + '-workflow-panel'}
+        onClick={onToggle}
+        className="group w-full p-6 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-accent-2 sm:p-7"
+      >
+        <span className="flex items-start gap-4">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-brand-line bg-brand-bg-soft text-brand-accent-2">
+            <Icon size={23} strokeWidth={1.5} aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-start justify-between gap-3">
+              <span className="font-serif text-[19px] font-bold leading-tight text-brand-ink">{name}</span>
+              <ChevronDown size={17} aria-hidden="true" className={'mt-0.5 shrink-0 text-brand-muted transition-transform ' + (isOpen ? 'rotate-180' : '')} />
+            </span>
+            <span className="mt-2 block font-sans text-[13.5px] leading-relaxed text-brand-ink-2">{description}</span>
+          </span>
+        </span>
+
+        <span className="mt-6 block overflow-hidden rounded-2xl border border-brand-line bg-brand-bg-soft text-brand-ink shadow-inner">
+          <span className="flex items-center justify-between gap-3 border-b border-brand-line bg-brand-ink px-4 py-3 text-white">
+            <span>
+              <span className="block font-sans text-[8px] font-bold uppercase tracking-[0.15em] text-white/45">Example workspace</span>
+              <span className="mt-0.5 block font-serif text-[13px] font-bold text-white">{example}</span>
+            </span>
+            <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 font-sans text-[9px] font-bold text-white/85">{status}</span>
+          </span>
+          <span className="grid grid-cols-3 border-b border-brand-line bg-brand-surface">
+            {metrics.map(([value, label], index) => (
+              <span key={label} className={'px-3 py-3 text-center ' + (index ? 'border-l border-brand-line' : '')}>
+                <span className="block font-serif text-[16px] font-bold text-brand-ink">{value}</span>
+                <span className="mt-0.5 block font-sans text-[8.5px] font-bold uppercase tracking-[0.1em] text-brand-muted">{label}</span>
+              </span>
+            ))}
+          </span>
+          <span className="block px-4 py-2.5">
+            {activity.slice(0, 2).map(([item, itemStatus]) => (
+              <span key={item} className="flex items-center justify-between gap-3 py-1.5 font-sans text-[10.5px]">
+                <span className="inline-flex min-w-0 items-center gap-2 font-semibold"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-accent" aria-hidden="true" />{item}</span>
+                <span className="shrink-0 text-brand-muted">{itemStatus}</span>
+              </span>
+            ))}
+          </span>
+        </span>
+
+        <span className="mt-4 flex items-center justify-between">
+          <span className="font-sans text-[10.5px] font-bold uppercase tracking-[0.12em] text-brand-accent-2">{isOpen ? 'Close details' : 'Explore workflow'}</span>
+          <span className="font-sans text-[10px] text-brand-muted">Records · roles · controls</span>
+        </span>
+      </button>
+
+      <div id={id + '-workflow-panel'} role="region" aria-labelledby={id + '-workflow-toggle'} hidden={!isOpen} className="border-t border-brand-line px-6 pb-6 pt-5 sm:px-7 sm:pb-7">
+        <div className="grid gap-5 sm:grid-cols-[1fr_0.95fr]">
+          <div>
+            <p className="font-sans text-[9.5px] font-bold uppercase tracking-[0.14em] text-brand-muted">Included surfaces</p>
+            <ul className="mt-3 space-y-2.5">
+              {features.map((feature) => (
+                <li key={feature} className="flex items-start gap-2 font-sans text-[12px] font-semibold leading-relaxed text-brand-ink-2">
+                  <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-brand-green" aria-hidden="true" />{feature}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="font-sans text-[9.5px] font-bold uppercase tracking-[0.14em] text-brand-muted">Access follows the role</p>
+            <div className="mt-3 flex flex-wrap gap-2" aria-label="Workflow roles">
+              {roles.map((role) => <span key={role} className="rounded-full border border-brand-line bg-brand-bg-soft px-2.5 py-1.5 font-sans text-[9.5px] font-semibold text-brand-ink-2">{role}</span>)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 export default function HomePage() {
+  const [expandedSkill, setExpandedSkill] = useState('commercial')
   const [expandedAddon, setExpandedAddon] = useState(null)
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
   const scrollTo = (id) => (e) => {
@@ -259,31 +365,7 @@ export default function HomePage() {
       >
         Skip to main content
       </a>
-      {/* ── Top nav ───────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 bg-brand-bg/85 backdrop-blur border-b border-brand-line">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <Link to="/" aria-label="LawHand home" className="rounded-lg">
-            <LawHandLogo compact />
-          </Link>
-          <nav aria-label="Marketing" className="hidden lg:flex items-center gap-7 text-[14px] font-sans font-medium text-brand-ink-2">
-            <a href="#how" onClick={scrollTo('how')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">How it works</a>
-            <a href="#features" onClick={scrollTo('features')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Platform</a>
-            <a href="#skills" onClick={scrollTo('skills')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Practice areas</a>
-            <a href="#security" onClick={scrollTo('security')} className="inline-flex min-h-11 items-center hover:text-brand-ink transition-colors">Security</a>
-          </nav>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <Link to="/login" className="inline-flex min-h-11 items-center px-2 text-[14px] font-sans font-semibold text-brand-ink hover:text-brand-accent-2 transition-colors">
-              Sign in
-            </Link>
-            <a href={contactUrl} className="hidden sm:inline-flex min-h-11 items-center gap-2 px-4 py-2 bg-brand-ink text-white text-[14px] font-sans font-semibold rounded-xl hover:bg-brand-ink-2 transition-all shadow-sm hover:-translate-y-[1px]">
-              Book a demo
-            </a>
-            <a href={contactUrl} className="inline-flex sm:hidden min-h-11 items-center px-3 py-2 bg-brand-ink text-white text-[13px] font-sans font-semibold rounded-xl">
-              Book demo
-            </a>
-          </div>
-        </div>
-      </header>
+      <MarketingHeader onSectionClick={scrollTo} />
 
       <main id="main-content" tabIndex="-1">
       {/* ── Hero ──────────────────────────────────────────────────── */}
@@ -459,6 +541,87 @@ export default function HomePage() {
 
       {/* ── Review-first workflows ────────────────────────────────── */}
       {/* ── Practice-area skills ──────────────────────────────────── */}
+      <section id="ai" className="max-w-6xl mx-auto px-6 py-16 md:py-24 scroll-mt-20">
+        <div className="max-w-2xl">
+          <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">LawHand intelligence</span>
+          <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
+            Work with the matter. Connect it to everything else.
+          </h2>
+          <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
+            Use matter-aware AI chat inside LawHand, or bring controlled LawHand tools into an approved external system through MCP.
+          </p>
+        </div>
+
+        <div className="grid lg:grid-cols-[1.18fr_0.82fr] gap-6 mt-10 items-stretch">
+          <article className="relative overflow-hidden rounded-3xl border border-brand-line bg-brand-surface p-7 md:p-9 shadow-sm">
+            <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brand-accent/10 blur-3xl" aria-hidden="true" />
+            <div className="relative grid gap-8 md:grid-cols-[0.88fr_1.12fr] md:items-center">
+              <div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-accent text-white shadow-sm">
+                  <MessageSquareText size={22} />
+                </div>
+                <h3 className="font-serif font-bold text-[25px] leading-tight mt-5">Matter-aware AI chat</h3>
+                <p className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mt-3">
+                  Research, review, summarize, and draft with the active matter and authorized sources close at hand.
+                </p>
+                <Link to="/product/chat" className="inline-flex items-center gap-2 mt-6 text-[13.5px] font-sans font-bold text-brand-accent-2 hover:underline">
+                  Explore LawHand Chat <ArrowRight size={15} />
+                </Link>
+              </div>
+              <div className="rounded-2xl border border-brand-line bg-brand-bg-soft p-4 shadow-inner">
+                <div className="flex items-center justify-between border-b border-brand-line pb-3">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.14em] font-bold text-brand-muted">Matter chat</p>
+                    <p className="font-serif font-bold text-[13px] mt-1">Northwind Services Agreement</p>
+                  </div>
+                  <span className="rounded-full bg-brand-green/10 text-brand-green border border-brand-green/20 px-2 py-1 text-[9px] font-bold">Sources connected</span>
+                </div>
+                <div className="mt-4 ml-auto max-w-[82%] rounded-xl rounded-br-sm bg-brand-accent px-3 py-2.5 text-[11px] leading-relaxed text-white">
+                  Summarize the unresolved valuation questions.
+                </div>
+                <div className="mt-3 rounded-xl rounded-bl-sm border border-brand-line bg-white px-3 py-3">
+                  <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-accent-2"><Sparkles size={11} /> LawHand</div>
+                  <p className="mt-2 text-[10.5px] leading-relaxed text-brand-ink-2">Three assets still need a current valuation. Each item links back to the inventory and supporting source.</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {['Inventory', 'Appraisal', 'Trust schedule'].map((source) => <span key={source} className="rounded border border-brand-line bg-brand-bg px-2 py-1 text-[8.5px] font-semibold text-brand-muted">{source}</span>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article className="relative overflow-hidden rounded-3xl border border-brand-ink/10 bg-brand-ink p-7 md:p-9 text-white shadow-lg">
+            <div className="absolute -bottom-20 -right-20 h-56 w-56 rounded-full bg-brand-accent/30 blur-3xl" aria-hidden="true" />
+            <div className="relative flex h-full flex-col">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/10"><Braces size={22} /></div>
+                <span className="rounded-full border border-brand-gold/30 bg-brand-gold/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-gold">Private preview</span>
+              </div>
+              <h3 className="font-serif font-bold text-[25px] leading-tight mt-5 text-white">LawHand MCP</h3>
+              <p className="text-white/65 font-sans text-[14.5px] leading-relaxed mt-3">
+                Give approved tools scoped access to LawHand through product keys, explicit allowlists, bounded usage, and visible activity.
+              </p>
+              <div className="mt-7 grid grid-cols-2 gap-2">
+                {[
+                  ['Auth', 'Scoped key'],
+                  ['Access', 'Tool allowlist'],
+                  ['Price', '$0.45 / call'],
+                  ['Limits', 'Bounded'],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5">
+                    <p className="text-[8.5px] font-bold uppercase tracking-[0.12em] text-white/40">{label}</p>
+                    <p className="mt-1 font-mono text-[10.5px] text-white/85">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <Link to="/product/mcp" className="inline-flex items-center gap-2 mt-auto pt-7 text-[13.5px] font-sans font-bold text-white hover:text-brand-gold">
+                Explore the MCP preview <ArrowRight size={15} />
+              </Link>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section id="skills" className="bg-brand-bg-soft/40 border-y border-brand-line scroll-mt-20">
         <div className="max-w-6xl mx-auto px-6 py-16 md:py-24">
           <div className="md:flex items-end justify-between gap-8 mb-10">
@@ -472,19 +635,19 @@ export default function HomePage() {
                 every team into the same generic workflow.
               </p>
             </div>
+            <p className="mt-5 shrink-0 font-sans text-[11px] font-bold uppercase tracking-[0.13em] text-brand-muted md:mt-0">
+              Select a skill to see it at work
+            </p>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {SKILLS.map(({ icon: Icon, name, description }) => (
-              <div key={name} className="bg-brand-surface border border-brand-line rounded-2xl p-5">
-                <div className="flex items-start gap-4">
-                  <div className="w-11 h-11 rounded-xl bg-brand-bg-soft border border-brand-line flex items-center justify-center text-brand-ink shrink-0">
-                    <Icon size={22} strokeWidth={1.5} />
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="font-serif font-bold text-[16px] leading-tight mb-1.5">{name}</h3>
-                    <p className="text-brand-ink-2 font-sans text-[13.5px] leading-relaxed">{description}</p>
-                  </div>
-                </div>
+            {SKILLS.map((skill) => (
+              <div key={skill.id} className={expandedSkill === skill.id ? 'sm:col-span-2 lg:col-span-3' : ''}>
+                <PracticeSkillCard
+                  skill={skill}
+                  isOpen={expandedSkill === skill.id}
+                  onToggle={() => setExpandedSkill(expandedSkill === skill.id ? null : skill.id)}
+                />
+                <PracticeSkillPanel skill={skill} isOpen={expandedSkill === skill.id} />
               </div>
             ))}
           </div>
@@ -496,29 +659,31 @@ export default function HomePage() {
         <div className="max-w-2xl mb-10">
           <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Optional add-on modules</span>
           <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-            Add depth where a generic matter view falls short.
+            Extend the workspace when the work demands it.
           </h2>
           <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-            Trust and estate work and mediation need ongoing portfolios with role-aware
-            access for clients and parties. Add those surfaces only when the work calls for them.
+            LawHand has a broader module library than any one page should catalog. These two
+            examples show how specialized records, roles, and controls can fit into the same core matter experience.
           </p>
         </div>
         <div className="grid md:grid-cols-2 gap-6 items-start">
           {ADDONS.map((addon) => (
-            <AddonDisclosureButton
+            <AddonCard
               key={addon.id}
               addon={addon}
               isOpen={expandedAddon === addon.id}
               onToggle={() => setExpandedAddon(expandedAddon === addon.id ? null : addon.id)}
             />
           ))}
-          {ADDONS.map((addon) => (
-            <AddonWorkflowPanel
-              key={addon.id + '-panel'}
-              addon={addon}
-              isOpen={expandedAddon === addon.id}
-            />
-          ))}
+        </div>
+        <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-brand-line bg-brand-bg-soft px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="font-sans text-[13px] leading-relaxed text-brand-ink-2">
+            <span className="font-bold text-brand-ink">The module library keeps growing.</span>{' '}
+            We scope the records, roles, and review points around the work your firm actually handles.
+          </p>
+          <a href={contactUrl} className="inline-flex shrink-0 items-center gap-2 font-sans text-[12px] font-bold text-brand-accent-2 hover:underline">
+            Discuss your workflow <ArrowRight size={14} />
+          </a>
         </div>
       </section>
 
@@ -526,16 +691,16 @@ export default function HomePage() {
       <section className="max-w-6xl mx-auto px-6 py-16 md:py-24">
         <div className="grid lg:grid-cols-2 gap-14 items-center">
           <div>
-            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Built for both sides of the table</span>
+            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Access that follows the role</span>
             <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">
-              Attorneys keep control. Clients get clarity.
+              Attorneys keep control. Every participant gets the right view.
             </h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4 max-w-xl">
-              Each firm workspace runs role-aware access — for trustees, grantors, and beneficiaries,
-              or for two parties in a mediation — surfacing what each person needs and hiding what they don’t.
+              Module roles shape which records someone can see, update, or approve — from internal
+              reviewers to clients, counterparties, fiduciaries, and neutral participants.
             </p>
             <div className="flex flex-wrap gap-2.5 mt-7">
-              {['Attorney · full edit', 'Trustee · update assets', 'Grantor · update assets', 'Beneficiary · view-only', 'Mediator · neutral view', 'Firm admin · billing & seats'].map((b) => (
+              {['Attorney · full edit', 'Reviewer · approve', 'Client · share inputs', 'Participant · limited view', 'Neutral · shared view', 'Firm admin · policies & seats'].map((b) => (
                 <span key={b} className="px-3 py-1.5 rounded-full text-[12.5px] font-sans font-medium text-brand-ink-2 bg-brand-surface border border-brand-line">
                   {b}
                 </span>
@@ -548,7 +713,7 @@ export default function HomePage() {
               src={balancedAccessImg}
               srcSet={`${balancedAccessSmallImg} 720w, ${balancedAccessImg} 1280w`}
               sizes="(max-width: 768px) 100vw, 50vw"
-              alt="Two role-specific sets of legal documents converging on one organized record"
+              alt="An attorney passes an approved brief to a client while retaining the complete matter folio"
               loading="lazy"
               className="relative w-full aspect-[3/2] object-cover rounded-2xl shadow-xl border border-brand-line"
             />
@@ -556,9 +721,9 @@ export default function HomePage() {
         </div>
         <div className="grid sm:grid-cols-3 gap-5 mt-14">
           {[
-            { n: '01', t: 'Helps keep records current', b: 'Configured reminders and roll-forwards surface work on the cadence you set.' },
-            { n: '02', t: 'Supports hard conversations', b: 'In mediation, a shared workspace can organize items, calculations, and recorded approvals.' },
-            { n: '03', t: 'Keeps a reviewable trail', b: 'Key values, citations, and approvals can be tracked and included in generated reports.' },
+            { n: '01', t: 'Keep the record current', b: 'Structured updates and reminders surface work on the cadence each module requires.' },
+            { n: '02', t: 'Make access legible', b: 'Participants see the documents, requests, and decisions assigned to their role.' },
+            { n: '03', t: 'Preserve the review trail', b: 'Key values, sources, changes, and approvals stay connected to the matter record.' },
           ].map(({ n, t, b }) => (
             <div key={n} className="bg-brand-surface border border-brand-line rounded-2xl p-6">
               <div className="font-serif text-[26px] text-brand-accent-2">{n}</div>
@@ -573,11 +738,11 @@ export default function HomePage() {
       <section id="pricing" className="bg-brand-bg-soft/40 border-y border-brand-line scroll-mt-20">
         <div className="max-w-6xl mx-auto px-6 py-16 md:py-24">
           <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">A practical rollout</span>
-            <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">Start with one workflow. Expand when it earns its place.</h2>
+            <span className="text-[12px] font-sans font-bold uppercase tracking-[0.16em] text-brand-accent-2">Straightforward pricing</span>
+            <h2 className="font-serif font-bold text-[34px] leading-tight mt-3">One clear platform price. Controlled expansion.</h2>
             <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-              Give the team one clear improvement first. Add broader matter, integration,
-              and AI workflows only after scope and access are agreed.
+              License the full LawHand workspace by seat, start with intake when that is the right first move,
+              and add external MCP connections deliberately.
             </p>
           </div>
           <div className="grid lg:grid-cols-2 gap-8 items-stretch max-w-5xl mx-auto">
@@ -609,20 +774,21 @@ export default function HomePage() {
             {/* Price card */}
             <div className="bg-brand-surface border-[1.5px] border-brand-ink rounded-2xl p-8 shadow-lg flex flex-col">
               <div className="flex items-center justify-between">
-                <h3 className="font-serif font-bold text-[22px]">Add the wider platform</h3>
-                <span className="px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold text-brand-muted bg-brand-bg-soft border border-brand-line">configured to fit</span>
+                <h3 className="font-serif font-bold text-[22px]">LawHand platform</h3>
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-sans font-semibold text-brand-muted bg-brand-bg-soft border border-brand-line">per user</span>
               </div>
-              <p className="text-brand-ink-2 font-sans text-[14.5px] leading-relaxed mt-5">
-                Choose the operational scope first. We document integrations, onboarding,
-                support, and commercial terms before anything is enabled in production.
-              </p>
+              <div className="mt-5 flex items-baseline gap-1.5">
+                <span className="font-serif text-[52px] font-bold leading-none">$89</span>
+                <span className="text-[14px] text-brand-muted font-sans">/ user / month</span>
+              </div>
+              <p className="text-brand-muted font-sans text-[12.5px] mt-2">Billed annually</p>
               <hr className="border-brand-line my-6" />
               <div className="space-y-3">
                 {[
-                  { name: 'Call Intake + Tasks', price: 'day one', body: 'Caller tracking, history, outcomes, staff assignment, and optional verified Zoom Phone intake.' },
-                  { name: 'Matter platform', price: 'when ready', body: 'Matter, contact, document, task, billing, and approved integration workflows selected for your firm.' },
-                  { name: 'AI model access', price: 'controlled', body: 'Model access and usage controls are configured for the users and providers your firm approves.' },
-                  { name: 'Practice modules', price: 'optional', body: 'Add specialized workflows only after scope, readiness, and access requirements are agreed.' },
+                  { name: 'Matter-aware AI chat', price: 'included', body: 'Research, review, summaries, and drafting connected to the active matter and authorized sources.' },
+                  { name: 'Firm operations', price: 'included', body: 'Matters, contacts, documents, tasks, deadlines, billing, reporting, and approved integrations.' },
+                  { name: 'Role-aware access', price: 'included', body: 'Tenant-isolated firm workspaces with controlled client and party access.' },
+                  { name: 'Specialized workflows', price: 'optional', body: 'Add practice modules after scope, readiness, and access requirements are agreed.' },
                 ].map((plan) => (
                   <div key={plan.name} className="rounded-xl border border-brand-line bg-brand-bg-soft px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -638,18 +804,36 @@ export default function HomePage() {
               <div className="mt-5 flex items-start gap-2.5 rounded-xl bg-brand-bg-soft border border-brand-line px-4 py-3">
                 <Sparkles size={16} className="text-brand-gold shrink-0 mt-0.5" />
                 <p className="text-[13px] font-sans text-brand-ink-2 leading-relaxed">
-                  <span className="font-semibold text-brand-ink">Module independence by design.</span>{' '}
-                  Intake-only firms can log into just the call tracker. Standard and premium firms see
-                  the broader workflows their tenant has licensed.
+                  <span className="font-semibold text-brand-ink">Configured to fit the firm.</span>{' '}
+                  Integrations, onboarding, support, enabled modules, and model-provider usage are documented before production rollout.
                 </p>
               </div>
-              <a href={contactUrl} className="block w-full mt-7 py-3 rounded-lg text-center font-sans font-semibold text-[14px] bg-brand-accent text-white hover:bg-brand-accent-2 transition-all">
-                Book a demo
-              </a>
+              <Link to="/pricing" className="block w-full mt-7 py-3 rounded-lg text-center font-sans font-semibold text-[14px] bg-brand-accent text-white hover:bg-brand-accent-2 transition-all">
+                View full pricing
+              </Link>
               <p className="text-center text-brand-muted font-sans text-[12.5px] mt-4">
                 Questions about onboarding or commercial terms?{' '}
                 <a href={contactUrl} className="text-brand-accent-2 font-semibold hover:underline">Talk to us</a>.
               </p>
+            </div>
+          </div>
+
+          <div className="max-w-5xl mx-auto mt-8 rounded-2xl border border-brand-line bg-brand-ink p-7 md:p-8 text-white">
+            <div className="grid gap-6 md:grid-cols-[1fr_auto] md:items-center">
+              <div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <KeyRound size={20} className="text-brand-gold" />
+                  <h3 className="font-serif text-[21px] font-bold text-white">LawHand MCP</h3>
+                  <span className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white/65">Private preview</span>
+                </div>
+                <p className="mt-3 max-w-2xl text-[13.5px] leading-relaxed text-white/65">
+                  Connect approved external tools with scoped keys, explicit tool access, bounded usage, and administrative visibility.
+                </p>
+              </div>
+              <div className="md:text-right">
+                <div className="flex items-baseline gap-1.5 md:justify-end"><span className="font-serif text-[38px] font-bold">$0.45</span><span className="text-[12px] text-white/55">/ tool call</span></div>
+                <Link to="/product/mcp" className="mt-2 inline-flex items-center gap-2 text-[12.5px] font-bold text-brand-gold hover:underline">Preview details <ArrowRight size={14} /></Link>
+              </div>
             </div>
           </div>
 
@@ -685,18 +869,7 @@ export default function HomePage() {
       </section>
       </main>
 
-      {/* ── Footer ────────────────────────────────────────────────── */}
-      <footer className="border-t border-brand-line">
-        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <LawHandLogo compact />
-          <p className="text-brand-muted font-sans text-[14px] tracking-wide">The whole matter, in hand.</p>
-          <div className="flex items-center gap-4 text-brand-muted font-sans text-[12.5px]">
-            <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
-            <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
-            <span>© {new Date().getFullYear()} LawHand</span>
-          </div>
-        </div>
-      </footer>
+      <MarketingFooter />
     </div>
   )
 }
