@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -39,6 +40,24 @@ def test_system_prompt_does_not_expose_firm_context_label():
     assert "FIRM CONTEXT" not in prompt
     assert "SOURCE MATERIALS" in prompt
     assert "Never write the phrase" in prompt
+
+
+def test_standard_gateway_candidates_skip_routes_in_latency_cooldown():
+    service = LLMService()
+    with patch(
+        "app.services.llm_routing.is_model_in_cooldown",
+        side_effect=lambda alias: alias == settings.LITELLM_STANDARD_MODEL,
+    ):
+        candidates = service._gateway_candidates(
+            settings.LITELLM_STANDARD_MODEL,
+            use_premium=False,
+            customer_api_key=None,
+        )
+
+    assert candidates == [
+        "clarity-standard-zen-nemotron",
+        "clarity-standard-deepseek-flash-free",
+    ]
 
 
 @pytest.mark.asyncio
@@ -90,7 +109,7 @@ async def test_standard_stream_retries_gateway_fallback_before_first_token():
 
     assert models == [
         settings.LITELLM_STANDARD_MODEL,
-        "clarity-standard-fb-0",
+        "clarity-standard-zen-nemotron",
     ]
     assert "".join(chunks) == "fallback answer"
 

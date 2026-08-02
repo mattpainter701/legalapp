@@ -343,6 +343,12 @@ export const streamMessage = async function* (conversationId, content, includePu
             } catch {
               // Ignore malformed progress metadata; token streaming should continue.
             }
+          } else if (data.startsWith('[TOKEN]')) {
+            try {
+              yield JSON.parse(data.slice('[TOKEN]'.length))
+            } catch {
+              // Ignore malformed answer chunks without terminating the stream.
+            }
           } else if (data && data !== '[STREAM_COMPLETE]' && !data.startsWith('[ERROR]')) {
             yield data
           } else if (data === '[STREAM_COMPLETE]' || data.startsWith('[ERROR]')) {

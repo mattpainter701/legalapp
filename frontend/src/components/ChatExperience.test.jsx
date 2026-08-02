@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ChatHeader from './ChatHeader'
 import ChatInput from './ChatInput'
+import ChatMessage, { linkSourceReferences } from './ChatMessage'
 import Messages from './Messages'
 import ChatRail from './chat/ChatRail'
 
@@ -41,6 +42,83 @@ afterEach(() => {
 })
 
 describe('Chat assistant experience', () => {
+  it('turns source tags into numbered source hyperlinks', () => {
+    const sources = [
+      {
+        source_id: 'courtlistener:gries-1',
+        case_name: 'Gries Sports Enterprises, Inc. v. Modell',
+        citation: '15 Ohio St.3d 284 (1984)',
+        url: 'https://www.courtlistener.com/opinion/675482/',
+        source_type: 'public_authority',
+        locator: 'Retrieved passage 3',
+      },
+    ]
+    const content = 'Ohio applies its choice-of-law framework. [source: courtlistener:gries-1] [verify]'
+
+    expect(linkSourceReferences(content, sources, 'answer-1')).toContain(
+      '[[1]](#source-answer-1-1)',
+    )
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-1',
+          role: 'assistant',
+          content,
+          sources,
+          created_at: '2026-08-02T12:00:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
+      'href',
+      '#source-answer-1-1',
+    )
+    expect(screen.getByRole('link', { name: '15 Ohio St.3d 284 (1984)' })).toHaveAttribute(
+      'href',
+      'https://www.courtlistener.com/opinion/675482/',
+    )
+    expect(screen.getByText('Authorities Referenced')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Link to Retrieved passage 3' })).toHaveAttribute(
+      'href',
+      '#source-answer-1-1',
+    )
+  })
+
+  it('renders truthful timed retrieval activity with live source previews', () => {
+    render(
+      <ChatMessage
+        message={{
+          id: 'working-1',
+          role: 'assistant',
+          content: '',
+          sources: [],
+          progress: {
+            status: 'Checking cases, statutes, and rules',
+            counts: { matter: 1, uploads: 0, firm: 2, courtlistener: 1, total: 4 },
+            activities: [
+              { id: 'working_context', state: 'completed', label: 'Working context ready', elapsed_ms: 240 },
+              {
+                id: 'public_authority',
+                state: 'progress',
+                label: 'Checking cases, statutes, and rules',
+                detail: 'CourtListener and public authority search',
+                elapsed_ms: 1250,
+                sources: [{ source_id: 'courtlistener:1', case_name: 'Smith v. Jones', citation: '123 Ohio St.3d 1' }],
+              },
+            ],
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getAllByText('Checking cases, statutes, and rules').length).toBeGreaterThan(0)
+    expect(screen.getByText('1.3s')).toBeInTheDocument()
+    expect(screen.getByText('Smith v. Jones')).toBeInTheDocument()
+    expect(screen.getByLabelText('Sources found')).toBeInTheDocument()
+  })
+
   it('exposes response model and source settings at every viewport', async () => {
     const user = userEvent.setup()
     const setUsePremium = vi.fn()

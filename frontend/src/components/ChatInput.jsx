@@ -70,10 +70,10 @@ export default function ChatInput({
 
   return (
     <div
-      className={`relative z-20 flex-shrink-0 border-t border-brand-line bg-brand-surface/95 px-3 pt-3 backdrop-blur transition-colors sm:px-4 md:px-6 ${
+      className={`relative z-20 flex-shrink-0 border-t border-brand-line bg-brand-surface/95 px-2 pt-2 backdrop-blur transition-colors sm:px-4 sm:pt-3 md:px-6 ${
         isDragOver ? 'bg-brand-accent/10' : ''
       }`}
-      style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
+      style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0.5rem))' }}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -89,7 +89,7 @@ export default function ChatInput({
 
       <div className="mx-auto flex max-w-4xl flex-col gap-2.5">
         {!inputValue && pendingAttachments.length === 0 && suggestions.length > 0 && (
-          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5" aria-label="Suggested prompts">
+          <div className="-mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex" aria-label="Suggested prompts">
             {suggestions.map((suggestion) => (
               <button
                 key={suggestion}
@@ -128,7 +128,7 @@ export default function ChatInput({
           </div>
         )}
 
-        <div className="rounded-2xl border border-brand-line-2 bg-brand-surface p-2 shadow-sm focus-within:border-brand-accent focus-within:ring-2 focus-within:ring-brand-accent/15">
+        <div className="rounded-xl border border-brand-line-2 bg-brand-surface p-1.5 shadow-sm focus-within:border-brand-accent focus-within:ring-2 focus-within:ring-brand-accent/15 sm:rounded-2xl sm:p-2">
           <textarea
             ref={textareaRef}
             value={inputValue}
@@ -137,19 +137,19 @@ export default function ChatInput({
             placeholder={placeholder}
             aria-label="Message the assistant"
             aria-describedby="assistant-review-note"
-            className="min-h-[52px] max-h-[200px] w-full resize-none bg-transparent px-2 py-2 text-[15px] leading-relaxed text-brand-ink placeholder-brand-muted focus:outline-none"
+            className="min-h-[42px] max-h-[120px] w-full resize-none bg-transparent px-2 py-1.5 text-[15px] leading-relaxed text-brand-ink placeholder-brand-muted focus:outline-none sm:min-h-[52px] sm:max-h-[200px] sm:py-2"
             rows={1}
             style={{ height: 'auto' }}
             disabled={disabled || isSending}
           />
 
           <div className="flex items-center justify-between gap-3 border-t border-brand-line/70 px-1 pt-2">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
                 onClick={onUploadClick}
                 disabled={isSending}
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl px-2.5 text-xs font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-xs font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:rounded-xl sm:px-2.5"
                 aria-label="Attach a document"
               >
                 <Paperclip size={16} />
@@ -168,7 +168,7 @@ export default function ChatInput({
                 type="button"
                 onClick={onSend}
                 disabled={!inputValue.trim() || isSending}
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-brand-ink px-3.5 text-sm font-semibold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:bg-brand-line-2 disabled:text-brand-muted"
+                className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-brand-ink px-3 text-sm font-semibold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:bg-brand-line-2 disabled:text-brand-muted sm:min-h-10 sm:rounded-xl sm:px-3.5"
                 aria-label={isSending ? 'Assistant is responding' : 'Send message'}
               >
                 {isSending ? (
@@ -187,7 +187,7 @@ export default function ChatInput({
           </div>
         </div>
 
-        <p id="assistant-review-note" className="text-center text-[10px] leading-relaxed text-brand-muted">
+        <p id="assistant-review-note" className="hidden text-center text-[10px] leading-relaxed text-brand-muted sm:block">
           Verify cited authority, dates, and legal conclusions before relying on assistant work.
         </p>
       </div>

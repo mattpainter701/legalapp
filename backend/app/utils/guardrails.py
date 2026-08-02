@@ -122,6 +122,72 @@ _SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
 _QUOTED_SPAN_RE = re.compile(r'["“]([^"”]{20,})["”]')
 
 
+_MODEL_ATTRIBUTION_RE = re.compile(
+    r"\[(?:model\s+knowledge|model\s+reasoning)\]", re.IGNORECASE
+)
+
+
+def reconcile_retrieved_source_attribution(
+    text: str, sources: list[dict[str, Any]] | None
+) -> tuple[str, int]:
+    """Attach retrieved sources when a model mislabeled a matching citation.
+
+    This is deliberately narrow: a model attribution is changed only when the
+    immediately preceding claim contains a distinctive case/source name or
+    citation that exactly matches a retrieved result. The claim remains
+    ``[verify]`` unless it independently satisfies the stricter settled check.
+    """
+    candidates: list[tuple[str, tuple[str, ...]]] = []
+    for row in sources or []:
+        source_id = str(row.get("source_id") or row.get("id") or "").strip()
+        if not source_id:
+            continue
+        identifiers = []
+        for key in ("citation", "case_name", "title"):
+            value = re.sub(r"\s+", " ", str(row.get(key) or "")).strip().casefold()
+            if len(value) >= 8 and value not in {"unknown case", "legal authority"}:
+                identifiers.append(value)
+        if identifiers:
+            candidates.append((source_id, tuple(identifiers)))
+
+    if not candidates or not text:
+        return text, 0
+
+    reconciled = 0
+
+    def replace(match: re.Match) -> str:
+        nonlocal reconciled
+        claim = text[max(0, match.start() - 700) : match.start()]
+        previous_tag = max(
+            claim.casefold().rfind("[verify]"),
+            claim.casefold().rfind("[model knowledge]"),
+            claim.casefold().rfind("[model reasoning]"),
+            claim.casefold().rfind("[settled]"),
+        )
+        if previous_tag >= 0:
+            claim = claim[previous_tag:]
+        normalized_claim = re.sub(r"\s+", " ", claim).casefold()
+        existing_ids = {
+            value.strip().casefold() for value in _SOURCE_REF_RE.findall(claim)
+        }
+        has_valid_existing_source = any(
+            source_id.casefold() in existing_ids for source_id, _ in candidates
+        )
+        matched_ids = []
+        for source_id, identifiers in candidates:
+            if source_id.casefold() in existing_ids:
+                continue
+            if any(identifier in normalized_claim for identifier in identifiers):
+                matched_ids.append(source_id)
+        if not matched_ids and not has_valid_existing_source:
+            return match.group(0)
+        reconciled += 1
+        refs = " ".join(f"[source: {source_id}]" for source_id in matched_ids[:3])
+        return f"{refs} [verify]" if refs else "[verify]"
+
+    return _MODEL_ATTRIBUTION_RE.sub(replace, text), reconciled
+
+
 def validate_citation_confidence(
     text: str, sources: list[dict[str, Any]] | None
 ) -> tuple[str, int]:

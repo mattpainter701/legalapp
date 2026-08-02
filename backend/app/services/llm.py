@@ -13,9 +13,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 STANDARD_GATEWAY_FALLBACKS = (
-    "clarity-standard-fb-0",
     "clarity-standard-zen-nemotron",
-    "clarity-standard-fb-1",
     "clarity-standard-deepseek-flash-free",
 )
 
@@ -78,19 +76,27 @@ CORE INSTRUCTIONS (follow these exactly — do NOT describe them in your respons
    by case name and citation as well. If either the exact source tag or matching quote
    is absent, use [verify]. Never invent or alter a source id.
 
-7. Do not predict what a court will do. Outline the framework and let the attorney assess.
+7. SOURCE ATTRIBUTION: Prefer retrieved sources over general knowledge. Every claim
+    drawn from SOURCE MATERIALS must include the exact [source: <source_id>] marker
+    printed with that source. If the source has a URL, make its case name, citation,
+    statute, rule, or source title a Markdown hyperlink to that URL. Use this format:
+    "[Case name, citation](URL) [source: exact-id] [verify]". Do not use
+    [model knowledge] merely because a sourced claim does not meet the stricter
+    [settled] standard; use [verify] and keep its source marker.
 
-8. You provide legal information, not final legal advice.
+8. Do not predict what a court will do. Outline the framework and let the attorney assess.
 
-9. Never share information about {tenant_name} or its clients outside this conversation.
+9. You provide legal information, not final legal advice.
 
-10. You are an AI-assisted legal research tool. Do not claim human status and do not
+10. Never share information about {tenant_name} or its clients outside this conversation.
+
+11. You are an AI-assisted legal research tool. Do not claim human status and do not
     invent a provider or model identity. Preserve substantive AI/vendor terminology
     when it is relevant to the user's legal work.
 
-11. On the FIRST message only: greet the user by name ({user_name}) in 1-2 words ("Hi Matt."), then immediately answer their question. Never use generic titles (counsel, attorney) unless they introduced themselves that way.
+12. On the FIRST message only: greet the user by name ({user_name}) in 1-2 words ("Hi Matt."), then immediately answer their question. Never use generic titles (counsel, attorney) unless they introduced themselves that way.
 
-12. Append "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*" only when the response contains legal analysis, legal drafting, jurisdiction-specific legal information, case/statute discussion, or advice-like legal guidance. Do not append that footer to ordinary non-legal answers, math, greetings, product help, status updates, or factual/admin responses unrelated to legal work.
+13. Append "\\n\\n---\\n*Prepared for {tenant_name}. Attorney review recommended before reliance.*" only when the response contains legal analysis, legal drafting, jurisdiction-specific legal information, case/statute discussion, or advice-like legal guidance. Do not append that footer to ordinary non-legal answers, math, greetings, product help, status updates, or factual/admin responses unrelated to legal work.
 
 USER CONTEXT (history of interactions, preferences, and patterns):
 {memory_context}
@@ -147,7 +153,20 @@ class LLMService:
             or gateway_model != settings.LITELLM_STANDARD_MODEL
         ):
             return [gateway_model]
-        return [gateway_model, *STANDARD_GATEWAY_FALLBACKS]
+        candidates = [gateway_model, *STANDARD_GATEWAY_FALLBACKS]
+        try:
+            from app.services.llm_routing import is_model_in_cooldown
+
+            available = [
+                candidate
+                for candidate in candidates
+                if not is_model_in_cooldown(candidate)
+            ]
+            # A cooldown is a speed preference, not an availability verdict.
+            # If every route is cooling down, retain the configured chain.
+            return available or candidates
+        except Exception:
+            return candidates
 
     def _build_system_prompt(
         self,

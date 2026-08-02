@@ -204,6 +204,19 @@ export const markdownComponents = {
   li: ({ children }) => <li className="text-[15px] leading-relaxed">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-brand-ink">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
+  a: ({ children, href }) => {
+    const isInternalSource = String(href || '').startsWith('#source-')
+    return (
+      <a
+        href={href}
+        target={isInternalSource ? undefined : '_blank'}
+        rel={isInternalSource ? undefined : 'noreferrer'}
+        className="font-semibold text-brand-accent-2 underline decoration-brand-line-2 underline-offset-2 hover:text-brand-ink"
+      >
+        {children}
+      </a>
+    )
+  },
   blockquote: ({ children }) => (
     <blockquote className="border-l-[3px] border-brand-line-2 pl-4 italic font-serif text-brand-ink-2 my-4 py-1 bg-brand-surface-2">
       {children}
