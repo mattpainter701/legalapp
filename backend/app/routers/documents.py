@@ -148,9 +148,7 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             embeddings = await embedding_service.embed_batch(chunks_text)
             if len(embeddings) != len(chunks_text):
                 doc.status = "error"
-                doc.error_message = (
-                    "Embedding service returned an incomplete result; indexing was not saved"
-                )
+                doc.error_message = "Embedding service returned an incomplete result; indexing was not saved"
                 await db.commit()
                 return
 

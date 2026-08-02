@@ -148,7 +148,9 @@ def _source_locator_from_chunk(chunk: dict) -> str | None:
     section = chunk.get("section_path") or metadata.get("section_path")
     if section and str(section).strip() not in {"CourtListener", "general"}:
         parts.append(str(section).strip())
-    page = chunk.get("page_number") or metadata.get("page_number") or metadata.get("page")
+    page = (
+        chunk.get("page_number") or metadata.get("page_number") or metadata.get("page")
+    )
     if page is not None:
         parts.append(f"Page {page}")
     paragraph = chunk.get("paragraph_number") or metadata.get("paragraph_number")
@@ -174,7 +176,11 @@ def _source_locator_from_chunk(chunk: dict) -> str | None:
 def _source_dict_from_chunk(chunk: dict) -> dict:
     raw_source = chunk.get("source") or ""
     source_type = chunk.get("clause_type") or raw_source or "public_authority"
-    if raw_source in {"courtlistener_mcp", "legal_authority_mcp", "public_courtlistener"}:
+    if raw_source in {
+        "courtlistener_mcp",
+        "legal_authority_mcp",
+        "public_courtlistener",
+    }:
         source_type = "public_authority"
     return {
         "source_id": str(chunk.get("id")) if chunk.get("id") is not None else None,
@@ -1351,9 +1357,7 @@ async def send_message(
         context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
         source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
-    cleaned_response = _canonicalize_source_references(
-        cleaned_response, source_aliases
-    )
+    cleaned_response = _canonicalize_source_references(cleaned_response, source_aliases)
     cleaned_response, _ = reconcile_retrieved_source_attribution(
         cleaned_response, source_dicts
     )
@@ -1579,13 +1583,11 @@ async def stream_message(
             return cached, [], effective_matter_cloud_folder, True
         async with async_session_maker() as context_db:
             await set_tenant_context(context_db, str(user.tenant_id))
-            mcs, has_pii, mpf = (
-                await matter_context_service.get_safe_matter_context(
-                    db=context_db,
-                    matter_id=effective_matter_id,
-                    tenant_id=user.tenant_id,
-                    privacy_mode=user.privacy_mode,
-                )
+            mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
+                db=context_db,
+                matter_id=effective_matter_id,
+                tenant_id=user.tenant_id,
+                privacy_mode=user.privacy_mode,
             )
         await cache_manager.set_cached_matter_context(
             matter_id=effective_matter_id,
@@ -1618,9 +1620,7 @@ async def stream_message(
             return await resolve_llm_route(
                 context_db,
                 user.tenant_id,
-                use_premium=_premium_for_user(
-                    user, body.content, body.use_premium_llm
-                ),
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 requested_provider=body.provider,
             )
 

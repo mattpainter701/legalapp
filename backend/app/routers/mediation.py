@@ -372,7 +372,9 @@ async def update_case(
             matter.counterparty = case.party_b
             matter.stage = case.mediation_stage
             matter.budget_amount = case.fixed_fee
-            matter.billing_method = "flat_fee" if case.fixed_fee is not None else matter.billing_method
+            matter.billing_method = (
+                "flat_fee" if case.fixed_fee is not None else matter.billing_method
+            )
 
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
@@ -393,7 +395,9 @@ async def set_next_action(
     await set_tenant_context(db, str(user.tenant_id))
     case = await _get_case_or_404(db, case_id, user.tenant_id)
     if not case.matter_id:
-        raise HTTPException(status_code=409, detail="Mediation is not linked to a matter")
+        raise HTTPException(
+            status_code=409, detail="Mediation is not linked to a matter"
+        )
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Next action title is required")

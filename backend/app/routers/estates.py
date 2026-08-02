@@ -141,16 +141,16 @@ def _estate_to_response(estate: Estate) -> EstateResponse:
         if distribution.status not in {"complete", "completed", "cancelled"}
     )
     overdue_deadlines = [
-        deadline
-        for deadline in open_deadlines
-        if deadline.due_date < date.today()
+        deadline for deadline in open_deadlines if deadline.due_date < date.today()
     ]
     if overdue_deadlines:
         next_action = f"Complete overdue deadline: {overdue_deadlines[0].title}"
     elif missing_facts:
         next_action = f"Add missing opening fact: {missing_facts[0]}"
     elif unvalued_assets:
-        next_action = f"Value {unvalued_assets} asset{'s' if unvalued_assets != 1 else ''}"
+        next_action = (
+            f"Value {unvalued_assets} asset{'s' if unvalued_assets != 1 else ''}"
+        )
     elif unresolved_claims:
         next_action = f"Review {unresolved_claims} unresolved claim{'s' if unresolved_claims != 1 else ''}"
     elif pending_distributions:

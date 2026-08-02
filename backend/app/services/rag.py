@@ -326,9 +326,7 @@ def _public_source_url(chunk: dict[str, Any]) -> str:
     if not value:
         opinion_id = chunk.get("opinion_id")
         return (
-            f"https://www.courtlistener.com/opinion/{opinion_id}/"
-            if opinion_id
-            else ""
+            f"https://www.courtlistener.com/opinion/{opinion_id}/" if opinion_id else ""
         )
     url = str(value).strip()
     if url.startswith("//"):
@@ -434,7 +432,9 @@ async def search_courtlistener_mcp(
         if item.get("content")
     ]
     combined = case_chunks + authority_chunks
-    combined.sort(key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True)
+    combined.sort(
+        key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True
+    )
     return combined[:top_k]
 
 
