@@ -126,6 +126,7 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
     step_names = {step["name"] for step in job["steps"]}
 
     assert job["name"] == "Tenant data safety - migrations and RLS"
+    assert job["env"]["PYTHONPATH"] == "backend"
     assert "Reject destructive or rewritten migrations" in step_names
     assert "Rehearse upgrade over two-tenant customer data" in step_names
     assert "Verify tenant schema and effective isolation" in step_names
