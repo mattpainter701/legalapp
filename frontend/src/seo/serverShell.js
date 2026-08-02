@@ -37,6 +37,38 @@ const LEGAL_SHELLS = Object.freeze({
   },
 })
 
+const MARKETING_SHELLS = Object.freeze({
+  '/product/chat': {
+    heading: 'Ask with the whole matter in hand.',
+    lead: 'LawHand gives legal teams a matter-aware AI workspace for research, review, summaries, and drafting with authorized sources close at hand.',
+    sections: [
+      { heading: 'Starts with the matter', body: 'Open chat from a matter and keep the conversation tied to the work instead of rebuilding context in a blank chatbot.' },
+      { heading: 'Shows its source trail', body: 'When connected sources are enabled, answers can include citations, confidence cues, and links for attorney verification.' },
+      { heading: 'Moves into work product', body: 'Use LawHand to summarize, compare, review, and prepare a first draft while keeping professional judgment in the loop.' },
+    ],
+  },
+  '/product/mcp': {
+    heading: 'Bring LawHand context into the tools you already use.',
+    lead: 'LawHand MCP connects approved systems through scoped keys, explicit tool access, bounded usage, and administrative visibility.',
+    sections: [
+      { heading: 'Scoped product keys', body: 'Issue named credentials for a tenant and revoke them without exposing a user session.' },
+      { heading: 'Bounded access', body: 'Choose allowed tools and apply monthly and per-minute limits to each approved connection.' },
+      { heading: 'Private preview', body: 'Public key issuance remains gated while production release checks are completed. The intended public price is $0.45 per tool call.' },
+    ],
+  },
+  '/pricing': {
+    heading: 'One clear platform price. Controlled expansion.',
+    lead: 'LawHand is $89 per user per month, billed annually. Begin with the full platform, add specialized workflows deliberately, and evaluate MCP through the private preview.',
+    sections: [
+      { heading: 'LawHand platform', body: 'The core seat includes the firm workspace, matter-aware AI chat, firm operations, source-aware workflows, and role-aware access within the licensed scope.' },
+      { heading: 'LawHand MCP', body: 'The intended public price is $0.45 per tool call. MCP remains in private preview until its public release gates are complete.' },
+      { heading: 'Call Intake', body: 'Firms may begin with a focused caller-intake and task workflow, with optional verified Zoom Phone integration.' },
+    ],
+  },
+})
+
+const PUBLIC_SHELLS = Object.freeze({ ...LEGAL_SHELLS, ...MARKETING_SHELLS })
+
 const LAST_UPDATED = 'July 27, 2026'
 
 function escapeHtml(value) {
@@ -107,9 +139,40 @@ ${sections}
       </main>`
 }
 
+function marketingShellMarkup(pathname) {
+  const route = MARKETING_SHELLS[pathname]
+  const sections = route.sections
+    .map((section) => `          <section>
+            <h2>${escapeHtml(section.heading)}</h2>
+            <p>${escapeHtml(section.body)}</p>
+          </section>`)
+    .join('\n')
+  return `      <main class="server-legal">
+        <article class="server-legal__article">
+          <header class="server-legal__header">
+            <a class="server-legal__brand" href="/">LawHand</a>
+            <h1>${escapeHtml(route.heading)}</h1>
+            <p class="server-legal__lead">${escapeHtml(route.lead)}</p>
+          </header>
+          <nav class="server-legal__contents" aria-label="LawHand product pages">
+            <h2>Explore LawHand</h2>
+            <ol>
+              <li><a href="/product/chat">AI Chat</a></li>
+              <li><a href="/product/mcp">MCP</a></li>
+              <li><a href="/pricing">Pricing</a></li>
+            </ol>
+          </nav>
+${sections}
+          <footer class="server-legal__footer">
+            <p><a href="mailto:contact@perevagagroup.com">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
+          </footer>
+        </article>
+      </main>`
+}
+
 /** Derive a crawl-correct, no-JavaScript shell from Vite's final SPA index. */
 export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '') {
-  if (!Object.hasOwn(LEGAL_SHELLS, pathname)) {
+  if (!Object.hasOwn(PUBLIC_SHELLS, pathname)) {
     throw new Error(`No public server shell is defined for ${pathname}`)
   }
   const meta = getRouteMeta(pathname)
@@ -134,7 +197,12 @@ export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '') {
   html = replaceMeta(html, 'name', 'twitter:title', meta.title)
   html = replaceMeta(html, 'name', 'twitter:description', meta.description)
 
-  return replaceRootContents(html, legalShellMarkup(pathname))
+  return replaceRootContents(
+    html,
+    Object.hasOwn(LEGAL_SHELLS, pathname)
+      ? legalShellMarkup(pathname)
+      : marketingShellMarkup(pathname),
+  )
 }
 
-export const PUBLIC_SERVER_SHELL_PATHS = Object.freeze(Object.keys(LEGAL_SHELLS))
+export const PUBLIC_SERVER_SHELL_PATHS = Object.freeze(Object.keys(PUBLIC_SHELLS))
