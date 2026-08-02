@@ -45,6 +45,7 @@ class SourceCitation(BaseModel):
     url: Optional[str] = None
     source_type: Optional[str] = None
     source_label: Optional[str] = None
+    locator: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

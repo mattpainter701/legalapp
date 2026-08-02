@@ -87,6 +87,7 @@ function initialStreamProgress(content, attachmentCount) {
       courtlistener: 0,
       total: uploads,
     },
+    activities: [],
   }
 }
 
@@ -96,10 +97,24 @@ function mergeStreamProgress(current, event, content) {
     ...(current?.counts || {}),
     ...(event.counts || {}),
   }
+  const activities = [...(current?.activities || [])]
+  if (event.activity?.id) {
+    const activityIndex = activities.findIndex((item) => item.id === event.activity.id)
+    if (activityIndex >= 0) {
+      activities[activityIndex] = {
+        ...activities[activityIndex],
+        ...event.activity,
+        sources: event.activity.sources || activities[activityIndex].sources || [],
+      }
+    } else {
+      activities.push(event.activity)
+    }
+  }
   return {
     ...(current || {}),
     ...event,
     counts,
+    activities,
     keyphrases: event.keyphrases || current?.keyphrases || deriveKeyphrases(content),
   }
 }
@@ -695,16 +710,16 @@ export default function ChatPage() {
             onOpenSidebar={() => setRailOpen(true)}
           />
 
-          <div className="relative px-3 pt-3 sm:px-4 md:px-6" ref={matterPickerRef}>
-            <div className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-surface/95 px-3 py-2.5 shadow-sm">
-              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+          <div className="relative px-2 pt-2 sm:px-4 sm:pt-3 md:px-6" ref={matterPickerRef}>
+            <div className="flex min-h-10 items-center gap-2 rounded-xl border border-brand-line bg-brand-surface/95 px-2 py-1.5 shadow-sm sm:gap-3 sm:rounded-2xl sm:px-3 sm:py-2.5">
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:h-9 sm:w-9 sm:rounded-xl ${
                 linkedMatterId ? 'bg-brand-accent/10 text-brand-accent-2' : 'bg-brand-bg-soft text-brand-muted'
               }`}>
                 <Briefcase size={17} />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted">Working context</p>
-                <p className={`mt-0.5 truncate text-sm font-semibold ${linkedMatterId ? 'text-brand-ink' : 'text-brand-muted'}`}>
+                <p className="hidden text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted sm:block">Working context</p>
+                <p className={`truncate text-xs font-semibold sm:mt-0.5 sm:text-sm ${linkedMatterId ? 'text-brand-ink' : 'text-brand-muted'}`}>
                   {linkedMatterId
                     ? linkedMatterName
                     : activeConvId
@@ -719,7 +734,7 @@ export default function ChatPage() {
                 <button
                   type="button"
                   onClick={() => navigate(`/matters/${linkedMatterId}`)}
-                  className="tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink"
+                  className="hidden tap-target rounded-xl text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink sm:inline-flex"
                   aria-label={`Open ${linkedMatterName}`}
                   title="Open linked matter"
                 >
@@ -732,9 +747,9 @@ export default function ChatPage() {
                 disabled={!activeConvId || matterLinking}
                 aria-expanded={matterPickerOpen}
                 aria-haspopup="dialog"
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-brand-line bg-brand-surface px-3 text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-brand-line bg-brand-surface px-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-3"
               >
-                <Link2 size={14} />
+                <Link2 size={14} className="hidden sm:block" />
                 <span className="hidden sm:inline">{linkedMatterId ? 'Change' : 'Link matter'}</span>
                 <ChevronDown size={13} />
               </button>

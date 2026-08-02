@@ -320,6 +320,24 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     }
 
 
+def _public_source_url(chunk: dict[str, Any]) -> str:
+    """Return a provider-safe absolute URL for prompt-visible public sources."""
+    value = chunk.get("url") or chunk.get("source_url") or chunk.get("canonical_url")
+    if not value:
+        opinion_id = chunk.get("opinion_id")
+        return (
+            f"https://www.courtlistener.com/opinion/{opinion_id}/" if opinion_id else ""
+        )
+    url = str(value).strip()
+    if url.startswith("//"):
+        return f"https:{url}"
+    if url.startswith("/"):
+        return f"https://www.courtlistener.com{url}"
+    if url.startswith(("https://", "http://")):
+        return url
+    return ""
+
+
 def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     """Map a statute/rule/manual MCP hit to the shared chat/RAG contract."""
     chunk_id = str(item.get("chunk_id") or item.get("id") or f"authority_{rank_index}")
@@ -414,7 +432,9 @@ async def search_courtlistener_mcp(
         if item.get("content")
     ]
     combined = case_chunks + authority_chunks
-    combined.sort(key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True)
+    combined.sort(
+        key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True
+    )
     return combined[:top_k]
 
 
@@ -434,6 +454,7 @@ async def build_rag_context(chunks: List[dict]) -> str:
         section_path = chunk.get("section_path") or ""
         clause_type = chunk.get("clause_type") or "general"
         source = chunk.get("source", "")
+        source_url = _public_source_url(chunk)
 
         source_id = str(chunk.get("id") or "").strip()
         header_parts = [f"[{i}] {case_name}"]
@@ -441,6 +462,8 @@ async def build_rag_context(chunks: List[dict]) -> str:
             header_parts.append(f"[source: {source_id}]")
         if citation:
             header_parts.append(f"Citation: {citation}")
+        if source_url:
+            header_parts.append(f"URL: {source_url}")
         if court:
             header_parts.append(f"Court: {court}")
         if decision_date:
@@ -481,31 +504,47 @@ async def full_rag_query(
     public chunks are appended (they live in a different embedding space).
     """
     use_mcp_public = include_public and bool(settings.MCP_SERVER_URL)
-    if include_public and not use_mcp_public:
-        query_embedding, public_embedding, fts_results = await asyncio.gather(
-            embedding_service.embed_text(question),
-            embedding_service.embed_public_query(question),
-            search_chunks_fts(
-                db=db,
+    public_task = None
+    if use_mcp_public:
+        # Public authority retrieval does not depend on the tenant embedding.
+        # Start it immediately instead of making it wait for embedding + FTS.
+        public_task = asyncio.create_task(
+            search_courtlistener_mcp(
                 query=question,
-                tenant_id=tenant_id,
-                top_k=settings.RAG_TOP_K,
-            ),
+                top_k=settings.PUBLIC_RAG_TOP_K,
+            )
         )
-    else:
-        query_embedding, fts_results = await asyncio.gather(
-            embedding_service.embed_text(question),
-            search_chunks_fts(
-                db=db,
-                query=question,
-                tenant_id=tenant_id,
-                top_k=settings.RAG_TOP_K,
-            ),
-        )
-        public_embedding = None
+    try:
+        if include_public and not use_mcp_public:
+            query_embedding, public_embedding, fts_results = await asyncio.gather(
+                embedding_service.embed_text(question),
+                embedding_service.embed_public_query(question),
+                search_chunks_fts(
+                    db=db,
+                    query=question,
+                    tenant_id=tenant_id,
+                    top_k=settings.RAG_TOP_K,
+                ),
+            )
+        else:
+            query_embedding, fts_results = await asyncio.gather(
+                embedding_service.embed_text(question),
+                search_chunks_fts(
+                    db=db,
+                    query=question,
+                    tenant_id=tenant_id,
+                    top_k=settings.RAG_TOP_K,
+                ),
+            )
+            public_embedding = None
+    except BaseException:
+        if public_task is not None:
+            public_task.cancel()
+            await asyncio.gather(public_task, return_exceptions=True)
+        raise
 
     # Dense + public searches in parallel
-    dense_chunks, public_chunks = await asyncio.gather(
+    dense_task = (
         search_chunks(
             db=db,
             query_embedding=query_embedding,
@@ -513,12 +552,11 @@ async def full_rag_query(
             top_k=settings.RAG_TOP_K,
         )
         if query_embedding is not None
-        else _empty_chunks(),
-        search_courtlistener_mcp(
-            query=question,
-            top_k=settings.PUBLIC_RAG_TOP_K,
-        )
-        if use_mcp_public
+        else _empty_chunks()
+    )
+    public_search = (
+        public_task
+        if public_task is not None
         else (
             search_public_chunks(
                 db=db,
@@ -527,7 +565,11 @@ async def full_rag_query(
             )
             if public_embedding is not None
             else _empty_chunks()
-        ),
+        )
+    )
+    dense_chunks, public_chunks = await asyncio.gather(
+        dense_task,
+        public_search,
     )
     if use_mcp_public:
         try:

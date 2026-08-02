@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -26,7 +27,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, set_tenant_context
+from app.database import async_session_maker, get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
@@ -58,6 +59,7 @@ from app.utils.guardrails import (
     check_pii_in_input,
     prepare_provider_messages,
     prepare_provider_text,
+    reconcile_retrieved_source_attribution,
     validate_citation_confidence,
 )
 from app.services.error_tracker import capture_chat_error
@@ -70,6 +72,7 @@ settings = get_settings()
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_TEXT_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
 _HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
+_SOURCE_REFERENCE_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
 
 
 def _clean_source_text(value, max_length: int | None = None) -> str:
@@ -134,9 +137,50 @@ def _source_label(source_type: str | None) -> str:
     return labels.get(source_type or "", "Context")
 
 
+def _source_locator_from_chunk(chunk: dict) -> str | None:
+    """Build an honest pinpoint label from retrieval metadata.
+
+    This deliberately says "passage" for chunk ordinals. A retrieval chunk is
+    not a legal page/line cite, so we never present it as one.
+    """
+    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    parts: list[str] = []
+    section = chunk.get("section_path") or metadata.get("section_path")
+    if section and str(section).strip() not in {"CourtListener", "general"}:
+        parts.append(str(section).strip())
+    page = (
+        chunk.get("page_number") or metadata.get("page_number") or metadata.get("page")
+    )
+    if page is not None:
+        parts.append(f"Page {page}")
+    paragraph = chunk.get("paragraph_number") or metadata.get("paragraph_number")
+    if paragraph is not None:
+        parts.append(f"Paragraph {paragraph}")
+    line_start = chunk.get("line_start") or metadata.get("line_start")
+    line_end = chunk.get("line_end") or metadata.get("line_end")
+    if line_start is not None:
+        parts.append(
+            f"Lines {line_start}-{line_end}"
+            if line_end is not None and str(line_end) != str(line_start)
+            else f"Line {line_start}"
+        )
+    if not parts and chunk.get("chunk_index") is not None:
+        try:
+            passage = int(chunk.get("chunk_index")) + 1
+        except (TypeError, ValueError):
+            passage = chunk.get("chunk_index")
+        parts.append(f"Retrieved passage {passage}")
+    return " · ".join(parts) or None
+
+
 def _source_dict_from_chunk(chunk: dict) -> dict:
-    source_type = chunk.get("clause_type") or chunk.get("source") or "public_authority"
-    if source_type == "courtlistener_mcp":
+    raw_source = chunk.get("source") or ""
+    source_type = chunk.get("clause_type") or raw_source or "public_authority"
+    if raw_source in {
+        "courtlistener_mcp",
+        "legal_authority_mcp",
+        "public_courtlistener",
+    }:
         source_type = "public_authority"
     return {
         "source_id": str(chunk.get("id")) if chunk.get("id") is not None else None,
@@ -149,6 +193,7 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "url": _source_url_from_chunk(chunk),
         "source_type": source_type,
         "source_label": _source_label(source_type),
+        "locator": _source_locator_from_chunk(chunk),
     }
 
 
@@ -167,7 +212,29 @@ def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
         "url": _normalize_source_url(hit_dict.get("url")),
         "source_type": source_type,
         "source_label": _source_label(source_type),
+        "locator": _clean_source_text(
+            hit_dict.get("section_path") or hit_dict.get("modified_time"), 120
+        )
+        or None,
     }
+
+
+def _canonicalize_source_references(text: str, aliases: dict[str, str]) -> str:
+    """Point duplicate chunk ids at the single source retained for display."""
+    if not text or not aliases:
+        return text
+    normalized_aliases = {
+        str(source_id).strip().casefold(): str(canonical_id).strip()
+        for source_id, canonical_id in aliases.items()
+        if source_id and canonical_id
+    }
+
+    def replace(match: re.Match) -> str:
+        source_id = match.group(1).strip()
+        canonical_id = normalized_aliases.get(source_id.casefold())
+        return f"[source: {canonical_id}]" if canonical_id else match.group(0)
+
+    return _SOURCE_REFERENCE_RE.sub(replace, text)
 
 
 def _citation_validation_sources(
@@ -256,7 +323,8 @@ def _join_context_sections(*sections: str | None) -> str:
 
 def _is_public_authority_chunk(chunk: dict) -> bool:
     return (
-        chunk.get("source") == "courtlistener_mcp"
+        chunk.get("source")
+        in {"courtlistener_mcp", "legal_authority_mcp", "public_courtlistener"}
         or chunk.get("source_type") == "public_authority"
         or chunk.get("clause_type") == "public_authority"
         or chunk.get("source_label") == "Cited authority"
@@ -291,6 +359,89 @@ def _stream_source_counts(
 def _stream_progress_event(event: str, payload: dict | None = None) -> str:
     data = {"type": "progress", "event": event, **(payload or {})}
     return f"data: [PROGRESS]{json.dumps(data)}\n\n"
+
+
+def _stream_token_event(content: str) -> str:
+    """Encode answer text as JSON so SSE preserves Markdown newlines exactly."""
+    return f"data: [TOKEN]{json.dumps(content)}\n\n"
+
+
+def _stream_activity_event(
+    activity_id: str,
+    state: str,
+    label: str,
+    *,
+    elapsed_ms: int | None = None,
+    counts: dict | None = None,
+    sources: list[dict] | None = None,
+    detail: str | None = None,
+) -> str:
+    activity = {
+        "id": activity_id,
+        "state": state,
+        "label": label,
+    }
+    if elapsed_ms is not None:
+        activity["elapsed_ms"] = max(0, int(elapsed_ms))
+    if counts is not None:
+        activity["counts"] = counts
+    if sources:
+        activity["sources"] = sources
+    if detail:
+        activity["detail"] = detail
+    return _stream_progress_event(
+        "activity",
+        {
+            "activity": activity,
+            "status": label,
+            **({"counts": counts} if counts is not None else {}),
+        },
+    )
+
+
+def _stream_source_previews(chunks: list[dict], cloud_hits: list) -> list[dict]:
+    firm_previews: list[dict] = []
+    authority_previews: list[dict] = []
+    for chunk in chunks:
+        source = _source_dict_from_chunk(chunk)
+        preview = {
+            key: source.get(key)
+            for key in (
+                "source_id",
+                "case_name",
+                "citation",
+                "source_label",
+                "locator",
+                "url",
+            )
+            if source.get(key)
+        }
+        destination = (
+            authority_previews
+            if source.get("source_type") == "public_authority"
+            else firm_previews
+        )
+        if len(destination) < 2:
+            destination.append(preview)
+    for hit in cloud_hits:
+        source = _source_dict_from_cloud_hit(_cloud_hit_dict(hit))
+        if len(firm_previews) >= 2:
+            break
+        firm_previews.append(
+            {
+                key: source.get(key)
+                for key in (
+                    "source_id",
+                    "case_name",
+                    "citation",
+                    "source_label",
+                    "locator",
+                    "url",
+                )
+                if source.get(key)
+            }
+        )
+    return firm_previews + authority_previews
 
 
 def _auto_tier(query: str, user_requested_premium: bool) -> bool:
@@ -1182,14 +1333,16 @@ async def send_message(
     source_dicts = []
     context_used = []
     context_scores = {}
-    seen_citations: set = set()
+    seen_citations: dict[str, str] = {}
+    source_aliases: dict[str, str] = {}
     for chunk in chunks:
+        chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
         citation_key = chunk.get("citation") or chunk.get("case_name") or ""
         if citation_key and citation_key in seen_citations:
+            source_aliases[chunk_id] = seen_citations[citation_key]
             continue
         if citation_key:
-            seen_citations.add(citation_key)
-        chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
+            seen_citations[citation_key] = chunk_id
         context_used.append(chunk_id)
         context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
         source_dicts.append(_source_dict_from_chunk(chunk))
@@ -1199,11 +1352,15 @@ async def send_message(
         cloud_id = _cloud_hit_context_id(hit_dict)
         if cloud_id in seen_citations:
             continue
-        seen_citations.add(cloud_id)
+        seen_citations[cloud_id] = cloud_id
         context_used.append(cloud_id)
         context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
         source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
+    cleaned_response = _canonicalize_source_references(cleaned_response, source_aliases)
+    cleaned_response, _ = reconcile_retrieved_source_attribution(
+        cleaned_response, source_dicts
+    )
     cleaned_response, _ = validate_citation_confidence(
         cleaned_response,
         _citation_validation_sources(source_dicts, chunks, cloud_hits),
@@ -1411,8 +1568,9 @@ async def stream_message(
     )
     provider_question = prepare_provider_text(body.content, user.privacy_mode)
 
-    # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
-    #     attachment context, and RAG cache check. These are independent reads.
+    # The remaining work intentionally happens inside the response generator.
+    # This opens SSE immediately so the client can render real retrieval activity
+    # instead of staring at an inert composer while all context work finishes.
     async def _load_matter_context():
         if not effective_matter_id:
             return "", [], None, False
@@ -1423,12 +1581,14 @@ async def stream_message(
         )
         if cached:
             return cached, [], effective_matter_cloud_folder, True
-        mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
-            db=db,
-            matter_id=effective_matter_id,
-            tenant_id=user.tenant_id,
-            privacy_mode=user.privacy_mode,
-        )
+        async with async_session_maker() as context_db:
+            await set_tenant_context(context_db, str(user.tenant_id))
+            mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
+                db=context_db,
+                matter_id=effective_matter_id,
+                tenant_id=user.tenant_id,
+                privacy_mode=user.privacy_mode,
+            )
         await cache_manager.set_cached_matter_context(
             matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
@@ -1437,100 +1597,50 @@ async def stream_message(
         )
         return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
 
-    (
-        (
-            matter_context_str,
-            matter_pii_findings,
-            matter_cloud_folder,
-            cache_hit_matter,
-        ),
-        attachment_context,
-        memory_context,
-        route,
-        cached_rag,
-    ) = await asyncio.gather(
-        _load_matter_context(),
-        _build_attachment_context(
-            db,
-            user,
-            conv,
-            body.attachment_ids if hasattr(body, "attachment_ids") else None,
-        ),
-        memory_service.get_memory_context_for_injection(db=db, user_id=user.id),
-        resolve_llm_route(
-            db,
-            user.tenant_id,
-            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-            requested_provider=body.provider,
-        ),
-        cache_manager.get_cached_rag_results(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-            include_public=body.include_public,
-            scope_key=rag_scope_key,
-        ),
-    )
+    async def _load_attachment_context_for_stream():
+        async with async_session_maker() as context_db:
+            await set_tenant_context(context_db, str(user.tenant_id))
+            return await _build_attachment_context(
+                context_db,
+                user,
+                conv,
+                body.attachment_ids if hasattr(body, "attachment_ids") else None,
+            )
 
-    # 4. RAG: embed question, search chunks, build context (with caching)
-    cache_hit_rag = False
-    cloud_hits = []
-    if cached_rag:
-        context_str, chunks = cached_rag
-        cache_hit_rag = True
-    else:
-        try:
-            context_str, chunks, cloud_hits = await hybrid_rag_query(
-                db=db,
-                embedding_service=embedding_service,
-                question=provider_question,
+    async def _load_memory_context_for_stream():
+        async with async_session_maker() as context_db:
+            await set_tenant_context(context_db, str(user.tenant_id))
+            return await memory_service.get_memory_context_for_injection(
+                db=context_db, user_id=user.id
+            )
+
+    async def _resolve_stream_route():
+        async with async_session_maker() as context_db:
+            await set_tenant_context(context_db, str(user.tenant_id))
+            return await resolve_llm_route(
+                context_db,
+                user.tenant_id,
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                requested_provider=body.provider,
+            )
+
+    async def _load_stream_prework():
+        return await asyncio.gather(
+            _load_matter_context(),
+            _load_attachment_context_for_stream(),
+            _load_memory_context_for_stream(),
+            _resolve_stream_route(),
+            cache_manager.get_cached_rag_results(
+                question=body.content,
                 tenant_id=str(user.tenant_id),
                 user_id=str(user.id),
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
                 include_public=body.include_public,
-                cloud_search_service=_get_cloud_search_service(),
-                retrieval_planner=_get_retrieval_planner(),
-                tenant_name=prepare_provider_text(
-                    user.tenant.name if user.tenant else "Legal", user.privacy_mode
-                ),
-                matter_context_str=prepare_provider_text(
-                    matter_context_str, user.privacy_mode
-                ),
-                matter_id=effective_matter_id,
-                matter_cloud_folder=matter_cloud_folder,
-            )
-        except Exception:
-            logger.exception(
-                "RAG query failed in streaming path, continuing without context"
-            )
-            context_str, chunks = "", []
-        await cache_manager.set_cached_rag_results(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            context_str=context_str,
-            chunks=chunks,
-            expertise_level=user.expertise_level,
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-            include_public=body.include_public,
-            scope_key=rag_scope_key,
+                scope_key=rag_scope_key,
+            ),
         )
 
-    # 4a. Combine attachment, matter, and RAG context
-    context_str = _join_context_sections(
-        attachment_context,
-        matter_context_str,
-        context_str,
-    )
-    context_str = prepare_provider_text(context_str, user.privacy_mode)
-    memory_context = prepare_provider_text(memory_context, user.privacy_mode)
     attachment_count = len(body.attachment_ids or [])
-    progress_counts = _stream_source_counts(
-        chunks=chunks,
-        cloud_hits=cloud_hits,
-        has_matter_context=bool(matter_context_str and matter_context_str.strip()),
-        attachment_count=attachment_count,
-    )
 
     # Create the streaming generator
     stream_user_first_name = prepare_provider_text(
@@ -1540,26 +1650,195 @@ async def stream_message(
 
     async def stream_generator():
         try:
+            stream_started_at = time.monotonic()
+            latency_breakdown: dict[str, int] = {}
+
+            yield _stream_activity_event(
+                "understanding",
+                "started",
+                "Understanding your request",
+                detail="Identifying the legal task and source scope",
+            )
+            yield _stream_activity_event(
+                "understanding",
+                "completed",
+                "Request understood",
+                elapsed_ms=0,
+            )
+
+            prework_started_at = time.monotonic()
+            yield _stream_activity_event(
+                "working_context",
+                "started",
+                "Loading matter, attachments, and saved context",
+            )
+            (
+                (
+                    matter_context_str,
+                    matter_pii_findings,
+                    matter_cloud_folder,
+                    cache_hit_matter,
+                ),
+                attachment_context,
+                memory_context,
+                route,
+                cached_rag,
+            ) = await _load_stream_prework()
+            latency_breakdown["context_ms"] = int(
+                (time.monotonic() - prework_started_at) * 1000
+            )
+            context_counts = _stream_source_counts(
+                chunks=[],
+                cloud_hits=[],
+                has_matter_context=bool(
+                    matter_context_str and matter_context_str.strip()
+                ),
+                attachment_count=attachment_count,
+            )
+            yield _stream_activity_event(
+                "working_context",
+                "completed",
+                "Working context ready",
+                elapsed_ms=latency_breakdown["context_ms"],
+                counts=context_counts,
+                detail=(
+                    "Used cached matter context"
+                    if cache_hit_matter
+                    else "Loaded current matter context"
+                ),
+            )
+
+            retrieval_started_at = time.monotonic()
+            yield _stream_activity_event(
+                "firm_search",
+                "started",
+                "Searching firm knowledge",
+                detail="Hybrid vector and keyword retrieval",
+            )
+            if body.include_public:
+                yield _stream_activity_event(
+                    "public_authority",
+                    "started",
+                    "Checking cases, statutes, and rules",
+                    detail="CourtListener and public authority search",
+                )
+
+            cache_hit_rag = False
+            cloud_hits = []
+            rag_cache_task = None
+            if cached_rag:
+                context_str, chunks = cached_rag
+                cache_hit_rag = True
+            else:
+                try:
+                    context_str, chunks, cloud_hits = await hybrid_rag_query(
+                        db=db,
+                        embedding_service=embedding_service,
+                        question=provider_question,
+                        tenant_id=str(user.tenant_id),
+                        user_id=str(user.id),
+                        include_public=body.include_public,
+                        cloud_search_service=_get_cloud_search_service(),
+                        retrieval_planner=_get_retrieval_planner(),
+                        tenant_name=prepare_provider_text(
+                            user.tenant.name if user.tenant else "Legal",
+                            user.privacy_mode,
+                        ),
+                        matter_context_str=prepare_provider_text(
+                            matter_context_str, user.privacy_mode
+                        ),
+                        matter_id=effective_matter_id,
+                        matter_cloud_folder=matter_cloud_folder,
+                    )
+                except Exception:
+                    logger.exception(
+                        "RAG query failed in streaming path, continuing without context"
+                    )
+                    context_str, chunks = "", []
+                # Cache writes should never hold up model time-to-first-token.
+                # Rejoin the task before stream completion so failures are observed.
+                rag_cache_task = asyncio.create_task(
+                    cache_manager.set_cached_rag_results(
+                        question=body.content,
+                        tenant_id=str(user.tenant_id),
+                        user_id=str(user.id),
+                        context_str=context_str,
+                        chunks=chunks,
+                        expertise_level=user.expertise_level,
+                        skill=body.skill
+                        if hasattr(body, "skill")
+                        else user.default_skill,
+                        include_public=body.include_public,
+                        scope_key=rag_scope_key,
+                    )
+                )
+
+            latency_breakdown["retrieval_ms"] = int(
+                (time.monotonic() - retrieval_started_at) * 1000
+            )
+            progress_counts = _stream_source_counts(
+                chunks=chunks,
+                cloud_hits=cloud_hits,
+                has_matter_context=bool(
+                    matter_context_str and matter_context_str.strip()
+                ),
+                attachment_count=attachment_count,
+            )
+            source_previews = _stream_source_previews(chunks, cloud_hits)
+            firm_previews = [
+                source
+                for source in source_previews
+                if source.get("source_label") != "Cited authority"
+            ]
+            authority_previews = [
+                source
+                for source in source_previews
+                if source.get("source_label") == "Cited authority"
+            ]
+            yield _stream_activity_event(
+                "firm_search",
+                "completed",
+                (
+                    "Firm knowledge search complete"
+                    if not cache_hit_rag
+                    else "Retrieved sources restored from cache"
+                ),
+                elapsed_ms=latency_breakdown["retrieval_ms"],
+                counts=progress_counts,
+                sources=firm_previews,
+            )
+            if body.include_public:
+                yield _stream_activity_event(
+                    "public_authority",
+                    "completed",
+                    "Public authority search complete",
+                    elapsed_ms=latency_breakdown["retrieval_ms"],
+                    counts=progress_counts,
+                    sources=authority_previews,
+                )
+
+            context_str = _join_context_sections(
+                attachment_context,
+                matter_context_str,
+                context_str,
+            )
+            context_str = prepare_provider_text(context_str, user.privacy_mode)
+            memory_context = prepare_provider_text(memory_context, user.privacy_mode)
             tenant_name = prepare_provider_text(
                 user.tenant.name if user.tenant else "Legal", user.privacy_mode
             )
-            yield _stream_progress_event(
-                "sources_done",
-                {
-                    "counts": progress_counts,
-                    "status": "Source retrieval complete",
-                },
-            )
-            yield _stream_progress_event(
-                "generation_started",
-                {
-                    "counts": progress_counts,
-                    "status": "Composing answer with retrieved authority",
-                },
+            generation_started_at = time.monotonic()
+            yield _stream_activity_event(
+                "drafting",
+                "started",
+                "Drafting the cited answer",
+                counts=progress_counts,
+                sources=source_previews,
             )
 
             # Stream tokens from the LLM
             accumulated_text = ""
+            last_generation_update = generation_started_at
             async for token in llm_service.stream_complete(
                 messages=llm_messages,
                 tenant_name=tenant_name,
@@ -1583,6 +1862,35 @@ async def stream_message(
                 ),
             ):
                 accumulated_text += token
+                now = time.monotonic()
+                if now - last_generation_update >= 0.75:
+                    yield _stream_activity_event(
+                        "drafting",
+                        "progress",
+                        "Drafting the cited answer",
+                        elapsed_ms=int((now - generation_started_at) * 1000),
+                        counts=progress_counts,
+                        detail=f"{len(accumulated_text.split())} draft words received",
+                    )
+                    last_generation_update = now
+
+            latency_breakdown["generation_ms"] = int(
+                (time.monotonic() - generation_started_at) * 1000
+            )
+            yield _stream_activity_event(
+                "drafting",
+                "completed",
+                "Draft complete",
+                elapsed_ms=latency_breakdown["generation_ms"],
+                counts=progress_counts,
+            )
+            validation_started_at = time.monotonic()
+            yield _stream_activity_event(
+                "citation_check",
+                "started",
+                "Checking citations, source tags, and privacy",
+                counts=progress_counts,
+            )
 
             # Apply guardrails to full response
             cleaned_response, needs_retry, response_pii = apply_guardrails(
@@ -1591,6 +1899,13 @@ async def stream_message(
 
             if needs_retry:
                 # Clear and retry with explicit instruction
+                yield _stream_activity_event(
+                    "citation_check",
+                    "progress",
+                    "Revising the draft before release",
+                    counts=progress_counts,
+                    detail="The first draft did not pass the response policy check",
+                )
                 retry_messages = llm_messages + [
                     {
                         "role": "assistant",
@@ -1635,14 +1950,16 @@ async def stream_message(
             source_dicts = []
             context_used = []
             context_scores = {}
-            seen_citations: set = set()
+            seen_citations: dict[str, str] = {}
+            source_aliases: dict[str, str] = {}
             for chunk in chunks:
+                chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
                 citation_key = chunk.get("citation") or chunk.get("case_name") or ""
                 if citation_key and citation_key in seen_citations:
+                    source_aliases[chunk_id] = seen_citations[citation_key]
                     continue
                 if citation_key:
-                    seen_citations.add(citation_key)
-                chunk_id = chunk.get("id", f"chunk_{len(context_used)}")
+                    seen_citations[citation_key] = chunk_id
                 context_used.append(chunk_id)
                 context_scores[chunk_id] = chunk.get("relevance_score", 0.5)
                 source_dicts.append(_source_dict_from_chunk(chunk))
@@ -1652,25 +1969,41 @@ async def stream_message(
                 cloud_id = _cloud_hit_context_id(hit_dict)
                 if cloud_id in seen_citations:
                     continue
-                seen_citations.add(cloud_id)
+                seen_citations[cloud_id] = cloud_id
                 context_used.append(cloud_id)
                 context_scores[cloud_id] = hit_dict.get("relevance_score", 0.5)
                 source_dicts.append(_source_dict_from_cloud_hit(hit_dict))
 
+            cleaned_response = _canonicalize_source_references(
+                cleaned_response, source_aliases
+            )
+            cleaned_response, _ = reconcile_retrieved_source_attribution(
+                cleaned_response, source_dicts
+            )
             cleaned_response, _ = validate_citation_confidence(
                 cleaned_response,
                 _citation_validation_sources(source_dicts, chunks, cloud_hits),
+            )
+            latency_breakdown["validation_ms"] = int(
+                (time.monotonic() - validation_started_at) * 1000
+            )
+            latency_breakdown["response_ready_ms"] = int(
+                (time.monotonic() - stream_started_at) * 1000
+            )
+            yield _stream_activity_event(
+                "citation_check",
+                "completed",
+                "Citations and privacy checks complete",
+                elapsed_ms=latency_breakdown["validation_ms"],
+                counts=progress_counts,
+                sources=source_previews,
             )
             # Do not expose unvalidated provider output.  Buffering preserves
             # the SSE contract while ensuring the client only receives the
             # privacy- and citation-checked answer.
             for offset in range(0, len(cleaned_response), 80):
-                safe_chunk = (
-                    cleaned_response[offset : offset + 80]
-                    .replace("\r", " ")
-                    .replace("\n", " ")
-                )
-                yield f"data: {safe_chunk}\n\n"
+                safe_chunk = cleaned_response[offset : offset + 80]
+                yield _stream_token_event(safe_chunk)
 
             # Track matter context usage if provided
             if effective_matter_id:
@@ -1757,10 +2090,17 @@ async def stream_message(
                 cache_hit_rag=cache_hit_rag,
                 cache_hit_llm=False,  # Streaming bypasses LLM cache
                 cache_hit_matter=cache_hit_matter,
+                latency_breakdown=latency_breakdown,
             )
             db.add(usage)
 
             await db.commit()
+            if rag_cache_task is not None:
+                cache_result = await asyncio.gather(
+                    rag_cache_task, return_exceptions=True
+                )
+                if cache_result and isinstance(cache_result[0], BaseException):
+                    logger.warning("RAG cache write failed: %s", cache_result[0])
 
             # Fire memory generation without blocking the stream completion
             asyncio.create_task(
@@ -1782,7 +2122,14 @@ async def stream_message(
             traceback.print_exc()
             yield f"data: [ERROR: {str(e)[:200]}]\n\n"
 
-    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def _error_stream(message: str):

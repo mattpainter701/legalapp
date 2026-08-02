@@ -102,7 +102,7 @@ export default function ChatHeader({
   const canEditTitle = Boolean(activeConvTitle && onRenameConversation)
 
   return (
-    <header className="z-20 flex min-h-16 flex-shrink-0 items-center justify-between gap-3 border-b border-brand-line bg-brand-surface px-3 py-2 sm:px-4 md:px-6">
+    <header className="z-20 flex min-h-12 flex-shrink-0 items-center justify-between gap-2 border-b border-brand-line bg-brand-surface px-2 py-1.5 sm:min-h-16 sm:gap-3 sm:px-4 sm:py-2 md:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button
           type="button"
@@ -115,7 +115,7 @@ export default function ChatHeader({
         </button>
 
         <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-brand-muted">
+          <div className="mb-0.5 hidden items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-brand-muted sm:flex">
             <span>AI assistant</span>
             {activeRef !== '—' && (
               <>
@@ -143,7 +143,7 @@ export default function ChatHeader({
               autoFocus
             />
           ) : (
-            <h1 className="min-w-0 truncate font-serif text-lg font-semibold text-brand-ink sm:text-xl">
+            <h1 className="min-w-0 truncate font-serif text-base font-semibold text-brand-ink sm:text-xl">
               {canEditTitle ? (
                 <button
                   type="button"
@@ -180,7 +180,7 @@ export default function ChatHeader({
             aria-label="Response settings"
             aria-haspopup="dialog"
             aria-expanded={showSettings}
-            className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-2.5 text-xs font-semibold ${
+            className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-2 text-xs font-semibold sm:min-h-10 sm:rounded-xl sm:px-2.5 ${
               showSettings
                 ? 'border-brand-ink bg-brand-ink text-white'
                 : 'border-brand-line bg-brand-surface text-brand-ink hover:bg-brand-bg-soft'

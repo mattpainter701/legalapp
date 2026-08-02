@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["095_office_assistant"]
+    assert heads == ["099_chat_latency_breakdown"]
 
 
 def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():

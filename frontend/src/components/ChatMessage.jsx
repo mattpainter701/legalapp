@@ -12,6 +12,10 @@ import {
   PenLine,
   FileText,
   FolderSearch,
+  CheckCircle2,
+  LoaderCircle,
+  ShieldCheck,
+  Clock3,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
 
@@ -27,9 +31,32 @@ function cleanSourceText(value) {
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
+  if (url?.startsWith('/')) return `https://www.courtlistener.com${url}`
   const citation = cleanSourceText(src?.citation)
   if (citation.startsWith('http://') || citation.startsWith('https://')) return citation
   return ''
+}
+
+export function sourceAnchor(messageId, index) {
+  const safeMessageId = String(messageId || 'message').replace(/[^A-Za-z0-9_-]/g, '-')
+  return `source-${safeMessageId}-${index + 1}`
+}
+
+export function linkSourceReferences(text, sources, messageId) {
+  if (!text) return ''
+  const sourceList = Array.isArray(sources) ? sources : []
+  const sourceIndexes = new Map()
+  sourceList.forEach((source, index) => {
+    const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
+    if (id && !sourceIndexes.has(id)) sourceIndexes.set(id, { source, index })
+  })
+
+  return String(text).replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
+    const entry = sourceIndexes.get(String(rawId || '').trim().toLowerCase())
+    if (!entry) return '**[source]**'
+    const label = `[${entry.index + 1}]`
+    return `[${label}](#${sourceAnchor(messageId, entry.index)})`
+  })
 }
 
 function sourceBadge(src) {
@@ -50,22 +77,22 @@ function sourceBadge(src) {
   return { label, classes: 'bg-brand-line/40 text-brand-muted border-brand-line' }
 }
 
-function SourcesLedger({ sources }) {
+function SourcesLedger({ sources, messageId }) {
   if (!sources || sources.length === 0) return null
 
-  const cols = 'grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
+  const cols = 'sm:grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
   const publicAuthorityCount = sources.filter((src) => src?.source_type === 'public_authority').length
   const heading = publicAuthorityCount > 0 ? 'Authorities Referenced' : 'Sources & References'
 
   return (
-    <div className="mt-10 pt-6 border-t-[3px] border-brand-ink">
-      <h4 className="font-mono text-xs font-bold uppercase tracking-widest text-brand-ink mb-4 flex items-center gap-2">
+    <div className="mt-5 border-t-[3px] border-brand-ink pt-4 sm:mt-10 sm:pt-6">
+      <h4 className="mb-3 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-widest text-brand-ink sm:mb-4">
         <Book className="w-4 h-4" /> {heading}
       </h4>
 
-      <div className="w-full overflow-x-auto text-left text-sm border border-brand-line bg-brand-bg">
+      <div className="w-full overflow-hidden border border-brand-line bg-brand-bg text-left text-sm sm:overflow-x-auto">
         {/* Header */}
-        <div className={`grid min-w-[620px] ${cols} gap-2 p-2 border-b border-brand-line bg-brand-surface-2 text-xs font-mono text-brand-muted uppercase tracking-wider`}>
+        <div className={`hidden min-w-[620px] ${cols} gap-2 border-b border-brand-line bg-brand-surface-2 p-2 font-mono text-xs uppercase tracking-wider text-brand-muted sm:grid`}>
           <div className="text-center">#</div>
           <div>Source</div>
           <div>Reference</div>
@@ -81,23 +108,36 @@ function SourcesLedger({ sources }) {
             const excerpt = cleanSourceText(src.excerpt)
             const href = sourceHref(src)
             const badge = sourceBadge(src)
+            const locator = cleanSourceText(src.locator)
+            const anchor = sourceAnchor(messageId, idx)
 
             return (
               <div
                 key={idx}
-                className={`flex flex-col ${idx % 2 === 1 ? 'bg-brand-surface' : ''}`}
+                id={anchor}
+                tabIndex={-1}
+                className={`scroll-mt-24 flex flex-col outline-none transition target:bg-brand-gold/10 target:ring-2 target:ring-inset target:ring-brand-gold ${idx % 2 === 1 ? 'bg-brand-surface' : ''}`}
               >
-                <div className={`grid min-w-[620px] ${cols} gap-2 p-3 items-center`}>
-                  <div className="text-center font-mono text-brand-muted text-xs">
+                <div className={`grid min-w-0 grid-cols-1 ${cols} items-center gap-2 p-3 sm:min-w-[620px]`}>
+                  <div className="hidden text-center font-mono text-xs text-brand-muted sm:block">
                     {String(idx + 1).padStart(2, '0')}
                   </div>
                   <div className="min-w-0">
-                    <div className="font-serif font-bold text-brand-ink truncate" title={caseName}>
+                    <div className="truncate font-serif font-bold text-brand-ink" title={caseName}>
                       {caseName}
                     </div>
                     <span className={`mt-1 inline-flex w-fit items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest font-mono border ${badge.classes}`}>
                       {badge.label}
                     </span>
+                    {locator && (
+                      <a
+                        href={`#${anchor}`}
+                        className="ml-2 mt-1 inline-flex w-fit font-mono text-[10px] text-brand-accent-2 underline decoration-brand-line-2 underline-offset-2"
+                        aria-label={`Link to ${locator}`}
+                      >
+                        {locator}
+                      </a>
+                    )}
                   </div>
                   <div className="min-w-0">
                     {citation ? (
@@ -130,13 +170,21 @@ function SourcesLedger({ sources }) {
                       <span className="text-brand-muted text-xs">—</span>
                     )}
                   </div>
-                  <div className="text-xs text-brand-ink-2 truncate" title={court}>
+                  <div className="truncate text-xs text-brand-ink-2" title={court}>
                     {court || '—'}
                   </div>
                 </div>
                 {excerpt && (
-                  <div className="pl-[38px] pr-4 pb-3">
-                    <p className="max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-serif italic text-sm text-brand-ink-2 border-l-[3px] border-brand-line-2 pl-3 ml-2 bg-brand-surface p-2">
+                  <div className="px-3 pb-3 sm:pl-[38px] sm:pr-4">
+                    <details className="sm:hidden">
+                      <summary className="cursor-pointer text-xs font-semibold text-brand-accent-2">
+                        View source excerpt
+                      </summary>
+                      <p className="mt-2 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-l-[3px] border-brand-line-2 bg-brand-surface p-2 pl-3 font-serif text-xs italic text-brand-ink-2">
+                        "{excerpt}"
+                      </p>
+                    </details>
+                    <p className="hidden max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-l-[3px] border-brand-line-2 bg-brand-surface p-2 pl-3 font-serif text-sm italic text-brand-ink-2 sm:ml-2 sm:block">
                       "{excerpt}"
                     </p>
                   </div>
@@ -199,7 +247,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
     { icon: Scale, label: 'Matter', value: counts.matter },
     { icon: FileText, label: 'Uploads', value: counts.uploads },
     { icon: FolderSearch, label: 'Firm/cloud', value: counts.firm },
-    { icon: BookOpen, label: 'CourtListener', value: counts.courtlistener },
+    { icon: BookOpen, label: 'Authority', value: counts.courtlistener },
   ].filter((chip) => chip.value > 0)
 
   const isUser = variant === 'user'
@@ -229,7 +277,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
           </span>
         ))}
         {status && (
-          <span className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]" title={status}>
+          <span className="hidden min-w-0 max-w-full break-words [overflow-wrap:anywhere] sm:inline" title={status}>
             {status}
           </span>
         )}
@@ -253,35 +301,52 @@ function AssistantWorkingState({ progress, compact = false }) {
     { icon: Scale, label: 'Matter', value: matterCount },
     { icon: FileText, label: 'Uploads', value: uploadCount },
     { icon: FolderSearch, label: 'Firm/cloud', value: firmCount },
-    { icon: BookOpen, label: 'CourtListener', value: courtlistenerCount },
+    { icon: BookOpen, label: 'Public authority', value: courtlistenerCount },
   ]
-  const steps = [
-    {
-      icon: Search,
-      label: localCount > 0 ? `${localCount} local source${localCount === 1 ? '' : 's'} found` : 'Searching local sources',
-    },
-    {
-      icon: BookOpen,
-      label: courtlistenerCount > 0 ? `${courtlistenerCount} CourtListener source${courtlistenerCount === 1 ? '' : 's'} found` : 'Checking CourtListener authority',
-    },
-    {
-      icon: PenLine,
-      label: focusTerms.length ? `Streaming answer focus: ${focusTerms.join(', ')}` : status,
-    },
+  const activities = Array.isArray(progress?.activities) ? progress.activities : []
+  const fallbackActivities = [
+    { id: 'firm_search', state: 'started', label: 'Searching firm knowledge' },
+    ...(courtlistenerCount || progress?.event === 'retrieving'
+      ? [{ id: 'public_authority', state: 'started', label: 'Checking public authority' }]
+      : []),
   ]
+  const timeline = activities.length ? activities : fallbackActivities
+  const currentActivity = [...timeline].reverse().find((item) => ['started', 'progress'].includes(item.state))
+    || timeline[timeline.length - 1]
+  const sourcePreviews = []
+  const seenSourceIds = new Set()
+  for (const activity of timeline) {
+    for (const source of activity.sources || []) {
+      const key = source.source_id || `${source.case_name}-${source.citation}`
+      if (!seenSourceIds.has(key)) {
+        seenSourceIds.add(key)
+        sourcePreviews.push(source)
+      }
+    }
+  }
+  const activityIcons = {
+    understanding: Search,
+    working_context: Scale,
+    firm_search: FolderSearch,
+    public_authority: BookOpen,
+    drafting: PenLine,
+    citation_check: ShieldCheck,
+  }
+  const formatElapsed = (milliseconds) => {
+    const value = Number(milliseconds)
+    if (!Number.isFinite(value)) return ''
+    return value < 1000 ? `${Math.max(0, Math.round(value))}ms` : `${(value / 1000).toFixed(1)}s`
+  }
 
   if (compact) {
     return (
       <div className="mb-4 border border-brand-line bg-brand-bg px-3 py-2 text-xs text-brand-ink-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono font-bold uppercase tracking-widest text-brand-muted">
-            {status}
-          </span>
-          <span className="text-brand-line-2">|</span>
-          <span>{localCount} local</span>
-          <span>{courtlistenerCount} CourtListener</span>
+          <CheckCircle2 className="h-3.5 w-3.5 text-brand-green" aria-hidden="true" />
+          <span className="font-semibold text-brand-ink">{currentActivity?.label || status}</span>
+          <span className="ml-auto font-mono text-brand-muted">{counts.total || localCount + courtlistenerCount} sources</span>
           {focusTerms.length > 0 && (
-            <span className="min-w-0 truncate text-brand-muted">
+            <span className="hidden min-w-0 truncate text-brand-muted sm:inline">
               Focus: {focusTerms.join(', ')}
             </span>
           )}
@@ -291,7 +356,20 @@ function AssistantWorkingState({ progress, compact = false }) {
   }
 
   return (
-    <div className="border border-brand-line bg-brand-bg p-4">
+    <>
+      <div className="border border-brand-line bg-brand-bg px-3 py-2 text-xs text-brand-ink-2 sm:hidden">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-brand-accent" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate">{currentActivity?.label || status}</span>
+          <span className="shrink-0 font-mono text-brand-muted">
+            {counts.total || localCount + courtlistenerCount} sources
+          </span>
+        </div>
+        {currentActivity?.detail && (
+          <p className="mt-1 truncate pl-4 text-[10px] text-brand-muted">{currentActivity.detail}</p>
+        )}
+      </div>
+      <div className="hidden border border-brand-line bg-brand-bg p-4 sm:block">
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-brand-line bg-brand-surface-2">
           <Scale className="h-4 w-4 text-brand-gold" strokeWidth={2} />
@@ -317,21 +395,62 @@ function AssistantWorkingState({ progress, compact = false }) {
           </div>
         ))}
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        {steps.map(({ icon: Icon, label }) => (
-          <div key={label} className="flex items-center gap-2 border border-brand-line bg-brand-surface px-3 py-2 text-xs text-brand-ink-2">
-            <Icon className="h-3.5 w-3.5 text-brand-muted" strokeWidth={2} />
-            <span className="min-w-0 truncate" title={label}>{label}</span>
-          </div>
-        ))}
+      <div className="mt-3 overflow-hidden border border-brand-line bg-brand-surface">
+        {timeline.map((activity, index) => {
+          const Icon = activityIcons[activity.id] || Search
+          const isActive = ['started', 'progress'].includes(activity.state)
+          const isComplete = activity.state === 'completed'
+          return (
+            <div key={activity.id} className={`flex items-start gap-3 px-3 py-2.5 ${index ? 'border-t border-brand-line' : ''}`}>
+              <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center border ${isActive ? 'border-brand-accent/30 bg-brand-accent/10 text-brand-accent-2' : 'border-brand-line bg-brand-bg text-brand-muted'}`}>
+                {isComplete ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-brand-green" aria-label="Completed" />
+                ) : isActive ? (
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-label="In progress" />
+                ) : (
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold text-brand-ink">{activity.label}</span>
+                {activity.detail && <span className="mt-0.5 block truncate text-[10px] text-brand-muted">{activity.detail}</span>}
+              </span>
+              {activity.elapsed_ms != null && (
+                <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-brand-muted">
+                  <Clock3 className="h-3 w-3" /> {formatElapsed(activity.elapsed_ms)}
+                </span>
+              )}
+            </div>
+          )
+        })}
       </div>
-    </div>
+      {sourcePreviews.length > 0 && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Sources found">
+          {sourcePreviews.slice(0, 4).map((source) => (
+            <div key={source.source_id || source.case_name} className="animate-fade-in border border-brand-line bg-brand-surface px-3 py-2">
+              <div className="flex items-center gap-2">
+                <BookOpen className="h-3.5 w-3.5 shrink-0 text-brand-gold" />
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-brand-ink">{source.case_name}</span>
+                <span className="shrink-0 font-mono text-[9px] uppercase text-brand-muted">{source.source_label}</span>
+              </div>
+              {(source.citation || source.locator) && (
+                <p className="mt-1 truncate pl-5 font-mono text-[10px] text-brand-muted">
+                  {[source.citation, source.locator].filter(Boolean).join(' · ')}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      </div>
+    </>
   )
 }
 
 export default function ChatMessage({ message }) {
   const isUser = message.role === 'user'
   const content = message.content || ''
+  const renderedContent = linkSourceReferences(content, message.sources, message.id)
   const hasAssistantContent = content.trim().length > 0
   const timestamp = message.created_at
     ? format(new Date(message.created_at), 'h:mm a')
@@ -346,8 +465,8 @@ export default function ChatMessage({ message }) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end mb-7 group">
-        <div className="bg-brand-ink text-brand-bg p-4 max-w-2xl border-l-4 border-brand-accent shadow-sm hover:shadow-md transition-shadow">
+      <div className="group mb-4 flex justify-end sm:mb-7">
+        <div className="max-w-2xl border-l-4 border-brand-accent bg-brand-ink p-3 text-brand-bg shadow-sm transition-shadow hover:shadow-md sm:p-4">
           <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-widest text-brand-bg/55">
             <span className="font-bold text-brand-accent">You</span>
             {timestamp && (
@@ -358,7 +477,7 @@ export default function ChatMessage({ message }) {
             )}
             <button
               onClick={handleCopy}
-              className="ml-auto flex items-center gap-1 text-brand-bg/40 opacity-0 transition-opacity hover:text-brand-bg/85 group-hover:opacity-100"
+              className="ml-auto flex items-center gap-1 text-brand-bg/55 opacity-100 transition-opacity hover:text-brand-bg/85 sm:opacity-0 sm:group-hover:opacity-100"
               title="Copy query"
             >
               {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -366,30 +485,32 @@ export default function ChatMessage({ message }) {
             </button>
           </div>
           <p className="text-base leading-relaxed font-sans whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{content}</p>
-          <ReferenceTrail
-            referenceContext={message.referenceContext}
-            sources={message.sources}
-            variant="user"
-          />
+          <div className="hidden sm:block">
+            <ReferenceTrail
+              referenceContext={message.referenceContext}
+              sources={message.sources}
+              variant="user"
+            />
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex justify-start mb-8 group">
-      <div className="bg-brand-surface border border-brand-line p-8 max-w-3xl w-full shadow-sm hover:shadow-md transition-shadow relative">
+    <div className="group mb-4 flex justify-start sm:mb-8">
+      <div className="relative w-full max-w-3xl border border-brand-line bg-brand-surface p-4 shadow-sm transition-shadow hover:shadow-md sm:p-8">
         {/* Gold top bar */}
         <div className="absolute top-0 left-0 w-full h-1 bg-brand-gold"></div>
 
         {/* Header */}
-        <div className="flex items-center gap-2 mb-6 text-xs font-mono text-brand-muted uppercase tracking-wider border-b border-brand-line pb-4">
+        <div className="mb-3 flex items-center gap-2 border-b border-brand-line pb-2 font-mono text-[10px] uppercase tracking-wider text-brand-muted sm:mb-6 sm:pb-4 sm:text-xs">
           <Scale className="w-4 h-4 text-brand-gold" strokeWidth={2} />
           <span className="font-bold text-brand-ink">LawHand Analysis</span>
           {timestamp && <span className="ml-auto">{timestamp}</span>}
           <button
             onClick={handleCopy}
-            className="ml-2 text-brand-muted hover:text-brand-ink opacity-0 group-hover:opacity-100 transition-opacity"
+            className="ml-2 text-brand-muted opacity-100 transition-opacity hover:text-brand-ink sm:opacity-0 sm:group-hover:opacity-100"
             title="Copy response"
           >
             {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -397,13 +518,13 @@ export default function ChatMessage({ message }) {
         </div>
 
         {/* Body */}
-        <div className="min-w-0 text-brand-ink text-[15px] break-words [overflow-wrap:anywhere]">
+        <div className="min-w-0 break-words text-[14px] text-brand-ink [overflow-wrap:anywhere] sm:text-[15px]">
           {hasAssistantContent ? (
             <>
               {message.progress && !message.progress.complete && (
                 <AssistantWorkingState progress={message.progress} compact />
               )}
-              <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
+              <ReactMarkdown components={markdownComponents}>{renderedContent}</ReactMarkdown>
             </>
           ) : (
             <AssistantWorkingState progress={message.progress} />
@@ -416,7 +537,7 @@ export default function ChatMessage({ message }) {
           )}
         </div>
 
-        {hasAssistantContent && <SourcesLedger sources={message.sources} />}
+        {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
       </div>
     </div>
   )

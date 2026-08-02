@@ -124,6 +124,7 @@ class UsageRecord(Base):
     query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     rag_chunks_retrieved: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rag_source_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    latency_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Cache tracking

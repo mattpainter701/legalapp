@@ -10,12 +10,15 @@ from sqlalchemy import select
 
 from app.routers.chat import (
     _auto_tier,
+    _canonicalize_source_references,
     _clean_source_text,
     _conversation_belongs_to_user,
     _join_context_sections,
     _source_dict_from_chunk,
+    _stream_activity_event,
     _stream_progress_event,
     _stream_source_counts,
+    _stream_token_event,
 )
 from app.schemas.chat import ChatAttachmentResponse
 from app.models.conversation import Conversation
@@ -26,7 +29,10 @@ from app.models.user import User
 from app.services.cloud_search import CloudHit
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
-from app.utils.guardrails import validate_citation_confidence
+from app.utils.guardrails import (
+    reconcile_retrieved_source_attribution,
+    validate_citation_confidence,
+)
 
 
 @pytest.mark.asyncio
@@ -52,6 +58,84 @@ async def test_rag_source_id_and_quote_survive_authoritative_validation():
     validated, downgraded = validate_citation_confidence(answer, [source])
     assert validated.endswith("[settled]")
     assert downgraded == 0
+
+
+@pytest.mark.asyncio
+async def test_rag_context_exposes_absolute_source_url_to_model():
+    context = await build_rag_context(
+        [
+            {
+                "id": "courtlistener:authority-1",
+                "case_name": "Gries Sports Enterprises, Inc. v. Modell",
+                "citation": "15 Ohio St.3d 284 (1984)",
+                "content": "Ohio choice-of-law analysis.",
+                "source_url": "/opinion/675482/gries-sports-enterprises-inc-v-modell/",
+            }
+        ]
+    )
+
+    assert "URL: https://www.courtlistener.com/opinion/675482/" in context
+
+
+def test_matching_retrieved_citation_is_not_left_as_model_knowledge():
+    answer = (
+        "Ohio courts apply the chosen law in the agreement. "
+        "Gries Sports Enterprises, Inc. v. Modell, 15 Ohio St.3d 284 (1984). "
+        "[model knowledge]"
+    )
+    reconciled, count = reconcile_retrieved_source_attribution(
+        answer,
+        [
+            {
+                "source_id": "courtlistener:gries-1",
+                "case_name": "Gries Sports Enterprises, Inc. v. Modell",
+                "citation": "15 Ohio St.3d 284 (1984)",
+            }
+        ],
+    )
+
+    assert "[source: courtlistener:gries-1] [verify]" in reconciled
+    assert "[model knowledge]" not in reconciled
+    assert count == 1
+
+
+def test_unmatched_model_knowledge_is_not_rewritten():
+    answer = "A general proposition. [model knowledge]"
+    reconciled, count = reconcile_retrieved_source_attribution(
+        answer,
+        [{"source_id": "authority:1", "case_name": "A Distinct Legal Authority"}],
+    )
+
+    assert reconciled == answer
+    assert count == 0
+
+
+def test_existing_valid_source_marker_replaces_model_tag_with_verify():
+    answer = (
+        "Gries Sports Enterprises, Inc. v. Modell applies. "
+        "[source: courtlistener:gries-1] [model reasoning]"
+    )
+    reconciled, count = reconcile_retrieved_source_attribution(
+        answer,
+        [
+            {
+                "source_id": "courtlistener:gries-1",
+                "case_name": "Gries Sports Enterprises, Inc. v. Modell",
+            }
+        ],
+    )
+
+    assert reconciled.endswith("[source: courtlistener:gries-1] [verify]")
+    assert count == 1
+
+
+def test_duplicate_chunk_source_marker_uses_visible_canonical_source():
+    answer = "The court applied the rule. [source: courtlistener:chunk-2] [verify]"
+
+    assert _canonicalize_source_references(
+        answer,
+        {"courtlistener:chunk-2": "courtlistener:chunk-1"},
+    ) == "The court applied the rule. [source: courtlistener:chunk-1] [verify]"
 
 
 @pytest.mark.asyncio
@@ -127,7 +211,51 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
         "url": "https://www.courtlistener.com/opinion/4347183/",
         "source_type": "public_authority",
         "source_label": "Cited authority",
+        "locator": None,
     }
+
+
+def test_legal_authority_mcp_source_is_public_and_linked():
+    source = _source_dict_from_chunk(
+        {
+            "id": "authority:ohio-rule-1",
+            "source": "legal_authority_mcp",
+            "clause_type": "court_rule",
+            "case_name": "Ohio Rules of Civil Procedure",
+            "citation": "Ohio Civ.R. 56",
+            "source_url": "https://www.supremecourt.ohio.gov/LegalResources/Rules/civil/CivilProcedure.pdf",
+            "content": "Summary judgment standard.",
+        }
+    )
+
+    assert source["source_type"] == "public_authority"
+    assert source["source_label"] == "Cited authority"
+    assert source["url"].startswith("https://www.supremecourt.ohio.gov/")
+
+
+def test_source_locator_distinguishes_retrieval_passage_from_legal_pinpoint():
+    passage = _source_dict_from_chunk(
+        {
+            "id": "courtlistener:chunk-8",
+            "source": "courtlistener_mcp",
+            "chunk_index": 7,
+            "case_name": "Smith v. Jones",
+            "content": "Retrieved language.",
+        }
+    )
+    exact = _source_dict_from_chunk(
+        {
+            "id": "tenant:chunk-2",
+            "source": "tenant_document",
+            "section_path": "Article IV > Termination",
+            "metadata": {"page_number": 12, "line_start": 4, "line_end": 8},
+            "case_name": "Services Agreement",
+            "content": "Termination language.",
+        }
+    )
+
+    assert passage["locator"] == "Retrieved passage 8"
+    assert exact["locator"] == "Article IV > Termination · Page 12 · Lines 4-8"
 
 
 def test_stream_source_counts_classifies_local_and_public_context():
@@ -145,6 +273,11 @@ def test_stream_source_counts_classifies_local_and_public_context():
                 "source_label": "Cited authority",
                 "source_type": "public_authority",
             },
+            {
+                "id": "authority:ohio-rule-1",
+                "source": "legal_authority_mcp",
+                "clause_type": "court_rule",
+            },
         ],
         cloud_hits=[{"id": "drive-hit"}],
         has_matter_context=True,
@@ -155,8 +288,8 @@ def test_stream_source_counts_classifies_local_and_public_context():
         "matter": 1,
         "uploads": 2,
         "firm": 3,
-        "courtlistener": 2,
-        "total": 8,
+        "courtlistener": 3,
+        "total": 9,
     }
 
 
@@ -175,6 +308,21 @@ def test_stream_progress_event_encodes_typed_sse_payload():
     assert '"type": "progress"' in payload
     assert '"event": "sources_done"' in payload
     assert '"courtlistener": 4' in payload
+
+
+def test_stream_activity_and_token_events_are_structured_and_preserve_markdown():
+    activity = _stream_activity_event(
+        "public_authority",
+        "completed",
+        "Public authority search complete",
+        elapsed_ms=1250,
+        sources=[{"source_id": "courtlistener:1", "case_name": "Smith v. Jones"}],
+    )
+    token = _stream_token_event("## Analysis\n\n- First point")
+
+    assert '"id": "public_authority"' in activity
+    assert '"elapsed_ms": 1250' in activity
+    assert token.startswith('data: [TOKEN]"## Analysis\\n\\n- First point"')
 
 
 def test_auto_tier_respects_manual_premium_for_simple_queries():
@@ -569,6 +717,9 @@ async def test_stream_message_persists_cloud_sources(
 
     assert resp.status_code == 200
     assert "[STREAM_COMPLETE]" in body
+    assert '"id": "understanding"' in body
+    assert '"id": "firm_search"' in body
+    assert "[TOKEN]" in body
     detail = (await client.get(f"/api/conversations/{conv['id']}")).json()
     assistant = [m for m in detail["messages"] if m["role"] == "assistant"][0]
     assert assistant["sources"][0]["case_name"] == "Client Closing Checklist"
