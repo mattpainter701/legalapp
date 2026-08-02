@@ -17,6 +17,82 @@ on:
     branches: [main]
 
 jobs:
+  # Dedicated branch-protection gate for customer data. A fresh-schema test is
+  # not enough: this job rehearses the upgrade over two populated tenants and
+  # then audits the resulting PostgreSQL RLS catalog with the production-shaped
+  # NOBYPASSRLS runtime role.
+  tenant-data-safety:
+    name: Tenant data safety - migrations and RLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+        env:
+          POSTGRES_DB: legalapp_safety
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd "pg_isready -U test -d legalapp_safety"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/legalapp_safety
+      MIGRATOR_DATABASE_URL: postgresql+asyncpg://test:test@127.0.0.1:5432/legalapp_safety
+      RLS_TEST_DATABASE_URL: postgresql+asyncpg://clarity_safety:clarity-ci-safety-password@127.0.0.1:5432/legalapp_safety
+      SECRET_KEY: ci-tenant-safety-secret-not-for-production
+      TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
+      MIGRATION_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+
+    steps:
+      - name: Checkout full history for migration diff
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject destructive or rewritten migrations
+        run: >-
+          python scripts/check_migration_safety.py
+          --base "$MIGRATION_DIFF_BASE"
+          --head "$GITHUB_SHA"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Rehearse upgrade over two-tenant customer data
+        run: >-
+          python scripts/rehearse_tenant_migration.py
+          --base "$MIGRATION_DIFF_BASE"
+          --head "$GITHUB_SHA"
+
+      - name: Provision production-shaped runtime role
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h 127.0.0.1 -U test -d legalapp_safety -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE clarity_safety LOGIN PASSWORD 'clarity-ci-safety-password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          GRANT CONNECT ON DATABASE legalapp_safety TO clarity_safety;
+          GRANT USAGE ON SCHEMA public TO clarity_safety;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO clarity_safety;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO clarity_safety;
+          SQL
+
+      - name: Verify tenant schema and effective isolation
+        run: python scripts/verify_tenant_schema.py
+
   # ─── Backend: Linting ───────────────────────────────────────────────────────
   lint-backend:
     name: Backend — Lint (ruff)

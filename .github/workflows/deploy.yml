@@ -12,6 +12,10 @@
 
 name: Deploy to Production
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -35,6 +39,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Pin exact release commit
+        id: release
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI for exact release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          conclusion="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="$RELEASE_SHA" \
+              -f branch=main \
+              -f event=push \
+              -f per_page=20 \
+              --jq '.workflow_runs | sort_by(.run_number) | last | .conclusion // ""'
+          )"
+          if [[ "$conclusion" != success ]]; then
+            echo "::error::CI has not succeeded for release commit $RELEASE_SHA (conclusion=${conclusion:-missing})."
+            exit 1
+          fi
 
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -56,14 +88,18 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
           BUILD_MODE: ${{ github.event.inputs.build_mode || '--build' }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           ssh $VPS_USER@$VPS_HOST "
             set -e
             cd $VPS_APP_DIR
-            echo '==> Pulling latest code'
+            echo '==> Fetching pinned release commit $RELEASE_SHA'
             git fetch origin main
-            git reset --hard origin/main
-            echo '==> Commit: $(git log --oneline -1)'
+            git cat-file -e '$RELEASE_SHA^{commit}'
+            git merge-base --is-ancestor '$RELEASE_SHA' origin/main
+            git reset --hard '$RELEASE_SHA'
+            test \"\$(git rev-parse HEAD)\" = '$RELEASE_SHA'
+            echo '==> Commit: $RELEASE_SHA'
             echo '==> Running deploy script'
             bash scripts/deploy_prod.sh $BUILD_MODE
           "
