@@ -12,6 +12,7 @@ import balancedAccessSmallImg from '../assets/home/lawhand-controlled-handoff-ed
 import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.webp'
 import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
 import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
+import MarketingChatWorkspace from '../components/MarketingChatWorkspace'
 
 const SKILLS = [
   {
@@ -568,25 +569,7 @@ export default function HomePage() {
                   Explore LawHand Chat <ArrowRight size={15} />
                 </Link>
               </div>
-              <div className="rounded-2xl border border-brand-line bg-brand-bg-soft p-4 shadow-inner">
-                <div className="flex items-center justify-between border-b border-brand-line pb-3">
-                  <div>
-                    <p className="text-[9px] uppercase tracking-[0.14em] font-bold text-brand-muted">Matter chat</p>
-                    <p className="font-serif font-bold text-[13px] mt-1">Northwind Services Agreement</p>
-                  </div>
-                  <span className="rounded-full bg-brand-green/10 text-brand-green border border-brand-green/20 px-2 py-1 text-[9px] font-bold">Sources connected</span>
-                </div>
-                <div className="mt-4 ml-auto max-w-[82%] rounded-xl rounded-br-sm bg-brand-accent px-3 py-2.5 text-[11px] leading-relaxed text-white">
-                  Summarize the unresolved valuation questions.
-                </div>
-                <div className="mt-3 rounded-xl rounded-bl-sm border border-brand-line bg-white px-3 py-3">
-                  <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-brand-accent-2"><Sparkles size={11} /> LawHand</div>
-                  <p className="mt-2 text-[10.5px] leading-relaxed text-brand-ink-2">Three assets still need a current valuation. Each item links back to the inventory and supporting source.</p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {['Inventory', 'Appraisal', 'Trust schedule'].map((source) => <span key={source} className="rounded border border-brand-line bg-brand-bg px-2 py-1 text-[8.5px] font-semibold text-brand-muted">{source}</span>)}
-                  </div>
-                </div>
-              </div>
+              <MarketingChatWorkspace compact />
             </div>
           </article>
 
