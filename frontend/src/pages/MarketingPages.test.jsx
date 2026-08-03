@@ -23,6 +23,13 @@ describe('public LawHand product marketing', () => {
     expect(screen.getByRole('heading', { level: 1, name: /Ask with the whole matter in hand/i })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Shows its source trail' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'View pricing' })).toHaveAttribute('href', '/pricing')
+    expect(screen.getByRole('region', { name: 'LawHand Assistant workspace preview' })).toBeInTheDocument()
+    expect(screen.getByText('AI assistant / Conversation 01')).toBeVisible()
+    expect(screen.getByText('Working context')).toBeVisible()
+    expect(screen.getByText('LawHand Analysis')).toBeVisible()
+    expect(screen.getByText('Sources & References')).toBeVisible()
+    expect(screen.queryByText('Matter chat')).not.toBeInTheDocument()
+    expect(screen.queryByText('3 sources connected')).not.toBeInTheDocument()
   })
 
   it('markets MCP truthfully as a metered private preview', () => {

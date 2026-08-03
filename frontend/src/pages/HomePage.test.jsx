@@ -1,5 +1,5 @@
 import React from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -72,6 +72,9 @@ describe('HomePage launch routing and claims', () => {
     )
 
     expect(screen.getByRole('heading', { name: 'Matter-aware AI chat' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Compact LawHand Assistant workspace preview' })).toBeInTheDocument()
+    expect(screen.getByText('LawHand Analysis')).toBeVisible()
+    expect(screen.queryByText('Matter chat')).not.toBeInTheDocument()
     expect(screen.getAllByText('$89')).not.toHaveLength(0)
     expect(screen.getAllByText(/\$0\.45/)).not.toHaveLength(0)
     expect(screen.getByRole('link', { name: /Explore LawHand Chat/i })).toHaveAttribute('href', '/product/chat')
@@ -143,8 +146,8 @@ describe('marketing add-on workflows', () => {
     expect(mediationButton).toHaveAttribute('aria-expanded', 'true')
     expect(estatePanel).not.toBeVisible()
     expect(mediationPanel).toBeVisible()
-    expect(screen.getByText('Rivera v. Northwind')).toBeVisible()
-    expect(screen.getByText('Shared issue and proposal tracking')).toBeVisible()
+    expect(within(mediationButton).getByText('Rivera v. Northwind')).toBeVisible()
+    expect(within(mediationPanel).getByText('Shared issue and proposal tracking')).toBeVisible()
 
     await user.click(mediationButton)
     expect(mediationButton).toHaveAttribute('aria-expanded', 'false')

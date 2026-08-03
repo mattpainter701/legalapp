@@ -1,10 +1,11 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import {
-  ArrowRight, BadgeCheck, FileText, FolderOpen, MessageSquareText,
-  Search, ShieldCheck, Sparkles,
+  ArrowRight, BadgeCheck, FileText, FolderOpen,
+  Search, ShieldCheck,
 } from 'lucide-react'
 import MarketingPageLayout from '../components/MarketingChrome'
+import MarketingChatWorkspace from '../components/MarketingChatWorkspace'
 
 const CAPABILITIES = [
   {
@@ -55,38 +56,8 @@ export default function ProductChatPage() {
 
         <div className="relative">
           <div className="absolute -inset-5 rounded-[34px] bg-brand-accent/10" aria-hidden="true" />
-          <div className="relative overflow-hidden rounded-3xl border border-brand-line bg-brand-surface shadow-2xl">
-            <div className="flex items-center justify-between border-b border-brand-line bg-brand-ink px-5 py-4 text-white sm:px-6">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/55">Matter chat</p>
-                <p className="mt-1 font-serif text-[16px] font-bold">Rivera v. Northwind</p>
-              </div>
-              <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] font-semibold text-white/80">3 sources connected</span>
-            </div>
-            <div className="space-y-4 p-5 sm:p-6">
-              <div className="ml-auto max-w-[82%] rounded-2xl rounded-br-md bg-brand-accent px-4 py-3 text-[13px] leading-relaxed text-white">
-                Compare the settlement positions and identify the issues that still need attorney review.
-              </div>
-              <div className="max-w-[92%] rounded-2xl rounded-bl-md border border-brand-line bg-brand-bg-soft p-4">
-                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-brand-accent-2">
-                  <Sparkles size={13} /> LawHand
-                </div>
-                <p className="mt-3 text-[13px] leading-relaxed text-brand-ink-2">
-                  The positions overlap on payment timing and confidentiality. The remaining review points are release scope, tax treatment, and the proposed non-disparagement language.
-                </p>
-                <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                  {['Demand letter · p. 4', 'Mediator brief · p. 7', 'Draft term sheet'].map((source) => (
-                    <span key={source} className="rounded-lg border border-brand-line bg-white px-2.5 py-2 text-[10px] font-semibold text-brand-ink-2">
-                      {source}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-3 rounded-xl border border-brand-line bg-white px-4 py-3 text-[12px] text-brand-muted">
-                <MessageSquareText size={17} className="text-brand-accent-2" />
-                Ask a follow-up about this matter…
-              </div>
-            </div>
+          <div className="relative">
+            <MarketingChatWorkspace />
           </div>
         </div>
       </section>
