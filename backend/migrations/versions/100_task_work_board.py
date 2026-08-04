@@ -30,19 +30,14 @@ def upgrade() -> None:
         sa.Column(
             "status_changed_at",
             sa.DateTime(timezone=True),
-            nullable=True,
+            nullable=False,
             server_default=sa.text("now()"),
         ),
-    )
-    op.execute(
-        "UPDATE tasks SET status_changed_at = COALESCE(updated_at, created_at, now()) "
-        "WHERE status_changed_at IS NULL"
     )
     op.execute(
         "UPDATE tasks SET completed_at = COALESCE(updated_at, created_at, now()) "
         "WHERE status = 'completed' AND completed_at IS NULL"
     )
-    op.alter_column("tasks", "status_changed_at", nullable=False)
     op.add_column("tasks", sa.Column("waiting_reason", sa.Text(), nullable=True))
     op.add_column(
         "tasks", sa.Column("waiting_follow_up_date", sa.Date(), nullable=True)
