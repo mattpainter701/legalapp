@@ -8,12 +8,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT_DIR"
 
-readonly ENV_FILE="$ROOT_DIR/.env"
+readonly PROD_ENV_FILE="$ROOT_DIR/.env"
 readonly COMPOSE_FILE="$ROOT_DIR/docker-compose.hypervisor.yml"
 readonly PUBLIC_ORIGIN="https://getlawhand.com"
 readonly EXPECTED_COMMIT="${GITHUB_DEPLOY_COMMIT:?GITHUB_DEPLOY_COMMIT is required}"
 
-[[ -f "$ENV_FILE" ]] || { echo "ERROR: missing $ENV_FILE" >&2; exit 2; }
+[[ -f "$PROD_ENV_FILE" ]] || { echo "ERROR: missing $PROD_ENV_FILE" >&2; exit 2; }
 [[ -f "$COMPOSE_FILE" ]] || { echo "ERROR: missing $COMPOSE_FILE" >&2; exit 2; }
 
 git_commit="$(git rev-parse HEAD)"
@@ -26,8 +26,8 @@ export APP_COMMIT="$git_commit"
 export APP_VERSION="$(git rev-parse --short HEAD)"
 export APP_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-compose=(docker compose -p legalapp --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
-guard_compose="-p legalapp --env-file $ENV_FILE -f $COMPOSE_FILE"
+compose=(docker compose -p legalapp --env-file "$PROD_ENV_FILE" -f "$COMPOSE_FILE")
+guard_compose="-p legalapp --env-file $PROD_ENV_FILE -f $COMPOSE_FILE"
 
 failure_diagnostics() {
   rc=$?
@@ -41,7 +41,7 @@ failure_diagnostics() {
 trap failure_diagnostics ERR
 
 echo "==> Validating production configuration"
-ENV_FILE="$ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE" \
+ENV_FILE="$PROD_ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE" \
   bash scripts/prod_env_preflight.sh
 
 echo "==> Capturing validated pre-deploy database backups and counts"

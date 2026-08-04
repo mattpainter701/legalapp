@@ -144,6 +144,9 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     host_entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
         encoding="utf-8"
     )
+    host_deploy = (ROOT / "scripts" / "deploy_skynet_runner.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "Require successful CI for exact release commit" in deploy
     assert '[[ "$RELEASE_REF" != refs/heads/main ]]' in deploy
@@ -160,3 +163,9 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint
     assert 'reset --hard "$requested_sha"' in host_entrypoint
     assert '[[ "$checked_out_sha" == "$requested_sha" ]]' in host_entrypoint
+
+    # ENV_FILE is the child preflight's public input. Keeping a readonly local
+    # with that name makes Bash reject the per-command environment assignment.
+    assert 'readonly PROD_ENV_FILE="$ROOT_DIR/.env"' in host_deploy
+    assert 'ENV_FILE="$PROD_ENV_FILE" COMPOSE_FILES="$COMPOSE_FILE"' in host_deploy
+    assert "readonly ENV_FILE=" not in host_deploy
