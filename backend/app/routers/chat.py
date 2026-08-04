@@ -1828,10 +1828,15 @@ async def stream_message(
                 user.tenant.name if user.tenant else "Legal", user.privacy_mode
             )
             generation_started_at = time.monotonic()
+            drafting_label = (
+                "Drafting a cited answer"
+                if progress_counts["total"]
+                else "Drafting answer"
+            )
             yield _stream_activity_event(
                 "drafting",
                 "started",
-                "Drafting the cited answer",
+                drafting_label,
                 counts=progress_counts,
                 sources=source_previews,
             )
@@ -1867,7 +1872,7 @@ async def stream_message(
                     yield _stream_activity_event(
                         "drafting",
                         "progress",
-                        "Drafting the cited answer",
+                        drafting_label,
                         elapsed_ms=int((now - generation_started_at) * 1000),
                         counts=progress_counts,
                         detail=f"{len(accumulated_text.split())} draft words received",

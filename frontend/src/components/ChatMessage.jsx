@@ -357,7 +357,7 @@ function AssistantWorkingState({ progress, compact = false }) {
 
   return (
     <>
-      <div className="border border-brand-line bg-brand-bg px-3 py-2 text-xs text-brand-ink-2 sm:hidden">
+      <div className="border border-brand-line bg-brand-bg px-3 py-2 text-xs text-brand-ink-2">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 animate-pulse rounded-full bg-brand-accent" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate">{currentActivity?.label || status}</span>
@@ -369,7 +369,7 @@ function AssistantWorkingState({ progress, compact = false }) {
           <p className="mt-1 truncate pl-4 text-[10px] text-brand-muted">{currentActivity.detail}</p>
         )}
       </div>
-      <div className="hidden border border-brand-line bg-brand-bg p-4 sm:block">
+      <div className="hidden border border-brand-line bg-brand-bg p-4">
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-brand-line bg-brand-surface-2">
           <Scale className="h-4 w-4 text-brand-gold" strokeWidth={2} />
