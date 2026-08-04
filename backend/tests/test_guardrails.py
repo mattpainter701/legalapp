@@ -38,6 +38,9 @@ def test_system_prompt_is_transparent_and_requires_verifiable_source_spans():
     assert "not an AI" not in SYSTEM_PROMPT_TEMPLATE
     assert "verbatim quote of" in SYSTEM_PROMPT_TEMPLATE
     assert "[source: <source_id>]" in SYSTEM_PROMPT_TEMPLATE
+    assert "**Source note:** This response uses general legal knowledge" in SYSTEM_PROMPT_TEMPLATE
+    assert "Do not repeat [model knowledge] after every factual claim" in SYSTEM_PROMPT_TEMPLATE
+    assert "Except for a response with empty SOURCE MATERIALS" in SYSTEM_PROMPT_TEMPLATE
 
 
 def test_citation_detected():

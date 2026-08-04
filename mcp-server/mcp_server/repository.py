@@ -37,9 +37,10 @@ class CourtListenerRepository:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> tuple[list[str], list[Any]]:
-        # Versioned authority adapters retain prior releases for auditability.
-        # Normal chat/search must not mix superseded text with current law.
-        filters = ["d.document_status = 'current'", "s.enabled = TRUE"]
+        # Caselaw lives in the CourtListener tables, not the versioned legal
+        # authority tables. The latter's `d` and `s` aliases are not present
+        # in either caselaw query, so those status filters must not leak here.
+        filters = ["TRUE"]
         params: list[Any] = []
         if jurisdiction:
             filters.append("(oc.court_id = %s OR c.jurisdiction = %s)")
