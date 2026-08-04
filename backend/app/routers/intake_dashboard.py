@@ -46,6 +46,11 @@ from app.schemas.intake_dashboard import (
 )
 from app.services.intake_archive_import import normalize_phone
 from app.services.task_history import record_task_event
+from app.services.task_workflow import (
+    append_task_event,
+    increment_task_version,
+    transition_task,
+)
 from app.services.task_notifications import notify_task_created
 from app.services.zoom_phone import (
     ZoomPhoneIntegrationError,
@@ -559,23 +564,54 @@ async def _upsert_lead_assignment_task(
         )
         db.add(task)
         await db.flush()
+        append_task_event(
+            db,
+            task,
+            event_type="created",
+            actor_user_id=created_by_user_id,
+            to_status="pending",
+        )
+        append_task_event(
+            db,
+            task,
+            event_type="assigned",
+            actor_user_id=created_by_user_id,
+            metadata={"assigned_to_user_id": str(assigned_to_user_id)},
+        )
         await record_task_event(
             db, task, event="assigned", actor_user_id=created_by_user_id
         )
     else:
+        transitioned = False
         task.title = f"Urgent intake follow-up: {caller}"
         task.description = "\n".join(bit for bit in description_bits if bit)
         task.priority = "urgent"
-        task.status = "pending" if task.status == "cancelled" else task.status
+        if task.status == "cancelled":
+            transitioned = transition_task(
+                db,
+                task,
+                to_status="pending",
+                actor_user_id=created_by_user_id,
+                reason="Intake follow-up reactivated",
+            )
         task.due_date = task.due_date or date.today()
         task.contact_id = lead.contact_id
         if task.assigned_to_user_id != assigned_to_user_id:
             # New assignee has not seen the task; reset the read receipt.
             task.viewed_at = None
             task.assigned_to_user_id = assigned_to_user_id
+            append_task_event(
+                db,
+                task,
+                event_type="reassigned",
+                actor_user_id=created_by_user_id,
+                metadata={"assigned_to_user_id": str(assigned_to_user_id)},
+            )
             await record_task_event(
                 db, task, event="reassigned", actor_user_id=created_by_user_id
             )
+        if not transitioned:
+            increment_task_version(task)
 
     return task
 
@@ -643,23 +679,54 @@ async def _upsert_general_call_task(
         )
         db.add(task)
         await db.flush()
+        append_task_event(
+            db,
+            task,
+            event_type="created",
+            actor_user_id=created_by_user_id,
+            to_status="pending",
+        )
+        append_task_event(
+            db,
+            task,
+            event_type="assigned",
+            actor_user_id=created_by_user_id,
+            metadata={"assigned_to_user_id": str(assigned_to_user_id)},
+        )
         await record_task_event(
             db, task, event="assigned", actor_user_id=created_by_user_id
         )
     else:
+        transitioned = False
         task.title = task_title
         task.description = "\n".join(bit for bit in description_bits if bit)
         task.priority = "urgent"
-        task.status = "pending" if task.status == "cancelled" else task.status
+        if task.status == "cancelled":
+            transitioned = transition_task(
+                db,
+                task,
+                to_status="pending",
+                actor_user_id=created_by_user_id,
+                reason="General intake task reactivated",
+            )
         task.due_date = task.due_date or date.today()
         task.contact_id = contact_id
         if task.assigned_to_user_id != assigned_to_user_id:
             # New assignee has not seen the task; reset the read receipt.
             task.viewed_at = None
             task.assigned_to_user_id = assigned_to_user_id
+            append_task_event(
+                db,
+                task,
+                event_type="reassigned",
+                actor_user_id=created_by_user_id,
+                metadata={"assigned_to_user_id": str(assigned_to_user_id)},
+            )
             await record_task_event(
                 db, task, event="reassigned", actor_user_id=created_by_user_id
             )
+        if not transitioned:
+            increment_task_version(task)
     return task
 
 

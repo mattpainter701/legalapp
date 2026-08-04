@@ -2,20 +2,24 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getTasks,
+  getTaskBoard,
+  getTaskBoardConfig,
+  recordTaskBoardTelemetry,
   getTask,
   createTask,
   updateTask,
+  transitionTask,
   deleteTask,
   getOverdueTasks,
   sendTaskReminder,
   qualifyIntakeTask,
-  markTaskViewed,
   markTaskContacted,
   searchUsers,
   getLead,
   convertLead,
+  getMattersV2,
 } from '../api'
-import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing } from 'lucide-react'
+import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing, LayoutGrid, List, UserRound, UsersRound } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import CreatableCombobox from '../components/CreatableCombobox'
@@ -29,6 +33,7 @@ import {
   WorkspacePage,
 } from '../components/ui'
 import { canAccessModuleList } from '../moduleAccess'
+import TaskBoard from '../components/tasks/TaskBoard'
 
 const PRIORITY_COLORS = {
   urgent: 'bg-brand-rose/10 text-brand-rose border-brand-rose/20',
@@ -100,7 +105,13 @@ function UserSearchPicker({ selectedUser, onSelect, placeholder = 'Search staff 
 
   return (
     <div>
-      <div className="flex gap-2">
+      {selectedUser && (
+        <div className="mb-2 flex min-h-10 items-center justify-between rounded-lg border border-brand-accent/30 bg-brand-accent/5 px-3 text-sm">
+          <span className="truncate font-semibold text-brand-ink">{selectedUser.full_name || selectedUser.email}</span>
+          <button type="button" onClick={() => { onSelect(null); setUsers([]); setQuery('') }} aria-label={`Clear ${placeholder.toLowerCase()}`} className="rounded p-1 text-brand-muted hover:bg-white"><X size={13} /></button>
+        </div>
+      )}
+      <div className={`flex gap-2 ${selectedUser ? 'hidden' : ''}`}>
         <input
           id={inputId}
           aria-label={placeholder}
@@ -935,8 +946,8 @@ function TaskRow({
     >
       <button
         onClick={() => onComplete(task)}
-        aria-label={`${task.status === 'completed' ? 'Reopen' : 'Complete'} task: ${task.title}`}
-        aria-pressed={task.status === 'completed'}
+        aria-label={`${isClosed ? 'Reopen' : 'Complete'} task: ${task.title}`}
+        aria-pressed={isClosed}
         className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
           task.status === 'completed'
             ? 'bg-brand-green border-brand-green text-white'
@@ -954,6 +965,9 @@ function TaskRow({
             {task.description}
           </p>
         )}
+        {task.status === 'waiting' && task.waiting_reason && (
+          <p className="mt-1 line-clamp-2 text-[12px] font-medium text-amber-800">Waiting: {task.waiting_reason}</p>
+        )}
         {isClosed && task.closed_reason && (
           <p className="text-[12px] text-brand-muted mt-0.5 italic truncate" title={task.closed_reason}>
             {task.status === 'cancelled' ? 'Cancelled' : 'Closed'}: {task.closed_reason}
@@ -968,6 +982,11 @@ function TaskRow({
           </span>
         )}
         <PriorityBadge priority={task.priority} />
+        {!isClosed && task.status !== 'pending' && (
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${task.status === 'waiting' ? 'border-amber-200 bg-amber-50 text-amber-800' : task.status === 'review' ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-blue-200 bg-blue-50 text-blue-700'}`}>
+            {task.status.replace('_', ' ')}
+          </span>
+        )}
         {task.assigned_to_user_id && task.assigned_to_user_id !== currentUserId && (
           task.viewed_at ? (
             <span
@@ -1119,6 +1138,18 @@ export default function TasksPage() {
   const [logContactTask, setLogContactTask] = useState(null)
   const [reassignTask, setReassignTask] = useState(null)
   const [closeTask, setCloseTask] = useState(null)
+  const [viewMode, setViewMode] = useState(() => {
+    try { return window.localStorage.getItem('tasks:view-mode') === 'board' ? 'board' : 'list' } catch { return 'list' }
+  })
+  const [boardScope, setBoardScope] = useState('mine')
+  const [boardDueWindow, setBoardDueWindow] = useState('')
+  const [boardAssignee, setBoardAssignee] = useState(null)
+  const [boardMatterId, setBoardMatterId] = useState('')
+  const [boardMatters, setBoardMatters] = useState([])
+  const [boardData, setBoardData] = useState(null)
+  const [boardEnabled, setBoardEnabled] = useState(null)
+  const [boardLoading, setBoardLoading] = useState(false)
+  const [boardError, setBoardError] = useState(null)
   const createTaskButtonRef = useRef(null)
 
   const closeCreate = useCallback(() => {
@@ -1127,6 +1158,31 @@ export default function TasksPage() {
   }, [])
 
   const canOpenMatters = canAccessModuleList(user?.enabled_modules, 'matters')
+
+  const boardParams = useCallback((extra = {}) => ({
+    scope: boardScope,
+    ...(boardScope === 'firm' && boardAssignee?.id ? { assigned_to_user_id: boardAssignee.id } : {}),
+    ...(boardMatterId ? { matter_id: boardMatterId } : {}),
+    ...(filterPriority ? { priority: filterPriority } : {}),
+    ...(filterType ? { task_type: filterType } : {}),
+    ...(boardDueWindow ? { due_window: boardDueWindow } : {}),
+    ...extra,
+  }), [boardScope, boardAssignee, boardMatterId, filterPriority, filterType, boardDueWindow])
+
+  const loadBoard = useCallback(async () => {
+    setBoardLoading(true)
+    setBoardError(null)
+    try {
+      const data = await getTaskBoard(boardParams())
+      setBoardData(data)
+      return data
+    } catch (e) {
+      setBoardError(e?.response?.data?.detail || 'Failed to load the work board')
+      return null
+    } finally {
+      setBoardLoading(false)
+    }
+  }, [boardParams])
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -1162,31 +1218,42 @@ export default function TasksPage() {
   }, [filterStatus, filterPriority, filterType, taskId])
 
   useEffect(() => { loadTasks() }, [loadTasks])
+  useEffect(() => {
+    let active = true
+    getTaskBoardConfig()
+      .then(config => {
+        if (!active) return
+        setBoardEnabled(config.enabled !== false)
+        if (config.enabled === false) setViewMode('list')
+      })
+      // Preserve compatibility during a rolling frontend/backend deployment.
+      .catch(() => { if (active) setBoardEnabled(true) })
+    return () => { active = false }
+  }, [])
+  useEffect(() => {
+    if (viewMode === 'board' && boardEnabled === true) loadBoard()
+    try { window.localStorage.setItem('tasks:view-mode', viewMode) } catch { /* preference is optional */ }
+    if (boardEnabled !== null) {
+      recordTaskBoardTelemetry({
+        event: viewMode === 'board' ? 'board_selected' : 'list_selected',
+        ...(viewMode === 'board' ? { scope: boardScope } : {}),
+      }).catch(() => { /* telemetry never blocks task work */ })
+    }
+  }, [viewMode, boardScope, boardEnabled, loadBoard])
+  useEffect(() => {
+    if (viewMode !== 'board' || !canOpenMatters || boardMatters.length > 0) return
+    getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
+      .then(data => setBoardMatters(data.items || []))
+      .catch(() => setBoardMatters([]))
+  }, [viewMode, canOpenMatters, boardMatters.length])
 
   useEffect(() => {
-    if (!taskId || loading) return
+    if (viewMode !== 'list' || !taskId || loading) return
     document.getElementById(`task-${taskId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [taskId, loading, tasks, overdue])
-
-  // Read receipt: rendering this page shows the assignee their tasks, so mark
-  // any of the current user's unviewed tasks as seen (fire-and-forget).
-  useEffect(() => {
-    if (!user?.id || loading) return
-    const mine = [...overdue, ...tasks].filter(
-      t => t.assigned_to_user_id === user.id && !t.viewed_at
-    )
-    if (mine.length === 0) return
-    mine.forEach(t => { markTaskViewed(t.id).catch(() => {}) })
-    const seenAt = new Date().toISOString()
-    const markSeen = list => list.map(
-      t => (t.assigned_to_user_id === user.id && !t.viewed_at ? { ...t, viewed_at: seenAt } : t)
-    )
-    setTasks(markSeen)
-    setOverdue(markSeen)
-  }, [loading, user?.id])
+  }, [viewMode, taskId, loading, tasks, overdue])
 
   const handleComplete = async (task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    const newStatus = task.status === 'completed' || task.status === 'cancelled' ? 'pending' : 'completed'
     setActionError(null)
     try {
       await updateTask(task.id, { status: newStatus })
@@ -1223,6 +1290,49 @@ export default function TasksPage() {
     await sendTaskReminder(taskId)
   }
 
+  const reloadWorkspace = useCallback(async () => {
+    await Promise.all([
+      loadTasks(),
+      viewMode === 'board' ? loadBoard() : Promise.resolve(),
+    ])
+  }, [loadTasks, loadBoard, viewMode])
+
+  const handleBoardTransition = async (task, toStatus, details = {}) => {
+    setActionError(null)
+    const updated = await transitionTask(task.id, {
+      to_status: toStatus,
+      expected_version: task.version,
+      ...details,
+    })
+    await loadBoard()
+    return updated
+  }
+
+  const handleBoardLoadMore = async (status, cursor) => getTaskBoard(boardParams({
+    column_status: status,
+    cursor: Number(cursor),
+  }))
+
+  const handleBoardAction = async (action, task) => {
+    if (action === 'view_matter' && task.matter_id) {
+      navigate(`/matters/${task.matter_id}`)
+      return
+    }
+    if (action === 'remind') {
+      try {
+        await handleRemind(task.id)
+      } catch (e) {
+        setActionError(e?.response?.data?.detail || 'Reminder email could not be sent.')
+      }
+      return
+    }
+    navigate('/tasks')
+    if (action === 'reassign') setReassignTask(task)
+    if (action === 'contact') setLogContactTask(task)
+    if (action === 'qualify') setQualifyTask(task)
+    if (action === 'open_matter') setOpenMatterTask(task)
+  }
+
   // Group tasks by due date bucket
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -1238,6 +1348,10 @@ export default function TasksPage() {
   const completedTasks = tasks.filter(isClosedTask)
 
   const totalActive = overdue.length + todayTasks.length + upcomingTasks.length + noDueTasks.length
+  const boardActive = (boardData?.columns || [])
+    .filter(column => column.status !== 'completed')
+    .reduce((sum, column) => sum + column.total, 0)
+  const displayedActive = viewMode === 'board' && boardData ? boardActive : totalActive
   const hasFilters = Boolean(filterStatus || filterPriority || filterType)
   const taskRowActions = {
     currentUserId: user?.id,
@@ -1258,17 +1372,17 @@ export default function TasksPage() {
   }
 
   return (
-    <WorkspacePage width="compact">
+    <WorkspacePage width={viewMode === 'board' ? 'full' : 'compact'}>
       <div>
         {/* Header */}
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">Personal work queue</p>
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-brand-accent-2">{viewMode === 'board' && boardScope === 'firm' ? 'Firm workflow' : 'Personal work queue'}</p>
             <h1 className="text-2xl font-serif font-bold text-brand-ink">Tasks & Deadlines</h1>
             <p className="text-sm text-brand-muted mt-1">
-              {totalActive} active task{totalActive !== 1 ? 's' : ''}
-              {overdue.length > 0 && (
-                <span className="ml-2 text-brand-rose font-semibold">· {overdue.length} overdue</span>
+              {displayedActive} active task{displayedActive !== 1 ? 's' : ''}
+              {(viewMode === 'board' ? boardData?.risk_counts?.overdue : overdue.length) > 0 && (
+                <span className="ml-2 text-brand-rose font-semibold">· {viewMode === 'board' ? boardData?.risk_counts?.overdue : overdue.length} overdue</span>
               )}
             </p>
           </div>
@@ -1281,16 +1395,33 @@ export default function TasksPage() {
           </button>
         </div>
 
+        <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-brand-line bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="inline-flex w-fit rounded-xl bg-brand-bg-soft p-1" role="group" aria-label="Task view">
+            {boardEnabled !== false && <button type="button" disabled={boardEnabled === null} onClick={() => setViewMode('board')} aria-pressed={viewMode === 'board'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold disabled:opacity-50 ${viewMode === 'board' ? 'bg-white text-brand-ink shadow-sm' : 'text-brand-muted hover:text-brand-ink'}`}><LayoutGrid size={15} /> Board</button>}
+            <button type="button" onClick={() => setViewMode('list')} aria-pressed={viewMode === 'list'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold ${viewMode === 'list' ? 'bg-white text-brand-ink shadow-sm' : 'text-brand-muted hover:text-brand-ink'}`}><List size={15} /> List</button>
+          </div>
+          {viewMode === 'board' && (
+            <div className="inline-flex w-fit rounded-xl border border-brand-line p-1" role="group" aria-label="Task scope">
+              <button type="button" onClick={() => setBoardScope('mine')} aria-pressed={boardScope === 'mine'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold ${boardScope === 'mine' ? 'bg-brand-ink text-white' : 'text-brand-muted hover:bg-brand-bg-soft'}`}><UserRound size={14} /> My Work</button>
+              <button type="button" onClick={() => setBoardScope('firm')} aria-pressed={boardScope === 'firm'} className={`inline-flex min-h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold ${boardScope === 'firm' ? 'bg-brand-ink text-white' : 'text-brand-muted hover:bg-brand-bg-soft'}`}><UsersRound size={14} /> Firm Work</button>
+            </div>
+          )}
+        </div>
+
         {/* Filters */}
         <FilterToolbar ariaLabel="Task filters">
-          <select aria-label="Filter tasks by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-            className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
-            <option value="">All statuses</option>
-            <option value="pending">Pending</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+          {viewMode === 'list' && (
+            <select aria-label="Filter tasks by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+              className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
+              <option value="">All statuses</option>
+              <option value="pending">To Do</option>
+              <option value="in_progress">In Progress</option>
+              <option value="waiting">Waiting</option>
+              <option value="review">Review</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          )}
           <select aria-label="Filter tasks by priority" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
             <option value="">All priorities</option>
@@ -1304,6 +1435,30 @@ export default function TasksPage() {
             <option value="">All types</option>
             {TASK_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
           </select>
+          {viewMode === 'board' && (
+            <select aria-label="Filter tasks by due window" value={boardDueWindow} onChange={e => setBoardDueWindow(e.target.value)} className="min-h-10 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
+              <option value="">Any due date</option>
+              <option value="overdue">Overdue</option>
+              <option value="today">Due today</option>
+              <option value="7_days">Next 7 days</option>
+              <option value="30_days">Next 30 days</option>
+              <option value="none">No due date</option>
+            </select>
+          )}
+          {viewMode === 'board' && canOpenMatters && (
+            <select aria-label="Filter tasks by matter" value={boardMatterId} onChange={e => setBoardMatterId(e.target.value)} className="min-h-10 max-w-56 rounded-xl border border-brand-line bg-brand-surface px-3 py-2 text-sm text-brand-ink">
+              <option value="">All matters</option>
+              {boardMatters.map(matter => <option key={matter.id} value={matter.id}>{matter.matter_name}{matter.case_number ? ` · ${matter.case_number}` : ''}</option>)}
+            </select>
+          )}
+          {viewMode === 'board' && boardScope === 'firm' && (
+            <div className="min-w-56">
+              <UserSearchPicker selectedUser={boardAssignee} onSelect={setBoardAssignee} placeholder="Filter by assignee" inputId="board-assignee-filter" />
+            </div>
+          )}
+          {viewMode === 'board' && (filterPriority || filterType || boardDueWindow || boardMatterId || boardAssignee) && (
+            <button type="button" onClick={() => { setFilterPriority(''); setFilterType(''); setBoardDueWindow(''); setBoardMatterId(''); setBoardAssignee(null) }} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-brand-muted hover:bg-brand-bg-soft hover:text-brand-ink">Clear filters</button>
+          )}
         </FilterToolbar>
 
         {actionError && (
@@ -1317,7 +1472,22 @@ export default function TasksPage() {
           </AlertBanner>
         )}
 
-        {loading ? (
+        {viewMode === 'board' ? (
+          <TaskBoard
+            data={boardData}
+            loading={boardLoading}
+            error={boardError}
+            scope={boardScope}
+            onRetry={loadBoard}
+            onTransition={handleBoardTransition}
+            onLoadMore={handleBoardLoadMore}
+            taskId={taskId}
+            onOpenTask={id => navigate(`/tasks/${id}`)}
+            onCloseTask={() => navigate('/tasks')}
+            onTaskAction={handleBoardAction}
+            canOpenMatters={canOpenMatters}
+          />
+        ) : loading ? (
           <Spinner />
         ) : error ? (
           <AlertBanner
@@ -1418,7 +1588,7 @@ export default function TasksPage() {
           onClose={closeCreate}
           onCreate={() => {
             closeCreate()
-            loadTasks()
+            reloadWorkspace()
           }}
         />
       )}
@@ -1429,7 +1599,7 @@ export default function TasksPage() {
           onClose={() => setQualifyTask(null)}
           onQualified={() => {
             setQualifyTask(null)
-            loadTasks()
+            reloadWorkspace()
           }}
         />
       )}
@@ -1440,7 +1610,7 @@ export default function TasksPage() {
           onClose={() => setLogContactTask(null)}
           onLogged={() => {
             setLogContactTask(null)
-            loadTasks()
+            reloadWorkspace()
           }}
         />
       )}
@@ -1451,7 +1621,7 @@ export default function TasksPage() {
           onClose={() => setReassignTask(null)}
           onReassigned={() => {
             setReassignTask(null)
-            loadTasks()
+            reloadWorkspace()
           }}
         />
       )}
@@ -1462,7 +1632,7 @@ export default function TasksPage() {
           onClose={() => setCloseTask(null)}
           onClosed={() => {
             setCloseTask(null)
-            loadTasks()
+            reloadWorkspace()
           }}
         />
       )}
@@ -1474,7 +1644,7 @@ export default function TasksPage() {
           onClose={() => setOpenMatterTask(null)}
           onOpened={(result) => {
             setOpenMatterTask(null)
-            loadTasks()
+            reloadWorkspace()
             navigate(`/matters/${result.matter_id}`)
           }}
         />

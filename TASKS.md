@@ -7,7 +7,7 @@ from a phone, inspect the exact candidate, and approve its verified bytes withou
 overwriting the source or implying that anything was sent.
 
 - [x] Add tenant-scoped revision lineage, idempotent request IDs, source/output
-      SHA-256 evidence, status history, RLS, and migration `100_doc_revisions`
+      SHA-256 evidence, status history, RLS, and migration `101_doc_revisions`
 - [x] Combine deterministic DOCX inspection with Standard/Premium model planning
       and an allowlisted exact-replacement engine
 - [x] Store every result as a new private matter document, supersede stale review
@@ -27,13 +27,37 @@ overwriting the source or implying that anything was sent.
 
 Product and safety contract: `docs/virtual-document-assistant-plan.md`.
 
-Validation: 131 frontend tests, accessibility checks, lint, and production build
+Validation: 137 integrated frontend tests, accessibility checks, lint, and production build
 pass; 44 focused backend engine/lifecycle/migration tests and 25 adjacent
 e-sign/storage/auth-contract tests pass. The complete PostgreSQL migration chain
-upgrades to revision 100, downgrades to 099, and re-upgrades to 100 successfully.
+upgrades to revision 101, downgrades to 100, and re-upgrades to 101 successfully.
 The Vite production route and fixture prototype return HTTP 200 locally. Automated
 browser visual inspection and page-faithful DOCX rendering were unavailable in
 this environment, so those remain explicit manual release checks.
+
+## Legal Work Board Product Enhancement — 2026-08-04 (DONE)
+
+**Goal:** Give law firms a deadline-safe, continuous-flow Work Board without
+forcing software-team Scrum language or replacing the existing deadline list.
+
+- [x] Add To Do, In Progress, Waiting, Review, and Done workflow stages with
+      validated waiting, review, closure, cancellation, and reopening semantics
+- [x] Add Board/List preference, My Work/Firm Work scopes, legal-work filters,
+      risk summaries, deterministic risk-first ordering, and per-column paging
+- [x] Add accessible drag-and-drop, keyboard Move actions, a mobile single-stage
+      view, transition dialogs, optimistic updates, and conflict recovery
+- [x] Add privacy-minimized cards plus on-demand task detail and append-only
+      internal history
+- [x] Add tenant-scoped reviewer validation, version-based concurrency, database
+      indexes, row-level security, and migration `100_task_work_board`
+- [x] Add an administrator-controlled tenant feature flag and privacy-safe
+      structured rollout telemetry without task, matter, or client content
+- [x] Route task, intake, mediation, and email-agent lifecycle changes through
+      shared workflow/audit behavior
+- [x] Add backend state-machine/migration/API tests and frontend interaction,
+      accessibility, page, and full-suite coverage
+
+Implementation and operating decisions: `docs/legal-task-board-plan.md`.
 
 ## Demo Polish Release — Ohio Authority And Practice Workflows — 2026-07-31 (IN PROGRESS)
 

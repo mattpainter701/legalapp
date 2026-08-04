@@ -10,20 +10,24 @@ Tasks router — deadline and task management.
   DELETE /api/tasks/{id}       delete/cancel
 """
 
+import logging
+import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
 from app.models.plugin import Matter
-from app.models.task import Task
+from app.models.task import Task, TaskEvent
+from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
 from app.services.task_history import record_customer_contact, record_task_event
@@ -33,17 +37,39 @@ from app.services.task_notifications import (
     remove_task_from_calendars,
     task_calendar_user_id,
 )
+from app.services.task_workflow import (
+    TaskVersionConflict,
+    TaskWorkflowError,
+    append_task_event,
+    increment_task_version,
+    transition_task,
+)
 from app.schemas.task import (
+    BOARD_STATUS_LABELS,
+    BOARD_TASK_STATUSES,
+    OPEN_TASK_STATUSES,
     IntakeTaskQualifyRequest,
     IntakeTaskQualifyResponse,
+    TaskBoardCard,
+    TaskBoardColumn,
+    TaskBoardConfig,
+    TaskBoardResponse,
+    TaskBoardRiskCounts,
+    TaskBoardTelemetryRequest,
+    TaskCardMatter,
+    TaskCardPerson,
     TaskContactedRequest,
     TaskCreate,
+    TaskEventListResponse,
+    TaskEventResponse,
     TaskListResponse,
     TaskResponse,
+    TaskTransitionRequest,
     TaskUpdate,
 )
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+logger = logging.getLogger(__name__)
 
 # Fields that affect the pushed calendar event when changed
 _CALENDAR_RELEVANT_FIELDS = {
@@ -99,6 +125,16 @@ async def _load_task_or_404(
     return task
 
 
+async def _task_board_enabled(db: AsyncSession, tenant_id: uuid.UUID) -> bool:
+    """Default on for existing tenants; an administrator can disable rollout."""
+    enabled = await db.scalar(
+        select(TenantSettings.enable_task_board).where(
+            TenantSettings.tenant_id == tenant_id
+        )
+    )
+    return enabled is not False
+
+
 async def _require_task_references_for_tenant(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -118,6 +154,7 @@ async def _require_task_references_for_tenant(
         ("matter_id", Matter, "Matter not found", False),
         ("contact_id", Contact, "Contact not found", False),
         ("assigned_to_user_id", User, "Assigned user not found", True),
+        ("reviewer_user_id", User, "Reviewer not found", True),
     )
     for field, model, detail, require_active in checks:
         reference_id = values.get(field)
@@ -134,6 +171,67 @@ async def _require_task_references_for_tenant(
             # A single 404 response covers both missing and foreign records so
             # the endpoint does not become a cross-tenant ID oracle.
             raise HTTPException(status_code=404, detail=detail)
+
+
+def _task_card_from_row(row) -> TaskBoardCard:
+    (
+        task,
+        matter_name,
+        case_number,
+        assignee_name,
+        assignee_email,
+        reviewer_name,
+        reviewer_email,
+    ) = row
+    return TaskBoardCard(
+        id=task.id,
+        title=task.title,
+        task_type=task.task_type,
+        status=task.status,
+        priority=task.priority,
+        due_date=task.due_date,
+        due_time=task.due_time,
+        matter_id=task.matter_id,
+        contact_id=task.contact_id,
+        assigned_to_user_id=task.assigned_to_user_id,
+        created_by_user_id=task.created_by_user_id,
+        reviewer_user_id=task.reviewer_user_id,
+        matter=(
+            TaskCardMatter(
+                id=task.matter_id, label=matter_name, case_number=case_number
+            )
+            if task.matter_id and matter_name
+            else None
+        ),
+        assignee=(
+            TaskCardPerson(
+                id=task.assigned_to_user_id,
+                label=assignee_name or assignee_email or "Assigned user",
+            )
+            if task.assigned_to_user_id
+            else None
+        ),
+        reviewer=(
+            TaskCardPerson(
+                id=task.reviewer_user_id,
+                label=reviewer_name or reviewer_email or "Reviewer",
+            )
+            if task.reviewer_user_id
+            else None
+        ),
+        viewed_at=task.viewed_at,
+        customer_contacted_at=task.customer_contacted_at,
+        customer_contact_method=task.customer_contact_method,
+        waiting_reason=task.waiting_reason,
+        waiting_follow_up_date=task.waiting_follow_up_date,
+        completed_at=task.completed_at,
+        closed_reason=task.closed_reason,
+        source=task.source,
+        external_ref=task.external_ref,
+        version=task.version,
+        status_changed_at=task.status_changed_at,
+        updated_at=task.updated_at,
+    )
 
 
 @router.get("/overdue", response_model=TaskListResponse)
@@ -267,6 +365,266 @@ async def list_tasks(
     )
 
 
+@router.get("/board/config", response_model=TaskBoardConfig)
+async def get_task_board_config(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_uuid))
+    return TaskBoardConfig(
+        enabled=await _task_board_enabled(db, tenant_uuid),
+        statuses=BOARD_STATUS_LABELS,
+    )
+
+
+@router.post("/board/telemetry", status_code=202)
+async def record_task_board_telemetry(
+    payload: TaskBoardTelemetryRequest,
+    current_user=Depends(get_current_user),
+):
+    """Record allow-listed, content-free view adoption signals."""
+    logger.info(
+        "task_board_view event=%s tenant_id=%s user_id=%s scope=%s",
+        payload.event,
+        current_user.tenant_id,
+        current_user.id,
+        payload.scope or "none",
+    )
+    return {"accepted": True}
+
+
+@router.get("/board", response_model=TaskBoardResponse)
+async def get_task_board(
+    scope: str = "mine",
+    assigned_to_user_id: Optional[uuid.UUID] = None,
+    matter_id: Optional[uuid.UUID] = None,
+    priority: Optional[str] = None,
+    task_type: Optional[str] = None,
+    due_window: Optional[str] = None,
+    include_completed_days: int = Query(14, ge=1, le=365),
+    per_column_limit: int = Query(50, ge=1, le=100),
+    column_status: Optional[str] = None,
+    cursor: int = Query(0, ge=0),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a risk-ordered, label-enriched task board.
+
+    Descriptions and customer details intentionally stay out of this read model;
+    the detail endpoint remains the authoritative expanded task view.
+    """
+    started_at = time.perf_counter()
+    if scope not in {"mine", "firm"}:
+        raise HTTPException(status_code=422, detail="scope must be mine or firm")
+    if column_status and column_status not in BOARD_TASK_STATUSES:
+        raise HTTPException(status_code=422, detail="Unknown board column")
+    if due_window not in {None, "overdue", "today", "7_days", "30_days", "none"}:
+        raise HTTPException(status_code=422, detail="Unknown due window")
+
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_uuid))
+    if not await _task_board_enabled(db, tenant_uuid):
+        raise HTTPException(status_code=404, detail="The Work Board is disabled")
+    today = date.today()
+    base_conditions = [Task.tenant_id == tenant_uuid]
+    if scope == "mine":
+        base_conditions.append(Task.assigned_to_user_id == current_user.id)
+    elif assigned_to_user_id:
+        await _require_task_references_for_tenant(
+            db, tenant_uuid, {"assigned_to_user_id": assigned_to_user_id}
+        )
+        base_conditions.append(Task.assigned_to_user_id == assigned_to_user_id)
+    if matter_id:
+        await _require_task_references_for_tenant(
+            db, tenant_uuid, {"matter_id": matter_id}
+        )
+        base_conditions.append(Task.matter_id == matter_id)
+    if priority:
+        base_conditions.append(Task.priority == priority)
+    if task_type:
+        base_conditions.append(Task.task_type == task_type)
+    if due_window == "overdue":
+        base_conditions.append(Task.due_date < today)
+    elif due_window == "today":
+        base_conditions.append(Task.due_date == today)
+    elif due_window == "7_days":
+        base_conditions.extend(
+            [Task.due_date >= today, Task.due_date <= today + timedelta(days=7)]
+        )
+    elif due_window == "30_days":
+        base_conditions.extend(
+            [Task.due_date >= today, Task.due_date <= today + timedelta(days=30)]
+        )
+    elif due_window == "none":
+        base_conditions.append(Task.due_date.is_(None))
+
+    open_conditions = [Task.status.in_(OPEN_TASK_STATUSES)]
+    risk_counts = TaskBoardRiskCounts(
+        overdue=(
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(*base_conditions, *open_conditions, Task.due_date < today)
+            )
+            or 0
+        ),
+        due_today=(
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(*base_conditions, *open_conditions, Task.due_date == today)
+            )
+            or 0
+        ),
+        unassigned=(
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(
+                    *base_conditions,
+                    *open_conditions,
+                    Task.assigned_to_user_id.is_(None),
+                )
+            )
+            or 0
+        ),
+        waiting_follow_up_due=(
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(
+                    *base_conditions,
+                    Task.status == "waiting",
+                    Task.waiting_follow_up_date.is_not(None),
+                    Task.waiting_follow_up_date <= today,
+                )
+            )
+            or 0
+        ),
+    )
+
+    assignee = aliased(User)
+    reviewer = aliased(User)
+    risk_bucket = case(
+        (Task.due_date < today, 0),
+        (Task.due_date == today, 1),
+        else_=2,
+    )
+    priority_bucket = case(
+        (Task.priority == "urgent", 0),
+        (Task.priority == "high", 1),
+        (Task.priority == "medium", 2),
+        else_=3,
+    )
+    columns = []
+    completed_cutoff = datetime.now(timezone.utc) - timedelta(
+        days=include_completed_days
+    )
+    for status_value in BOARD_TASK_STATUSES:
+        status_conditions = [Task.status == status_value]
+        if status_value == "completed":
+            status_conditions.append(Task.completed_at >= completed_cutoff)
+        total = (
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(*base_conditions, *status_conditions)
+            )
+            or 0
+        )
+        offset = cursor if column_status == status_value else 0
+        stmt = (
+            select(
+                Task,
+                Matter.matter_name,
+                Matter.case_number,
+                assignee.full_name,
+                assignee.email,
+                reviewer.full_name,
+                reviewer.email,
+            )
+            .outerjoin(
+                Matter,
+                and_(Matter.id == Task.matter_id, Matter.tenant_id == tenant_uuid),
+            )
+            .outerjoin(
+                assignee,
+                and_(
+                    assignee.id == Task.assigned_to_user_id,
+                    assignee.tenant_id == tenant_uuid,
+                ),
+            )
+            .outerjoin(
+                reviewer,
+                and_(
+                    reviewer.id == Task.reviewer_user_id,
+                    reviewer.tenant_id == tenant_uuid,
+                ),
+            )
+            .where(*base_conditions, *status_conditions)
+            .order_by(
+                risk_bucket,
+                priority_bucket,
+                Task.due_date.asc().nulls_last(),
+                Task.due_time.asc().nulls_last(),
+                Task.status_changed_at.desc(),
+                Task.id,
+            )
+            .offset(offset)
+            .limit(per_column_limit)
+        )
+        rows = (await db.execute(stmt)).all()
+        next_offset = offset + len(rows)
+        columns.append(
+            TaskBoardColumn(
+                status=status_value,
+                label=BOARD_STATUS_LABELS[status_value],
+                total=total,
+                items=[_task_card_from_row(row) for row in rows],
+                next_cursor=str(next_offset) if next_offset < total else None,
+            )
+        )
+
+    oldest_waiting_at, oldest_review_at = (
+        await db.execute(
+            select(
+                func.min(
+                    case((Task.status == "waiting", Task.status_changed_at), else_=None)
+                ),
+                func.min(
+                    case((Task.status == "review", Task.status_changed_at), else_=None)
+                ),
+            ).where(*base_conditions)
+        )
+    ).one()
+    now = datetime.now(timezone.utc)
+
+    def age_hours(value):
+        if value is None:
+            return 0
+        return max(0, int((now - value).total_seconds() / 3600))
+
+    result = TaskBoardResponse(
+        columns=columns,
+        risk_counts=risk_counts,
+        scope=scope,
+        generated_at=now,
+    )
+    logger.info(
+        "task_board_load tenant_id=%s user_id=%s scope=%s cards=%d "
+        "waiting_oldest_hours=%d review_oldest_hours=%d duration_ms=%d",
+        tenant_uuid,
+        current_user.id,
+        scope,
+        sum(len(column.items) for column in columns),
+        age_hours(oldest_waiting_at),
+        age_hours(oldest_review_at),
+        int((time.perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
 @router.post("", response_model=TaskResponse, status_code=201)
 async def create_task(
     payload: TaskCreate,
@@ -293,7 +651,22 @@ async def create_task(
         )
     db.add(task)
     await db.flush()
+    append_task_event(
+        db,
+        task,
+        event_type="created",
+        actor_user_id=current_user.id,
+        to_status=task.status,
+    )
     if task.assigned_to_user_id:
+        append_task_event(
+            db,
+            task,
+            event_type="assigned",
+            actor_user_id=current_user.id,
+            note=assignment_note,
+            metadata={"assigned_to_user_id": str(task.assigned_to_user_id)},
+        )
         await record_task_event(
             db, task, event="assigned", actor=current_user, note=assignment_note
         )
@@ -437,25 +810,67 @@ async def qualify_intake_task(
         )
         db.add(attorney_task)
         await db.flush()
+        append_task_event(
+            db,
+            attorney_task,
+            event_type="created",
+            actor_user_id=current_user.id,
+            to_status="pending",
+        )
+        append_task_event(
+            db,
+            attorney_task,
+            event_type="assigned",
+            actor_user_id=current_user.id,
+            note=payload.partner_notes,
+            metadata={"assigned_to_user_id": str(attorney.id)},
+        )
     else:
         previous_calendar_user_id = task_calendar_user_id(attorney_task)
         assignment_changed = attorney_task.assigned_to_user_id != attorney.id
         attorney_task.title = f"Qualified intake: {caller}"
         attorney_task.description = attorney_description
         attorney_task.task_type = "intake"
-        attorney_task.status = (
-            "pending" if attorney_task.status == "cancelled" else attorney_task.status
-        )
+        reopened_attorney_task = False
+        if attorney_task.status == "cancelled":
+            reopened_attorney_task = transition_task(
+                db,
+                attorney_task,
+                to_status="pending",
+                actor_user_id=current_user.id,
+                reason="Intake re-qualified",
+            )
         attorney_task.priority = "urgent"
         attorney_task.due_date = attorney_task.due_date or date.today()
         attorney_task.contact_id = lead.contact_id
         attorney_task.assigned_to_user_id = attorney.id
+        if not reopened_attorney_task:
+            increment_task_version(attorney_task)
+        if assignment_changed:
+            append_task_event(
+                db,
+                attorney_task,
+                event_type="reassigned",
+                actor_user_id=current_user.id,
+                note=payload.partner_notes,
+                metadata={"assigned_to_user_id": str(attorney.id)},
+            )
 
     if partner_task.status != "completed":
-        partner_task.status = "completed"
-        partner_task.completed_at = datetime.now(timezone.utc)
-        partner_task.closed_reason = "Lead qualified and handed to attorney intake"
-        partner_task.closed_by_user_id = current_user.id
+        transition_task(
+            db,
+            partner_task,
+            to_status="completed",
+            actor_user_id=current_user.id,
+            reason="Lead qualified and handed to attorney intake",
+        )
+        await record_task_event(
+            db,
+            partner_task,
+            event="completed",
+            actor=current_user,
+            note=partner_task.closed_reason,
+        )
 
     if created_attorney_task or assignment_changed:
         await record_task_event(
@@ -491,6 +906,174 @@ async def qualify_intake_task(
         assigned_to_user_id=attorney.id,
         lead_status=lead.status,
     )
+
+
+@router.get("/{task_id}/events", response_model=TaskEventListResponse)
+async def get_task_events(
+    task_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    await set_tenant_context(db, str(tenant_uuid))
+    await _load_task_or_404(db, task_id, tenant_uuid)
+    total = (
+        await db.scalar(
+            select(func.count())
+            .select_from(TaskEvent)
+            .where(
+                TaskEvent.tenant_id == tenant_uuid,
+                TaskEvent.task_id == task_id,
+            )
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            select(TaskEvent, User.full_name, User.email)
+            .outerjoin(
+                User,
+                and_(
+                    User.id == TaskEvent.actor_user_id,
+                    User.tenant_id == tenant_uuid,
+                ),
+            )
+            .where(
+                TaskEvent.tenant_id == tenant_uuid,
+                TaskEvent.task_id == task_id,
+            )
+            .order_by(TaskEvent.created_at.desc(), TaskEvent.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    return TaskEventListResponse(
+        items=[
+            TaskEventResponse(
+                id=event.id,
+                task_id=event.task_id,
+                event_type=event.event_type,
+                actor_user_id=event.actor_user_id,
+                actor_label=full_name or email,
+                from_status=event.from_status,
+                to_status=event.to_status,
+                note=event.note,
+                metadata_json=event.metadata_json or {},
+                created_at=event.created_at,
+            )
+            for event, full_name, email in rows
+        ],
+        total=total,
+    )
+
+
+@router.post("/{task_id}/transition", response_model=TaskResponse)
+async def transition_task_status(
+    task_id: uuid.UUID,
+    payload: TaskTransitionRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_uuid = uuid.UUID(str(current_user.tenant_id))
+    tenant_id = str(tenant_uuid)
+    await set_tenant_context(db, tenant_id)
+    task = (
+        await db.execute(
+            select(Task)
+            .where(Task.id == task_id, Task.tenant_id == tenant_uuid)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if payload.reviewer_user_id:
+        await _require_task_references_for_tenant(
+            db, tenant_uuid, {"reviewer_user_id": payload.reviewer_user_id}
+        )
+    previous_calendar_user_id = task_calendar_user_id(task)
+    previous_status = task.status
+    try:
+        changed = transition_task(
+            db,
+            task,
+            to_status=payload.to_status,
+            actor_user_id=current_user.id,
+            expected_version=payload.expected_version,
+            reason=payload.reason,
+            waiting_follow_up_date=payload.waiting_follow_up_date,
+            reviewer_user_id=payload.reviewer_user_id,
+        )
+    except TaskVersionConflict as exc:
+        logger.warning(
+            "task_board_transition_conflict tenant_id=%s user_id=%s task_id=%s "
+            "from_status=%s to_status=%s expected_version=%s current_version=%s",
+            tenant_uuid,
+            current_user.id,
+            task.id,
+            previous_status,
+            payload.to_status,
+            payload.expected_version,
+            task.version,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": exc.detail,
+                "current_task": TaskResponse.model_validate(task).model_dump(
+                    mode="json"
+                ),
+            },
+        ) from exc
+    except TaskWorkflowError as exc:
+        logger.info(
+            "task_board_transition_rejected tenant_id=%s user_id=%s task_id=%s "
+            "from_status=%s to_status=%s reason_code=workflow_validation",
+            tenant_uuid,
+            current_user.id,
+            task.id,
+            previous_status,
+            payload.to_status,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if (
+        changed
+        and task.status in {"completed", "cancelled"}
+        and task.status != previous_status
+    ):
+        await record_task_event(
+            db,
+            task,
+            event=task.status,
+            actor=current_user,
+            note=task.closed_reason,
+        )
+    await db.commit()
+    await db.refresh(task)
+    if changed:
+        await notify_task_updated(
+            db,
+            task,
+            tenant_id,
+            calendar_changed=True,
+            assignment_changed=False,
+            previous_calendar_user_id=previous_calendar_user_id,
+        )
+    logger.info(
+        "task_board_transition_success tenant_id=%s user_id=%s task_id=%s "
+        "from_status=%s to_status=%s changed=%s version=%s",
+        tenant_uuid,
+        current_user.id,
+        task.id,
+        previous_status,
+        task.status,
+        changed,
+        task.version,
+    )
+    return TaskResponse.model_validate(task)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -555,13 +1138,19 @@ async def mark_customer_contacted(
         )
 
     now = datetime.now(timezone.utc)
+    transitioned = False
     if task.customer_contacted_at is None:
         task.customer_contacted_at = now
     task.customer_contact_method = payload.method
     if task.assigned_to_user_id == current_user.id and task.viewed_at is None:
         task.viewed_at = now
     if task.status == "pending":
-        task.status = "in_progress"
+        transitioned = transition_task(
+            db,
+            task,
+            to_status="in_progress",
+            actor_user_id=current_user.id,
+        )
     if payload.note and payload.note.strip():
         contacted_by = current_user.full_name or current_user.email
         task.description = _append_section(
@@ -572,6 +1161,16 @@ async def mark_customer_contacted(
     await record_customer_contact(
         db, task, method=payload.method, actor=current_user, note=payload.note
     )
+    append_task_event(
+        db,
+        task,
+        event_type="contacted",
+        actor_user_id=current_user.id,
+        note=payload.note,
+        metadata={"method": payload.method},
+    )
+    if not transitioned:
+        increment_task_version(task)
     await db.commit()
     await db.refresh(task)
     return TaskResponse.model_validate(task)
@@ -603,12 +1202,18 @@ async def update_task(
     previous_assignee_id = task.assigned_to_user_id
     previous_status = task.status
     updates = payload.model_dump(exclude_none=True)
-    reference_fields = {"matter_id", "contact_id", "assigned_to_user_id"}
+    reference_fields = {
+        "matter_id",
+        "contact_id",
+        "assigned_to_user_id",
+        "reviewer_user_id",
+    }
     for field in reference_fields & payload.model_fields_set:
         # PATCH distinguishes omission (leave unchanged) from an explicit null
         # (remove the optional link). Other nullable-looking fields retain the
         # endpoint's existing exclude-none behavior.
         updates[field] = getattr(payload, field)
+    expected_version = updates.pop("expected_version", None)
     assignment_note = (updates.pop("assignment_note", None) or "").strip() or None
     closed_reason = (updates.pop("closed_reason", None) or "").strip() or None
     changed_references = {
@@ -620,25 +1225,49 @@ async def update_task(
     await _require_task_references_for_tenant(
         db, uuid.UUID(tenant_id), changed_references
     )
+    if expected_version is not None and expected_version != task.version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "This task changed after it was loaded. Review the latest task and try again.",
+                "current_task": TaskResponse.model_validate(task).model_dump(
+                    mode="json"
+                ),
+            },
+        )
     calendar_changed = bool(_CALENDAR_RELEVANT_FIELDS & set(updates))
     assignment_changed = "assigned_to_user_id" in updates
 
-    new_status = updates.get("status")
-    if (
-        new_status == "cancelled"
-        and previous_status != "cancelled"
-        and not closed_reason
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="A closed_reason is required when cancelling a task",
-        )
-
-    # Auto-set completed_at when marking complete
-    if new_status == "completed" and not task.completed_at:
-        task.completed_at = datetime.now(timezone.utc)
-    elif new_status and new_status != "completed":
-        task.completed_at = None
+    new_status = updates.pop("status", None)
+    waiting_reason = updates.pop("waiting_reason", None)
+    waiting_follow_up_date = updates.pop("waiting_follow_up_date", None)
+    reviewer_user_id = updates.pop("reviewer_user_id", None)
+    transition_changed = False
+    workflow_metadata_requested = bool(
+        {"waiting_reason", "waiting_follow_up_date", "reviewer_user_id"}
+        & payload.model_fields_set
+    )
+    if new_status is None and workflow_metadata_requested:
+        if task.status not in {"waiting", "review"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Waiting and reviewer fields require a Waiting or Review task",
+            )
+        new_status = task.status
+    if new_status is not None:
+        try:
+            transition_changed = transition_task(
+                db,
+                task,
+                to_status=new_status,
+                actor_user_id=current_user.id,
+                expected_version=expected_version,
+                reason=waiting_reason if new_status == "waiting" else closed_reason,
+                waiting_follow_up_date=waiting_follow_up_date,
+                reviewer_user_id=reviewer_user_id,
+            )
+        except TaskWorkflowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     for field, value in updates.items():
         setattr(task, field, value)
@@ -653,38 +1282,65 @@ async def update_task(
                 task.description, f"Reassignment note ({assigner}):", assignment_note
             )
 
-    closing = new_status in ("completed", "cancelled") and new_status != previous_status
-    if new_status in ("completed", "cancelled"):
-        if closed_reason:
-            task.closed_reason = closed_reason
-        if closing:
-            task.closed_by_user_id = current_user.id
-    elif new_status:
-        # Reopened — the previous closure record no longer applies.
-        task.closed_reason = None
-        task.closed_by_user_id = None
-    elif closed_reason and task.status in ("completed", "cancelled"):
+    closing = (
+        task.status in ("completed", "cancelled") and task.status != previous_status
+    )
+    if (
+        new_status is None
+        and closed_reason
+        and task.status in ("completed", "cancelled")
+    ):
         task.closed_reason = closed_reason
 
     if reassigned:
+        internal_event = (
+            "unassigned"
+            if task.assigned_to_user_id is None
+            else "reassigned"
+            if previous_assignee_id
+            else "assigned"
+        )
+        append_task_event(
+            db,
+            task,
+            event_type=internal_event,
+            actor_user_id=current_user.id,
+            note=assignment_note,
+            metadata={
+                "previous_assignee_user_id": (
+                    str(previous_assignee_id) if previous_assignee_id else None
+                ),
+                "assigned_to_user_id": (
+                    str(task.assigned_to_user_id) if task.assigned_to_user_id else None
+                ),
+            },
+        )
         await record_task_event(
             db,
             task,
-            event=(
-                "unassigned"
-                if task.assigned_to_user_id is None
-                else "reassigned"
-                if previous_assignee_id
-                else "assigned"
-            ),
+            event=internal_event,
             actor=current_user,
             note=assignment_note,
             previous_assignee_user_id=previous_assignee_id,
         )
     if closing:
         await record_task_event(
-            db, task, event=new_status, actor=current_user, note=task.closed_reason
+            db, task, event=task.status, actor=current_user, note=task.closed_reason
         )
+
+    changed_fields = sorted(set(updates) - {"assigned_to_user_id"})
+    if changed_fields:
+        append_task_event(
+            db,
+            task,
+            event_type="updated",
+            actor_user_id=current_user.id,
+            metadata={"fields": changed_fields},
+        )
+    if (
+        updates or reassigned or (closed_reason and not transition_changed)
+    ) and not transition_changed:
+        increment_task_version(task)
 
     await db.commit()
     await db.refresh(task)

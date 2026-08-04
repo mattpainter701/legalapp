@@ -105,7 +105,7 @@ and persists across refreshes at:
 - `/matters/:matterId/documents/:documentId/revise`
 - `/matters/:matterId/documents/:documentId/revisions/:revisionId`
 
-Migration `100_doc_revisions` adds tenant-isolated lineage and review evidence.
+Migration `101_doc_revisions` adds tenant-isolated lineage and review evidence.
 The API supports idempotent creation, lineage history, exact artifact retrieval,
 SHA-bound approval, rejection, and preview-only internal signature replacement.
 The implementation remains synchronous and DOCX-only; durable job execution,
@@ -113,7 +113,7 @@ page-faithful rendering, arbitrary drafting, portal publication approval, and a
 real external e-sign replacement saga are follow-up product slices.
 
 The implemented slice has been exercised against real PostgreSQL, including the
-full migration chain through revision 100 and a 100 -> 099 -> 100 round trip.
+full migration chain through revision 101 and a 101 -> 100 -> 101 round trip.
 Engine, lifecycle, storage/e-sign compatibility, API contract, frontend workflow,
 accessibility, and production-build checks pass. Page-level DOCX visual comparison
 and an automated browser/device walkthrough remain manual release gates because

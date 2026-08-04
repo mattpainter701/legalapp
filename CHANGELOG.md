@@ -14,6 +14,17 @@
   The current internal signature flow exposes only an
   explicitly non-executable replacement preview; it does not void, create,
   notify, or send anything.
+- **Law-firm Work Board:** expanded `/tasks` with a responsive Board/List
+  workspace using To Do, In Progress, Waiting, Review, and Done stages; My/Firm
+  scopes; risk counters; filters; per-column pagination; accessible drag/drop
+  and Move controls; waiting/reviewer/closure workflows; privacy-minimized cards;
+  an on-demand detail drawer; and an append-only internal timeline. A canonical
+  transition service, tenant-scoped reviewer checks, optimistic concurrency,
+  conflict refresh, row-level security, task indexes, and migration
+  `100_task_work_board` keep intake, mediation, email-agent, and direct task
+  changes consistent without removing the existing deadline list. Tenant admins
+  can disable the board independently, and content-free structured telemetry
+  supports controlled rollout and bottleneck monitoring.
 - **Document automation and e-sign enhancement research:** added
   `docs/research/2026-07-08-document-automation-esign-enhancements.md`,
   comparing Gavel, Clio Draft, Docassemble, Dropbox Sign, DocuSign, PandaDoc,

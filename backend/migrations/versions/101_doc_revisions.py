@@ -1,7 +1,7 @@
 """Add bounded matter-document revision proposals.
 
-Revision ID: 100_doc_revisions
-Revises: 099_chat_latency_breakdown
+Revision ID: 101_doc_revisions
+Revises: 100_task_work_board
 """
 
 from alembic import op
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision = "100_doc_revisions"
-down_revision = "099_chat_latency_breakdown"
+revision = "101_doc_revisions"
+down_revision = "100_task_work_board"
 branch_labels = None
 depends_on = None
 

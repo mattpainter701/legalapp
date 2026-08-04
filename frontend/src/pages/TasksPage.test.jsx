@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { axe } from 'jest-axe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TasksPage from './TasksPage'
-import { getOverdueTasks, getTasks, sendTaskReminder } from '../api'
+import { getOverdueTasks, getTaskBoard, getTaskBoardConfig, getTasks, sendTaskReminder } from '../api'
 
 vi.mock('../App', () => ({
   useAuth: () => ({
@@ -19,9 +19,14 @@ vi.mock('../App', () => ({
 
 vi.mock('../api', () => ({
   getTasks: vi.fn(),
+  getTaskBoard: vi.fn(),
+  getTaskBoardConfig: vi.fn(),
+  recordTaskBoardTelemetry: vi.fn(() => Promise.resolve({ accepted: true })),
   getTask: vi.fn(),
   createTask: vi.fn(),
   updateTask: vi.fn(),
+  transitionTask: vi.fn(),
+  getTaskEvents: vi.fn(),
   deleteTask: vi.fn(),
   getOverdueTasks: vi.fn(),
   sendTaskReminder: vi.fn(),
@@ -32,6 +37,7 @@ vi.mock('../api', () => ({
   getLead: vi.fn(),
   convertLead: vi.fn(),
   getMatterFieldOptions: vi.fn(() => Promise.resolve({})),
+  getMattersV2: vi.fn(() => Promise.resolve({ items: [] })),
   getContacts: vi.fn(),
 }))
 
@@ -52,8 +58,22 @@ const task = {
 describe('TasksPage accessibility', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     getTasks.mockResolvedValue({ items: [task] })
     getOverdueTasks.mockResolvedValue({ items: [] })
+    getTaskBoardConfig.mockResolvedValue({ enabled: true })
+    getTaskBoard.mockResolvedValue({
+      scope: 'mine',
+      generated_at: '2026-08-04T12:00:00Z',
+      risk_counts: { overdue: 0, due_today: 0, unassigned: 0, waiting_follow_up_due: 0 },
+      columns: [
+        { status: 'pending', label: 'To Do', total: 1, items: [{ ...task, version: 1, status_changed_at: '2026-08-04T12:00:00Z', updated_at: '2026-08-04T12:00:00Z' }], next_cursor: null },
+        { status: 'in_progress', label: 'In Progress', total: 0, items: [], next_cursor: null },
+        { status: 'waiting', label: 'Waiting', total: 0, items: [], next_cursor: null },
+        { status: 'review', label: 'Review', total: 0, items: [], next_cursor: null },
+        { status: 'completed', label: 'Done', total: 0, items: [], next_cursor: null },
+      ],
+    })
   })
 
   afterEach(() => cleanup())
@@ -137,5 +157,31 @@ describe('TasksPage accessibility', () => {
     expect(await screen.findByText('Not sent')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('outbound email is unavailable')
     expect(screen.queryByText('Sent!')).not.toBeInTheDocument()
+  })
+
+  it('switches between the deadline list and scoped firm board', async () => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+    await screen.findByText('Return intake call')
+
+    await user.click(screen.getByRole('button', { name: 'Board' }))
+    expect(await screen.findByRole('heading', { name: 'To Do' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'My Work' })).toHaveAttribute('aria-pressed', 'true')
+    expect(getTaskBoard).toHaveBeenCalledWith(expect.objectContaining({ scope: 'mine' }))
+
+    await user.click(screen.getByRole('button', { name: 'Firm Work' }))
+    await waitFor(() => expect(getTaskBoard).toHaveBeenCalledWith(expect.objectContaining({ scope: 'firm' })))
+    expect(screen.getByText('Firm workflow')).toBeInTheDocument()
+  })
+
+  it('keeps the deadline list available when the tenant disables the board', async () => {
+    window.localStorage.setItem('tasks:view-mode', 'board')
+    getTaskBoardConfig.mockResolvedValueOnce({ enabled: false })
+    render(<MemoryRouter><TasksPage /></MemoryRouter>)
+
+    expect(await screen.findByText('Return intake call')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Board' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
+    expect(getTaskBoard).not.toHaveBeenCalled()
   })
 })
