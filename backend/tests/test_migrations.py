@@ -12,7 +12,24 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["100_task_work_board"]
+    assert heads == ["101_doc_revisions"]
+
+
+def test_document_revision_migration_forces_tenant_rls_and_preserves_sources():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "101_doc_revisions.py"
+    ).read_text(encoding="utf-8")
+
+    assert "matter_document_revisions_tenant_isolation" in source
+    assert "current_setting('app.current_tenant_id', true)" in source
+    assert "ALTER TABLE matter_document_revisions FORCE ROW LEVEL SECURITY" in source
+    assert (
+        source.count('sa.ForeignKey("matter_documents.id", ondelete="RESTRICT")') == 3
+    )
+    assert "uq_doc_revisions_tenant_client_request" in source
+    assert "ck_doc_revisions_approval_evidence" in source
+    assert "'superseded'" in source
 
 
 def test_task_work_board_migration_has_history_rls_and_concurrency_fields():

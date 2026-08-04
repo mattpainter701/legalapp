@@ -1267,6 +1267,28 @@ export const deleteMatterDocument = (matterId, docId) =>
 export const getMatterDocumentDownloadUrl = (matterId, docId) =>
   `${API_BASE_URL}/matters/${matterId}/documents/${docId}/download`
 
+// Matter document revisions
+export const createMatterDocumentRevision = (matterId, sourceDocumentId, data) =>
+  api.post(`/matters/${matterId}/documents/${sourceDocumentId}/revisions`, data).then(r => r.data)
+
+export const listMatterDocumentRevisions = (matterId, sourceDocumentId) =>
+  api.get(`/matters/${matterId}/documents/${sourceDocumentId}/revisions`).then(r => r.data)
+
+export const getMatterDocumentRevision = (matterId, revisionId) =>
+  api.get(`/matters/${matterId}/document-revisions/${revisionId}`).then(r => r.data)
+
+export const getMatterDocumentRevisionArtifactUrl = (matterId, revisionId) =>
+  `${API_BASE_URL}/matters/${matterId}/document-revisions/${revisionId}/artifact`
+
+export const approveMatterDocumentRevision = (matterId, revisionId, data) =>
+  api.post(`/matters/${matterId}/document-revisions/${revisionId}/approve`, data).then(r => r.data)
+
+export const rejectMatterDocumentRevision = (matterId, revisionId, data = {}) =>
+  api.post(`/matters/${matterId}/document-revisions/${revisionId}/reject`, data).then(r => r.data)
+
+export const prepareMatterDocumentRevisionESignReplacement = (matterId, revisionId, data) =>
+  api.post(`/matters/${matterId}/document-revisions/${revisionId}/prepare-esign-replacement`, data).then(r => r.data)
+
 export const getMatterCloudFolder = (matterId) =>
   api.get(`/matters/${matterId}/cloud-folder`).then(r => r.data)
 

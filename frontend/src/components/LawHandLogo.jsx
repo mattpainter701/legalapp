@@ -19,6 +19,7 @@ export default function LawHandLogo({
   return (
     <div
       className={`inline-flex items-center ${compact ? 'gap-2' : 'gap-3'} ${className}`}
+      role="img"
       aria-label="LawHand"
     >
       {markOnly && <img

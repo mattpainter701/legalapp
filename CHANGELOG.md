@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- **Conversational matter-document revisions:** added a protected, mobile-first
+  DOCX revision workspace launched from matter documents. Standard or licensed
+  Premium model routes may propose at most eight exact text replacements; a
+  deterministic engine capability-checks and applies them to a new private
+  derivative while preserving the source, lineage, hashes, and review evidence.
+  Approval is bound to the re-read output SHA-256, newer candidates supersede
+  stale reviews, and assistant derivatives cannot enter the legacy portal or
+  signature-request paths because content approval is not destination approval.
+  The current internal signature flow exposes only an
+  explicitly non-executable replacement preview; it does not void, create,
+  notify, or send anything.
 - **Law-firm Work Board:** expanded `/tasks` with a responsive Board/List
   workspace using To Do, In Progress, Waiting, Review, and Done stages; My/Firm
   scopes; risk counters; filters; per-column pagination; accessible drag/drop

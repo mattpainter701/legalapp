@@ -59,8 +59,10 @@ test('receptionist captures a caller and sees the assigned task', async ({ page 
   await expect(page.getByRole('heading', { name: 'Tasks & Deadlines' })).toBeVisible()
   await expect(page.getByText(`${caller} - Call back caller`, { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Board', exact: true }).click()
-  await expect(page.getByLabel('Legal work board')).toBeVisible()
-  await expect(page.getByText(`${caller} - Call back caller`, { exact: true })).toBeVisible()
+  const board = page.getByLabel('Legal work board')
+  await expect(board).toBeVisible()
+  await page.getByRole('button', { name: 'Firm Work', exact: true }).click()
+  await expect(board.getByText(`${caller} - Call back caller`, { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'List', exact: true }).click()
 })
 

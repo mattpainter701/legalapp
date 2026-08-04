@@ -11,7 +11,7 @@ import {
   syncMatterCloudFolder,
   getMatterCloudFiles,
 } from '../api'
-import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff } from 'lucide-react'
+import { FileText, Upload, Trash2, Download, X, Check, Cloud, ExternalLink, RefreshCw, Eye, EyeOff, Sparkles, Pencil, ShieldCheck } from 'lucide-react'
 import { useConfirm } from './dialog/ConfirmProvider'
 import { useToast } from './toast/useToast'
 
@@ -50,6 +50,25 @@ function storageLabel(backend) {
   return 'Local'
 }
 
+function apiErrorMessage(error, fallback) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (typeof detail?.message === 'string') return detail.message
+  return error?.message || fallback
+}
+
+const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+export function canReviseWithAssistant(document) {
+  const filename = String(document?.filename || '').toLowerCase()
+  const contentType = String(document?.content_type || document?.mime_type || '').toLowerCase()
+  return filename.endsWith('.docx') || contentType === DOCX_MIME_TYPE
+}
+
+export function isAssistantRevisionDocument(document) {
+  return String(document?.document_category || '').toLowerCase() === 'assistant_revision'
+}
+
 function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
   const [status, setStatus] = useState(null)
   const [provisioning, setProvisioning] = useState(false)
@@ -69,7 +88,7 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
       onFolderChange?.(result.providers || {})
       setToast({ type: 'success', msg: 'Cloud folder set up successfully.' })
     } catch (err) {
-      setToast({ type: 'error', msg: err?.response?.data?.detail || 'Provisioning failed.' })
+      setToast({ type: 'error', msg: apiErrorMessage(err, 'Provisioning failed.') })
     } finally {
       setProvisioning(false)
     }
@@ -91,7 +110,7 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
         msg: `Synced ${result.files?.length ?? 0} cloud file${result.files?.length === 1 ? '' : 's'}.`,
       })
     } catch (err) {
-      setToast({ type: 'error', msg: err?.response?.data?.detail || 'Cloud sync failed.' })
+      setToast({ type: 'error', msg: apiErrorMessage(err, 'Cloud sync failed.') })
     } finally {
       setSyncing(false)
     }
@@ -194,7 +213,7 @@ function CloudFolderCard({ matterId, onFolderChange, onSynced }) {
   )
 }
 
-export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
+export default function MatterDocumentsTab({ matterId, onCloudFolderChange, onReviseDocument }) {
   const confirmAction = useConfirm()
   const toast = useToast()
   const [docs, setDocs] = useState([])
@@ -265,9 +284,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
         })
       }
     } catch (err) {
-      const msg =
-        err?.response?.data?.detail || 'Upload failed. Check file size (max 50MB).'
-      setUploadError(msg)
+      setUploadError(apiErrorMessage(err, 'Upload failed. Check file size (max 50MB).'))
     } finally {
       setUploading(false)
     }
@@ -279,7 +296,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
       await deleteMatterDocument(matterId, docId)
       setDocs((prev) => prev.filter((d) => d.id !== docId))
     } catch (error) {
-      toast.error('Document was not deleted', { message: error?.response?.data?.detail || 'Please try again.' })
+      toast.error('Document was not deleted', { message: apiErrorMessage(error, 'Please try again.') })
     }
   }
 
@@ -303,7 +320,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
       setDocs((prev) => prev.map((d) => (d.id === docId ? updated : d)))
       setEditingId(null)
     } catch (error) {
-      toast.error('Document changes were not saved', { message: error?.response?.data?.detail || 'Please try again.' })
+      toast.error('Document changes were not saved', { message: apiErrorMessage(error, 'Please try again.') })
     } finally {
       setSaving(false)
     }
@@ -509,7 +526,127 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
           </p>
         </div>
       ) : (
-        <div className="bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm">
+        <>
+        <div className="space-y-3 md:hidden" aria-label="Case documents">
+          {docs.map((doc) => {
+            const revisionAvailable = canReviseWithAssistant(doc)
+            const releaseLocked = isAssistantRevisionDocument(doc)
+            const unsupportedReasonId = `assistant-revision-unavailable-${doc.id}`
+            const releaseLockedReasonId = `assistant-release-locked-${doc.id}`
+            return (
+              <article key={doc.id} className="rounded-2xl border border-brand-line bg-brand-surface p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-bg-soft text-brand-accent">
+                    <FileText size={18} aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="break-words text-sm font-bold text-brand-ink">{doc.filename}</h3>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {doc.document_category ? <CategoryBadge category={doc.document_category} /> : <span className="text-xs text-brand-muted">Uncategorized</span>}
+                      <span className="text-xs text-brand-muted">{formatBytes(doc.file_size)}</span>
+                      <span className="text-xs text-brand-muted">{storageLabel(doc.storage_backend)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {editingId === doc.id ? (
+                  <div className="mt-4 space-y-3 rounded-xl border border-brand-line bg-brand-bg-soft/50 p-3">
+                    <div>
+                      <label htmlFor={`mobile-document-category-${doc.id}`} className={labelClasses}>Category</label>
+                      <select
+                        id={`mobile-document-category-${doc.id}`}
+                        value={editCategory}
+                        onChange={(event) => setEditCategory(event.target.value)}
+                        disabled={releaseLocked}
+                        title={releaseLocked ? 'Assistant revision category is protected.' : undefined}
+                        className={inputClasses}
+                      >
+                        <option value="">— none —</option>
+                        {CATEGORIES.map((category) => <option key={category} value={category}>{category.charAt(0).toUpperCase() + category.slice(1)}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor={`mobile-document-description-${doc.id}`} className={labelClasses}>Description</label>
+                      <input
+                        id={`mobile-document-description-${doc.id}`}
+                        value={editDescription}
+                        onChange={(event) => setEditDescription(event.target.value)}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => saveEdit(doc.id)} disabled={saving} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-brand-ink px-3 text-sm font-bold text-white disabled:opacity-50">
+                        <Check size={16} aria-hidden="true" /> Save
+                      </button>
+                      <button type="button" onClick={cancelEdit} className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-brand-line px-3 text-sm font-bold text-brand-ink">
+                        <X size={16} aria-hidden="true" /> Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {doc.description && <p className="mt-3 text-sm leading-relaxed text-brand-ink-2">{doc.description}</p>}
+                    <p className="mt-2 text-xs text-brand-muted">
+                      Uploaded {doc.created_at ? (() => { try { return format(parseISO(doc.created_at), 'MMM d, yyyy') } catch { return doc.created_at } })() : 'date unavailable'}
+                    </p>
+                  </>
+                )}
+
+                <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onReviseDocument?.(doc)}
+                    disabled={!revisionAvailable}
+                    aria-label={`Revise ${doc.filename} with assistant`}
+                    aria-describedby={!revisionAvailable ? unsupportedReasonId : undefined}
+                    title={revisionAvailable ? 'Revise with assistant' : 'Assistant revisions currently support DOCX files only.'}
+                    className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-ink px-4 text-sm font-bold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:bg-brand-bg-soft disabled:text-brand-muted"
+                  >
+                    <Sparkles size={16} aria-hidden="true" /> Revise with assistant
+                  </button>
+                  {!revisionAvailable && (
+                    <p id={unsupportedReasonId} className="text-center text-[11px] leading-relaxed text-brand-muted">Assistant revisions currently support DOCX files only.</p>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-brand-line pt-3">
+                  <button
+                    type="button"
+                    onClick={() => handleTogglePortalVisible(doc)}
+                    disabled={releaseLocked}
+                    aria-label={releaseLocked ? `${doc.filename} requires a separate release workflow` : doc.portal_visible ? `Make ${doc.filename} private` : `Share ${doc.filename} with client`}
+                    aria-describedby={releaseLocked ? releaseLockedReasonId : undefined}
+                    title={releaseLocked ? 'Assistant revisions require a separate destination approval workflow.' : undefined}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-line px-3 text-xs font-bold text-brand-ink disabled:cursor-not-allowed disabled:bg-brand-bg-soft disabled:text-brand-muted"
+                  >
+                    {releaseLocked ? <ShieldCheck size={15} aria-hidden="true" /> : doc.portal_visible ? <Eye size={15} aria-hidden="true" /> : <EyeOff size={15} aria-hidden="true" />}
+                    {releaseLocked ? 'Release locked' : doc.portal_visible ? 'Shared' : 'Private'}
+                  </button>
+                  <a
+                    href={doc.cloud_url || getMatterDocumentDownloadUrl(matterId, doc.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-line px-3 text-xs font-bold text-brand-ink"
+                  >
+                    {doc.cloud_url ? <ExternalLink size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+                    {doc.cloud_url ? 'Open' : 'Download'}
+                  </a>
+                  <button type="button" onClick={() => startEdit(doc)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-line px-3 text-xs font-bold text-brand-ink">
+                    <Pencil size={15} aria-hidden="true" /> Edit details
+                  </button>
+                  <button type="button" onClick={() => handleDelete(doc.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-rose/25 px-3 text-xs font-bold text-brand-rose">
+                    <Trash2 size={15} aria-hidden="true" /> Delete
+                  </button>
+                  {releaseLocked && (
+                    <p id={releaseLockedReasonId} className="col-span-2 text-center text-[11px] leading-relaxed text-brand-muted">Content approval does not authorize client release. Use a separate destination approval workflow.</p>
+                  )}
+                </div>
+              </article>
+            )
+          })}
+        </div>
+
+        <div className="hidden bg-brand-surface border border-brand-line rounded-2xl overflow-x-auto shadow-sm md:block">
           <table className="w-full text-[13px] font-sans">
             <thead>
               <tr className="border-b border-brand-line bg-brand-bg-soft/50">
@@ -531,7 +668,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
                 <th className="text-left px-5 py-3.5 text-[11px] font-bold text-brand-muted uppercase tracking-widest">
                   Client Portal
                 </th>
-                <th className="px-5 py-3.5" />
+                <th className="px-5 py-3.5 text-right text-[11px] font-bold text-brand-muted uppercase tracking-widest">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -549,6 +686,8 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
                         <select
                           value={editCategory}
                           onChange={(e) => setEditCategory(e.target.value)}
+                          disabled={isAssistantRevisionDocument(doc)}
+                          title={isAssistantRevisionDocument(doc) ? 'Assistant revision category is protected.' : undefined}
                           className="border border-brand-line rounded px-2 py-1 text-[13px] font-sans text-brand-ink bg-brand-surface focus:outline-none focus:border-brand-accent"
                         >
                           <option value="">— none —</option>
@@ -661,11 +800,16 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
                       <td className="px-5 py-3">
                         <button
                           onClick={() => handleTogglePortalVisible(doc)}
-                          aria-label={doc.portal_visible ? 'Make private' : 'Share with client'}
-                          title={doc.portal_visible ? 'Make private' : 'Share with client'}
-                          className="flex items-center gap-1.5 group"
+                          disabled={isAssistantRevisionDocument(doc)}
+                          aria-label={isAssistantRevisionDocument(doc) ? `${doc.filename} requires a separate release workflow` : doc.portal_visible ? 'Make private' : 'Share with client'}
+                          title={isAssistantRevisionDocument(doc) ? 'Assistant revisions require a separate destination approval workflow.' : doc.portal_visible ? 'Make private' : 'Share with client'}
+                          className="flex items-center gap-1.5 group disabled:cursor-not-allowed"
                         >
-                          {doc.portal_visible ? (
+                          {isAssistantRevisionDocument(doc) ? (
+                            <span className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                              <ShieldCheck size={11} /> Release locked
+                            </span>
+                          ) : doc.portal_visible ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-brand-green/10 text-brand-green border border-brand-green/30 group-hover:bg-brand-green/20 transition-colors">
                               <Eye size={11} /> Shared with client
                             </span>
@@ -678,6 +822,16 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => onReviseDocument?.(doc)}
+                            disabled={!canReviseWithAssistant(doc)}
+                            aria-label={`Revise ${doc.filename} with assistant`}
+                            title={canReviseWithAssistant(doc) ? 'Revise with assistant' : 'Assistant revisions currently support DOCX files only.'}
+                            className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-brand-line px-2.5 text-xs font-bold text-brand-ink hover:border-brand-accent hover:bg-brand-bg-soft disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            <Sparkles size={15} aria-hidden="true" /> Revise
+                          </button>
                           <a
                             href={doc.cloud_url || getMatterDocumentDownloadUrl(matterId, doc.id)}
                             target="_blank"
@@ -703,6 +857,7 @@ export default function MatterDocumentsTab({ matterId, onCloudFolderChange }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   )

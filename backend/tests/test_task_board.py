@@ -110,7 +110,9 @@ async def test_firm_board_risk_counts_and_reviewer_labels(
         waiting_reason="Court ruling",
         waiting_follow_up_date=date.today(),
     )
-    db_session.add_all([reviewer, overdue, unassigned, waiting])
+    db_session.add(reviewer)
+    await db_session.flush()
+    db_session.add_all([overdue, unassigned, waiting])
     await db_session.commit()
 
     response = await client.get("/api/tasks/board", params={"scope": "firm"})
