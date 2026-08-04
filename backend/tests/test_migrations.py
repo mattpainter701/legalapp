@@ -41,6 +41,11 @@ def test_task_work_board_migration_has_history_rls_and_concurrency_fields():
     assert 'revision = "100_task_work_board"' in source
     assert 'down_revision = "099_chat_latency_breakdown"' in source
     assert '"status_changed_at"' in source
+    status_changed_at = source.split('"status_changed_at"', 1)[1].split(
+        "op.add_column", 1
+    )[0]
+    assert "nullable=False" in status_changed_at
+    assert 'op.alter_column("tasks", "status_changed_at"' not in source
     assert '"waiting_reason"' in source
     assert '"reviewer_user_id"' in source
     assert '"version"' in source
