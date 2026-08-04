@@ -21,6 +21,12 @@ from app.schemas.matter_document import (
     MatterDocumentUpdate,
 )
 from app.services.matter_file_store import MatterFileStore
+from app.services.matter_document_revisions import (
+    DocumentRevisionServiceError,
+    assert_assistant_derivative_category_preserved,
+    assert_document_not_in_revision_lineage,
+    assert_no_legacy_assistant_derivative_release,
+)
 from app.services.graph_client import graph_request
 from app.services.google_client import google_request
 from app.services.provider_http import (
@@ -376,8 +382,34 @@ async def update_matter_document(
     if body.description is not None:
         doc.description = body.description
     if body.document_category is not None:
+        try:
+            await assert_assistant_derivative_category_preserved(
+                db,
+                tenant_id=user.tenant_id,
+                matter_id=uuid.UUID(matter_id),
+                document_id=doc.id,
+                requested_category=body.document_category,
+            )
+        except DocumentRevisionServiceError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
         doc.document_category = body.document_category
     if body.portal_visible is not None:
+        if body.portal_visible:
+            try:
+                await assert_no_legacy_assistant_derivative_release(
+                    db,
+                    tenant_id=user.tenant_id,
+                    matter_id=uuid.UUID(matter_id),
+                    document_id=doc.id,
+                )
+            except DocumentRevisionServiceError as exc:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail={"code": exc.code, "message": exc.message},
+                ) from exc
         doc.portal_visible = body.portal_visible
 
     await db.commit()
@@ -396,6 +428,20 @@ async def delete_matter_document(
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
     doc = await _get_doc_or_404(doc_id, matter_id, user.tenant_id, db)
+    await db.refresh(doc, with_for_update=True)
+
+    try:
+        await assert_document_not_in_revision_lineage(
+            db,
+            tenant_id=user.tenant_id,
+            matter_id=uuid.UUID(matter_id),
+            document_id=doc.id,
+        )
+    except DocumentRevisionServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
 
     await _delete_cloud_backing_if_needed(doc, db)
 

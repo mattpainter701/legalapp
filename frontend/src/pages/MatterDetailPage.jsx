@@ -1260,6 +1260,7 @@ export default function MatterDetailPage() {
           <div className="space-y-8">
             <MatterDocumentsTab
               matterId={id}
+              onReviseDocument={(document) => navigate(`/matters/${id}/documents/${document.id}/revise`)}
               onCloudFolderChange={(providers) => {
                 setMatter(prev => prev ? { ...prev, cloud_folder: providers || {} } : prev)
                 setEditData(prev => ({ ...prev, cloud_folder: providers || {} }))

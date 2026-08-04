@@ -25,6 +25,7 @@ const PluginsPage = lazy(() => import('./pages/PluginsPage'))
 const PluginPage = lazy(() => import('./pages/PluginPage'))
 const MatterPortfolioPage = lazy(() => import('./pages/MatterPortfolioPage'))
 const MatterDetailPage = lazy(() => import('./pages/MatterDetailPage'))
+const DocumentRevisionPage = lazy(() => import('./pages/DocumentRevisionPage'))
 const RenewalTrackerPage = lazy(() => import('./pages/RenewalTrackerPage'))
 const EstatePortfolioPage = lazy(() => import('./pages/EstatePortfolioPage'))
 const EstateDetailPage = lazy(() => import('./pages/EstateDetailPage'))
@@ -222,6 +223,14 @@ export default function App() {
         <Route
           path="/matters/:id"
           element={<ShellRoute title="Matter Details" module="matters"><MatterDetailPage /></ShellRoute>}
+        />
+        <Route
+          path="/matters/:matterId/documents/:documentId/revise"
+          element={<ShellRoute title="Revise Document" module="matters"><DocumentRevisionPage /></ShellRoute>}
+        />
+        <Route
+          path="/matters/:matterId/documents/:documentId/revisions/:revisionId"
+          element={<ShellRoute title="Review Document Revision" module="matters"><DocumentRevisionPage /></ShellRoute>}
         />
         <Route
           path="/calendar"

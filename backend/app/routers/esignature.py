@@ -49,6 +49,10 @@ from app.services.matter_file_store import (
     MatterFileStore,
     MatterFileTooLarge,
 )
+from app.services.matter_document_revisions import (
+    DocumentRevisionServiceError,
+    assert_no_legacy_assistant_derivative_release,
+)
 from app.services.provider_http import (
     ProviderAuthError,
     ProviderError,
@@ -276,6 +280,18 @@ async def create_signature_request(
         or str(doc.tenant_id) != str(user.tenant_id)
     ):
         raise HTTPException(status_code=404, detail="Document not found on this matter")
+    try:
+        await assert_no_legacy_assistant_derivative_release(
+            db,
+            tenant_id=user.tenant_id,
+            matter_id=uuid.UUID(matter_id),
+            document_id=doc.id,
+        )
+    except DocumentRevisionServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
 
     provider_name = (body.provider or "internal").strip().lower()
     if provider_name != "internal":
@@ -291,6 +307,7 @@ async def create_signature_request(
             db=db,
             tenant_id=str(user.tenant_id),
             document=doc,
+            expected_size=doc.file_size,
         )
     except MatterFileTooLarge as exc:
         raise HTTPException(

@@ -2,9 +2,10 @@
 
 **Date:** 2026-08-03
 
-**Status:** Draft for collaborative expansion
+**Status:** Product direction accepted; first bounded implementation slice implemented
 
-**Scope:** Planning only; this proposal does not authorize an implementation or outbound-action rollout
+**Scope:** Product plan plus an authorized first implementation slice. Outbound
+delivery remains separately gated and is not authorized by conversational text.
 
 **Primary surface:** Existing in-app Assistant, extended with a document canvas and workflow rail
 
@@ -31,6 +32,92 @@ The core contract is:
 Conversation alone never approves an external action. A reply such as "yes",
 "looks good", or "send it" may advance the planning conversation, but it cannot
 substitute for the explicit approval control.
+
+## Product Direction: Matter Assistant
+
+The product is broader than a one-shot document generator. It is a matter-aware
+assistant that turns ordinary language into reviewable work while keeping facts,
+content, and effects separate:
+
+- **Facts** are tenant- and matter-scoped values resolved or approved by a user,
+  with provenance.
+- **Content** is a versioned draft, summary, or review finding that may be proposed
+  by a model.
+- **Effects** are server-owned typed actions, such as creating a task, saving a
+  document, publishing to the portal, or dispatching a signature request.
+
+The customer promise is: tell the assistant once, review the important details,
+and find the completed work on the correct matter. The mobile surface should be
+optimized for voice/text capture, short consequential clarifications, redline and
+artifact review, approval, receipts, and desktop handoff rather than reproducing a
+full desktop editor.
+
+### Core document conversation
+
+An attorney must be able to open an existing matter document, state requested
+changes in ordinary language, review a new revision, and continue the conversation
+without returning to a laptop:
+
+1. Select an existing matter document and submit typed or dictated instructions.
+2. Preserve the original and create a new version in the same logical document
+   family.
+3. Show an exact change list plus the strongest truthful artifact preview the
+   current renderer can provide.
+4. Let the attorney request another revision; every follow-up creates another
+   version and stales the prior review.
+5. Bind approval to the exact stored output bytes and their SHA-256 digest.
+6. After approval, prepare a separate replacement/signature action showing the
+   old request, new artifact, signers, provider semantics, and all side effects.
+7. Execute only through a dedicated destination-specific approval and return a
+   durable receipt.
+
+Documents do not need to originate in an assistant workflow. Any supported,
+tenant-owned matter document can enter the conversation after safe intake and
+capability detection.
+
+### First bounded product slice
+
+The first implementation deliberately proves the revision contract before adding
+arbitrary drafting or external delivery:
+
+- Clean DOCX inputs only.
+- Exact, bounded text replacements proposed by the Standard model route and
+  applied by a deterministic DOCX engine.
+- Original bytes are never overwritten; output is a new private
+  `MatterDocument` derivative with persisted lineage and hashes.
+- Mobile content preview and before/after change cards, with an explicit link to
+  open the exact DOCX bytes. The UI does not claim page-faithful rendering until a
+  pinned DOCX-to-PDF renderer and preview-evidence contract exist.
+- SHA-bound approval after the stored derivative is re-read and verified.
+- A non-executable signature-replacement preview only. The current internal
+  signature provider is a portal acknowledgment flow and does not dispatch a real
+  provider invitation, so this slice never claims that a document was resent.
+
+PDF, DOCM, protected or tracked-change DOCX, embedded/active content, arbitrary
+clause insertion, executed-document mutation, and real replace-and-resend remain
+blocked until their format and provider contracts pass the relevant release gates.
+
+### Implemented product surface
+
+The first slice is available from an eligible DOCX in a matter's Documents tab
+and persists across refreshes at:
+
+- `/matters/:matterId/documents/:documentId/revise`
+- `/matters/:matterId/documents/:documentId/revisions/:revisionId`
+
+Migration `100_doc_revisions` adds tenant-isolated lineage and review evidence.
+The API supports idempotent creation, lineage history, exact artifact retrieval,
+SHA-bound approval, rejection, and preview-only internal signature replacement.
+The implementation remains synchronous and DOCX-only; durable job execution,
+page-faithful rendering, arbitrary drafting, portal publication approval, and a
+real external e-sign replacement saga are follow-up product slices.
+
+The implemented slice has been exercised against real PostgreSQL, including the
+full migration chain through revision 100 and a 100 -> 099 -> 100 round trip.
+Engine, lifecycle, storage/e-sign compatibility, API contract, frontend workflow,
+accessibility, and production-build checks pass. Page-level DOCX visual comparison
+and an automated browser/device walkthrough remain manual release gates because
+the local render/browser runtimes were unavailable during implementation.
 
 ## Interactive Prototype
 
@@ -642,7 +729,21 @@ cannot hide or repeat an earlier successful external effect.
 
 ## Recommended First Customer Slice
 
-Ship a narrow end-to-end path before email or e-signature sending:
+Ship two narrow, matter-linked loops before email or real e-signature sending.
+The first is the conversational revision loop that makes the assistant useful
+from a phone:
+
+1. Open a supported existing DOCX matter document.
+2. Request bounded changes in ordinary language.
+3. Create a private derivative without modifying the source.
+4. Review before/after changes and open the exact candidate artifact.
+5. Approve the verified candidate hash.
+6. Request another change from the approved or ready candidate while preserving
+   lineage.
+7. Prepare, but do not execute, a truthful replacement preview for an eligible
+   portal signature acknowledgment.
+
+The second is the controlled document-generation path:
 
 1. Matter-linked template or free-form draft.
 2. Versioned canvas review.
@@ -653,7 +754,8 @@ Ship a narrow end-to-end path before email or e-signature sending:
 7. Durable receipts and matter timeline entries.
 
 Email remains draft/handoff-only, and signature remains prepare-only, until their
-provider contracts meet the external-action requirements above.
+provider contracts meet the external-action requirements above. The internal
+portal acknowledgment must not be marketed as externally delivered e-signature.
 
 ## Proposed Work Breakdown
 
@@ -669,6 +771,14 @@ provider contracts meet the external-action requirements above.
 - **VA-7:** Controlled email delivery adapter.
 - **VA-8:** E-signature provider semantics, notifications, and reconciliation.
 - **VA-9:** Office workflow capture and post-pilot expansion.
+- **VA-10:** Existing-DOCX conversational revision slice: safe capability
+  detection, exact replacement plans, private derivative lineage, content review,
+  SHA-bound approval, and non-executable signature-replacement preview.
+- **VA-11:** Pinned DOCX-to-PDF/page renderer, exact preview evidence, semantic
+  redlines, and release-artifact promotion.
+- **VA-12:** Real e-sign provider adapter with immutable release binding,
+  idempotent void/create/send saga, webhook reconciliation, notification receipt,
+  and replacement state machine.
 
 Each item should land behind tenant-level feature flags and include its phase exit
 gate before the next external capability is enabled.

@@ -55,6 +55,7 @@ from app.models.intake_dashboard import (
 )
 from app.models.client_portal import ClientPortalInvite
 from app.models.signature import SignatureRequest, SignatureSigner
+from app.models.matter_document import MatterDocument
 from app.models.task import Task
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
@@ -92,6 +93,7 @@ from app.models.operator_audit import OperatorAuditLog
 from app.models.durable_job import DurableJob
 from app.models.office_action_run import OfficeActionRun
 from app.models.plugin_skill_run import PluginSkillRun
+from app.models.matter_document_revision import MatterDocumentRevision
 
 __all__ = [
     "Tenant",
@@ -155,6 +157,7 @@ __all__ = [
     "ClientPortalInvite",
     "SignatureRequest",
     "SignatureSigner",
+    "MatterDocument",
     "Task",
     "ScheduledEvent",
     "CommunicationLog",
@@ -184,4 +187,5 @@ __all__ = [
     "DurableJob",
     "OfficeActionRun",
     "PluginSkillRun",
+    "MatterDocumentRevision",
 ]

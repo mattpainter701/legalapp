@@ -1,5 +1,40 @@
 # TASKS.md
 
+## Matter Assistant — Conversational DOCX Revisions — 2026-08-04 (SLICE 1 DONE)
+
+**Goal:** Let an attorney request bounded changes to an existing matter DOCX
+from a phone, inspect the exact candidate, and approve its verified bytes without
+overwriting the source or implying that anything was sent.
+
+- [x] Add tenant-scoped revision lineage, idempotent request IDs, source/output
+      SHA-256 evidence, status history, RLS, and migration `100_doc_revisions`
+- [x] Combine deterministic DOCX inspection with Standard/Premium model planning
+      and an allowlisted exact-replacement engine
+- [x] Store every result as a new private matter document, supersede stale review
+      candidates, and protect all lineage evidence from legacy deletion
+- [x] Add mobile Request / Changes / Preview UI, exact before-and-after cards,
+      authenticated artifact access, explicit review acknowledgment, and
+      hash-bound approve/reject controls
+- [x] Block assistant derivatives, including content-approved candidates, from
+      legacy portal visibility and signature-request creation until a separate
+      destination approval workflow exists
+- [x] Add a truthful, non-executable preview for replacing an open internal portal
+      signature acknowledgment; no request is voided, created, sent, or notified
+- [ ] `VA-11` Add a pinned DOCX-to-PDF renderer, page-faithful preview evidence,
+      semantic redlines, and immutable release-artifact promotion
+- [ ] `VA-12` Add a real external e-sign provider and an idempotent,
+      webhook-reconciled void/create/send replacement workflow
+
+Product and safety contract: `docs/virtual-document-assistant-plan.md`.
+
+Validation: 131 frontend tests, accessibility checks, lint, and production build
+pass; 44 focused backend engine/lifecycle/migration tests and 25 adjacent
+e-sign/storage/auth-contract tests pass. The complete PostgreSQL migration chain
+upgrades to revision 100, downgrades to 099, and re-upgrades to 100 successfully.
+The Vite production route and fixture prototype return HTTP 200 locally. Automated
+browser visual inspection and page-faithful DOCX rendering were unavailable in
+this environment, so those remain explicit manual release checks.
+
 ## Demo Polish Release — Ohio Authority And Practice Workflows — 2026-07-31 (IN PROGRESS)
 
 **Goal:** Ship one rehearsed polish release before the law-firm demonstrations: real
