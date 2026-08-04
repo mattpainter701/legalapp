@@ -30,6 +30,7 @@ from app.services.cloud_search import CloudHit
 from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
 from app.utils.guardrails import (
+    consolidate_unverified_model_knowledge,
     reconcile_retrieved_source_attribution,
     validate_citation_confidence,
 )
@@ -107,6 +108,33 @@ def test_unmatched_model_knowledge_is_not_rewritten():
     )
 
     assert reconciled == answer
+    assert count == 0
+
+
+def test_unverified_model_knowledge_is_condensed_to_one_source_note():
+    answer = (
+        "A general proposition. [model knowledge]\n\n"
+        "Another proposition. [model reasoning]"
+    )
+    consolidated, count = consolidate_unverified_model_knowledge(
+        answer,
+        [{"source_id": "authority:1", "case_name": "A Distinct Legal Authority"}],
+    )
+
+    assert consolidated.startswith("**Source note:**")
+    assert "[model knowledge]" not in consolidated
+    assert "[model reasoning]" not in consolidated
+    assert count == 2
+
+
+def test_unverified_model_knowledge_is_kept_when_a_retrieved_source_is_cited():
+    answer = "A sourced proposition. [source: authority:1] [model knowledge]"
+    consolidated, count = consolidate_unverified_model_knowledge(
+        answer,
+        [{"source_id": "authority:1", "case_name": "A Distinct Legal Authority"}],
+    )
+
+    assert consolidated == answer
     assert count == 0
 
 

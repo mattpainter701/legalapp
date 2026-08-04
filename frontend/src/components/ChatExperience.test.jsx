@@ -86,6 +86,74 @@ describe('Chat assistant experience', () => {
     )
   })
 
+  it('uses the available chat width and lets readers collapse answer sections', async () => {
+    const user = userEvent.setup()
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-sections',
+          role: 'assistant',
+          content: "## Filing path\n\nFile in the child's home state.\n\n## Support path\n\nConfirm personal jurisdiction.",
+        }}
+      />,
+    )
+
+    expect(screen.getByTestId('assistant-response')).toHaveClass('w-full', 'max-w-none')
+    expect(screen.getByText("File in the child's home state.")).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Collapse sections' }))
+    expect(screen.queryByText("File in the child's home state.")).not.toBeVisible()
+    expect(screen.getByText('Confirm personal jurisdiction.')).not.toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Expand sections' }))
+    expect(screen.getByText("File in the child's home state.")).toBeVisible()
+  })
+
+  it('copies a formatted assistant response for Word-compatible paste', async () => {
+    const user = userEvent.setup()
+    const write = vi.fn().mockResolvedValue(undefined)
+    const previousClipboard = navigator.clipboard
+    const previousClipboardItem = window.ClipboardItem
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { write },
+    })
+    Object.defineProperty(window, 'ClipboardItem', {
+      configurable: true,
+      value: class ClipboardItem {
+        constructor(data) {
+          this.data = data
+        }
+      },
+    })
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-copy',
+          role: 'assistant',
+          content: '## Filing path\n\n| State | Requirement |\n| --- | --- |\n| Ohio | Six months |',
+        }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Copy formatted response' }))
+
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
+    const clipboardItem = write.mock.calls[0][0][0]
+    expect(clipboardItem.data['text/html']).toBeInstanceOf(Blob)
+    expect(clipboardItem.data['text/plain']).toBeInstanceOf(Blob)
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: previousClipboard,
+    })
+    Object.defineProperty(window, 'ClipboardItem', {
+      configurable: true,
+      value: previousClipboardItem,
+    })
+  })
+
   it('renders truthful timed retrieval activity with live source previews', () => {
     render(
       <ChatMessage
