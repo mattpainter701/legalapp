@@ -32,6 +32,18 @@ Conversation alone never approves an external action. A reply such as "yes",
 "looks good", or "send it" may advance the planning conversation, but it cannot
 substitute for the explicit approval control.
 
+## Interactive Prototype
+
+A backend-free Vite prototype lives at
+`frontend/virtual-assistant-mockup.html`. It exercises the mobile-first
+`command -> action card -> exact review -> dedicated action button -> receipt`
+pattern for client/task creation, time entry, and private document preparation.
+
+Run `npm run dev` from `frontend/`, then open
+`http://localhost:3000/virtual-assistant-mockup.html`. The prototype uses fixture
+data, makes no API calls, and writes no records. It is a design-validation surface,
+not a production route or an implementation of the workflow contracts below.
+
 ## Why This Fits the Existing Product
 
 The repository already contains most of the required foundations, but they are
