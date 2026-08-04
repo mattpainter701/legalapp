@@ -57,6 +57,7 @@ from app.services.gateway_privacy import gateway_metadata, retained_gateway_quer
 from app.utils.guardrails import (
     apply_guardrails,
     check_pii_in_input,
+    consolidate_unverified_model_knowledge,
     prepare_provider_messages,
     prepare_provider_text,
     reconcile_retrieved_source_attribution,
@@ -1361,6 +1362,9 @@ async def send_message(
     cleaned_response, _ = reconcile_retrieved_source_attribution(
         cleaned_response, source_dicts
     )
+    cleaned_response, _ = consolidate_unverified_model_knowledge(
+        cleaned_response, source_dicts
+    )
     cleaned_response, _ = validate_citation_confidence(
         cleaned_response,
         _citation_validation_sources(source_dicts, chunks, cloud_hits),
@@ -1983,6 +1987,9 @@ async def stream_message(
                 cleaned_response, source_aliases
             )
             cleaned_response, _ = reconcile_retrieved_source_attribution(
+                cleaned_response, source_dicts
+            )
+            cleaned_response, _ = consolidate_unverified_model_knowledge(
                 cleaned_response, source_dicts
             )
             cleaned_response, _ = validate_citation_confidence(

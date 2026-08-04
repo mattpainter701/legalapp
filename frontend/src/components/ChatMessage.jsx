@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { format } from 'date-fns'
 import {
@@ -16,6 +16,7 @@ import {
   LoaderCircle,
   ShieldCheck,
   Clock3,
+  ChevronDown,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
 
@@ -57,6 +58,82 @@ export function linkSourceReferences(text, sources, messageId) {
     const label = `[${entry.index + 1}]`
     return `[${label}](#${sourceAnchor(messageId, entry.index)})`
   })
+}
+
+function splitMarkdownSections(markdown) {
+  const intro = []
+  const sections = []
+  let activeSection = null
+
+  for (const line of String(markdown || '').split('\n')) {
+    const match = line.match(/^#{2,6}\s+(.+)$/)
+    if (match) {
+      activeSection = { title: match[1], body: [] }
+      sections.push(activeSection)
+    } else if (activeSection) {
+      activeSection.body.push(line)
+    } else {
+      intro.push(line)
+    }
+  }
+
+  return { intro: intro.join('\n').trim(), sections }
+}
+
+function readableSectionTitle(value) {
+  return String(value || '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`]/g, '')
+    .trim()
+}
+
+function CollapsibleMarkdown({ content }) {
+  const { intro, sections } = splitMarkdownSections(content)
+  const [collapsed, setCollapsed] = useState({})
+  const hasOpenSections = sections.some((_, index) => !collapsed[index])
+
+  const setAllSections = (nextCollapsed) => {
+    setCollapsed(Object.fromEntries(sections.map((_, index) => [index, nextCollapsed])))
+  }
+
+  return (
+    <>
+      {intro && <ReactMarkdown components={markdownComponents}>{intro}</ReactMarkdown>}
+      {sections.length > 0 && (
+        <div className="mb-3 flex justify-end">
+          <button
+            type="button"
+            data-copy-exclude="true"
+            onClick={() => setAllSections(hasOpenSections)}
+            className="inline-flex items-center gap-1 border border-brand-line bg-brand-bg px-2 py-1 text-[10px] font-mono font-semibold uppercase tracking-wider text-brand-ink-2 hover:bg-brand-bg-soft"
+          >
+            {hasOpenSections ? 'Collapse sections' : 'Expand sections'}
+          </button>
+        </div>
+      )}
+      {sections.map((section, index) => {
+        const isOpen = !collapsed[index]
+        const title = readableSectionTitle(section.title)
+        return (
+          <section key={`${title}-${index}`} className="border-t border-brand-line first:border-t-0">
+            <button
+              type="button"
+              data-copy-heading="true"
+              aria-expanded={isOpen}
+              onClick={() => setCollapsed((current) => ({ ...current, [index]: isOpen }))}
+              className="flex w-full items-center gap-2 py-4 text-left font-sans text-sm font-bold uppercase tracking-widest text-brand-muted hover:text-brand-ink"
+            >
+              <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? '' : '-rotate-90'}`} aria-hidden="true" />
+              <span>{title}</span>
+            </button>
+            <div className="pb-2" hidden={!isOpen}>
+              <ReactMarkdown components={markdownComponents}>{section.body.join('\n').trim()}</ReactMarkdown>
+            </div>
+          </section>
+        )
+      })}
+    </>
+  )
 }
 
 function sourceBadge(src) {
@@ -456,9 +533,36 @@ export default function ChatMessage({ message }) {
     ? format(new Date(message.created_at), 'h:mm a')
     : ''
   const [copied, setCopied] = useState(false)
+  const responseCopyRef = useRef(null)
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content)
+  const handleCopy = async () => {
+    const copyTarget = isUser ? null : responseCopyRef.current
+    const copyContents = copyTarget?.cloneNode(true)
+    copyContents?.querySelectorAll('[data-copy-exclude]').forEach((element) => {
+      element.remove()
+    })
+    copyContents?.querySelectorAll('[data-copy-heading]').forEach((element) => {
+      const heading = document.createElement('h2')
+      heading.textContent = element.textContent
+      element.replaceWith(heading)
+    })
+    copyContents?.querySelectorAll('[hidden]').forEach((element) => {
+      element.hidden = false
+    })
+    const plainText = copyContents?.textContent?.trim() || content
+
+    const ClipboardItemConstructor = window.ClipboardItem
+    if (copyTarget && navigator.clipboard?.write && ClipboardItemConstructor) {
+      const html = copyContents?.innerHTML || copyTarget.innerHTML
+      await navigator.clipboard.write([
+        new ClipboardItemConstructor({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        }),
+      ])
+    } else {
+      await navigator.clipboard.writeText(plainText)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -499,7 +603,7 @@ export default function ChatMessage({ message }) {
 
   return (
     <div className="group mb-4 flex justify-start sm:mb-8">
-      <div className="relative w-full max-w-3xl border border-brand-line bg-brand-surface p-4 shadow-sm transition-shadow hover:shadow-md sm:p-8">
+      <div data-testid="assistant-response" className="relative w-full max-w-none border border-brand-line bg-brand-surface p-4 shadow-sm transition-shadow hover:shadow-md sm:p-8">
         {/* Gold top bar */}
         <div className="absolute top-0 left-0 w-full h-1 bg-brand-gold"></div>
 
@@ -511,7 +615,8 @@ export default function ChatMessage({ message }) {
           <button
             onClick={handleCopy}
             className="ml-2 text-brand-muted opacity-100 transition-opacity hover:text-brand-ink sm:opacity-0 sm:group-hover:opacity-100"
-            title="Copy response"
+            title="Copy formatted response"
+            aria-label="Copy formatted response"
           >
             {copied ? <Check size={14} /> : <Copy size={14} />}
           </button>
@@ -519,16 +624,19 @@ export default function ChatMessage({ message }) {
 
         {/* Body */}
         <div className="min-w-0 break-words text-[14px] text-brand-ink [overflow-wrap:anywhere] sm:text-[15px]">
-          {hasAssistantContent ? (
-            <>
+          <div ref={responseCopyRef}>
+            {hasAssistantContent ? (
+              <>
               {message.progress && !message.progress.complete && (
                 <AssistantWorkingState progress={message.progress} compact />
               )}
-              <ReactMarkdown components={markdownComponents}>{renderedContent}</ReactMarkdown>
-            </>
-          ) : (
-            <AssistantWorkingState progress={message.progress} />
-          )}
+                <CollapsibleMarkdown content={renderedContent} />
+              </>
+            ) : (
+              <AssistantWorkingState progress={message.progress} />
+            )}
+            {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
+          </div>
           {hasAssistantContent && (
             <ReferenceTrail
               referenceContext={message.referenceContext}
@@ -536,8 +644,6 @@ export default function ChatMessage({ message }) {
             />
           )}
         </div>
-
-        {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
       </div>
     </div>
   )

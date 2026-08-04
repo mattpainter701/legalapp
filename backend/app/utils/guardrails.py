@@ -188,6 +188,39 @@ def reconcile_retrieved_source_attribution(
     return _MODEL_ATTRIBUTION_RE.sub(replace, text), reconciled
 
 
+def consolidate_unverified_model_knowledge(
+    text: str, sources: list[dict[str, Any]] | None
+) -> tuple[str, int]:
+    """Replace repeated model-knowledge tags with one clear source note.
+
+    Per-claim tags are useful while reconciling a response, but they make a
+    client-facing answer hard to read when no retrieved source was actually
+    cited. Preserve them whenever the answer has a valid retrieved source
+    reference; otherwise make the disclosure once and leave the substance
+    visibly unverified.
+    """
+    if not text or not _MODEL_ATTRIBUTION_RE.search(text):
+        return text, 0
+
+    known_ids = {
+        str(row.get("source_id") or row.get("id") or "").strip().casefold()
+        for row in sources or []
+    }
+    cited_ids = {value.strip().casefold() for value in _SOURCE_REF_RE.findall(text)}
+    if known_ids.intersection(cited_ids):
+        return text, 0
+
+    cleaned, replacements = _MODEL_ATTRIBUTION_RE.subn("", text)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+    source_note = (
+        "**Source note:** The retrieved materials did not substantiate the "
+        "analysis below. Treat it as general legal information and verify the "
+        "governing jurisdiction's current law before relying on it.\n\n"
+    )
+    return f"{source_note}{cleaned}", replacements
+
+
 def validate_citation_confidence(
     text: str, sources: list[dict[str, Any]] | None
 ) -> tuple[str, int]:

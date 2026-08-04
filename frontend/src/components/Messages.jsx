@@ -95,12 +95,12 @@ export default function Messages({
       {!messages || messages.length === 0 ? (
         <EmptyState onPromptSelect={onPromptSelect} />
       ) : isLoading ? (
-        <div className="mx-auto max-w-4xl">
+        <div className="mx-auto w-full max-w-none">
           <MessageSkeleton />
           <MessageSkeleton />
         </div>
       ) : (
-        <div className="mx-auto max-w-4xl">
+        <div className="mx-auto w-full max-w-none">
           <div className="hidden sm:block">
             <ReviewTagLegend compact />
           </div>
