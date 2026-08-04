@@ -136,6 +136,9 @@ class TenantSettings(Base):
     enable_matter_context: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    enable_task_board: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
 
     # Rate limiting
     max_requests_per_minute: Mapped[int | None] = mapped_column(nullable=True)

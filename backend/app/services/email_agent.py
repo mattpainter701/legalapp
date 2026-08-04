@@ -28,6 +28,7 @@ async def _auto_log_and_task(
         from app.models.communication_log import CommunicationLog
         from app.models.matter_note import MatterNote
         from app.models.task import Task
+        from app.services.task_workflow import append_task_event
 
         await set_tenant_context(db, tenant_id)
         tid = uuid_mod.UUID(tenant_id)
@@ -113,6 +114,21 @@ async def _auto_log_and_task(
                     matter_id=matched_matter_ids[0] if matched_matter_ids else None,
                 )
                 db.add(task)
+                await db.flush()
+                append_task_event(
+                    db,
+                    task,
+                    event_type="created",
+                    actor_user_id=uid,
+                    to_status="pending",
+                )
+                append_task_event(
+                    db,
+                    task,
+                    event_type="assigned",
+                    actor_user_id=uid,
+                    metadata={"assigned_to_user_id": str(uid)},
+                )
             except Exception as parse_err:
                 logger.debug(
                     "Could not parse deadline '%s': %s", deadline_str, parse_err

@@ -133,6 +133,7 @@ class TenantSettingsResponse(BaseModel):
     enable_pii_detection: bool = True
     enable_skill_routing: bool = True
     enable_matter_context: bool = True
+    enable_task_board: bool = True
     # Rate limiting
     max_requests_per_minute: Optional[int] = None
     max_daily_tokens: Optional[int] = None
@@ -168,6 +169,7 @@ class TenantSettingsUpdate(BaseModel):
     enable_pii_detection: Optional[bool] = None
     enable_skill_routing: Optional[bool] = None
     enable_matter_context: Optional[bool] = None
+    enable_task_board: Optional[bool] = None
     max_requests_per_minute: Optional[int] = None
     max_daily_tokens: Optional[int] = None
     default_llm_provider: Optional[str] = None

@@ -1,5 +1,29 @@
 # TASKS.md
 
+## Legal Work Board Product Enhancement — 2026-08-04 (DONE)
+
+**Goal:** Give law firms a deadline-safe, continuous-flow Work Board without
+forcing software-team Scrum language or replacing the existing deadline list.
+
+- [x] Add To Do, In Progress, Waiting, Review, and Done workflow stages with
+      validated waiting, review, closure, cancellation, and reopening semantics
+- [x] Add Board/List preference, My Work/Firm Work scopes, legal-work filters,
+      risk summaries, deterministic risk-first ordering, and per-column paging
+- [x] Add accessible drag-and-drop, keyboard Move actions, a mobile single-stage
+      view, transition dialogs, optimistic updates, and conflict recovery
+- [x] Add privacy-minimized cards plus on-demand task detail and append-only
+      internal history
+- [x] Add tenant-scoped reviewer validation, version-based concurrency, database
+      indexes, row-level security, and migration `100_task_work_board`
+- [x] Add an administrator-controlled tenant feature flag and privacy-safe
+      structured rollout telemetry without task, matter, or client content
+- [x] Route task, intake, mediation, and email-agent lifecycle changes through
+      shared workflow/audit behavior
+- [x] Add backend state-machine/migration/API tests and frontend interaction,
+      accessibility, page, and full-suite coverage
+
+Implementation and operating decisions: `docs/legal-task-board-plan.md`.
+
 ## Demo Polish Release — Ohio Authority And Practice Workflows — 2026-07-31 (IN PROGRESS)
 
 **Goal:** Ship one rehearsed polish release before the law-firm demonstrations: real

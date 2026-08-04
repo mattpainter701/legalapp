@@ -1009,6 +1009,7 @@ function FeatureFlagsSection({ settings, onUpdate }) {
     { key: 'enable_pii_detection', label: 'PII detection', desc: 'Flag and suppress personally identifiable information in outputs' },
     { key: 'enable_skill_routing', label: 'Skill routing', desc: 'Route queries to domain-specific legal skills automatically' },
     { key: 'enable_matter_context', label: 'Matter context', desc: 'Inject active matter context into chat and skills' },
+    { key: 'enable_task_board', label: 'Legal Work Board', desc: 'Offer the board workflow alongside the deadline list for this firm' },
   ]
 
   const handleSave = async () => {
@@ -1019,6 +1020,7 @@ function FeatureFlagsSection({ settings, onUpdate }) {
         enable_pii_detection: s.enable_pii_detection,
         enable_skill_routing: s.enable_skill_routing,
         enable_matter_context: s.enable_matter_context,
+        enable_task_board: s.enable_task_board,
         max_requests_per_minute: s.max_requests_per_minute || null,
         max_daily_tokens: s.max_daily_tokens || null,
       })

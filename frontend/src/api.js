@@ -1078,6 +1078,15 @@ export const conflictCheck = (data) =>
 export const getTasks = (params = {}) =>
   api.get('/tasks', { params }).then(r => r.data)
 
+export const getTaskBoard = (params = {}) =>
+  api.get('/tasks/board', { params }).then(r => r.data)
+
+export const getTaskBoardConfig = () =>
+  api.get('/tasks/board/config').then(r => r.data)
+
+export const recordTaskBoardTelemetry = (data) =>
+  api.post('/tasks/board/telemetry', data).then(r => r.data)
+
 export const createTask = (data) =>
   api.post('/tasks', data).then(r => r.data)
 
@@ -1086,6 +1095,12 @@ export const getTask = (id) =>
 
 export const updateTask = (id, data) =>
   api.patch(`/tasks/${id}`, data).then(r => r.data)
+
+export const transitionTask = (id, data) =>
+  api.post(`/tasks/${id}/transition`, data).then(r => r.data)
+
+export const getTaskEvents = (id, params = {}) =>
+  api.get(`/tasks/${id}/events`, { params }).then(r => r.data)
 
 export const deleteTask = (id) =>
   api.delete(`/tasks/${id}`)

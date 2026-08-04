@@ -55,7 +55,7 @@ from app.models.intake_dashboard import (
 )
 from app.models.client_portal import ClientPortalInvite
 from app.models.signature import SignatureRequest, SignatureSigner
-from app.models.task import Task
+from app.models.task import Task, TaskEvent
 from app.models.scheduled_event import ScheduledEvent
 from app.models.communication_log import CommunicationLog
 from app.models.document_template import DocumentTemplate
@@ -156,6 +156,7 @@ __all__ = [
     "SignatureRequest",
     "SignatureSigner",
     "Task",
+    "TaskEvent",
     "ScheduledEvent",
     "CommunicationLog",
     "DocumentTemplate",

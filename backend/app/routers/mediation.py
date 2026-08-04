@@ -43,6 +43,7 @@ from app.models.mediation import (
 )
 from app.models.plugin import Matter, MediationCase, MediationCaseEvent
 from app.models.task import Task
+from app.services.task_workflow import append_task_event, transition_task
 from app.models.user import User
 from app.schemas.mediation import (
     AssetCreate,
@@ -287,17 +288,31 @@ async def create_case(
     )
     db.add(case)
     if body.next_action and body.next_action.strip():
-        db.add(
-            Task(
-                tenant_id=user.tenant_id,
-                title=body.next_action.strip(),
-                task_type="follow_up",
-                due_date=body.next_action_due,
-                matter_id=matter.id,
-                assigned_to_user_id=user.id,
-                created_by_user_id=user.id,
-                source="mediation_workflow",
-            )
+        next_task = Task(
+            tenant_id=user.tenant_id,
+            title=body.next_action.strip(),
+            task_type="follow_up",
+            due_date=body.next_action_due,
+            matter_id=matter.id,
+            assigned_to_user_id=user.id,
+            created_by_user_id=user.id,
+            source="mediation_workflow",
+        )
+        db.add(next_task)
+        await db.flush()
+        append_task_event(
+            db,
+            next_task,
+            event_type="created",
+            actor_user_id=user.id,
+            to_status="pending",
+        )
+        append_task_event(
+            db,
+            next_task,
+            event_type="assigned",
+            actor_user_id=user.id,
+            metadata={"assigned_to_user_id": str(user.id)},
         )
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
@@ -407,10 +422,13 @@ async def set_next_action(
     current_tasks = await _next_task_map(db, [case])
     current = current_tasks.get(case.matter_id)
     if current and body.complete_current:
-        current.status = "completed"
-        current.completed_at = datetime.now(timezone.utc)
-        current.closed_by_user_id = user.id
-        current.closed_reason = "Advanced from mediation work queue"
+        transition_task(
+            db,
+            current,
+            to_status="completed",
+            actor_user_id=user.id,
+            reason="Advanced from mediation work queue",
+        )
 
     task = Task(
         tenant_id=user.tenant_id,
@@ -424,6 +442,21 @@ async def set_next_action(
         source="mediation_workflow",
     )
     db.add(task)
+    await db.flush()
+    append_task_event(
+        db,
+        task,
+        event_type="created",
+        actor_user_id=user.id,
+        to_status="pending",
+    )
+    append_task_event(
+        db,
+        task,
+        event_type="assigned",
+        actor_user_id=user.id,
+        metadata={"assigned_to_user_id": str(user.id)},
+    )
     case.waiting_on = body.waiting_on
     case.updated_at = datetime.now(timezone.utc)
     await db.commit()

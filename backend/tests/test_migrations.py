@@ -12,7 +12,25 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["099_chat_latency_breakdown"]
+    assert heads == ["100_task_work_board"]
+
+
+def test_task_work_board_migration_has_history_rls_and_concurrency_fields():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "100_task_work_board.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "100_task_work_board"' in source
+    assert 'down_revision = "099_chat_latency_breakdown"' in source
+    assert '"status_changed_at"' in source
+    assert '"waiting_reason"' in source
+    assert '"reviewer_user_id"' in source
+    assert '"version"' in source
+    assert '"enable_task_board"' in source
+    assert '"task_events"' in source
+    assert "CREATE POLICY task_events_tenant_isolation" in source
+    assert "ALTER TABLE task_events FORCE ROW LEVEL SECURITY" in source
 
 
 def test_zoom_phone_migration_is_fail_closed_and_restores_force_rls():

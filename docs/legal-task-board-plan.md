@@ -2,9 +2,10 @@
 
 **Date:** 2026-08-04
 
-**Status:** Proposed implementation plan
+**Status:** Implemented on the feature branch; deployment and firm pilot pending
 
-**Scope:** Planning only; no production behavior is changed by this branch
+**Scope:** Production-ready product enhancement; database migration, API, UI,
+accessibility, tests, and operating guidance are included
 
 **Branch:** `agent/legal-task-board-plan`
 
@@ -41,6 +42,34 @@ The first release should therefore add a `Board | List` view switch, default to
 `My Work`, offer an authorized `Firm Work` scope, and reuse the existing task,
 matter, contact, assignee, priority, deadline, reminder, intake, and closure
 behavior.
+
+## Implementation Result
+
+The plan is now implemented as a full enhancement rather than an isolated MVP:
+
+- The existing `/tasks` workspace offers persistent Board/List preferences,
+  My Work/Firm Work scope, multi-dimensional filters, risk counters, per-column
+  pagination, responsive mobile navigation, and the original deadline list.
+- Board cards are intentionally privacy-minimized. Full descriptions, customer
+  details, and the internal history are fetched only when the detail drawer is
+  opened.
+- Drag-and-drop and keyboard-accessible Move actions share one transition API.
+  Waiting requires a reason and supports a follow-up date; Review supports a
+  reviewer; completion/cancellation records closure context; reopening clears
+  stale closure metadata.
+- Task versions provide optimistic concurrency control. A conflict rolls the
+  card back, refreshes the board, and asks the user to retry against current
+  data rather than overwriting another staff member's work.
+- An append-only, tenant-isolated `task_events` timeline records creation,
+  assignment, reassignment, workflow changes, contact logging, and material
+  edits. Customer communication history remains separate.
+- Intake dashboard, mediation, email-agent, and task CRUD paths all emit the
+  same workflow/audit semantics, so the board cannot drift from tasks created
+  elsewhere in the product.
+- Tenant administrators can enable or disable the Work Board independently of
+  the deadline list. Content-free structured logs cover view selection, board
+  load latency/card counts, oldest Waiting/Review age, transition success,
+  validation rejection, and version conflict for controlled rollout.
 
 ## Product Terminology
 
@@ -282,8 +311,9 @@ hard deletion with archival.
 - `completed_at` is non-null only for `completed`.
 - `closed_by_user_id` is set for completion/cancellation and cleared on reopen.
 - Changing status increments `version` and updates `status_changed_at`.
-- All mutations increment `version`, so a stale board move cannot overwrite a
-  simultaneous reassignment or deadline change.
+- All workflow and editorial mutations increment `version`, so a stale board
+  move cannot overwrite a simultaneous reassignment or deadline change. A
+  read-receipt write does not invalidate an otherwise current work card.
 - A board transition and its `task_events` row commit in one transaction.
 - Calendar/event sync treats `waiting` and `review` as open statuses.
 
@@ -492,7 +522,7 @@ keyboard, and mobile controls while due dates and ownership remain intact.
 
 ### Slice 4: Controlled rollout and observability
 
-- Put Board view behind `task_board_enabled` while List remains available.
+- Put Board view behind `enable_task_board` while List remains available.
 - Add structured events for board load, transition success/failure/conflict,
   waiting age, review age, and view selection. Do not include task titles,
   descriptions, client names, or matter names in analytics.

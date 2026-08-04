@@ -124,7 +124,7 @@ caller was contacted back (migration `073`, columns on `tasks`):
 
 | Signal | Set when | Surfaced |
 |-|-|-|
-| `viewed_at` | The **assignee** opens the Tasks page or fetches the task (`GET /api/tasks/{id}` or `POST /api/tasks/{id}/view`); views by other users never count | "Seen / Unread" badge on task rows, "Task seen" on the intake dashboard call panel, `task_viewed_at` in the calls CSV export |
+| `viewed_at` | The **assignee** opens task detail (`GET /api/tasks/{id}`) or explicitly marks it viewed (`POST /api/tasks/{id}/view`); loading the list or privacy-minimized board alone does not count, and views by other users never count | "Seen / Unread" badge on task rows, "Task seen" on the intake dashboard call panel, `task_viewed_at` in the calls CSV export |
 | `customer_contacted_at` + `customer_contact_method` | Assignee (or admin) posts `POST /api/tasks/{id}/contacted` `{method: call\|email\|sms\|meeting\|other, note}` — the "Log contact" action on a task row. First-contact timestamp is preserved; the note is appended to the task description and a `pending` task moves to `in_progress` | "Contacted" badge, "Customer contacted" on the call panel, `customer_contacted_at` / `customer_contact_method` in the calls export |
 
 These are **in-app receipts** — they measure engagement with the assigned task, not email

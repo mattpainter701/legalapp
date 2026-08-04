@@ -58,6 +58,10 @@ test('receptionist captures a caller and sees the assigned task', async ({ page 
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByRole('heading', { name: 'Tasks & Deadlines' })).toBeVisible()
   await expect(page.getByText(`${caller} - Call back caller`, { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Board', exact: true }).click()
+  await expect(page.getByLabel('Legal work board')).toBeVisible()
+  await expect(page.getByText(`${caller} - Call back caller`, { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'List', exact: true }).click()
 })
 
 test.describe('mobile workspace', () => {
@@ -85,6 +89,8 @@ test.describe('mobile workspace', () => {
     await mobileNavigation.getByRole('button', { name: 'Tasks', exact: true }).click()
     await expect(page).toHaveURL(/\/tasks$/)
     await expect(page.getByRole('heading', { name: 'Tasks & Deadlines' })).toBeVisible()
+    await page.getByRole('button', { name: 'Board', exact: true }).click()
+    await expect(page.getByLabel('Work stage')).toBeVisible()
     expect(await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
     )).toBe(true)
