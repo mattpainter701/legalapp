@@ -128,8 +128,15 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
     assert job["name"] == "Tenant data safety - migrations and RLS"
     assert job["env"]["PYTHONPATH"] == "backend"
     assert "Reject destructive or rewritten migrations" in step_names
+    assert "Resolve the deployed production migration baseline" in step_names
     assert "Rehearse upgrade over two-tenant customer data" in step_names
     assert "Verify tenant schema and effective isolation" in step_names
+
+    workflow_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "refs/tags/production:refs/tags/production" in workflow_text
+    assert 'MIGRATION_DIFF_BASE=$migration_diff_base' in workflow_text
 
 
 def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
@@ -146,6 +153,8 @@ def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     assert "environment:" in deploy
     assert "actions/checkout" not in deploy
     assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github" in deploy
+    assert "Advance production release marker" in deploy
+    assert "git/refs/tags/production" in deploy
 
     assert "rev-parse 'origin/main^{commit}'" in host_entrypoint
     assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint

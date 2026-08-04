@@ -176,6 +176,11 @@ deployments, fetches the canonical repository, rejects anything except the
 current `origin/main` commit, refuses a dirty production checkout, and then
 invokes `scripts/deploy_skynet_runner.sh` as the production user.
 
+The `production` Git tag records the deployed migration baseline. Tenant data
+safety checks always diff and rehearse from that tag, so a later green commit
+cannot conceal an unsafe migration from an earlier failed `main` run. The
+workflow advances the tag only after a successful production deployment.
+
 The runner deployment path preserves the production skill's data guard: it
 creates validated LegalApp and LiteLLM dumps/count manifests before rebuilding,
 requires non-decreasing counts afterward, and verifies readiness plus exact

@@ -104,3 +104,28 @@ jobs:
             echo "- Runner: \`$RUNNER_NAME\`"
             echo "- Site: https://getlawhand.com"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  record-release:
+    name: Advance production release marker
+    if: inputs.operation == 'deploy'
+    needs: [release-gate, production]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Move the production tag to the deployed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
+        run: |
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/git/refs/tags/production" \
+            -f sha="$RELEASE_SHA" \
+            -F force=true >/dev/null
+          recorded_sha="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/production" \
+              --jq '.object.sha'
+          )"
+          [[ "$recorded_sha" == "$RELEASE_SHA" ]]
+          echo "Production release marker advanced to $RELEASE_SHA" >> "$GITHUB_STEP_SUMMARY"

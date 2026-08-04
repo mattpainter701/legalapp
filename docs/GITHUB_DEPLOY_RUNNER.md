@@ -8,6 +8,9 @@
   `.github/workflows/deploy.yml` uses those labels.
 - Production deploys are manual. A deployment must be dispatched from `main`,
   and the exact commit must have a successful `CI` push run.
+- The moving `production` Git tag identifies the deployed migration baseline.
+  Migration safety always compares the candidate to that tag, and only a
+  successful deployment advances it.
 - The workflow performs no checkout on Skynet. The runner account can sudo only
   `/usr/local/sbin/lawhand-deploy-from-github`.
 - The root-owned entrypoint accepts only the current `origin/main` SHA, serializes
