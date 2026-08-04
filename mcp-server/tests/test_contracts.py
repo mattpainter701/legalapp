@@ -313,8 +313,8 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
     sql = conn.cursor_obj.sql
 
     assert "embedding <=>" not in sql
-    assert "d.document_status = 'current'" in sql
-    assert "s.enabled = TRUE" in sql
+    assert "d.document_status" not in sql
+    assert "s.enabled" not in sql
     assert "websearch_to_tsquery" in sql
     assert "source_url" in sql
     assert "{0,cite}" in sql
