@@ -134,10 +134,20 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
 
 def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    host_entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
+        encoding="utf-8"
+    )
 
     assert "Require successful CI for exact release commit" in deploy
-    assert "ref: main" in deploy
+    assert '[[ "$RELEASE_REF" != refs/heads/main ]]' in deploy
     assert 'head_sha="$RELEASE_SHA"' in deploy
     assert '[[ "$conclusion" != success ]]' in deploy
-    assert "git reset --hard '$RELEASE_SHA'" in deploy
-    assert "test \\\"\\$(git rev-parse HEAD)\\\" = '$RELEASE_SHA'" in deploy
+    assert "runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]" in deploy
+    assert "environment:" in deploy
+    assert "actions/checkout" not in deploy
+    assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github" in deploy
+
+    assert "rev-parse 'origin/main^{commit}'" in host_entrypoint
+    assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint
+    assert 'reset --hard "$requested_sha"' in host_entrypoint
+    assert '[[ "$checked_out_sha" == "$requested_sha" ]]' in host_entrypoint

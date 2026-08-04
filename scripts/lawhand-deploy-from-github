@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Root-owned boundary between GitHub Actions and the production checkout.
+# Install as /usr/local/sbin/lawhand-deploy-from-github. The Actions runner is
+# permitted to sudo only this command.
+set -Eeuo pipefail
+umask 077
+
+readonly APP_DIR="/home/varta/legalapp"
+readonly DEPLOY_USER="varta"
+readonly EXPECTED_ORIGIN="https://github.com/mattpainter701/legalapp.git"
+readonly PUBLIC_ORIGIN="https://getlawhand.com"
+readonly LOCK_FILE="/run/lock/lawhand-production-deploy.lock"
+
+operation="${1:-}"
+requested_sha="${2:-}"
+
+case "$operation" in
+  verify|deploy) ;;
+  *) echo "Usage: $0 <verify|deploy> <40-character-main-commit>" >&2; exit 2 ;;
+esac
+[[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "ERROR: release must be a full lowercase Git commit SHA" >&2
+  exit 2
+}
+[[ "$(id -u)" -eq 0 ]] || {
+  echo "ERROR: this entrypoint must run through its restricted sudo rule" >&2
+  exit 2
+}
+[[ -d "$APP_DIR/.git" && ! -L "$APP_DIR" ]] || {
+  echo "ERROR: production checkout is missing or is a symlink: $APP_DIR" >&2
+  exit 2
+}
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "ERROR: another LawHand production operation is already running" >&2
+  exit 75
+fi
+
+as_deploy_user() {
+  runuser -u "$DEPLOY_USER" -- env \
+    HOME="/home/$DEPLOY_USER" USER="$DEPLOY_USER" LOGNAME="$DEPLOY_USER" \
+    "$@"
+}
+
+origin_url="$(as_deploy_user git -C "$APP_DIR" remote get-url origin)"
+[[ "$origin_url" == "$EXPECTED_ORIGIN" ]] || {
+  echo "ERROR: unexpected production Git origin: $origin_url" >&2
+  exit 3
+}
+
+echo "==> Fetching the canonical main branch"
+as_deploy_user git -C "$APP_DIR" fetch --prune origin main
+main_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse 'origin/main^{commit}')"
+[[ "$requested_sha" == "$main_sha" ]] || {
+  echo "ERROR: requested $requested_sha, but origin/main is $main_sha" >&2
+  exit 3
+}
+
+current_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)"
+tracked_changes="$(as_deploy_user git -C "$APP_DIR" status --porcelain --untracked-files=no)"
+if [[ -n "$tracked_changes" ]]; then
+  echo "ERROR: production has tracked local changes; refusing to overwrite them" >&2
+  printf '%s\n' "$tracked_changes" >&2
+  exit 3
+fi
+
+if [[ "$operation" == verify ]]; then
+  echo "RUNNER_VERIFY=ok"
+  echo "DEPLOYED_COMMIT=$current_sha"
+  echo "AVAILABLE_MAIN_COMMIT=$main_sha"
+  curl -fsS --max-time 20 "$PUBLIC_ORIGIN/health/readiness"
+  echo
+  exit 0
+fi
+
+log_dir="/var/log/lawhand-deploy"
+install -d -m 0700 -o root -g root "$log_dir"
+log_file="$log_dir/$(date -u +%Y%m%dT%H%M%SZ)-${requested_sha:0:12}.log"
+exec > >(tee -a "$log_file") 2>&1
+
+echo "==> Deploying exact origin/main commit $requested_sha"
+as_deploy_user git -C "$APP_DIR" reset --hard "$requested_sha"
+checked_out_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)"
+[[ "$checked_out_sha" == "$requested_sha" ]] || {
+  echo "ERROR: production checkout did not land on the requested commit" >&2
+  exit 4
+}
+
+as_deploy_user env \
+  GITHUB_DEPLOY_COMMIT="$requested_sha" \
+  bash "$APP_DIR/scripts/deploy_skynet_runner.sh"
+
+final_sha="$(as_deploy_user git -C "$APP_DIR" rev-parse HEAD)"
+[[ "$final_sha" == "$requested_sha" ]] || {
+  echo "ERROR: production checkout moved during deployment" >&2
+  exit 4
+}
+echo "DEPLOY_LOG=$log_file"

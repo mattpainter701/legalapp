@@ -1,0 +1,1 @@
+lawhand-runner ALL=(root) NOPASSWD: /usr/local/sbin/lawhand-deploy-from-github

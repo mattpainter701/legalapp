@@ -1,135 +1,106 @@
-# Operator-triggered production deployment. Pushes to main never mutate
-# production automatically; run this only after CI and release gates pass.
-#
-# Required repository secrets (Settings → Secrets → Actions):
-#   VPS_HOST        — IP or hostname of the production VPS
-#   VPS_USER        — SSH user (e.g. deploy)
-#   VPS_SSH_KEY     — Private SSH key (corresponding public key must be in ~/.ssh/authorized_keys on VPS)
-#   VPS_KNOWN_HOSTS — Pre-verified known_hosts line for the production SSH host
-#   VPS_APP_DIR     — Absolute path to the app on VPS (e.g. /home/deploy/legalapp)
-#   PRODUCTION_ORIGIN — Canonical HTTPS origin, e.g. https://legal.example.com
-#   SLACK_WEBHOOK_URL — (optional) Slack incoming webhook for deploy notifications
-
+# Production changes are intentionally operator-triggered. CI stays on
+# GitHub-hosted runners; only this deployment job can target Skynet.
 name: Deploy to Production
 
-permissions:
-  contents: read
-  actions: read
+run-name: ${{ inputs.operation == 'deploy' && 'Deploy' || 'Verify' }} main @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
     inputs:
-      build_mode:
-        description: 'Build mode'
-        required: false
-        default: '--build'
+      operation:
+        description: "Verify the runner or deploy the selected main commit"
+        required: true
+        default: verify
         type: choice
-        options: ['--build', '--pull']
+        options:
+          - verify
+          - deploy
+
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false   # never cancel an in-progress deploy
+  group: law-hand-production
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy to VPS
+  release-gate:
+    name: Validate production release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
+      - name: Require the default branch
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [[ "$RELEASE_REF" != refs/heads/main ]]; then
+            echo "::error::Production runs must be dispatched from main, not $RELEASE_REF"
+            exit 1
+          fi
 
-      - name: Pin exact release commit
+      - name: Pin the exact release commit
         id: release
-        shell: bash
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Require successful CI for exact release commit
+        if: inputs.operation == 'deploy'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
-        shell: bash
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          conclusion="$(
-            gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f head_sha="$RELEASE_SHA" \
-              -f branch=main \
-              -f event=push \
-              -f per_page=20 \
-              --jq '.workflow_runs | sort_by(.run_number) | last | .conclusion // ""'
-          )"
+          head_sha="$RELEASE_SHA"
+          conclusion="$({
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --commit "$head_sha" \
+              --event push \
+              --limit 20 \
+              --json conclusion \
+              --jq '.[0].conclusion // ""'
+          } 2>/dev/null)"
           if [[ "$conclusion" != success ]]; then
-            echo "::error::CI has not succeeded for release commit $RELEASE_SHA (conclusion=${conclusion:-missing})."
+            echo "::error::CI for $head_sha is '$conclusion'; production was not changed."
             exit 1
           fi
 
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
-
-      - name: Add pinned VPS host key
+  production:
+    name: ${{ inputs.operation == 'deploy' && 'Deploy on Skynet' || 'Verify Skynet runner' }}
+    needs: release-gate
+    runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]
+    environment:
+      name: production
+      url: https://getlawhand.com
+    timeout-minutes: 45
+    steps:
+      # Deliberately do not check out repository code on the production runner.
+      # The root-owned entrypoint fetches origin/main and accepts only this SHA.
+      - name: Run the pinned host deployment entrypoint
         env:
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          DEPLOY_OPERATION: ${{ inputs.operation }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
         run: |
-          test -n "$VPS_KNOWN_HOSTS"
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          sudo -n /usr/local/sbin/lawhand-deploy-from-github \
+            "$DEPLOY_OPERATION" "$RELEASE_SHA"
 
-      - name: Deploy
+      - name: Record deployment summary
+        if: always()
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
-          BUILD_MODE: ${{ github.event.inputs.build_mode || '--build' }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          DEPLOY_OPERATION: ${{ inputs.operation }}
+          RELEASE_SHA: ${{ needs.release-gate.outputs.release_sha }}
         run: |
-          ssh $VPS_USER@$VPS_HOST "
-            set -e
-            cd $VPS_APP_DIR
-            echo '==> Fetching pinned release commit $RELEASE_SHA'
-            git fetch origin main
-            git cat-file -e '$RELEASE_SHA^{commit}'
-            git merge-base --is-ancestor '$RELEASE_SHA' origin/main
-            git reset --hard '$RELEASE_SHA'
-            test \"\$(git rev-parse HEAD)\" = '$RELEASE_SHA'
-            echo '==> Commit: $RELEASE_SHA'
-            echo '==> Running deploy script'
-            bash scripts/deploy_prod.sh $BUILD_MODE
-          "
-
-      - name: Health check
-        env:
-          PRODUCTION_ORIGIN: ${{ secrets.PRODUCTION_ORIGIN }}
-        run: |
-          test -n "$PRODUCTION_ORIGIN"
-          STATUS=$(curl -sf --retry 12 --retry-all-errors --retry-delay 5 --max-time 10 "$PRODUCTION_ORIGIN/health/readiness" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "unreachable")
-          echo "Health: $STATUS"
-          if [ "$STATUS" != "ok" ]; then
-            echo "::error::Health check failed — status=$STATUS"
-            exit 1
-          fi
-
-      - name: Notify Slack (success)
-        if: success() && env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H 'Content-type: application/json' \
-            -d "{\"text\":\"✅ Clarity Legal deployed successfully — <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|$(git log --oneline -1 --format='%s')>\"}"
-
-      - name: Notify Slack (failure)
-        if: failure() && env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          curl -s -X POST "$SLACK_WEBHOOK_URL" \
-            -H 'Content-type: application/json' \
-            -d "{\"text\":\"❌ Clarity Legal deploy FAILED — check <https://github.com/${{ github.repository }}/actions|Actions>\"}"
+          {
+            echo "## LawHand production"
+            echo
+            echo "- Operation: \`$DEPLOY_OPERATION\`"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Runner: \`$RUNNER_NAME\`"
+            echo "- Site: https://getlawhand.com"
+          } >> "$GITHUB_STEP_SUMMARY"
