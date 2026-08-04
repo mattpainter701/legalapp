@@ -128,16 +128,35 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
     assert job["name"] == "Tenant data safety - migrations and RLS"
     assert job["env"]["PYTHONPATH"] == "backend"
     assert "Reject destructive or rewritten migrations" in step_names
+    assert "Resolve the deployed production migration baseline" in step_names
     assert "Rehearse upgrade over two-tenant customer data" in step_names
     assert "Verify tenant schema and effective isolation" in step_names
+
+    workflow_text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "refs/tags/production:refs/tags/production" in workflow_text
+    assert 'MIGRATION_DIFF_BASE=$migration_diff_base' in workflow_text
 
 
 def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
     deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    host_entrypoint = (ROOT / "scripts" / "lawhand-deploy-from-github").read_text(
+        encoding="utf-8"
+    )
 
     assert "Require successful CI for exact release commit" in deploy
-    assert "ref: main" in deploy
+    assert '[[ "$RELEASE_REF" != refs/heads/main ]]' in deploy
     assert 'head_sha="$RELEASE_SHA"' in deploy
     assert '[[ "$conclusion" != success ]]' in deploy
-    assert "git reset --hard '$RELEASE_SHA'" in deploy
-    assert "test \\\"\\$(git rev-parse HEAD)\\\" = '$RELEASE_SHA'" in deploy
+    assert "runs-on: [self-hosted, linux, x64, skynet, lawhand-prod]" in deploy
+    assert "environment:" in deploy
+    assert "actions/checkout" not in deploy
+    assert "sudo -n /usr/local/sbin/lawhand-deploy-from-github" in deploy
+    assert "Advance production release marker" in deploy
+    assert "git/refs/tags/production" in deploy
+
+    assert "rev-parse 'origin/main^{commit}'" in host_entrypoint
+    assert '[[ "$requested_sha" == "$main_sha" ]]' in host_entrypoint
+    assert 'reset --hard "$requested_sha"' in host_entrypoint
+    assert '[[ "$checked_out_sha" == "$requested_sha" ]]' in host_entrypoint

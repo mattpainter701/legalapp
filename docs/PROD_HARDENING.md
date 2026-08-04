@@ -163,13 +163,30 @@ ENV_FILE=.env COMPOSE_FILE=docker-compose.hypervisor.yml \
 ## 7. Production verification and deployment authority
 
 Pushes to `main` do not automatically mutate production. The GitHub **Deploy to
-Production** workflow is operator-triggered, requires a pre-verified
-`VPS_KNOWN_HOSTS` entry (not trust-on-first-use `ssh-keyscan`), and verifies the
-canonical `PRODUCTION_ORIGIN/health/readiness` endpoint after the on-host gate.
+Production** workflow is operator-triggered and has `verify` and `deploy`
+operations. Pull-request CI and public health checks stay on GitHub-hosted
+runners; only the deployment job targets the dedicated Skynet runner labels.
 
-The authoritative on-host path remains `scripts/deploy_prod.sh`. The existing
-Skynet deployment additionally follows the repository production-deployment
-skill. Do not launch the workflow and a manual/skill deployment concurrently.
+The workflow does not check out or execute arbitrary workflow-branch code on
+Skynet. Its GitHub-hosted gate requires the selected ref to be `main` and, for a
+deployment, requires a successful `CI` push run for that exact commit. The
+production environment accepts only `main`. The runner can sudo only the
+root-owned `/usr/local/sbin/lawhand-deploy-from-github` entrypoint, which locks
+deployments, fetches the canonical repository, rejects anything except the
+current `origin/main` commit, refuses a dirty production checkout, and then
+invokes `scripts/deploy_skynet_runner.sh` as the production user.
+
+The `production` Git tag records the deployed migration baseline. Tenant data
+safety checks always diff and rehearse from that tag, so a later green commit
+cannot conceal an unsafe migration from an earlier failed `main` run. The
+workflow advances the tag only after a successful production deployment.
+
+The runner deployment path preserves the production skill's data guard: it
+creates validated LegalApp and LiteLLM dumps/count manifests before rebuilding,
+requires non-decreasing counts afterward, and verifies readiness plus exact
+release metadata at `https://getlawhand.com`. Do not launch a runner deployment
+and a manual/skill deployment concurrently. See
+`docs/GITHUB_DEPLOY_RUNNER.md` for installation, phone operation, and recovery.
 
 The scheduled **Production public health** workflow checks readiness, frontend,
 and the 14-day TLS floor every ten minutes, reconciles one GitHub issue, and can

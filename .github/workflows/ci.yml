@@ -48,13 +48,19 @@ jobs:
       SECRET_KEY: ci-tenant-safety-secret-not-for-production
       TOKEN_ENCRYPTION_KEY: KxzLuxmIM2dFDWQmKJL9LVUK5ouA0c3_-4VqCMrn-jY=
       PYTHONPATH: backend
-      MIGRATION_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
 
     steps:
       - name: Checkout full history for migration diff
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve the deployed production migration baseline
+        run: |
+          git fetch --force origin refs/tags/production:refs/tags/production
+          migration_diff_base="$(git rev-parse 'refs/tags/production^{commit}')"
+          git merge-base --is-ancestor "$migration_diff_base" "$GITHUB_SHA"
+          echo "MIGRATION_DIFF_BASE=$migration_diff_base" >> "$GITHUB_ENV"
 
       - name: Reject destructive or rewritten migrations
         run: >-
