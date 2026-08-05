@@ -10,8 +10,8 @@
 #   DOWNLOAD_DIR       - Where to store downloaded files
 #   SCRIPTS_DIR        - Directory containing Python scripts
 #   LOG_DIR            - Directory for log files
-#   NOTIFY_EMAIL       - Email address for error notifications (optional)
-#   SMTP_HOST          - SMTP host for sending error emails (optional)
+# Failures are written to the log and surfaced by the repository's GitHub
+# production-health automation; this script does not send SMTP notifications.
 
 set -euo pipefail
 
@@ -36,8 +36,6 @@ COURTLISTENER_URL="${COURTLISTENER_URL:-https://www.courtlistener.com/api/bulk-d
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/tmp/clarity_legal_downloads}"
 SCRIPTS_DIR="${SCRIPTS_DIR:-$SCRIPT_DIR}"
 LOG_DIR="${LOG_DIR:-/var/log/clarity-legal}"
-NOTIFY_EMAIL="${NOTIFY_EMAIL:-}"
-SMTP_HOST="${SMTP_HOST:-localhost}"
 
 # Date strings
 TODAY="$(date +%Y-%m-%d)"
@@ -73,18 +71,6 @@ send_error_notification() {
     log_error "NOTIFICATION: $subject"
     log_error "$body"
 
-    if [ -n "$NOTIFY_EMAIL" ] && command -v sendmail &>/dev/null; then
-        {
-            echo "To: $NOTIFY_EMAIL"
-            echo "From: clarity-legal-noreply@localhost"
-            echo "Subject: [WellPled] $subject"
-            echo ""
-            echo "$body"
-            echo ""
-            echo "--- Log excerpt ---"
-            tail -50 "$LOG_FILE" 2>/dev/null || echo "(log not available)"
-        } | sendmail -S "$SMTP_HOST" "$NOTIFY_EMAIL" 2>/dev/null || true
-    fi
 }
 
 cleanup() {

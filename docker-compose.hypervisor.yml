@@ -133,8 +133,8 @@ services:
       RUN_SCHEDULER: "false" # API processes never own background jobs
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
       EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
-      EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in .env}
-      EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in .env}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
       EMAIL_USER: ${EMAIL_USER:-}
       EMAIL_PASS: ${EMAIL_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}
@@ -181,8 +181,8 @@ services:
       RUN_SCHEDULER: "true"
       PUBLIC_SIGNUP_ENABLED: ${PUBLIC_SIGNUP_ENABLED:-false}
       EMAIL_ENABLED: ${EMAIL_ENABLED:?Set EMAIL_ENABLED in .env}
-      EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in .env}
-      EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in .env}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
       EMAIL_USER: ${EMAIL_USER:-}
       EMAIL_PASS: ${EMAIL_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM in .env}

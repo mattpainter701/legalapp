@@ -235,11 +235,11 @@ class Settings(BaseSettings):
     # ── Email / Notifications ─────────────────────────────────────────────────
     # Disabled delivery is a typed non-success; it never simulates a sent email.
     EMAIL_ENABLED: bool = False
-    EMAIL_HOST: str = "smtp.gmail.com"
+    EMAIL_HOST: str = ""
     EMAIL_PORT: int = 587
     EMAIL_USER: str = ""
     EMAIL_PASS: str = ""
-    EMAIL_FROM: str = "noreply@lawhand.local"
+    EMAIL_FROM: str = "matt@cybersafeadvisor.com"
     SLACK_WEBHOOK_URL: str = ""  # Optional: Slack incoming webhook URL
 
     # Never set True in production — enables /dev/* endpoints

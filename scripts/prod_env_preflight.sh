@@ -28,7 +28,7 @@ required=(
   POSTGRES_PASSWORD CLARITY_APP_PASSWORD REDIS_PASSWORD REDIS_URL
   MIGRATOR_DATABASE_URL APP_DATABASE_URL LITELLM_API_KEY LITELLM_SALT_KEY LITELLM_DB_PASSWORD
   LITELLM_DATABASE_URL UPLOADS_HOST_DIR HOST_STATUS_HOST_DIR HOST_DISK_STATUS_FILE HEALTH_HOST_DISK_MAX_AGE_SECONDS OFFSITE_BACKUP_REQUIRED
-  EMAIL_ENABLED EMAIL_HOST EMAIL_PORT EMAIL_FROM
+  EMAIL_ENABLED EMAIL_FROM
 )
 
 for key in "${required[@]}"; do
@@ -69,7 +69,6 @@ check_nonplaceholder() {
   fi
 }
 
-check_nonplaceholder EMAIL_HOST
 check_nonplaceholder EMAIL_FROM
 
 if [[ "$(get_env LITELLM_SALT_KEY)" == "$(get_env LITELLM_API_KEY)" ]]; then
@@ -89,8 +88,11 @@ vite_public_signup_enabled="$(get_env VITE_PUBLIC_SIGNUP_ENABLED)"
 email_enabled="$(get_env EMAIL_ENABLED)"
 [[ "$email_enabled" == "true" || "$email_enabled" == "false" ]] || errors+=("EMAIL_ENABLED must be explicitly true or false")
 if [[ "$email_enabled" == "true" ]]; then
+  check_nonplaceholder EMAIL_HOST
   check_nonplaceholder EMAIL_USER
   check_nonplaceholder EMAIL_PASS
+  email_port="$(get_env EMAIL_PORT)"
+  [[ "$email_port" =~ ^[0-9]+$ ]] && (( email_port >= 1 && email_port <= 65535 )) || errors+=("EMAIL_PORT must be an integer from 1 to 65535 when email delivery is enabled")
 fi
 [[ "$(get_env BACKEND_URL)" == https://* ]] || errors+=("BACKEND_URL must use https")
 [[ "$(get_env FRONTEND_URL)" == https://* ]] || errors+=("FRONTEND_URL must use https")
@@ -99,7 +101,8 @@ normalized_public_site_url="${public_site_url%/}"
 expected_public_site_url="https://$(get_env DOMAIN)"
 [[ "$normalized_public_site_url" == "$expected_public_site_url" ]] \
   || errors+=("VITE_PUBLIC_SITE_URL must exactly match https://DOMAIN (an optional trailing slash is normalized)")
-[[ "$(get_env VITE_CONTACT_URL)" == https://* || "$(get_env VITE_CONTACT_URL)" == mailto:* ]] || errors+=("VITE_CONTACT_URL must be an https or mailto destination")
+operator_email="matt@cybersafeadvisor.com"
+[[ "$(get_env VITE_CONTACT_URL)" == "mailto:$operator_email" ]] || errors+=("VITE_CONTACT_URL must be mailto:$operator_email")
 [[ "$(get_env DOMAIN)" != *yourdomain* && "$(get_env DOMAIN)" != *localhost* ]] || errors+=("DOMAIN is a placeholder")
 [[ "$(get_env APP_DATABASE_URL)" == *://clarity_app:* ]] || errors+=("APP_DATABASE_URL must use the clarity_app runtime role")
 [[ "$(get_env MIGRATOR_DATABASE_URL)" != *://clarity_app:* ]] || errors+=("MIGRATOR_DATABASE_URL must use the owner/migrator role")
@@ -136,9 +139,7 @@ disk_max_percent="${disk_max_percent:-85}"
   && (( disk_max_percent >= 1 && disk_max_percent <= 100 )) \
   || errors+=("DISK_MAX_PERCENT must be an integer from 1 to 100")
 
-email_port="$(get_env EMAIL_PORT)"
-[[ "$email_port" =~ ^[0-9]+$ ]] && (( email_port >= 1 && email_port <= 65535 )) || errors+=("EMAIL_PORT must be an integer from 1 to 65535")
-[[ "$(get_env EMAIL_FROM)" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || errors+=("EMAIL_FROM must be a valid email address")
+[[ "$(get_env EMAIL_FROM)" == "$operator_email" ]] || errors+=("EMAIL_FROM must be $operator_email")
 
 zoom_required_tenant_id="$(get_env ZOOM_REQUIRED_TENANT_ID)"
 zoom_required_tenant_plan="$(get_env ZOOM_REQUIRED_TENANT_PLAN)"
@@ -153,11 +154,7 @@ elif [[ "$zoom_required_tenant_plan" != "intake-only" ]]; then
   errors+=("ZOOM_REQUIRED_TENANT_PLAN must be intake-only for the first-customer launch")
 fi
 if [[ "$email_enabled" == "false" ]]; then
-  if [[ "${BOOTSTRAP_MODE:-false}" == "true" ]]; then
-    warnings+=("EMAIL_ENABLED=false; bootstrap is infrastructure-only until SMTP credentials and delivery acceptance pass")
-  else
-    errors+=("EMAIL_ENABLED must be true for the sold-tenant launch")
-  fi
+  warnings+=("EMAIL_ENABLED=false by design; outbound application email is disabled and GitHub production-health issues are the primary operator alert channel")
 fi
 [[ -z "$(get_env OFFSITE_BACKUP_ATTESTATION_FILE)" ]] || errors+=("OFFSITE_BACKUP_ATTESTATION_FILE must never be persisted in .env; pass one short-lived file in the deploy process")
 [[ -z "$(get_env HOST_CAPACITY_OVERRIDE)" ]] || errors+=("HOST_CAPACITY_OVERRIDE must never be persisted in .env; pass it only to one reviewed process")

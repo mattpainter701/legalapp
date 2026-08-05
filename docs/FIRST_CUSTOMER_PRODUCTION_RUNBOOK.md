@@ -31,7 +31,8 @@ Set these non-secret relationships in `.env`:
 - `PUBLIC_SIGNUP_ENABLED=false` and `VITE_PUBLIC_SIGNUP_ENABLED=false`. New
   tenants are operator/invite-provisioned until paid conversion and expiry
   enforcement are implemented and proven; marketing CTAs use `VITE_CONTACT_URL`.
-- `VITE_CONTACT_URL` is the verified sales/contact destination used by the public site.
+- `VITE_CONTACT_URL=mailto:matt@cybersafeadvisor.com` is the canonical sales,
+  legal, privacy, and support destination used by the public site.
 - `VITE_PUBLIC_SITE_URL=https://<DOMAIN>` is required and must match `DOMAIN`
   exactly (apart from one optional trailing slash). It is baked into legal-page
   canonicals, social metadata, `robots.txt`, and the sitemap, so rerun the
@@ -58,13 +59,12 @@ Set these non-secret relationships in `.env`:
 - `ZOOM_REQUIRED_TENANT_ID` is the sold tenant UUID and
   `ZOOM_REQUIRED_TENANT_PLAN=intake-only`. Strict checks are bound to that exact
   active tenant and plan; another configured/demo tenant cannot satisfy launch.
-- `EMAIL_ENABLED` must be explicit. It may remain `false` only during an
-  explicitly non-go-live bootstrap deployment while the SMTP account is being provisioned,
-  but assignment alerts are then logged as unavailable and explicit reminder
-  requests return a clear service-unavailable error. Tasks and intake records
-  remain durable even when an alert cannot be sent. For customer go-live, set
-  it to `true` and provide `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`,
-  `EMAIL_PASS`, and a provider-authorized `EMAIL_FROM` address.
+- `EMAIL_ENABLED=false` is the intentional production policy. LawHand does not
+  operate an SMTP sender. Assignment alerts are logged as unavailable and
+  explicit reminder requests return a clear service-unavailable error; tasks
+  and intake records remain durable. Keep `EMAIL_FROM=matt@cybersafeadvisor.com`
+  as the canonical identity. Operator incidents are delivered by GitHub's
+  scheduled production-health issues.
 - Zoom Phone requires the tenant-owned app stored through Admin > Zoom. Save its client ID, client secret, and webhook secret; do not copy the numeric Account Number from Zoom Account Profile. OAuth plus an account call-history probe establishes API readiness immediately. A correctly signed completion event and exact provider fetch then learn or confirm Zoom's opaque `payload.account_id` for real-time delivery without blocking Test Connection or history sync. Shared platform/S2S Phone credentials are prohibited. The production check requires an active tenant app secret, refresh token, healthy API grant, required read scopes, public CRC, and live webhook/provider proof. Remove unused scopes in the Zoom Marketplace app and reauthorize only when the grant or scopes are invalid; the application cannot revoke provider-side grants.
 
 For a single-host VPS, provision at least 8 vCPU and 32 GB advertised memory.
@@ -124,7 +124,7 @@ with `deploy_prod.sh`.
 On a new public host, point DNS at the instance, open inbound TCP 80/443 only, and provision the first certificate before deployment:
 
 ```bash
-bash nginx/init-letsencrypt.sh "$DOMAIN" operations@example.com
+bash nginx/init-letsencrypt.sh "$DOMAIN" matt@cybersafeadvisor.com
 ```
 
 The certificate initializer and renewal cron accept the same `ENV_FILE` and
@@ -353,11 +353,10 @@ per-tenant scheduler heartbeats, stale/exhausted durable jobs, incomplete Zoom
 Phone configuration, failed Zoom CRC ingress, public HTTP, or a TLS certificate
 inside the 14-day floor. The host probe deduplicates filesystem identities while
 covering `DISK_PATH`, uploads, backups, every resolved Compose bind, and
-DockerRootDir (which covers named volumes). For the strict sold-tenant gate,
-email must be enabled: the check connects to SMTP, negotiates TLS where
-configured, authenticates, and disconnects without issuing `MAIL`, `RCPT`, or
-`DATA`. Only a `ZOOM_REQUIRED=false` bootstrap check may remain email-disabled,
-and that check explicitly reports that it is not go-live evidence.
+DockerRootDir (which covers named volumes). The check verifies the intentional
+email-disabled policy and relies on the GitHub production-health issue workflow
+for operator incident delivery. If SMTP is ever explicitly enabled later, the
+check still fails closed on incomplete or unauthenticated configuration.
 
 Confirm scheduler ownership and RLS evidence:
 
@@ -389,11 +388,8 @@ Then:
 2. Place a real inbound test call so a correctly signed completion event reaches the tenant-specific webhook. Confirm the worker uses the same grant to fetch that exact call. The first event learns the opaque account binding atomically; later events must match it.
 3. Run `scripts/production_check.sh`. The gate's CRC request must return an `encryptedToken` through nginx/TLS and its live provider proof must pass.
 4. Confirm the call appears once in Call Intake.
-5. Send one assignment to a controlled firm test mailbox and confirm receipt,
-   sender alignment, links, text/HTML rendering, and reply handling. The safe
-   production probe proves connectivity and authentication but intentionally
-   does not send mail, so this external acceptance step cannot be automated
-   without customer SMTP credentials.
+5. Confirm assignment creation remains durable while the email delivery result
+   reports `disabled`; the UI must not claim that an email was sent.
 6. Save the intake with a specific staff task. Confirm the task appears in Tasks, is tenant-scoped, and notification/read-receipt behavior works.
 
 The automated regression is:
@@ -421,4 +417,8 @@ manager provides another persistent, operator-owned path.
 
 ## Go/no-go
 
-Go only when fresh-host rehearsal, off-host restore, strict production check, real Zoom call-to-task, controlled-mailbox assignment delivery, and post-deploy backup all pass. `EMAIL_ENABLED=false` is accepted only for an explicitly non-go-live bootstrap check. Keep `MCP_PRODUCT_ENABLED=false`; do not market, issue, or accept MCP product keys for this customer.
+Go only when fresh-host rehearsal, off-host restore, strict production check,
+real Zoom call-to-task, durable assignment behavior with email disabled, GitHub
+production-health issue delivery, and post-deploy backup all pass. Keep
+`MCP_PRODUCT_ENABLED=false`; do not market, issue, or accept MCP product keys
+for this customer.

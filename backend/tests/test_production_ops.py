@@ -27,7 +27,7 @@ def _production_env(**overrides: str) -> str:
         "BACKEND_URL": "https://ops-test.invalid",
         "FRONTEND_URL": "https://ops-test.invalid",
         "VITE_PUBLIC_SITE_URL": "https://ops-test.invalid",
-        "VITE_CONTACT_URL": "mailto:ops@example.invalid",
+        "VITE_CONTACT_URL": "mailto:matt@cybersafeadvisor.com",
         "DEV_MODE": "false",
         "PUBLIC_SIGNUP_ENABLED": "false",
         "VITE_PUBLIC_SIGNUP_ENABLED": "false",
@@ -56,12 +56,12 @@ def _production_env(**overrides: str) -> str:
         "DISK_MAX_PERCENT": "85",
         "OFFSITE_BACKUP_REQUIRED": "true",
         "OFFSITE_RESTORE_PUBLIC_KEY_FILE": "__TEST_OFFSITE_PUBLIC_KEY__",
-        "EMAIL_ENABLED": "true",
-        "EMAIL_HOST": "smtp.ops-test.invalid",
+        "EMAIL_ENABLED": "false",
+        "EMAIL_HOST": "",
         "EMAIL_PORT": "587",
-        "EMAIL_USER": "operator@ops-test.invalid",
-        "EMAIL_PASS": "smtp-password-0123456789",
-        "EMAIL_FROM": "noreply@ops-test.invalid",
+        "EMAIL_USER": "",
+        "EMAIL_PASS": "",
+        "EMAIL_FROM": "matt@cybersafeadvisor.com",
         "ZOOM_REQUIRED_TENANT_ID": "00000000-0000-4000-8000-000000000111",
         "ZOOM_REQUIRED_TENANT_PLAN": "intake-only",
     }
@@ -809,7 +809,7 @@ def test_production_preflight_rejects_conflicting_inherited_compose_value(
     assert inherited_secret not in output
 
 
-def test_production_preflight_rejects_disabled_email_for_strict_launch(
+def test_production_preflight_accepts_intentionally_disabled_email(
     tmp_path: Path,
 ) -> None:
     result = _run_preflight(
@@ -818,8 +818,26 @@ def test_production_preflight_rejects_disabled_email_for_strict_launch(
     )
     output = result.stdout + result.stderr
 
+    assert result.returncode == 0, output
+    assert "EMAIL_ENABLED=false by design" in output
+    assert "GitHub production-health issues" in output
+
+
+def test_production_preflight_rejects_incomplete_enabled_email(
+    tmp_path: Path,
+) -> None:
+    result = _run_preflight(
+        tmp_path,
+        _production_env(
+            EMAIL_ENABLED="true", EMAIL_HOST="", EMAIL_USER="", EMAIL_PASS=""
+        ),
+    )
+    output = result.stdout + result.stderr
+
     assert result.returncode != 0
-    assert "EMAIL_ENABLED must be true for the sold-tenant launch" in output
+    assert "EMAIL_HOST must be configured" in output
+    assert "EMAIL_USER must be configured" in output
+    assert "EMAIL_PASS must be configured" in output
 
 
 def test_litellm_release_contract_is_pinned_and_fail_closed() -> None:

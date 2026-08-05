@@ -275,11 +275,7 @@ finally:
 PY
   fi
 else
-  if [[ "$ZOOM_REQUIRED" == true ]]; then
-    fail "EMAIL_ENABLED must be true for first-customer task assignment and reminder delivery"
-  else
-    echo "WARNING: EMAIL_ENABLED=false; bootstrap is infrastructure-only until SMTP delivery is proven." >&2
-  fi
+  echo "WARNING: EMAIL_ENABLED=false by design; outbound application email is disabled and GitHub production-health issues are the primary operator alert channel." >&2
 fi
 
 curl -fsS --max-time 15 "https://${DOMAIN}/health" >/dev/null || fail "public HTTPS health check failed"
@@ -311,10 +307,10 @@ if ! timeout 15 openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 
 fi
 
 if ((${#failures[@]})); then
-  message="WellPled production check FAILED on $(hostname): $(IFS='; '; echo "${failures[*]}")"
+  message="LawHand production check FAILED on $(hostname): $(IFS='; '; echo "${failures[*]}")"
   state="failed"
 else
-  message="WellPled production check recovered/healthy on $(hostname)."
+  message="LawHand production check recovered/healthy on $(hostname)."
   state="healthy"
 fi
 
@@ -333,7 +329,7 @@ if [[ "$state" == "failed" ]]; then
   exit 1
 fi
 if [[ "$ZOOM_REQUIRED" == true ]]; then
-  echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, authenticated SMTP, HTTP, and TLS."
+  echo "Production check passed: disk, containers, PostgreSQL, Redis, scheduler, queue, Zoom, email-delivery policy, HTTP, and TLS."
 else
   echo "Bootstrap infrastructure check passed. NOT GO-LIVE until strict Zoom production_check passes." >&2
 fi

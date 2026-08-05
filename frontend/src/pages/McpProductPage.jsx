@@ -13,7 +13,7 @@ const CONTROLS = [
 ]
 
 export default function McpProductPage() {
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
 
   return (
     <MarketingPageLayout>

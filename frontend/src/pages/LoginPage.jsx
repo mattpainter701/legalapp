@@ -47,7 +47,7 @@ export default function LoginPage() {
   const [error, setError] = useState(null)
   const { login: authLogin } = useAuth()
   const navigate = useNavigate()
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
 
   const handleEmailLogin = async (e) => {
     e.preventDefault()

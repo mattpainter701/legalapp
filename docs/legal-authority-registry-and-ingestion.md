@@ -140,9 +140,9 @@ python -m mcp_server.irs_ingest --preview --irb --forms --limit 10
 python -m mcp_server.benefits_authority_ingest --preview `
   --source-key cms:medicaid-estate-recovery --limit 1
 python -m mcp_server.ohio_authority_ingest --preview `
-  --contact operations@example.com --limit 10 --delay 2
+  --contact matt@cybersafeadvisor.com --limit 10 --delay 2
 python -m mcp_server.nd_authority_ingest --preview `
-  --contact operations@example.com --limit 10 --delay 2
+  --contact matt@cybersafeadvisor.com --limit 10 --delay 2
 
 # Run one overlap-protected production cycle. Adapter checkpoints live on the
 # legal_authority_cache volume when this command runs through Compose.

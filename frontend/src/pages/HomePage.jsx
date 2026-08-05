@@ -352,7 +352,7 @@ function AddonCard({ addon, isOpen, onToggle }) {
 export default function HomePage() {
   const [expandedSkill, setExpandedSkill] = useState('commercial')
   const [expandedAddon, setExpandedAddon] = useState(null)
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
   const scrollTo = (id) => (e) => {
     e.preventDefault()
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
