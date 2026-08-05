@@ -46,7 +46,7 @@ async def test_route_save_records_operator_audit(
             aliases=aliases,
             validate=validate,
         )
-        return {"litellm_updated": False, "litellm_error": "skipped in test"}
+        return {"litellm_updated": True, "litellm_error": None}
 
     async def fake_gateway_status(aliases=None):
         return {"status": "disabled"}
