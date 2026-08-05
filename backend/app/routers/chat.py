@@ -1087,6 +1087,13 @@ async def send_message(
     )
     provider_question = prepare_provider_text(body.content, user.privacy_mode)
 
+    # The submitted turn is durable before retrieval/provider work begins. If a
+    # downstream dependency fails, the user's message remains visible and can
+    # be retried instead of disappearing with the request transaction.
+    conv.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
+
     # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
     #     attachment context, and RAG cache check. These are independent reads.
     async def _load_matter_context_nonstream():
@@ -1153,7 +1160,7 @@ async def send_message(
     cache_hit_rag = False
     cloud_hits = []
     if cached_rag:
-        context_str, chunks = cached_rag
+        context_str, chunks, cloud_hits = cached_rag
         cache_hit_rag = True
     else:
         try:
@@ -1182,6 +1189,7 @@ async def send_message(
                 user_id=str(user.id),
                 context_str=context_str,
                 chunks=chunks,
+                cloud_hits=cloud_hits,
                 expertise_level=user.expertise_level,
                 skill=body.skill if hasattr(body, "skill") else user.default_skill,
                 include_public=body.include_public,
@@ -1211,9 +1219,9 @@ async def send_message(
     context_str = prepare_provider_text(context_str, user.privacy_mode)
     memory_context = prepare_provider_text(memory_context, user.privacy_mode)
 
-    # 5. Call LLM (with caching)
-    import hashlib
-
+    # 5. Call LLM. Conversational answers are deliberately not response-cached:
+    # history and injected memory are part of the semantic input, and serving a
+    # stale answer is a worse failure mode than paying for a fresh completion.
     tenant_name = prepare_provider_text(
         user.tenant.name if user.tenant else "Legal", user.privacy_mode
     )
@@ -1222,71 +1230,50 @@ async def send_message(
         user.privacy_mode,
     )
 
-    context_hash = hashlib.md5(f"{route.cache_key}\n{context_str}".encode()).hexdigest()
-
     cache_hit_llm = False
-    cached_response = await cache_manager.get_cached_llm_response(
-        question=body.content,
-        tenant_id=str(user.tenant_id),
-        user_id=str(user.id),
-        context_hash=context_hash,
-        skill=body.skill if hasattr(body, "skill") else user.default_skill,
-    )
-
     tokens_in, tokens_out = 0, 0
-    if cached_response:
-        response_text = cached_response
-        cache_hit_llm = True
-    else:
-        try:
-            response_text, tokens_in, tokens_out = await llm_service.complete(
-                messages=llm_messages,
-                tenant_name=tenant_name,
-                context=context_str,
-                memory_context=memory_context,
-                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-                provider=route.provider,
-                model=route.model,
-                user_name=user_first_name,
-                customer_api_key=route.customer_api_key,
-                customer_provider=route.customer_provider,
-                customer_endpoint=route.customer_endpoint,
-                gateway_metadata=gateway_metadata(
-                    tenant_id=user.tenant_id,
-                    user_id=user.id,
-                    conversation_id=conv.id,
-                    operation_type="chat",
-                    matter_id=effective_matter_id,
-                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                    premium=_premium_for_user(user, body.content, body.use_premium_llm),
-                ),
-            )
-            # Cache LLM response
-            await cache_manager.set_cached_llm_response(
-                question=body.content,
-                tenant_id=str(user.tenant_id),
-                user_id=str(user.id),
-                context_hash=context_hash,
-                response=response_text,
-                expertise_level=user.expertise_level,
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-            )
-        except Exception as llm_exc:
-            logger.exception("LLM call failed")
-            await capture_chat_error(
-                db=db,
-                error_type="llm_error",
-                message=f"LLM call failed: {llm_exc}",
-                user_id=user.id,
+    llm_usage: dict = {}
+    try:
+        response_text, tokens_in, tokens_out = await llm_service.complete(
+            messages=llm_messages,
+            tenant_name=tenant_name,
+            context=context_str,
+            memory_context=memory_context,
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            provider=route.provider,
+            model=route.model,
+            user_name=user_first_name,
+            customer_api_key=route.customer_api_key,
+            customer_provider=route.customer_provider,
+            customer_endpoint=route.customer_endpoint,
+            gateway_metadata=gateway_metadata(
                 tenant_id=user.tenant_id,
-                request=request,
-                query_text=body.content,
+                user_id=user.id,
                 conversation_id=conv.id,
-                severity="error",
-            )
-            raise HTTPException(
-                status_code=502, detail="LLM service temporarily unavailable"
-            )
+                operation_type="chat",
+                matter_id=effective_matter_id,
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            ),
+            usage_sink=llm_usage,
+        )
+    except Exception as llm_exc:
+        logger.exception("LLM call failed")
+        await capture_chat_error(
+            db=db,
+            error_type="llm_error",
+            message=f"LLM call failed: {llm_exc}",
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            request=request,
+            query_text=body.content,
+            conversation_id=conv.id,
+            severity="error",
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=502, detail="LLM service temporarily unavailable"
+        )
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
     cleaned_response, needs_retry, response_pii = apply_guardrails(
@@ -1322,6 +1309,7 @@ async def send_message(
                 skill=body.skill if hasattr(body, "skill") else user.default_skill,
                 premium=_premium_for_user(user, body.content, body.use_premium_llm),
             ),
+            usage_sink=llm_usage,
         )
         cleaned_response, _, response_pii = apply_guardrails(
             response_text2, privacy_mode=user.privacy_mode
@@ -1383,7 +1371,7 @@ async def send_message(
         )
 
     # 7. Save assistant message with context tracking and skill info
-    model_used = route.model
+    model_used = str(llm_usage.get("model") or route.model)
     skill_applied = (
         body.skill if hasattr(body, "skill") and body.skill else user.default_skill
     )
@@ -1430,8 +1418,8 @@ async def send_message(
         resolved_route=route.resolved_route,
         gateway_provider=route.gateway_provider,
         gateway_alias=route.gateway_alias,
-        final_model=route.gateway_alias,
-        model_used=model_used,
+        final_model=model_used[:200],
+        model_used=model_used[:100],
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost_usd=cost,
@@ -1472,8 +1460,8 @@ async def stream_message(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Streaming RAG endpoint — same as send_message but returns SSE stream of tokens.
-    Yields tokens as they arrive from the LLM, prefixed with 'data: '.
+    Streaming RAG endpoint — same as send_message but returns SSE progress while
+    generation is validated, followed by safe answer chunks prefixed with 'data: '.
     Sends [STREAM_COMPLETE] when done, or [ERROR: message] on failure.
     """
     user = await get_current_user(request, db)
@@ -1567,6 +1555,12 @@ async def stream_message(
         user.privacy_mode,
     )
     provider_question = prepare_provider_text(body.content, user.privacy_mode)
+
+    # Commit before returning the StreamingResponse. The generator can fail or
+    # the client can disconnect after this point without losing the user turn.
+    conv.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await set_tenant_context(db, str(user.tenant_id))
 
     # The remaining work intentionally happens inside the response generator.
     # This opens SSE immediately so the client can render real retrieval activity
@@ -1727,7 +1721,7 @@ async def stream_message(
             cloud_hits = []
             rag_cache_task = None
             if cached_rag:
-                context_str, chunks = cached_rag
+                context_str, chunks, cloud_hits = cached_rag
                 cache_hit_rag = True
             else:
                 try:
@@ -1764,6 +1758,7 @@ async def stream_message(
                         user_id=str(user.id),
                         context_str=context_str,
                         chunks=chunks,
+                        cloud_hits=cloud_hits,
                         expertise_level=user.expertise_level,
                         skill=body.skill
                         if hasattr(body, "skill")
@@ -1838,6 +1833,7 @@ async def stream_message(
 
             # Stream tokens from the LLM
             accumulated_text = ""
+            stream_usage: dict = {}
             last_generation_update = generation_started_at
             async for token in llm_service.stream_complete(
                 messages=llm_messages,
@@ -1860,6 +1856,7 @@ async def stream_message(
                     skill=body.skill if hasattr(body, "skill") else user.default_skill,
                     premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 ),
+                usage_sink=stream_usage,
             ):
                 accumulated_text += token
                 now = time.monotonic()
@@ -1913,10 +1910,12 @@ async def stream_message(
                     },
                 ]
                 accumulated_text = ""
+                retry_usage: dict = {}
                 async for token in llm_service.stream_complete(
                     messages=retry_messages,
                     tenant_name=tenant_name,
                     context=context_str,
+                    memory_context=memory_context,
                     use_premium=_premium_for_user(
                         user, body.content, body.use_premium_llm
                     ),
@@ -1939,8 +1938,18 @@ async def stream_message(
                             user, body.content, body.use_premium_llm
                         ),
                     ),
+                    usage_sink=retry_usage,
                 ):
                     accumulated_text += token
+
+                stream_usage["tokens_in"] = int(
+                    stream_usage.get("tokens_in") or 0
+                ) + int(retry_usage.get("tokens_in") or 0)
+                stream_usage["tokens_out"] = int(
+                    stream_usage.get("tokens_out") or 0
+                ) + int(retry_usage.get("tokens_out") or 0)
+                if retry_usage.get("model"):
+                    stream_usage["model"] = retry_usage["model"]
 
                 cleaned_response, _, response_pii = apply_guardrails(
                     accumulated_text, privacy_mode=user.privacy_mode
@@ -2024,7 +2033,7 @@ async def stream_message(
                 )
 
             # Save assistant message
-            model_used = route.model
+            model_used = str(stream_usage.get("model") or route.model)
             skill_applied = (
                 body.skill
                 if hasattr(body, "skill") and body.skill
@@ -2048,17 +2057,32 @@ async def stream_message(
             # Update conversation timestamp
             conv.updated_at = datetime.now(timezone.utc)
 
-            # Record usage (estimated tokens for streaming)
-            tokens_in = len(body.content.split()) * 1.3  # Rough estimate
-            tokens_out = len(accumulated_text.split()) * 1.3
+            # LiteLLM returns exact usage on the final streaming chunk. BYOK
+            # providers without that extension use an estimate of the complete
+            # provider input, rather than only the final user message.
+            estimated_provider_input = (
+                tenant_name
+                + context_str
+                + memory_context
+                + " ".join(
+                    str(message.get("content") or "") for message in llm_messages
+                )
+            )
+            tokens_in = int(
+                stream_usage.get("tokens_in")
+                or len(estimated_provider_input.split()) * 1.3
+            )
+            tokens_out = int(
+                stream_usage.get("tokens_out") or len(accumulated_text.split()) * 1.3
+            )
             # BYOK (customer) routes use the tenant's own provider subscription —
             # the platform does not pay for those tokens, so don't bill for them.
             cost = (
                 Decimal("0")
                 if route.resolved_route == "customer"
                 else calculate_cost(
-                    tokens_in=int(tokens_in),
-                    tokens_out=int(tokens_out),
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
                     model=model_used,
                     billing_tier=user.tenant.billing_tier if user.tenant else "payg",
                 )
@@ -2075,10 +2099,10 @@ async def stream_message(
                 resolved_route=route.resolved_route,
                 gateway_provider=route.gateway_provider,
                 gateway_alias=route.gateway_alias,
-                final_model=route.gateway_alias,
-                model_used=model_used,
-                tokens_in=int(tokens_in),
-                tokens_out=int(tokens_out),
+                final_model=model_used[:200],
+                model_used=model_used[:100],
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
                 cost_usd=cost,
                 operation_type="chat_stream",
                 query_text=retained_gateway_query_text(body.content),
@@ -2116,11 +2140,10 @@ async def stream_message(
             # Send completion marker
             yield "data: [STREAM_COMPLETE]\n\n"
 
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            yield f"data: [ERROR: {str(e)[:200]}]\n\n"
+        except Exception:
+            logger.exception("Streaming chat failed")
+            await db.rollback()
+            yield "data: [ERROR: Assistant service temporarily unavailable. Retry this message.]\n\n"
 
     return StreamingResponse(
         stream_generator(),

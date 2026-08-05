@@ -153,3 +153,15 @@ class TestCalculateCost:
         # ~50k tokens in, ~2k out on DeepSeek flat
         cost = calculate_cost(50_000, 2_000, "deepseek-chat", billing_tier="flat")
         assert Decimal("0.00001") < cost < Decimal("1.00")
+
+    def test_unknown_model_does_not_default_to_deepseek_price(self):
+        assert calculate_cost(1_000_000, 1_000_000, "unknown-model") == Decimal(
+            "0.000000"
+        )
+
+    def test_explicit_free_model_has_zero_cost(self):
+        assert calculate_cost(
+            1_000_000,
+            1_000_000,
+            "openrouter/deepseek-v4-flash-free",
+        ) == Decimal("0.000000")
