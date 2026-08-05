@@ -7,9 +7,25 @@ from openai import APIConnectionError
 
 from app.config import get_settings
 from app.services.llm import LLMService
+from app.services.llm_routing import _current_managed_alias
 
 
 settings = get_settings()
+
+
+def test_tenant_managed_alias_follows_active_route_revision():
+    config = {
+        "standard_model": "clarity-standard-rnew",
+        "premium_model": "clarity-premium-rnew",
+    }
+
+    assert (
+        _current_managed_alias("clarity-standard-rold", config)
+        == "clarity-standard-rnew"
+    )
+    assert (
+        _current_managed_alias("custom-tenant-alias", config) == "custom-tenant-alias"
+    )
 
 
 def test_disclaimer_footer_is_conditional_for_legal_work_only():
@@ -42,7 +58,7 @@ def test_system_prompt_does_not_expose_firm_context_label():
     assert "Never write the phrase" in prompt
 
 
-def test_standard_gateway_candidates_skip_routes_in_latency_cooldown():
+def test_gateway_delegates_fallbacks_to_litellm():
     service = LLMService()
     with patch(
         "app.services.llm_routing.is_model_in_cooldown",
@@ -54,14 +70,11 @@ def test_standard_gateway_candidates_skip_routes_in_latency_cooldown():
             customer_api_key=None,
         )
 
-    assert candidates == [
-        "clarity-standard-zen-nemotron",
-        "clarity-standard-deepseek-flash-free",
-    ]
+    assert candidates == [settings.LITELLM_STANDARD_MODEL]
 
 
 @pytest.mark.asyncio
-async def test_standard_stream_retries_gateway_fallback_before_first_token():
+async def test_standard_stream_does_not_bypass_litellm_route_graph():
     class FakeStream:
         def __init__(self, chunks):
             self._chunks = iter(chunks)
@@ -84,34 +97,29 @@ async def test_standard_stream_retries_gateway_fallback_before_first_token():
 
         async def create(self, **kwargs):
             self.models.append(kwargs["model"])
-            if len(self.models) == 1:
-                raise APIConnectionError(
-                    request=httpx.Request("POST", "http://litellm.local")
-                )
-            return FakeStream(["fallback ", "answer"])
+            raise APIConnectionError(
+                request=httpx.Request("POST", "http://litellm.local")
+            )
 
     async def run():
         service = LLMService()
         completions = FakeCompletions()
         service.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-        chunks = [
-            chunk
-            async for chunk in service.stream_complete(
-                [{"role": "user", "content": "test"}],
-                tenant_name="Tenant",
-                context="",
-                model=settings.LITELLM_STANDARD_MODEL,
-            )
-        ]
-        return completions.models, chunks
+        with pytest.raises(RuntimeError, match="LiteLLM Gateway API error"):
+            _ = [
+                chunk
+                async for chunk in service.stream_complete(
+                    [{"role": "user", "content": "test"}],
+                    tenant_name="Tenant",
+                    context="",
+                    model=settings.LITELLM_STANDARD_MODEL,
+                )
+            ]
+        return completions.models
 
-    models, chunks = await run()
+    models = await run()
 
-    assert models == [
-        settings.LITELLM_STANDARD_MODEL,
-        "clarity-standard-zen-nemotron",
-    ]
-    assert "".join(chunks) == "fallback answer"
+    assert models == [settings.LITELLM_STANDARD_MODEL]
 
 
 @pytest.mark.asyncio
@@ -125,11 +133,13 @@ async def test_complete_sends_metadata_without_prompt_content():
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))],
                 usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2),
+                model="openrouter/provider-actual-model",
             )
 
     async def run():
         service = LLMService()
         completions = FakeCompletions()
+        usage = {}
         service.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         await service.complete(
             [{"role": "user", "content": "privileged prompt"}],
@@ -141,13 +151,20 @@ async def test_complete_sends_metadata_without_prompt_content():
                 "operation_type": "chat",
                 "prompt": "privileged prompt",
             },
+            usage_sink=usage,
         )
-        return completions.kwargs
+        return completions.kwargs, usage
 
-    kwargs = await run()
+    kwargs, usage = await run()
 
     assert kwargs["extra_body"] == {
         "metadata": {"tenant_id": "tenant-1", "operation_type": "chat"}
+    }
+    assert usage == {
+        "requested_model": settings.LITELLM_STANDARD_MODEL,
+        "model": "openrouter/provider-actual-model",
+        "tokens_in": 3,
+        "tokens_out": 2,
     }
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import stripe
 from decimal import Decimal
@@ -6,6 +7,7 @@ from decimal import Decimal
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # Cost per 1M tokens (USD)
 DEEPSEEK_INPUT_COST_PER_M = Decimal("0.27")
@@ -33,7 +35,10 @@ def calculate_cost(
     """
     model_lower = model.lower()
 
-    if "claude" in model_lower or "anthropic" in model_lower:
+    if ":free" in model_lower or model_lower.endswith("-free"):
+        input_cost = Decimal("0")
+        output_cost = Decimal("0")
+    elif "claude" in model_lower or "anthropic" in model_lower:
         input_cost = CLAUDE_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
         output_cost = (
             CLAUDE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
@@ -47,12 +52,18 @@ def calculate_cost(
         # Azure OpenAI (GPT-4o, etc.)
         input_cost = AZURE_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
         output_cost = AZURE_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
-    else:
-        # DeepSeek or any other model defaults to DeepSeek pricing
+    elif "deepseek" in model_lower:
         input_cost = DEEPSEEK_INPUT_COST_PER_M * Decimal(tokens_in) / Decimal(1_000_000)
         output_cost = (
             DEEPSEEK_OUTPUT_COST_PER_M * Decimal(tokens_out) / Decimal(1_000_000)
         )
+    else:
+        # Unknown aliases must not silently inherit an unrelated provider's
+        # price. LiteLLM's spend ledger remains the canonical reconciliation
+        # source until an explicit price is configured here.
+        logger.warning("No application billing rate configured for model %s", model)
+        input_cost = Decimal("0")
+        output_cost = Decimal("0")
 
     base_cost = input_cost + output_cost
 
