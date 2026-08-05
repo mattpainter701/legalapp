@@ -304,6 +304,98 @@ async def test_full_rag_query_records_mcp_usage_in_isolated_session(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_tools_fail(
+    monkeypatch,
+):
+    class Embeddings:
+        public_calls = 0
+
+        async def embed_text(self, text):
+            return [0.1, 0.2]
+
+        async def embed_public_query(self, text):
+            self.public_calls += 1
+            return [0.3, 0.4]
+
+    class UsageSession:
+        async def __aenter__(self):
+            return "usage-session"
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    recorded = []
+
+    async def fake_fts(**kwargs):
+        return []
+
+    async def fake_dense(**kwargs):
+        return []
+
+    async def fake_public(**kwargs):
+        return [
+            {
+                "id": "local-public-1",
+                "content": "Local public authority fallback",
+                "case_name": "Fallback Authority",
+                "similarity": 0.8,
+            }
+        ]
+
+    async def fake_mcp(query, top_k):
+        return rag.MCPPublicResults(
+            [],
+            [
+                {
+                    "tool_name": "search_caselaw",
+                    "status_code": 503,
+                    "result_count": 0,
+                    "latency_ms": 12,
+                },
+                {
+                    "tool_name": "search_legal_authorities",
+                    "status_code": 502,
+                    "result_count": 0,
+                    "latency_ms": 14,
+                },
+            ],
+        )
+
+    async def fake_record_usage(**kwargs):
+        recorded.append((kwargs["tool_name"], kwargs["status_code"]))
+
+    embeddings = Embeddings()
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag, "search_chunks_fts", fake_fts)
+    monkeypatch.setattr(rag, "search_chunks", fake_dense)
+    monkeypatch.setattr(rag, "search_public_chunks", fake_public)
+    monkeypatch.setattr(rag, "search_courtlistener_mcp", fake_mcp)
+    monkeypatch.setattr(rag, "async_session_maker", lambda: UsageSession())
+    monkeypatch.setattr(rag, "set_tenant_context", lambda *args: _async_none())
+    monkeypatch.setattr(rag, "record_internal_chat_mcp_usage", fake_record_usage)
+
+    context, chunks = await rag.full_rag_query(
+        db=object(),
+        embedding_service=embeddings,
+        question="fallback authority",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        include_public=True,
+    )
+
+    assert embeddings.public_calls == 1
+    assert chunks[0]["id"] == "local-public-1"
+    assert "Local public authority fallback" in context
+    assert recorded == [
+        ("search_caselaw", 503),
+        ("search_legal_authorities", 502),
+    ]
+
+
+async def _async_none():
+    return None
+
+
+@pytest.mark.asyncio
 async def test_rag_cache_splits_public_and_private_contexts():
     class FakeRedis:
         def __init__(self):
@@ -325,6 +417,7 @@ async def test_rag_cache_splits_public_and_private_contexts():
         user_id="user",
         context_str="private only",
         chunks=[],
+        cloud_hits=[{"id": "cloud-1", "title": "Cached cloud source"}],
         include_public=False,
     )
 
@@ -337,7 +430,11 @@ async def test_rag_cache_splits_public_and_private_contexts():
     cached = await manager.get_cached_rag_results(
         "same question", "tenant", "user", include_public=False
     )
-    assert cached == ("private only", [])
+    assert cached == (
+        "private only",
+        [],
+        [{"id": "cloud-1", "title": "Cached cloud source"}],
+    )
 
 
 @pytest.mark.asyncio
@@ -383,4 +480,4 @@ async def test_rag_cache_splits_matter_scopes():
         include_public=True,
         scope_key="matter:one",
     )
-    assert cached == ("matter one context", [])
+    assert cached == ("matter one context", [], [])

@@ -479,9 +479,14 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
 
 function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases, onUpdate, onError, saving, setSaving }) {
   const config = tenantDetail?.llm_config || {}
+  const followManagedAlias = (alias) => {
+    if (alias === 'clarity-standard' || alias?.startsWith('clarity-standard-r')) return defaultAliases.standard || alias
+    if (alias === 'clarity-premium' || alias?.startsWith('clarity-premium-r')) return defaultAliases.premium || alias
+    return alias || ''
+  }
   const current = {
-    standardModel: config.standard_model || config.model || '',
-    premiumModel: config.premium_model || '',
+    standardModel: followManagedAlias(config.standard_model || config.model),
+    premiumModel: followManagedAlias(config.premium_model),
   }
   const [values, setValues] = useState(current)
   const [saved, setSaved] = useState(false)
@@ -491,7 +496,7 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
     if (isDirty.current) return
     setValues(current)
     setSaved(false)
-  }, [config.standard_model, config.premium_model, config.model])
+  }, [config.standard_model, config.premium_model, config.model, defaultAliases.standard, defaultAliases.premium])
 
   const changed = JSON.stringify(values) !== JSON.stringify(current)
 
@@ -530,21 +535,19 @@ function TenantAliasOverride({ tenant, tenantDetail, platformKey, defaultAliases
         ].map(([key, label, fallback]) => (
           <div key={key}>
             <label htmlFor={`tenant-${tenant.id}-${key}`} className="block text-xs text-brand-muted font-sans mb-1">{label}</label>
-            <input
+            <select
               id={`tenant-${tenant.id}-${key}`}
-              list={`tenant-aliases-${tenant.id}`}
               value={values[key] || ''}
               onChange={(e) => setValue(key, e.target.value)}
-              placeholder={`Inherit ${fallback}`}
               className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-            />
+            >
+              <option value="">Inherit {fallback}</option>
+              {[...new Set([defaultAliases.standard, defaultAliases.premium].filter(Boolean))].map((alias) => (
+                <option key={alias} value={alias}>{alias}</option>
+              ))}
+            </select>
           </div>
         ))}
-        <datalist id={`tenant-aliases-${tenant.id}`}>
-          {[defaultAliases.standard, defaultAliases.premium, 'clarity-standard', 'clarity-premium'].filter(Boolean).map((alias) => (
-            <option key={alias} value={alias} />
-          ))}
-        </datalist>
       </div>
       <div className="flex items-center gap-3">
         <button
@@ -1006,8 +1009,7 @@ function preferredModelOptions(models = []) {
 
 function routeIssues(route, allKeys) {
   const issues = []
-  const hasAny = Boolean(route.provider_id || route.key_id || route.model)
-  if (hasAny && !isCompleteTarget(route)) issues.push('Primary route needs provider, key, and model.')
+  if (!isCompleteTarget(route)) issues.push('Primary route needs provider, key, and model.')
   const key = allKeys.find((k) => k.id === route.key_id)
   if (key && route.provider_id && key.provider_id !== route.provider_id) {
     issues.push('Primary key does not belong to the selected provider.')
@@ -1130,7 +1132,7 @@ function RouteFlow({ label, alias, route, presets, keys, balanceCount, fallbackC
   )
 }
 
-function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels, onChange }) {
+function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platformKey, catalogModels, onChange }) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [models, setModels] = useState([])
   const [modelsError, setModelsError] = useState(null)
@@ -1138,7 +1140,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
   const [testResult, setTestResult] = useState(null)
 
   const routeKey = label.toLowerCase()
-  const alias = `clarity-${routeKey}`
+  const alias = activeAlias || `clarity-${routeKey}`
   const selectedPreset = presets.find((p) => p.id === route.provider_id)
   const selectedKey = allKeys.find((k) => k.id === route.key_id)
   const issues = routeIssues(route, allKeys)
@@ -1246,7 +1248,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 transition-colors"
           >
             {testing ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
-            Test
+            Test provider
           </button>
         </div>
       </div>
@@ -1259,7 +1261,7 @@ function RouteCard({ label, route, allKeys, presets, platformKey, catalogModels,
             <div className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
               <p>
                 {testResult.ok
-                  ? `Test OK with ${testResult.model_used}: ${testResult.response_preview}`
+                  ? `Provider test OK with ${testResult.model_used}: ${testResult.response_preview}`
                   : `Test failed: ${testResult.error}`}
               </p>
               <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
@@ -1397,6 +1399,7 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   const [adding, setAdding] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [addError, setAddError] = useState(null)
+  const [vaultError, setVaultError] = useState(null)
   const [syncResult, setSyncResult] = useState(null)
   const [probingKey, setProbingKey] = useState(null)
   const [keyModels, setKeyModels] = useState({})
@@ -1419,9 +1422,12 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
   const handleDelete = async (id) => {
     if (!await confirmAction({ title: 'Delete API key?', message: 'This key will be permanently removed from the vault.', confirmLabel: 'Delete key', destructive: true })) return
     try {
+      setVaultError(null)
       await deleteLLMProviderKey(platformKey, id)
       onKeysChange(keys.filter((k) => k.id !== id))
-    } catch { /* silent */ }
+    } catch (e) {
+      setVaultError(e?.response?.data?.detail || 'Failed to delete key')
+    }
   }
 
   const handleSyncEnv = async () => {
@@ -1472,6 +1478,12 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
           </button>
         </div>
       </div>
+
+      {vaultError && (
+        <div className="px-5 py-3 border-b border-brand-rose/20 bg-brand-rose/10 text-xs text-brand-rose font-sans" role="alert">
+          {vaultError}
+        </div>
+      )}
 
       {syncResult && (
         <div className="px-5 py-3 border-b border-brand-line text-xs font-sans">
@@ -1973,7 +1985,7 @@ function LiteLLMGatewayPanel({ status, checking, reloading, onCheck, onReload })
   )
 }
 
-function AIRoutingTab({ platformKey, onAuthError }) {
+export function AIRoutingTab({ platformKey, onAuthError }) {
   const [keys, setKeys] = useState([])
   const [presets, setPresets] = useState([])
   const [catalog, setCatalog] = useState(null)
@@ -1983,6 +1995,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
   const [reloadingRoutes, setReloadingRoutes] = useState(false)
   const [standard, setStandard] = useState(emptyRoute)
   const [premium, setPremium] = useState(emptyRoute)
+  const [activation, setActivation] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -1992,15 +2005,18 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setLoading(true)
     setLoadError(null)
     try {
-      const keysData = await getLLMProviderKeys(platformKey)
-      const presetsData = await getLLMProviderPresets(platformKey)
-      const routesData = await getLLMRoutes(platformKey)
-      const catalogData = await getLLMModelCatalog(platformKey)
-      const gatewayData = await getLLMGatewayStatus(platformKey)
+      const [keysData, presetsData, routesData, catalogData, gatewayData] = await Promise.all([
+        getLLMProviderKeys(platformKey),
+        getLLMProviderPresets(platformKey),
+        getLLMRoutes(platformKey),
+        getLLMModelCatalog(platformKey),
+        getLLMGatewayStatus(platformKey),
+      ])
       setKeys(keysData.keys || [])
       setPresets(presetsData.providers || [])
       setCatalog(catalogData)
       setGatewayStatus(gatewayData)
+      setActivation(routesData.activation || null)
       const std = routesData.standard || {}
       const prem = routesData.premium || {}
       setStandard({ key_id: std.key_id || '', provider_id: std.provider_id || '', model: std.model || '', capacity: std.capacity || 100, alternates: std.alternates || [], fallbacks: std.fallbacks || [] })
@@ -2074,6 +2090,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     try {
       const data = await reloadLLMRoutes(platformKey)
       if (data.gateway_status) setGatewayStatus(data.gateway_status)
+      if (data.app_aliases) setActivation((previous) => ({ ...(previous || {}), aliases: data.app_aliases }))
       setSaveResult({
         ok: Boolean(data.litellm_updated),
         message: reloadSummary(data),
@@ -2097,7 +2114,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     setSaveResult({
       ok: true,
       pending: true,
-      message: `Applied ${model.id} to ${routeLabel} ${placementLabel}. Save Routes to reload LiteLLM.`,
+      message: `Applied ${model.id} to ${routeLabel} ${placementLabel}. Validate and activate to publish it.`,
     })
   }
 
@@ -2111,6 +2128,13 @@ function AIRoutingTab({ platformKey, onAuthError }) {
     try {
       const data = await saveLLMRoutes(platformKey, { standard, premium })
       if (data.gateway_status) setGatewayStatus(data.gateway_status)
+      if (data.activated) {
+        setActivation({
+          status: 'active',
+          aliases: data.app_aliases,
+          revision: data.app_aliases?.standard?.split('-r').pop() || null,
+        })
+      }
       setSaveResult({
         ok: Boolean(data.litellm_updated),
         litellm_updated: data.litellm_updated,
@@ -2142,10 +2166,11 @@ function AIRoutingTab({ platformKey, onAuthError }) {
       <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 mb-6">
         <div>
           <h2 className="text-xl font-serif font-bold text-brand-ink">AI Provider Routing</h2>
-          <p className="text-sm text-brand-muted font-sans mt-1">Register standard and premium aliases in LiteLLM, then order fallback targets for each route.</p>
+          <p className="text-sm text-brand-muted font-sans mt-1">Activate versioned standard and premium routes after both aliases pass synthetic completions.</p>
           <div className="flex flex-wrap items-center gap-2 mt-3">
-            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">clarity-standard</span>
-            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">clarity-premium</span>
+            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{activation?.aliases?.standard || 'No standard route active'}</span>
+            <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-ink">{activation?.aliases?.premium || 'No premium route active'}</span>
+            {activation?.revision && <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-brand-bg border border-brand-line text-brand-muted">revision {activation.revision}</span>}
             <span className={`text-[11px] font-sans px-2 py-1 rounded-full ${validationIssues.length ? 'bg-brand-amber/10 text-brand-amber' : 'bg-brand-accent/10 text-brand-accent'}`}>
               {validationIssues.length ? `${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'}` : `${configuredCount}/2 primary routes configured`}
             </span>
@@ -2165,7 +2190,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
             className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
           >
             {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-            {saving ? 'Saving…' : 'Save Routes'}
+            {saving ? 'Activating…' : 'Validate & Activate'}
           </button>
         </div>
       </div>
@@ -2190,6 +2215,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <RouteCard
           label="Standard"
+          alias={activation?.aliases?.standard}
           route={standard}
           allKeys={keys}
           presets={presets}
@@ -2199,6 +2225,7 @@ function AIRoutingTab({ platformKey, onAuthError }) {
         />
         <RouteCard
           label="Premium"
+          alias={activation?.aliases?.premium}
           route={premium}
           allKeys={keys}
           presets={presets}

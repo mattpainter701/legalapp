@@ -109,10 +109,10 @@ class ExpertiseCacheManager:
         skill: Optional[str] = None,
         include_public: bool = True,
         scope_key: Optional[str] = None,
-    ) -> Optional[Tuple[str, list]]:
+    ) -> Optional[Tuple[str, list, list]]:
         """
         Retrieve cached RAG results.
-        Returns (context_str, chunks) or None if not cached.
+        Returns (context_str, chunks, cloud_hits) or None if not cached.
         """
         if not self.cache_enabled or not self.redis_client:
             return None
@@ -134,7 +134,9 @@ class ExpertiseCacheManager:
             cached = await self.redis_client.get(key)
             if cached:
                 data = json.loads(cached)
-                return data["context"], data["chunks"]
+                # cloud_hits was added after the original cache format. Treat
+                # older entries as having no cloud results until they expire.
+                return data["context"], data["chunks"], data.get("cloud_hits", [])
             return None
         except Exception as e:
             print(f"Cache get error: {e}")
@@ -147,6 +149,7 @@ class ExpertiseCacheManager:
         user_id: str,
         context_str: str,
         chunks: list,
+        cloud_hits: Optional[list] = None,
         expertise_level: str = "mid",
         skill: Optional[str] = None,
         include_public: bool = True,
@@ -171,7 +174,11 @@ class ExpertiseCacheManager:
                 query_hash,
             )
             ttl = self._get_ttl(expertise_level, "rag", skill)
-            data = {"context": context_str, "chunks": chunks}
+            data = {
+                "context": context_str,
+                "chunks": chunks,
+                "cloud_hits": cloud_hits or [],
+            }
             await self.redis_client.setex(key, ttl, json.dumps(data, default=str))
             return True
         except Exception as e:

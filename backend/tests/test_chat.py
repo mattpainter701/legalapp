@@ -160,10 +160,13 @@ def test_existing_valid_source_marker_replaces_model_tag_with_verify():
 def test_duplicate_chunk_source_marker_uses_visible_canonical_source():
     answer = "The court applied the rule. [source: courtlistener:chunk-2] [verify]"
 
-    assert _canonicalize_source_references(
-        answer,
-        {"courtlistener:chunk-2": "courtlistener:chunk-1"},
-    ) == "The court applied the rule. [source: courtlistener:chunk-1] [verify]"
+    assert (
+        _canonicalize_source_references(
+            answer,
+            {"courtlistener:chunk-2": "courtlistener:chunk-1"},
+        )
+        == "The court applied the rule. [source: courtlistener:chunk-1] [verify]"
+    )
 
 
 @pytest.mark.asyncio
@@ -550,6 +553,25 @@ async def test_send_message_returns_assistant(
         "role": "user",
         "content": "What is the standard for preliminary injunctions?",
     }
+
+
+@pytest.mark.asyncio
+async def test_failed_llm_call_preserves_submitted_user_message(
+    client: AsyncClient, mock_llm, mock_embeddings
+):
+    conv = (await client.post("/api/conversations", json={})).json()
+    mock_llm.side_effect = RuntimeError("provider unavailable")
+
+    response = await client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"content": "Keep this turn if generation fails."},
+    )
+
+    assert response.status_code == 502
+    detail = (await client.get(f"/api/conversations/{conv['id']}")).json()
+    assert [message["content"] for message in detail["messages"]] == [
+        "Keep this turn if generation fails."
+    ]
 
 
 @pytest.mark.asyncio
