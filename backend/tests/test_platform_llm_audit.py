@@ -29,9 +29,7 @@ async def _add_provider_key(db_session, *, provider_id: str = "openrouter"):
 
 async def _audit_actions(db_session):
     result = await db_session.execute(select(OperatorAuditLog))
-    return [
-        row for row in result.scalars().all() if row.action != "platform.request"
-    ]
+    return [row for row in result.scalars().all() if row.action != "platform.request"]
 
 
 @pytest.mark.asyncio
@@ -39,11 +37,18 @@ async def test_route_save_records_operator_audit(
     client: AsyncClient, db_session, monkeypatch
 ):
     key = await _add_provider_key(db_session)
+    reload_call = {}
 
-    async def fake_reload(config, keys_by_id):
+    async def fake_reload(config, keys_by_id, *, aliases=None, validate=True):
+        reload_call.update(
+            config=config,
+            keys_by_id=keys_by_id,
+            aliases=aliases,
+            validate=validate,
+        )
         return {"litellm_updated": False, "litellm_error": "skipped in test"}
 
-    async def fake_gateway_status():
+    async def fake_gateway_status(aliases=None):
         return {"status": "disabled"}
 
     monkeypatch.setattr(platform_llm_router, "_reload_litellm_routes", fake_reload)
@@ -75,6 +80,11 @@ async def test_route_save_records_operator_audit(
     )
 
     assert response.status_code == 200
+    assert reload_call["keys_by_id"] == {str(key.id): key}
+    assert reload_call["aliases"] == platform_llm_router._managed_route_aliases(
+        reload_call["config"]
+    )
+    assert reload_call["validate"] is True
     logs = await _audit_actions(db_session)
     assert [log.action for log in logs] == ["llm.routes_saved"]
     assert logs[0].metadata_json["standard"]["model"] == "google/gemma-4-31b-it:free"
