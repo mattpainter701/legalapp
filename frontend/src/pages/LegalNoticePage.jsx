@@ -4,7 +4,7 @@ import LawHandLogo from '../components/LawHandLogo'
 import { Link } from 'react-router-dom'
 
 const UPDATED = 'July 27, 2026'
-const EMAIL = 'contact@perevagagroup.com'
+const EMAIL = 'matt@cybersafeadvisor.com'
 
 const privacySections = [
   ['organization-role', 'Your organization’s role', [
@@ -35,7 +35,7 @@ const privacySections = [
     'LawHand uses tenant-scoped access controls and is designed to isolate firm workspaces. The service uses short-lived access sessions, rotating refresh state, and application encryption for stored integration credentials. Storage, model-provider, and connected-service protections also depend on the infrastructure, provider, and tenant configuration selected for the workspace. No method of storage or transmission is completely secure.',
   ]],
   ['choices-and-requests', 'Your choices and requests', [
-    'You may be able to update account information through the service or your workspace administrator. Depending on applicable law, you may have rights to request access, correction, deletion, restriction, objection, or portability. If your request concerns an organization-managed workspace, contact that organization first. For questions about this policy or information handled directly by LawHand, email contact@perevagagroup.com. We may need to verify a request before responding.',
+    'You may be able to update account information through the service or your workspace administrator. Depending on applicable law, you may have rights to request access, correction, deletion, restriction, objection, or portability. If your request concerns an organization-managed workspace, contact that organization first. For questions about this policy or information handled directly by LawHand, email matt@cybersafeadvisor.com. We may need to verify a request before responding.',
   ]],
   ['policy-changes', 'Changes to this policy', [
     'We may update this Privacy Policy as the service, providers, or legal requirements change. We will post the revised policy on this page and update the date above. Organization-specific notice obligations remain governed by the applicable subscription agreement or data processing agreement.',

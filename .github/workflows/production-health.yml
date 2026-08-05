@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      PRODUCTION_ORIGIN: https://legalapp.perevagagroup.com
-      PRODUCTION_DOMAIN: legalapp.perevagagroup.com
+      PRODUCTION_ORIGIN: https://getlawhand.com
+      PRODUCTION_DOMAIN: getlawhand.com
     steps:
       - name: Verify API and frontend
         id: http
@@ -72,7 +72,7 @@ jobs:
           TLS_OUTCOME: ${{ steps.tls.outcome }}
         with:
           script: |
-            const title = '[production-alert] Clarity Legal readiness failure';
+            const title = '[production-alert] LawHand readiness failure';
             const failed = process.env.HTTP_OUTCOME !== 'success' || process.env.TLS_OUTCOME !== 'success';
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
@@ -134,7 +134,7 @@ jobs:
             exit 0
           fi
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          payload="$(jq -n --arg text "Clarity Legal production health: ${ALERT_TRANSITION}. ${run_url}" '{text: $text}')"
+          payload="$(jq -n --arg text "LawHand production health: ${ALERT_TRANSITION}. ${run_url}" '{text: $text}')"
           curl --fail --silent --show-error --max-time 15 \
             -H 'Content-Type: application/json' --data "$payload" "$ALERT_WEBHOOK_URL" \
             || echo "::warning::Optional production alert webhook delivery failed."

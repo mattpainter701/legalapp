@@ -154,9 +154,9 @@ work; the UI reports the durable assignment, not a delivery receipt. The
 explicit manual-reminder action is different: disabled/incomplete SMTP maps to
 HTTP 503, an invalid recipient maps to 422, and provider rejection maps to 502,
 so it can never show **Sent** without a successful provider call. Production
-may use `EMAIL_ENABLED=false` only for an explicitly non-go-live bootstrap while
-credentials are provisioned; the strict sold-tenant gate requires authenticated
-SMTP in both backend and scheduler runtimes.
+intentionally uses `EMAIL_ENABLED=false`; LawHand does not operate an SMTP
+sender. Operational incidents are delivered through GitHub production-health
+issues, while task and intake state remain durable.
 
 **Close with reason:** completing or cancelling via `PATCH /api/tasks/{id}` records
 `closed_reason` and `closed_by_user_id`. Cancelling **requires** `closed_reason`

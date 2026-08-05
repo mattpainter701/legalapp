@@ -31,7 +31,7 @@ export default function SignupPage() {
   const { login: authLogin } = useAuth()
   const plan = searchParams.get('plan')
   const publicSignupEnabled = import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true'
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
   const isPlanSignup = plan === 'intake-only'
   const planLabel = plan === 'intake-only' ? 'Call Intake + Tasks' : null
   const [form, setForm] = useState({

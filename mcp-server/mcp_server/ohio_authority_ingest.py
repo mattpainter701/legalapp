@@ -23,13 +23,13 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
-from .authority_ingest import DEFAULT_USER_AGENT, FetchedDocument, html_main_text, ingest_document
+from .authority_ingest import FetchedDocument, html_main_text, ingest_document
 from .database import connect
 from .loader import init_schema
 from .source_catalog import load_catalog, seed_catalog
 
 DEFAULT_AUTHORIZATION_BASIS = "written authorization from Ohio Courts (user-confirmed 2026-07-31)"
-DEFAULT_CONTACT = "legal-data-admin@example.invalid"
+DEFAULT_CONTACT = "matt@cybersafeadvisor.com"
 DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 
 

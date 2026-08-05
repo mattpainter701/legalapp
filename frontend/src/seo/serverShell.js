@@ -15,7 +15,7 @@ const LEGAL_SHELLS = Object.freeze({
       { id: 'sharing', heading: 'Sharing and disclosures', body: 'Information may be disclosed to service providers supporting hosting, security, communications, payments, and enabled integrations; to the subscribing organization and its authorized administrators; or when required for legal compliance, safety, or a business transaction. Provider-specific processing is also governed by the provider’s terms and the configuration selected by the organization.' },
       { id: 'retention-security', heading: 'Retention and security', body: 'Retention depends on the type of information, tenant settings, contractual requirements, and legal obligations. LawHand uses administrative, technical, and organizational safeguards, including tenant isolation, but no system can guarantee absolute security.' },
       { id: 'choices', heading: 'Choices and privacy requests', body: 'Users may update certain account information through the service. Requests concerning workspace content should usually be directed to the subscribing organization. Other access, correction, deletion, or objection rights may apply based on location and can be submitted using the contact information below.' },
-      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to contact@perevagagroup.com.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update this policy as the service or applicable requirements change and will post the revised date here. Questions or privacy requests may be sent to matt@cybersafeadvisor.com.' },
     ],
   },
   '/terms': {
@@ -32,7 +32,7 @@ const LEGAL_SHELLS = Object.freeze({
       { id: 'content-integrations', heading: 'Content, AI features, and integrations', body: 'The subscribing organization retains its rights in submitted content and grants the permissions needed to operate the service. Outputs may be incomplete or incorrect and require review. Third-party services and AI providers are governed by their own terms and the organization\u2019s configuration.' },
       { id: 'availability', heading: 'Availability and changes', body: 'Features may evolve, and access may be limited for maintenance, security, legal compliance, nonpayment, or misuse. Subscription fees, support commitments, service levels, and termination rights are governed by the applicable subscription agreement.' },
       { id: 'disclaimers', heading: 'Disclaimers and liability', body: 'Except for express commitments in an applicable organization agreement, the public website and service are provided on an “as available” basis to the extent permitted by law. AI-assisted output, third-party content, citations, integrations, and connected services are not guaranteed to be error-free, complete, current, or continuously available.' },
-      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update these terms and will post the revised date here. Changes to an organization’s controlling subscription or data-processing terms are handled under those agreements. Questions may be sent to contact@perevagagroup.com.' },
+      { id: 'changes-contact', heading: 'Changes and contact', body: 'We may update these terms and will post the revised date here. Changes to an organization’s controlling subscription or data-processing terms are handled under those agreements. Questions may be sent to matt@cybersafeadvisor.com.' },
     ],
   },
 })
@@ -133,7 +133,7 @@ ${contents}
 ${sections}
           <footer class="server-legal__footer">
             <p>The controlling subscription agreement and, where applicable, data-processing agreement are available from your organization. Contact your firm administrator for workspace-specific terms.</p>
-            <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or email <a href="mailto:contact@perevagagroup.com">contact@perevagagroup.com</a>.</p>
+            <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or email <a href="mailto:matt@cybersafeadvisor.com">matt@cybersafeadvisor.com</a>.</p>
           </footer>
         </article>
       </main>`
@@ -164,7 +164,7 @@ function marketingShellMarkup(pathname) {
           </nav>
 ${sections}
           <footer class="server-legal__footer">
-            <p><a href="mailto:contact@perevagagroup.com">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
+            <p><a href="mailto:matt@cybersafeadvisor.com">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
           </footer>
         </article>
       </main>`

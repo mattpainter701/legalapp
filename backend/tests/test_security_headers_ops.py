@@ -90,6 +90,10 @@ def test_public_health_gates_require_hsts_and_api_http_redirect() -> None:
         ROOT / ".github" / "workflows" / "production-health.yml"
     ).read_text(encoding="utf-8")
 
+    assert "PRODUCTION_ORIGIN: https://getlawhand.com" in scheduled_check
+    assert "PRODUCTION_DOMAIN: getlawhand.com" in scheduled_check
+    assert "[production-alert] LawHand readiness failure" in scheduled_check
+
     for check in (production_check, scheduled_check):
         assert "strict-transport-security:" in check
         assert "max-age=63072000" in check

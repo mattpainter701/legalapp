@@ -12,7 +12,7 @@ const NAV_ITEMS = [
 ]
 
 export function MarketingHeader({ onSectionClick }) {
-  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:contact@perevagagroup.com'
+  const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
 
   return (
     <header className="sticky top-0 z-40 border-b border-brand-line bg-brand-bg/90 backdrop-blur">

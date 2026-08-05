@@ -20,7 +20,7 @@ from .loader import init_schema
 from .ohio_authority_ingest import _LinkParser, fetch_with_retries, to_fetched_document
 from .source_catalog import load_catalog, seed_catalog
 
-DEFAULT_CONTACT = "legal-data-admin@example.invalid"
+DEFAULT_CONTACT = "matt@cybersafeadvisor.com"
 
 
 @dataclass(frozen=True)
