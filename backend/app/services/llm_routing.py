@@ -142,6 +142,21 @@ def _model_from_values(provider: str | None, model: str | None) -> str | None:
     return _clean(model)
 
 
+def _current_managed_alias(
+    alias: str | None, platform_config: dict[str, str | None]
+) -> str | None:
+    """Move logical tenant overrides forward with managed route revisions."""
+
+    alias = _clean(alias)
+    if not alias:
+        return None
+    if alias == "clarity-standard" or alias.startswith("clarity-standard-r"):
+        return _clean(platform_config.get("standard_model")) or alias
+    if alias == "clarity-premium" or alias.startswith("clarity-premium-r"):
+        return _clean(platform_config.get("premium_model")) or alias
+    return alias
+
+
 def route_from_values(
     provider: str | None,
     model: str | None,
@@ -303,9 +318,11 @@ async def resolve_llm_route(
                 ),
             )
 
+    platform_config = await get_platform_llm_config(db)
     if ts:
         if requested_route in {"premium", "tenant-premium"}:
             alias = _model_from_values(ts.premium_llm_provider, ts.premium_llm_model)
+            alias = _current_managed_alias(alias, platform_config)
             if alias:
                 return _set_cached_route(
                     cache_key,
@@ -317,6 +334,7 @@ async def resolve_llm_route(
                 )
         elif requested_route in {"standard", "tenant-standard"}:
             alias = _model_from_values(ts.default_llm_provider, ts.default_llm_model)
+            alias = _current_managed_alias(alias, platform_config)
             if alias:
                 return _set_cached_route(
                     cache_key,
@@ -327,7 +345,6 @@ async def resolve_llm_route(
                     ),
                 )
 
-    platform_config = await get_platform_llm_config(db)
     if requested_route in {"premium", "tenant-premium"}:
         return _set_cached_route(
             cache_key,

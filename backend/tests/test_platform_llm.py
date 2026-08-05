@@ -227,12 +227,14 @@ def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeyp
             "premium": {},
         },
         {str(openrouter_key.id): openrouter_key, str(opencode_key.id): opencode_key},
+        {"standard": "clarity-standard-rtest", "premium": "clarity-premium-rtest"},
     )
 
     assert [model["model_name"] for model in models] == [
-        "clarity-standard",
-        "clarity-standard",
+        "clarity-standard-rtest",
+        "clarity-standard-rtest",
     ]
+    assert models[0]["model_info"]["id"] != models[1]["model_info"]["id"]
     assert (
         models[0]["litellm_params"]["model"] == "openrouter/qwen/qwen3-235b-a22b:free"
     )
@@ -290,12 +292,13 @@ def test_litellm_reload_payload_builds_fast_standard_route(monkeypatch):
             "premium": {},
         },
         {str(openrouter_key.id): openrouter_key, str(opencode_key.id): opencode_key},
+        {"standard": "clarity-standard-rtest", "premium": "clarity-premium-rtest"},
     )
 
     assert [model["model_name"] for model in models] == [
-        "clarity-standard",
-        "clarity-standard-fb-0",
-        "clarity-standard-fb-1",
+        "clarity-standard-rtest",
+        "clarity-standard-rtest-fb-0",
+        "clarity-standard-rtest-fb-1",
     ]
     assert (
         models[0]["litellm_params"]["model"] == "openrouter/google/gemma-4-31b-it:free"
@@ -304,7 +307,12 @@ def test_litellm_reload_payload_builds_fast_standard_route(monkeypatch):
     assert models[1]["litellm_params"]["api_base"] == "https://opencode.ai/zen/v1"
     assert models[2]["litellm_params"]["model"] == "openai/deepseek-v4-flash-free"
     assert fallbacks == [
-        {"clarity-standard": ["clarity-standard-fb-0", "clarity-standard-fb-1"]}
+        {
+            "clarity-standard-rtest": [
+                "clarity-standard-rtest-fb-0",
+                "clarity-standard-rtest-fb-1",
+            ]
+        }
     ]
     assert errors == []
 
@@ -406,6 +414,53 @@ async def test_litellm_reload_uses_model_management_api(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_litellm_upserts_each_balanced_deployment_by_stable_id(monkeypatch):
+    fake_client = _FakeLiteLLMClient(
+        [
+            _FakeLiteLLMResponse(200, {"data": []}),
+            _FakeLiteLLMResponse(201, {"ok": True}),
+            _FakeLiteLLMResponse(201, {"ok": True}),
+            _FakeLiteLLMResponse(200, {"message": "updated"}),
+        ]
+    )
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
+    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "sk-master")
+    monkeypatch.setattr(
+        platform_llm_router.httpx,
+        "AsyncClient",
+        lambda timeout: fake_client,
+    )
+
+    ok, error = await platform_llm_router._call_litellm_config_update(
+        [
+            {
+                "model_name": "clarity-standard-rtest",
+                "litellm_params": {"model": "openrouter/model-a", "api_key": "a"},
+                "model_info": {"id": "deployment-a", "legalapp_managed": True},
+            },
+            {
+                "model_name": "clarity-standard-rtest",
+                "litellm_params": {"model": "openrouter/model-b", "api_key": "b"},
+                "model_info": {"id": "deployment-b", "legalapp_managed": True},
+            },
+        ],
+        [],
+    )
+
+    assert ok is True
+    assert error is None
+    new_model_calls = [
+        call for call in fake_client.calls if call[1].endswith("/model/new")
+    ]
+    assert [call[2]["model_info"]["id"] for call in new_model_calls] == [
+        "deployment-a",
+        "deployment-b",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_litellm_reload_rejects_different_file_backed_alias(monkeypatch):
     fake_client = _FakeLiteLLMClient(
         [
@@ -486,6 +541,69 @@ async def test_provider_route_builder_rejects_mismatched_key_provider(
     )
     assert resp.status_code == 400
     assert "selected key belongs to deepseek" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_failed_route_activation_does_not_publish_candidate_config(
+    client: AsyncClient, db_session, monkeypatch
+):
+    headers = platform_headers()
+    standard_key = LLMProviderKey(
+        name="Standard key",
+        provider_id="openrouter",
+        encrypted_key="unused",
+        key_hint="test",
+    )
+    premium_key = LLMProviderKey(
+        name="Premium key",
+        provider_id="anthropic",
+        encrypted_key="unused",
+        key_hint="test",
+    )
+    db_session.add_all([standard_key, premium_key])
+    await db_session.commit()
+    await db_session.refresh(standard_key)
+    await db_session.refresh(premium_key)
+
+    async def failed_reload(*args, **kwargs):
+        return {
+            "litellm_updated": False,
+            "litellm_error": "synthetic premium completion failed",
+            "models_registered": 2,
+            "fallbacks_registered": 0,
+            "build_errors": [],
+            "app_aliases": kwargs["aliases"],
+            "validation": {"standard": {"ok": True}},
+        }
+
+    monkeypatch.setattr(platform_llm_router, "_reload_litellm_routes", failed_reload)
+
+    async def gateway_status(*args, **kwargs):
+        return {"reachable": True, "aliases": {}}
+
+    monkeypatch.setattr(platform_llm_router, "_check_litellm_gateway", gateway_status)
+    response = await client.put(
+        "/api/platform/llm/routes",
+        headers=headers,
+        json={
+            "standard": {
+                "provider_id": "openrouter",
+                "key_id": str(standard_key.id),
+                "model": "provider/standard",
+            },
+            "premium": {
+                "provider_id": "anthropic",
+                "key_id": str(premium_key.id),
+                "model": "claude-premium",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["saved"] is False
+    routes = (await client.get("/api/platform/llm/routes", headers=headers)).json()
+    assert routes["standard"].get("key_id") is None
+    assert routes["premium"].get("key_id") is None
 
 
 @pytest.mark.asyncio

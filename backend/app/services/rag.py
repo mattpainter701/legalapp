@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Any, List, Tuple
 
@@ -382,22 +383,42 @@ async def _call_public_mcp_search(
     tool_name: str,
     query: str,
     top_k: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    started_at = time.monotonic()
+    outcome = {
+        "tool_name": tool_name,
+        "status_code": 503,
+        "result_count": 0,
+        "latency_ms": 0,
+    }
     try:
         response = await client.post(
             url,
             json={"name": tool_name, "arguments": {"query": query, "top_k": top_k}},
             headers={"X-Clarity-Internal-Key": settings.MCP_UPSTREAM_API_KEY},
         )
+        outcome["status_code"] = response.status_code
         response.raise_for_status()
         response_data = response.json()
     except Exception:
         logger.exception("Public legal MCP search failed for tool=%s", tool_name)
-        return None
+        outcome["latency_ms"] = int((time.monotonic() - started_at) * 1000)
+        return None, outcome
     if response_data.get("isError"):
         logger.warning("Public legal MCP returned an error for tool=%s", tool_name)
-        return None
-    return response_data
+        outcome["status_code"] = 502
+        outcome["latency_ms"] = int((time.monotonic() - started_at) * 1000)
+        return None, outcome
+    outcome["latency_ms"] = int((time.monotonic() - started_at) * 1000)
+    return response_data, outcome
+
+
+class MCPPublicResults(list):
+    """Public chunks plus per-tool outcomes used by internal telemetry."""
+
+    def __init__(self, values: list[dict], outcomes: list[dict[str, Any]]):
+        super().__init__(values)
+        self.mcp_outcomes = outcomes
 
 
 async def search_courtlistener_mcp(
@@ -411,15 +432,28 @@ async def search_courtlistener_mcp(
     url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/mcp/tools/call"
     if not settings.MCP_UPSTREAM_API_KEY:
         logger.error("CourtListener MCP upstream authentication is not configured")
-        return []
+        return MCPPublicResults(
+            [],
+            [
+                {
+                    "tool_name": tool_name,
+                    "status_code": 503,
+                    "result_count": 0,
+                    "latency_ms": 0,
+                }
+                for tool_name in ("search_caselaw", "search_legal_authorities")
+            ],
+        )
     timeout = httpx.Timeout(12.0, connect=3.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        case_response, authority_response = await asyncio.gather(
+        case_result, authority_result = await asyncio.gather(
             _call_public_mcp_search(client, url, "search_caselaw", query, top_k),
             _call_public_mcp_search(
                 client, url, "search_legal_authorities", query, top_k
             ),
         )
+    case_response, case_outcome = case_result
+    authority_response, authority_outcome = authority_result
 
     case_chunks = [
         _mcp_item_to_chunk(item, index)
@@ -435,7 +469,12 @@ async def search_courtlistener_mcp(
     combined.sort(
         key=lambda item: float(item.get("relevance_score") or 0.0), reverse=True
     )
-    return combined[:top_k]
+    case_outcome["result_count"] = len(case_chunks)
+    authority_outcome["result_count"] = len(authority_chunks)
+    return MCPPublicResults(
+        combined[:top_k],
+        [case_outcome, authority_outcome],
+    )
 
 
 async def build_rag_context(chunks: List[dict]) -> str:
@@ -571,18 +610,48 @@ async def full_rag_query(
         dense_task,
         public_search,
     )
+    mcp_outcomes = list(getattr(public_chunks, "mcp_outcomes", []))
+    if (
+        use_mcp_public
+        and not public_chunks
+        and mcp_outcomes
+        and all(int(item.get("status_code") or 500) >= 400 for item in mcp_outcomes)
+    ):
+        # Preserve public research during an MCP outage using the existing
+        # local public-authority index. This path is intentionally only used
+        # when both MCP tools failed, not for a legitimate zero-result search.
+        try:
+            public_embedding = await embedding_service.embed_public_query(question)
+            public_chunks = await search_public_chunks(
+                db=db,
+                query_embedding=public_embedding,
+                top_k=settings.PUBLIC_RAG_TOP_K,
+            )
+        except Exception:
+            logger.exception("Legacy public-authority fallback failed")
+            public_chunks = []
     if use_mcp_public:
         try:
             async with async_session_maker() as usage_db:
                 await set_tenant_context(usage_db, str(tenant_id))
-                await record_internal_chat_mcp_usage(
-                    db=usage_db,
-                    tenant_id=uuid.UUID(str(tenant_id)),
-                    user_id=uuid.UUID(str(user_id)) if user_id else None,
-                    tool_name="search_caselaw",
-                    status_code=200,
-                    result_count=len(public_chunks),
-                )
+                outcomes = mcp_outcomes or [
+                    {
+                        "tool_name": "search_caselaw",
+                        "status_code": 200,
+                        "result_count": len(public_chunks),
+                        "latency_ms": None,
+                    }
+                ]
+                for outcome in outcomes:
+                    await record_internal_chat_mcp_usage(
+                        db=usage_db,
+                        tenant_id=uuid.UUID(str(tenant_id)),
+                        user_id=uuid.UUID(str(user_id)) if user_id else None,
+                        tool_name=str(outcome["tool_name"]),
+                        status_code=int(outcome["status_code"]),
+                        result_count=int(outcome.get("result_count") or 0),
+                        latency_ms=outcome.get("latency_ms"),
+                    )
         except Exception:
             logger.exception("Failed to record internal CourtListener MCP usage")
 

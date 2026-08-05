@@ -1,7 +1,7 @@
 import logging
 import time
 import uuid
-from typing import AsyncGenerator, List, Tuple
+from typing import Any, AsyncGenerator, List, Tuple
 
 from openai import APIConnectionError, APIError, AsyncOpenAI
 
@@ -11,11 +11,6 @@ from app.services.gateway_privacy import gateway_metadata as sanitized_gateway_m
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-STANDARD_GATEWAY_FALLBACKS = (
-    "clarity-standard-zen-nemotron",
-    "clarity-standard-deepseek-flash-free",
-)
 
 
 def _record_latency(model_alias: str, latency_ms: float) -> None:
@@ -147,26 +142,10 @@ class LLMService:
         use_premium: bool,
         customer_api_key: str | None,
     ) -> list[str]:
-        if (
-            customer_api_key
-            or use_premium
-            or gateway_model != settings.LITELLM_STANDARD_MODEL
-        ):
-            return [gateway_model]
-        candidates = [gateway_model, *STANDARD_GATEWAY_FALLBACKS]
-        try:
-            from app.services.llm_routing import is_model_in_cooldown
-
-            available = [
-                candidate
-                for candidate in candidates
-                if not is_model_in_cooldown(candidate)
-            ]
-            # A cooldown is a speed preference, not an availability verdict.
-            # If every route is cooling down, retain the configured chain.
-            return available or candidates
-        except Exception:
-            return candidates
+        # LiteLLM is the single authority for balancing, retries, cooldowns, and
+        # fallbacks. A second application-side chain can silently route around
+        # the graph the platform portal shows as active.
+        return [gateway_model]
 
     def _build_system_prompt(
         self,
@@ -221,6 +200,7 @@ class LLMService:
         customer_endpoint: str | None = None,
         gateway_metadata: dict | None = None,
         system_prompt_override: str | None = None,
+        usage_sink: dict[str, Any] | None = None,
     ) -> Tuple[str, int, int]:
         """Generate a completion through LiteLLM.
 
@@ -275,6 +255,15 @@ class LLMService:
                 response_text = response.choices[0].message.content or ""
                 tokens_in = response.usage.prompt_tokens if response.usage else 0
                 tokens_out = response.usage.completion_tokens if response.usage else 0
+                if usage_sink is not None:
+                    usage_sink.update(
+                        {
+                            "requested_model": candidate,
+                            "model": getattr(response, "model", None) or candidate,
+                            "tokens_in": tokens_in,
+                            "tokens_out": tokens_out,
+                        }
+                    )
                 return response_text, tokens_in, tokens_out
             except (APIError, APIConnectionError) as e:
                 elapsed_ms = (time.monotonic() - t0) * 1000
@@ -307,6 +296,7 @@ class LLMService:
         customer_provider: str | None = None,
         customer_endpoint: str | None = None,
         gateway_metadata: dict | None = None,
+        usage_sink: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream a completion through LiteLLM."""
         system_prompt = self._build_system_prompt(
@@ -345,14 +335,26 @@ class LLMService:
                 metadata = sanitized_gateway_metadata(**(gateway_metadata or {}))
                 if metadata and not customer_api_key:
                     create_kwargs["extra_body"] = {"metadata": metadata}
+                if not customer_api_key:
+                    create_kwargs["stream_options"] = {"include_usage": True}
                 stream = await client.chat.completions.create(**create_kwargs)
                 async for chunk in stream:
-                    if chunk.choices[0].delta.content:
+                    if usage_sink is not None:
+                        usage_sink["requested_model"] = candidate
+                        usage_sink["model"] = getattr(chunk, "model", None) or candidate
+                        chunk_usage = getattr(chunk, "usage", None)
+                        if chunk_usage:
+                            usage_sink["tokens_in"] = chunk_usage.prompt_tokens or 0
+                            usage_sink["tokens_out"] = (
+                                chunk_usage.completion_tokens or 0
+                            )
+                    content = chunk.choices[0].delta.content if chunk.choices else None
+                    if content:
                         if not first_token_recorded:
                             ttft_ms = (time.monotonic() - t0) * 1000
                             _record_latency(candidate, ttft_ms)
                             first_token_recorded = True
-                        yield chunk.choices[0].delta.content
+                        yield content
                 if not first_token_recorded:
                     # Empty response — still record latency
                     _record_latency(candidate, (time.monotonic() - t0) * 1000)

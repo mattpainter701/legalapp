@@ -726,6 +726,26 @@ async def update_tenant(
         _validate_provider(standard_provider, "standard_llm_provider")
         _validate_provider(body.premium_llm_provider, "premium_llm_provider")
 
+        platform_llm = await get_platform_llm_config(db)
+        active_aliases = {
+            str(platform_llm.get("standard_model") or "").strip(),
+            str(platform_llm.get("premium_model") or "").strip(),
+        } - {""}
+        requested_aliases = {
+            value
+            for value in (standard_model, body.premium_llm_model)
+            if value is not None
+        }
+        unknown_aliases = requested_aliases - active_aliases
+        if unknown_aliases:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Tenant routes must use an active platform alias. Unknown: "
+                    + ", ".join(sorted(unknown_aliases))
+                ),
+            )
+
         ts_result = await db.execute(
             select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
         )
