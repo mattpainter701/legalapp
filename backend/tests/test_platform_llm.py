@@ -100,7 +100,11 @@ def test_model_catalog_capabilities_from_provider_metadata():
             "id": "google/gemma-4-26b-a4b-it:free",
             "description": "Instruction-tuned multimodal model with structured output.",
             "context_length": 262144,
-            "architecture": {"modality": "text+image->text"},
+            "architecture": {
+                "modality": "text+image+file->text",
+                "input_modalities": ["text", "image", "file"],
+                "output_modalities": ["text"],
+            },
             "supported_parameters": ["tools", "response_format"],
             "pricing": {"prompt": "0", "completion": "0"},
         },
@@ -111,6 +115,8 @@ def test_model_catalog_capabilities_from_provider_metadata():
     assert set(model["capabilities"]).issuperset(
         {
             "vision",
+            "text_input",
+            "file_input",
             "instruction",
             "tool_use",
             "structured_output",
@@ -121,6 +127,68 @@ def test_model_catalog_capabilities_from_provider_metadata():
     assert model["legal_eligible"] is True
     assert model["legal_tier"] == "recommended"
     assert "Legal-ready" in model["eligibility_badges"]
+
+
+def test_model_catalog_derives_audio_transcription_and_embedding_modalities():
+    transcription = platform_llm_router._normalize_model_item(
+        {
+            "id": "provider/transcribe",
+            "architecture": {
+                "input_modalities": ["audio"],
+                "output_modalities": ["text"],
+            },
+            "pricing": {"prompt": "0.001", "completion": "0"},
+        },
+        "openrouter",
+    )
+    embedding = platform_llm_router._normalize_model_item(
+        {
+            "id": "provider/embedding",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["embeddings"],
+            },
+            "pricing": {"prompt": "0.001", "completion": "0"},
+        },
+        "openrouter",
+    )
+
+    assert {"audio_input", "speech_to_text"}.issubset(
+        transcription["capabilities"]
+    )
+    assert {"text_input", "embeddings"}.issubset(embedding["capabilities"])
+
+
+@pytest.mark.parametrize(
+    ("status", "category", "credential_state"),
+    (
+        (401, "invalid_credentials", "invalid"),
+        (403, "billing_or_provider_policy", "indeterminate_policy_block"),
+        (429, "rate_limited", "accepted_but_blocked"),
+        (500, "provider_unavailable", "indeterminate"),
+    ),
+)
+def test_provider_errors_are_redacted_and_classified(
+    status, category, credential_state
+):
+    request = platform_llm_router.httpx.Request("POST", "https://provider.invalid")
+    response = platform_llm_router.httpx.Response(
+        status,
+        request=request,
+        text='{"secret_workspace_id":"must-not-escape"}',
+    )
+    error = platform_llm_router.httpx.HTTPStatusError(
+        "provider response contains must-not-escape",
+        request=request,
+        response=response,
+    )
+
+    evidence = platform_llm_router._provider_error_evidence(error)
+
+    assert evidence["http_status"] == status
+    assert evidence["error_category"] == category
+    assert evidence["credential_state"] == credential_state
+    assert "must-not-escape" not in str(evidence)
 
 
 def test_model_catalog_marks_document_capable_free_legal_model():
@@ -178,6 +246,109 @@ def test_model_catalog_excludes_slow_free_model():
     assert model["legal_tier"] == "excluded"
     assert model["latency_eligible"] is False
     assert "slow_latency" in model["exclusion_reasons"]
+
+
+def test_customer_route_policy_finds_free_primary_alternate_and_fallback():
+    config = {
+        "standard": {
+            "provider_id": "openrouter",
+            "model": "provider/paid-standard",
+            "alternates": [
+                {
+                    "provider_id": "opencode-zen",
+                    "model": "nemotron-3-ultra-free",
+                }
+            ],
+            "fallbacks": [
+                {
+                    "provider_id": "openrouter",
+                    "model": "google/gemma-4-31b-it:free",
+                }
+            ],
+        },
+        "premium": {
+            "provider_id": "anthropic",
+            "model": "claude-3-5-sonnet-latest",
+        },
+    }
+
+    blocked = platform_llm_router._free_capacity_targets(config, {"models": []})
+
+    assert [(item["route"], item["placement"]) for item in blocked] == [
+        ("standard", "alternate[0]"),
+        ("standard", "fallback[0]"),
+    ]
+
+
+def test_customer_route_policy_uses_zero_priced_catalog_metadata():
+    config = {
+        "standard": {
+            "provider_id": "provider-a",
+            "model": "model-without-free-suffix",
+        },
+        "premium": {},
+    }
+    catalog = {
+        "models": [
+            {
+                "provider_id": "provider-a",
+                "id": "model-without-free-suffix",
+                "pricing": {"prompt": "0", "completion": "0.000000"},
+            }
+        ]
+    }
+
+    blocked = platform_llm_router._free_capacity_targets(config, catalog)
+
+    assert blocked == [
+        {
+            "route": "standard",
+            "placement": "primary",
+            "provider_id": "provider-a",
+            "model": "model-without-free-suffix",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_customer_route_policy_rejection_commits_audit(monkeypatch):
+    audit_call = {}
+
+    class _FakeDb:
+        committed = False
+
+        async def commit(self):
+            self.committed = True
+
+    async def fake_catalog(_db):
+        return {"models": []}
+
+    async def fake_audit(db, request, **kwargs):
+        audit_call.update(db=db, request=request, **kwargs)
+
+    monkeypatch.setattr(platform_llm_router, "_get_model_catalog", fake_catalog)
+    monkeypatch.setattr(platform_llm_router, "record_operator_audit", fake_audit)
+    db = _FakeDb()
+    request = object()
+
+    with pytest.raises(platform_llm_router.HTTPException) as raised:
+        await platform_llm_router._enforce_customer_route_capacity_policy(
+            request,
+            db,
+            {
+                "standard": {
+                    "provider_id": "openrouter",
+                    "model": "google/gemma-4-31b-it:free",
+                },
+                "premium": {},
+            },
+        )
+
+    assert raised.value.status_code == 409
+    assert raised.value.detail["code"] == "free_capacity_not_allowed"
+    assert db.committed is True
+    assert audit_call["action"] == "llm.routes_activation_blocked"
+    assert audit_call["metadata"]["reason"] == "free_capacity_not_allowed"
 
 
 def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeypatch):

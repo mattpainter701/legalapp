@@ -56,6 +56,7 @@ LLM_MODEL_CATALOG_KEY = "llm_model_catalog_v1"
 LEGAL_READY_LATENCY_MS = 3000
 MIN_LEGAL_CONTEXT_LENGTH = 16000
 RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
+FREE_CAPACITY_BLOCK_CODE = "free_capacity_not_allowed"
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,52 @@ def _usage_payload(
     }
 
 
+def _provider_error_evidence(exc: Exception) -> dict[str, Any]:
+    """Normalize provider failures without returning response bodies or IDs."""
+
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+
+    if status == 401:
+        category = "invalid_credentials"
+        message = "Provider rejected the API credential."
+        credential_state = "invalid"
+    elif status in (402, 403):
+        category = "billing_or_provider_policy"
+        message = "Billing or provider policy blocked the canary; credential validity is indeterminate."
+        credential_state = "indeterminate_policy_block"
+    elif status == 429:
+        category = "rate_limited"
+        message = "Provider rate or quota limits blocked the canary."
+        credential_state = "accepted_but_blocked"
+    elif status == 400:
+        category = "unsupported_or_bad_request"
+        message = "Provider rejected the model or synthetic canary request."
+        credential_state = "indeterminate"
+    elif status is not None and status >= 500:
+        category = "provider_unavailable"
+        message = "Provider was unavailable during the canary."
+        credential_state = "indeterminate"
+    elif isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        category = "provider_timeout"
+        message = "Provider timed out during the canary."
+        credential_state = "indeterminate"
+    else:
+        category = "network_or_provider_error"
+        message = "Provider canary failed without a safe diagnostic response."
+        credential_state = "indeterminate"
+    return {
+        "http_status": status,
+        "error_category": category,
+        "error": message,
+        "credential_state": credential_state,
+    }
+
+
 def _route_audit_payload(
     config: dict[str, Any], reload_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -257,14 +304,17 @@ def _model_test_audit_payload(
         "key_id": str(key.id),
         "key_hint": key.key_hint,
         "model": body.model,
+        "capability": "text",
         "ok": bool(result.get("ok")),
+        "credential_state": result.get("credential_state"),
         "model_used": result.get("model_used"),
+        "http_status": result.get("http_status"),
+        "error_category": result.get("error_category"),
         "provider_latency_ms": result.get("provider_latency_ms"),
         "server_elapsed_ms": result.get("server_elapsed_ms"),
         "prompt_tokens": result.get("prompt_tokens"),
         "completion_tokens": result.get("completion_tokens"),
         "total_tokens": result.get("total_tokens"),
-        "error": result.get("error"),
     }
 
 
@@ -308,11 +358,100 @@ def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     return False
 
 
+def _free_capacity_targets(
+    config: dict[str, Any], catalog: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Return customer-route targets backed by explicitly free capacity.
+
+    Model IDs are checked even when the catalog is empty or stale. When a live
+    catalog row is available, its normalized pricing metadata also participates
+    so a zero-priced model without a conventional ``:free`` suffix is blocked.
+    """
+
+    catalog_rows = catalog.get("models", []) if isinstance(catalog, dict) else []
+    catalog_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in catalog_rows if isinstance(catalog_rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        provider_id = _clean_optional(row.get("provider_id"))
+        model_id = _clean_optional(row.get("id") or row.get("model"))
+        if provider_id and model_id:
+            catalog_index[(provider_id, model_id)] = row
+
+    blocked: list[dict[str, str]] = []
+
+    def _inspect(route_name: str, placement: str, target: dict[str, Any]) -> None:
+        provider_id = _clean_optional(target.get("provider_id"))
+        model_id = _clean_optional(target.get("model"))
+        if not provider_id or not model_id:
+            return
+        row = catalog_index.get((provider_id, model_id), {})
+        if _is_free_model(model_id, row):
+            blocked.append(
+                {
+                    "route": route_name,
+                    "placement": placement,
+                    "provider_id": provider_id,
+                    "model": model_id,
+                }
+            )
+
+    for route_name in ("standard", "premium"):
+        route = config.get(route_name, {})
+        if not isinstance(route, dict):
+            continue
+        _inspect(route_name, "primary", route)
+        for index, alternate in enumerate(route.get("alternates", []) or []):
+            if isinstance(alternate, dict):
+                _inspect(route_name, f"alternate[{index}]", alternate)
+        for index, fallback in enumerate(route.get("fallbacks", []) or []):
+            if isinstance(fallback, dict):
+                _inspect(route_name, f"fallback[{index}]", fallback)
+
+    return blocked
+
+
+async def _enforce_customer_route_capacity_policy(
+    request: Request,
+    db: AsyncSession,
+    config: dict[str, Any],
+) -> None:
+    """Reject customer aliases backed by free capacity and audit the attempt."""
+
+    catalog = await _get_model_catalog(db)
+    free_capacity_targets = _free_capacity_targets(config, catalog)
+    if not free_capacity_targets:
+        return
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.routes_activation_blocked",
+        resource_type="llm_route_config",
+        resource_id=LLM_ROUTE_CONFIG_KEY,
+        metadata={
+            "reason": FREE_CAPACITY_BLOCK_CODE,
+            "targets": free_capacity_targets,
+        },
+    )
+    await db.commit()
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": FREE_CAPACITY_BLOCK_CODE,
+            "message": (
+                "Standard and Premium customer routes require paid capacity. "
+                "Use a separate lab-only alias for free models."
+            ),
+            "targets": free_capacity_targets,
+        },
+    )
+
+
 def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     """Derive capability tags from model metadata for legal-ops filtering.
 
-    Tags: vision, tool_use, reasoning, research, rag, legal,
-          large_context, ultra_context, structured_output.
+    Tags include provider-declared input/output modalities plus legal-chat
+    signals such as tool_use, reasoning, research, rag, and large_context.
     """
     caps: set[str] = set()
     model_id = (item.get("id") or "").lower()
@@ -326,6 +465,31 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     architecture = item.get("architecture") or {}
     if isinstance(architecture, dict):
         modality = (architecture.get("modality") or "").lower()
+        input_modalities = {
+            str(value).lower() for value in architecture.get("input_modalities") or []
+        }
+        output_modalities = {
+            str(value).lower() for value in architecture.get("output_modalities") or []
+        }
+        if "->" in modality:
+            raw_inputs, raw_outputs = modality.split("->", 1)
+            input_modalities.update(raw_inputs.replace(",", "+").split("+"))
+            output_modalities.update(raw_outputs.replace(",", "+").split("+"))
+
+        if "text" in input_modalities:
+            caps.add("text_input")
+        if "file" in input_modalities:
+            caps.add("file_input")
+        if "audio" in input_modalities:
+            caps.add("audio_input")
+        if "audio" in output_modalities:
+            caps.add("audio_output")
+        if "transcription" in output_modalities or (
+            "audio" in input_modalities and "text" in output_modalities
+        ):
+            caps.add("speech_to_text")
+        if "embeddings" in output_modalities:
+            caps.add("embeddings")
         if "image" in modality:
             caps.add("vision")
         for key in ("input_modalities", "output_modalities"):
@@ -1910,6 +2074,7 @@ async def save_routes(
         "standard": _normalize_route_entry(body.standard),
         "premium": _normalize_route_entry(body.premium),
     }
+    await _enforce_customer_route_capacity_policy(request, db, config)
     aliases = _managed_route_aliases(config)
     reload_result = await _reload_litellm_routes(
         config,
@@ -1967,6 +2132,7 @@ async def get_gateway_status(request: Request, db: AsyncSession = Depends(get_db
 async def reload_routes(request: Request, db: AsyncSession = Depends(get_db)):
     _require_platform_key(request)
     config = await _get_route_config(db)
+    await _enforce_customer_route_capacity_policy(request, db, config)
     keys_result = await db.execute(select(LLMProviderKey))
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
     activation = config.get("activation", {}) or {}
@@ -2025,6 +2191,9 @@ async def test_route(
         response_preview: str | None = None,
         usage: dict[str, Any] | None = None,
         error: str | None = None,
+        error_category: str | None = None,
+        credential_state: str = "valid",
+        http_status: int | None = None,
     ) -> dict[str, Any]:
         server_elapsed_ms = int((time.monotonic() - server_start) * 1000)
         payload: dict[str, Any] = {
@@ -2033,6 +2202,8 @@ async def test_route(
             "provider_latency_ms": provider_latency_ms,
             "server_elapsed_ms": server_elapsed_ms,
             "server_overhead_ms": max(0, server_elapsed_ms - provider_latency_ms),
+            "capability": "text",
+            "credential_state": credential_state,
         }
         if model_used:
             payload["model_used"] = model_used
@@ -2042,6 +2213,10 @@ async def test_route(
             payload.update(usage)
         if error:
             payload["error"] = error
+        if error_category:
+            payload["error_category"] = error_category
+        if http_status is not None:
+            payload["http_status"] = http_status
         return payload
 
     # Test the selected provider directly; route saves separately register LiteLLM aliases.
@@ -2077,7 +2252,7 @@ async def test_route(
             ).strip()
             usage = payload.get("usage") or {}
             result = _timing_response(
-                ok=True,
+                ok=text == "OK",
                 provider_latency_ms=elapsed_ms,
                 model_used=payload.get("model") or body.model,
                 response_preview=text[:120],
@@ -2086,6 +2261,12 @@ async def test_route(
                     completion_tokens=usage.get("output_tokens"),
                     elapsed_ms=elapsed_ms,
                 ),
+                error=(
+                    None
+                    if text == "OK"
+                    else "Provider responded, but the synthetic canary value was incorrect."
+                ),
+                error_category=None if text == "OK" else "unexpected_response",
             )
             await record_operator_audit(
                 db,
@@ -2112,7 +2293,7 @@ async def test_route(
         model_used = resp.model or body.model
         usage = resp.usage
         result = _timing_response(
-            ok=True,
+            ok=text == "OK",
             provider_latency_ms=elapsed_ms,
             model_used=model_used,
             response_preview=text[:120],
@@ -2122,6 +2303,12 @@ async def test_route(
                 total_tokens=getattr(usage, "total_tokens", None),
                 elapsed_ms=elapsed_ms,
             ),
+            error=(
+                None
+                if text == "OK"
+                else "Provider responded, but the synthetic canary value was incorrect."
+            ),
+            error_category=None if text == "OK" else "unexpected_response",
         )
         await record_operator_audit(
             db,
@@ -2135,10 +2322,11 @@ async def test_route(
         return result
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
+        evidence = _provider_error_evidence(exc)
         result = _timing_response(
             ok=False,
             provider_latency_ms=elapsed_ms,
-            error=str(exc)[:300],
+            **evidence,
         )
         await record_operator_audit(
             db,

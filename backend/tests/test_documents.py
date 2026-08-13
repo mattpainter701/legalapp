@@ -9,6 +9,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.routers.documents import _persist_uploaded_document
+from app.routers.documents import _is_allowed_upload
 
 
 class RecordingSession:
@@ -72,6 +73,14 @@ async def test_upload_text_document(client: AsyncClient, mock_embeddings):
     assert "id" in data
     assert data["filename"] == "test_brief.txt"
     assert data["status"] in ("pending", "processing", "ready")
+
+
+def test_general_document_upload_rejects_legacy_doc():
+    assert not _is_allowed_upload("agreement.doc", "application/msword")
+    assert _is_allowed_upload(
+        "agreement.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @pytest.mark.asyncio

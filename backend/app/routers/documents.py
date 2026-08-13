@@ -35,11 +35,10 @@ embedding_service = EmbeddingService()
 # through to a raw UTF-8 decode there, which happily "succeeds" (with garbage)
 # on arbitrary binaries — so unlisted types are rejected here instead of being
 # silently ingested into the RAG pipeline.
-_ALLOWED_UPLOAD_EXTENSIONS = (".pdf", ".docx", ".doc", ".txt")
+_ALLOWED_UPLOAD_EXTENSIONS = (".pdf", ".docx", ".txt")
 _ALLOWED_UPLOAD_CONTENT_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword",
     "text/plain",
 }
 
@@ -248,7 +247,7 @@ async def upload_document(
     if not _is_allowed_upload(file.filename, file.content_type):
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: PDF, DOC, DOCX, TXT.",
+            detail="Unsupported file type. Allowed: PDF, DOCX, TXT.",
         )
 
     # Create storage directory

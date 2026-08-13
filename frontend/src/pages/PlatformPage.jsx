@@ -3,6 +3,13 @@ import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatfor
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
+const apiErrorMessage = (error, fallback) => {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (typeof detail?.message === 'string') return detail.message
+  return error?.message || fallback
+}
+
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
     <div className="bg-brand-surface border border-brand-line rounded-xl p-5 shadow-sm">
@@ -1266,6 +1273,8 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
               </p>
               <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
                 {testResult.client_roundtrip_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Browser {testResult.client_roundtrip_ms}ms</span>}
+                {testResult.credential_state && <span className="rounded border border-brand-line px-2 py-0.5">Credential {testResult.credential_state.replaceAll('_', ' ')}</span>}
+                {testResult.error_category && <span className="rounded border border-brand-line px-2 py-0.5">{testResult.error_category.replaceAll('_', ' ')}</span>}
                 {testResult.server_elapsed_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Server {testResult.server_elapsed_ms}ms</span>}
                 {testResult.provider_latency_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Provider {testResult.provider_latency_ms}ms</span>}
                 {testResult.server_overhead_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Overhead {testResult.server_overhead_ms}ms</span>}
@@ -1577,7 +1586,13 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
 }
 
 const CAPABILITY_LABELS = {
+  text_input: { label: 'Text', color: 'bg-slate-100 text-slate-700 border-slate-200/60' },
+  file_input: { label: 'Files', color: 'bg-violet-100 text-violet-700 border-violet-200/60' },
   vision: { label: 'Vision', color: 'bg-purple-100 text-purple-700 border-purple-200/60' },
+  audio_input: { label: 'Audio In', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200/60' },
+  audio_output: { label: 'Audio Out', color: 'bg-rose-100 text-rose-700 border-rose-200/60' },
+  speech_to_text: { label: 'Speech-to-Text', color: 'bg-lime-100 text-lime-700 border-lime-200/60' },
+  embeddings: { label: 'Embeddings', color: 'bg-stone-100 text-stone-700 border-stone-200/60' },
   tool_use: { label: 'Tool Use', color: 'bg-blue-100 text-blue-700 border-blue-200/60' },
   reasoning: { label: 'Reasoning', color: 'bg-orange-100 text-orange-700 border-orange-200/60' },
   research: { label: 'Research', color: 'bg-indigo-100 text-indigo-700 border-indigo-200/60' },
@@ -2097,7 +2112,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       })
     } catch (e) {
       if (e?.response?.status === 403) onAuthError?.()
-      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'LiteLLM reload failed' })
+      setSaveResult({ ok: false, error: apiErrorMessage(e, 'LiteLLM reload failed') })
     } finally { setReloadingRoutes(false) }
   }
 
@@ -2145,7 +2160,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         message: reloadSummary(data, 'Saved and reloaded LiteLLM'),
       })
     } catch (e) {
-      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
+      setSaveResult({ ok: false, error: apiErrorMessage(e, 'Save failed') })
     } finally { setSaving(false) }
   }
 
