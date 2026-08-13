@@ -10,6 +10,16 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+def _usable_provider_key(value: str | None) -> bool:
+    """Reject empty/template notes before constructing a provider client.
+
+    API tokens do not contain whitespace.  This also keeps descriptive values
+    sometimes used in local hypervisor templates from being sent as credentials.
+    """
+
+    return bool(value and value.strip() == value and not any(char.isspace() for char in value))
+
+
 class EmbeddingService:
     def __init__(self):
         if settings.LITELLM_ENABLED and settings.LITELLM_EMBEDDING_MODEL:
@@ -20,24 +30,21 @@ class EmbeddingService:
             )
             self.model = settings.LITELLM_EMBEDDING_MODEL
         else:
-            # Direct provider fallback when LiteLLM is disabled
-            api_key = (
-                settings.OPENAI_API_KEY
-                or settings.OPENCODE_KEY
-                or settings.DEEPSEEK_API_KEY
-            )
-            if not api_key:
-                self.client = None
-                self.model = None
-            elif settings.OPENAI_API_KEY:
+            # Direct provider fallback when LiteLLM is disabled. OpenCode and
+            # DeepSeek chat credentials are deliberately excluded: their chat
+            # endpoints do not implement the configured OpenAI embedding model.
+            if _usable_provider_key(settings.OPENAI_API_KEY):
                 self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
                 self.model = settings.EMBEDDING_MODEL
-            else:
+            elif _usable_provider_key(settings.OPENROUTER_API_KEY):
                 self.client = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=settings.DEEPSEEK_BASE_URL,
+                    api_key=settings.OPENROUTER_API_KEY,
+                    base_url=settings.OPENROUTER_BASE_URL,
                 )
-                self.model = settings.EMBEDDING_MODEL
+                self.model = settings.OPENROUTER_EMBEDDING_MODEL
+            else:
+                self.client = None
+                self.model = None
 
         self.public_model = None
         self.public_model_load_failed = False

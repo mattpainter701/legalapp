@@ -119,6 +119,11 @@ def extract_text(
     ct_lower = (content_type or "").lower()
     fn_lower = (filename or "").lower()
 
+    if ct_lower == "application/msword" or fn_lower.endswith(".doc"):
+        raise ValueError(
+            "Legacy .doc files are not supported; convert to DOCX, PDF, or TXT."
+        )
+
     if ct_lower == "application/pdf" or fn_lower.endswith(".pdf"):
         return extract_text_from_pdf(
             file_bytes, max_pages=max_pdf_pages, max_chars=max_pdf_chars
@@ -128,10 +133,8 @@ def extract_text(
         ct_lower
         in (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/msword",
         )
         or fn_lower.endswith(".docx")
-        or fn_lower.endswith(".doc")
     ):
         return extract_text_from_docx(file_bytes)
 

@@ -113,6 +113,28 @@ describe('platform AI routing', () => {
     expect(await screen.findByText(/Saved and reloaded LiteLLM/)).toBeInTheDocument()
   })
 
+  it('shows the paid-capacity policy message from a structured rejection', async () => {
+    const user = userEvent.setup()
+    saveLLMRoutes.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'free_capacity_not_allowed',
+            message: 'Standard and Premium customer routes require paid capacity.',
+          },
+        },
+      },
+    })
+    renderRouting()
+
+    await user.click(await screen.findByRole('button', { name: 'Validate & Activate' }))
+
+    expect(
+      await screen.findByText('Standard and Premium customer routes require paid capacity.'),
+    ).toBeInTheDocument()
+  })
+
   it('surfaces a key deletion conflict from an active route', async () => {
     const user = userEvent.setup()
     deleteLLMProviderKey.mockRejectedValue({

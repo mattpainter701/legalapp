@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     # OpenRouter — free model access (OpenAI-compatible)
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
     # Comma-separated list of free models available via OpenRouter
     OPENROUTER_FREE_MODELS: str = (
         "google/gemma-4-31b-it:free,"

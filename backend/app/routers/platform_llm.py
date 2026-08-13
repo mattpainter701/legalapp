@@ -56,6 +56,7 @@ LLM_MODEL_CATALOG_KEY = "llm_model_catalog_v1"
 LEGAL_READY_LATENCY_MS = 3000
 MIN_LEGAL_CONTEXT_LENGTH = 16000
 RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
+FREE_CAPACITY_BLOCK_CODE = "free_capacity_not_allowed"
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -308,11 +309,100 @@ def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     return False
 
 
+def _free_capacity_targets(
+    config: dict[str, Any], catalog: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Return customer-route targets backed by explicitly free capacity.
+
+    Model IDs are checked even when the catalog is empty or stale. When a live
+    catalog row is available, its normalized pricing metadata also participates
+    so a zero-priced model without a conventional ``:free`` suffix is blocked.
+    """
+
+    catalog_rows = catalog.get("models", []) if isinstance(catalog, dict) else []
+    catalog_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in catalog_rows if isinstance(catalog_rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        provider_id = _clean_optional(row.get("provider_id"))
+        model_id = _clean_optional(row.get("id") or row.get("model"))
+        if provider_id and model_id:
+            catalog_index[(provider_id, model_id)] = row
+
+    blocked: list[dict[str, str]] = []
+
+    def _inspect(route_name: str, placement: str, target: dict[str, Any]) -> None:
+        provider_id = _clean_optional(target.get("provider_id"))
+        model_id = _clean_optional(target.get("model"))
+        if not provider_id or not model_id:
+            return
+        row = catalog_index.get((provider_id, model_id), {})
+        if _is_free_model(model_id, row):
+            blocked.append(
+                {
+                    "route": route_name,
+                    "placement": placement,
+                    "provider_id": provider_id,
+                    "model": model_id,
+                }
+            )
+
+    for route_name in ("standard", "premium"):
+        route = config.get(route_name, {})
+        if not isinstance(route, dict):
+            continue
+        _inspect(route_name, "primary", route)
+        for index, alternate in enumerate(route.get("alternates", []) or []):
+            if isinstance(alternate, dict):
+                _inspect(route_name, f"alternate[{index}]", alternate)
+        for index, fallback in enumerate(route.get("fallbacks", []) or []):
+            if isinstance(fallback, dict):
+                _inspect(route_name, f"fallback[{index}]", fallback)
+
+    return blocked
+
+
+async def _enforce_customer_route_capacity_policy(
+    request: Request,
+    db: AsyncSession,
+    config: dict[str, Any],
+) -> None:
+    """Reject customer aliases backed by free capacity and audit the attempt."""
+
+    catalog = await _get_model_catalog(db)
+    free_capacity_targets = _free_capacity_targets(config, catalog)
+    if not free_capacity_targets:
+        return
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.routes_activation_blocked",
+        resource_type="llm_route_config",
+        resource_id=LLM_ROUTE_CONFIG_KEY,
+        metadata={
+            "reason": FREE_CAPACITY_BLOCK_CODE,
+            "targets": free_capacity_targets,
+        },
+    )
+    await db.commit()
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": FREE_CAPACITY_BLOCK_CODE,
+            "message": (
+                "Standard and Premium customer routes require paid capacity. "
+                "Use a separate lab-only alias for free models."
+            ),
+            "targets": free_capacity_targets,
+        },
+    )
+
+
 def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     """Derive capability tags from model metadata for legal-ops filtering.
 
-    Tags: vision, tool_use, reasoning, research, rag, legal,
-          large_context, ultra_context, structured_output.
+    Tags include provider-declared input/output modalities plus legal-chat
+    signals such as tool_use, reasoning, research, rag, and large_context.
     """
     caps: set[str] = set()
     model_id = (item.get("id") or "").lower()
@@ -326,6 +416,33 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     architecture = item.get("architecture") or {}
     if isinstance(architecture, dict):
         modality = (architecture.get("modality") or "").lower()
+        input_modalities = {
+            str(value).lower()
+            for value in architecture.get("input_modalities") or []
+        }
+        output_modalities = {
+            str(value).lower()
+            for value in architecture.get("output_modalities") or []
+        }
+        if "->" in modality:
+            raw_inputs, raw_outputs = modality.split("->", 1)
+            input_modalities.update(raw_inputs.replace(",", "+").split("+"))
+            output_modalities.update(raw_outputs.replace(",", "+").split("+"))
+
+        if "text" in input_modalities:
+            caps.add("text_input")
+        if "file" in input_modalities:
+            caps.add("file_input")
+        if "audio" in input_modalities:
+            caps.add("audio_input")
+        if "audio" in output_modalities:
+            caps.add("audio_output")
+        if "transcription" in output_modalities or (
+            "audio" in input_modalities and "text" in output_modalities
+        ):
+            caps.add("speech_to_text")
+        if "embeddings" in output_modalities:
+            caps.add("embeddings")
         if "image" in modality:
             caps.add("vision")
         for key in ("input_modalities", "output_modalities"):
@@ -1910,6 +2027,7 @@ async def save_routes(
         "standard": _normalize_route_entry(body.standard),
         "premium": _normalize_route_entry(body.premium),
     }
+    await _enforce_customer_route_capacity_policy(request, db, config)
     aliases = _managed_route_aliases(config)
     reload_result = await _reload_litellm_routes(
         config,
@@ -1967,6 +2085,7 @@ async def get_gateway_status(request: Request, db: AsyncSession = Depends(get_db
 async def reload_routes(request: Request, db: AsyncSession = Depends(get_db)):
     _require_platform_key(request)
     config = await _get_route_config(db)
+    await _enforce_customer_route_capacity_policy(request, db, config)
     keys_result = await db.execute(select(LLMProviderKey))
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
     activation = config.get("activation", {}) or {}

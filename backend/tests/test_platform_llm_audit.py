@@ -63,7 +63,7 @@ async def test_route_save_records_operator_audit(
             "standard": {
                 "provider_id": key.provider_id,
                 "key_id": str(key.id),
-                "model": "google/gemma-4-31b-it:free",
+                "model": "google/gemma-4-31b-it",
                 "capacity": 100,
                 "alternates": [],
                 "fallbacks": [],
@@ -87,8 +87,89 @@ async def test_route_save_records_operator_audit(
     assert reload_call["validate"] is True
     logs = await _audit_actions(db_session)
     assert [log.action for log in logs] == ["llm.routes_saved"]
-    assert logs[0].metadata_json["standard"]["model"] == "google/gemma-4-31b-it:free"
+    assert logs[0].metadata_json["standard"]["model"] == "google/gemma-4-31b-it"
     assert "api_key" not in str(logs[0].metadata_json)
+
+
+@pytest.mark.asyncio
+async def test_free_customer_route_rejection_is_audited(
+    client: AsyncClient, db_session, monkeypatch
+):
+    standard_key = await _add_provider_key(db_session)
+    premium_key = await _add_provider_key(db_session, provider_id="anthropic")
+
+    async def reload_must_not_run(*_args, **_kwargs):
+        raise AssertionError("blocked free capacity must not reach LiteLLM")
+
+    monkeypatch.setattr(
+        platform_llm_router, "_reload_litellm_routes", reload_must_not_run
+    )
+
+    response = await client.put(
+        "/api/platform/llm/routes",
+        headers=platform_headers(),
+        json={
+            "standard": {
+                "provider_id": standard_key.provider_id,
+                "key_id": str(standard_key.id),
+                "model": "google/gemma-4-31b-it:free",
+            },
+            "premium": {
+                "provider_id": premium_key.provider_id,
+                "key_id": str(premium_key.id),
+                "model": "claude-3-5-sonnet-latest",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "free_capacity_not_allowed"
+    logs = await _audit_actions(db_session)
+    assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
+    assert logs[0].metadata_json["reason"] == "free_capacity_not_allowed"
+    assert logs[0].metadata_json["targets"] == [
+        {
+            "route": "standard",
+            "placement": "primary",
+            "provider_id": "openrouter",
+            "model": "google/gemma-4-31b-it:free",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reload_cannot_bypass_free_customer_route_policy(
+    client: AsyncClient, db_session, monkeypatch
+):
+    key = await _add_provider_key(db_session)
+    await platform_llm_router._save_route_config(
+        db_session,
+        {
+            "standard": {
+                "provider_id": key.provider_id,
+                "key_id": str(key.id),
+                "model": "google/gemma-4-31b-it:free",
+            },
+            "premium": {},
+        },
+    )
+    await db_session.commit()
+
+    async def reload_must_not_run(*_args, **_kwargs):
+        raise AssertionError("blocked free capacity must not reach LiteLLM")
+
+    monkeypatch.setattr(
+        platform_llm_router, "_reload_litellm_routes", reload_must_not_run
+    )
+
+    response = await client.post(
+        "/api/platform/llm/routes/reload", headers=platform_headers()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "free_capacity_not_allowed"
+    logs = await _audit_actions(db_session)
+    assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
 
 
 @pytest.mark.asyncio
