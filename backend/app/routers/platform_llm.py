@@ -466,12 +466,10 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     if isinstance(architecture, dict):
         modality = (architecture.get("modality") or "").lower()
         input_modalities = {
-            str(value).lower()
-            for value in architecture.get("input_modalities") or []
+            str(value).lower() for value in architecture.get("input_modalities") or []
         }
         output_modalities = {
-            str(value).lower()
-            for value in architecture.get("output_modalities") or []
+            str(value).lower() for value in architecture.get("output_modalities") or []
         }
         if "->" in modality:
             raw_inputs, raw_outputs = modality.split("->", 1)

@@ -17,7 +17,9 @@ def _usable_provider_key(value: str | None) -> bool:
     sometimes used in local hypervisor templates from being sent as credentials.
     """
 
-    return bool(value and value.strip() == value and not any(char.isspace() for char in value))
+    return bool(
+        value and value.strip() == value and not any(char.isspace() for char in value)
+    )
 
 
 class EmbeddingService:

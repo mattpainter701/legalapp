@@ -129,13 +129,9 @@ def extract_text(
             file_bytes, max_pages=max_pdf_pages, max_chars=max_pdf_chars
         )
 
-    if (
-        ct_lower
-        in (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        or fn_lower.endswith(".docx")
-    ):
+    if ct_lower in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ) or fn_lower.endswith(".docx"):
         return extract_text_from_docx(file_bytes)
 
     if ct_lower.startswith("text/") or fn_lower.endswith(".txt"):
