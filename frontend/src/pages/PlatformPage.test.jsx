@@ -12,6 +12,7 @@ import {
   getLLMRoutes,
   deleteLLMProviderKey,
   saveLLMRoutes,
+  testLLMRoute,
 } from '../api'
 
 vi.mock('../api', async (importOriginal) => ({
@@ -23,6 +24,7 @@ vi.mock('../api', async (importOriginal) => ({
   getLLMRoutes: vi.fn(),
   deleteLLMProviderKey: vi.fn(),
   saveLLMRoutes: vi.fn(),
+  testLLMRoute: vi.fn(),
 }))
 
 const activeAliases = {
@@ -67,6 +69,13 @@ beforeEach(() => {
     fallbacks_registered: 0,
   })
   deleteLLMProviderKey.mockResolvedValue({ deleted: true })
+  testLLMRoute.mockResolvedValue({
+    ok: false,
+    error: 'Billing or provider policy blocked the canary; credential validity is indeterminate.',
+    error_category: 'billing_or_provider_policy',
+    credential_state: 'indeterminate_policy_block',
+    provider_latency_ms: 123,
+  })
 })
 
 afterEach(cleanup)
@@ -148,5 +157,21 @@ describe('platform AI routing', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Provider key is used by the active standard route.',
     )
+  })
+
+  it('shows redacted provider credential evidence from a canary', async () => {
+    const user = userEvent.setup()
+    renderRouting()
+
+    const tests = await screen.findAllByRole('button', { name: 'Test provider' })
+    await user.click(tests[0])
+
+    expect(
+      await screen.findByText(
+        'Test failed: Billing or provider policy blocked the canary; credential validity is indeterminate.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Credential indeterminate policy block')).toBeInTheDocument()
+    expect(screen.getByText('billing or provider policy')).toBeInTheDocument()
   })
 })

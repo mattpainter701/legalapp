@@ -9,11 +9,13 @@ URLs, prompts, responses, or customer content.
 ## Proven production state
 
 - GitHub production verification run:
-  `https://github.com/mattpainter701/legalapp/actions/runs/31744918684`
+  `https://github.com/mattpainter701/legalapp/actions/runs/31748121309`
 - Runner: `skynet-lawhand-prod`
 - Deployed and available main commit:
   `3c8a31258543982a7c5c2823e439a31c7642aaa7`
 - Public version endpoint reports the same commit.
+- GitHub has no open pull requests and no merge newer than PR #95; `origin/main`
+  and production therefore agree on the complete merged history as of this audit.
 - Readiness reports `ok` for disk, database, Redis, scheduler, queue, and host
   disks.
 - The deployment production-check implementation requires authenticated LiteLLM

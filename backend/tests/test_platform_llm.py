@@ -159,6 +159,38 @@ def test_model_catalog_derives_audio_transcription_and_embedding_modalities():
     assert {"text_input", "embeddings"}.issubset(embedding["capabilities"])
 
 
+@pytest.mark.parametrize(
+    ("status", "category", "credential_state"),
+    (
+        (401, "invalid_credentials", "invalid"),
+        (403, "billing_or_provider_policy", "indeterminate_policy_block"),
+        (429, "rate_limited", "accepted_but_blocked"),
+        (500, "provider_unavailable", "indeterminate"),
+    ),
+)
+def test_provider_errors_are_redacted_and_classified(
+    status, category, credential_state
+):
+    request = platform_llm_router.httpx.Request("POST", "https://provider.invalid")
+    response = platform_llm_router.httpx.Response(
+        status,
+        request=request,
+        text='{"secret_workspace_id":"must-not-escape"}',
+    )
+    error = platform_llm_router.httpx.HTTPStatusError(
+        "provider response contains must-not-escape",
+        request=request,
+        response=response,
+    )
+
+    evidence = platform_llm_router._provider_error_evidence(error)
+
+    assert evidence["http_status"] == status
+    assert evidence["error_category"] == category
+    assert evidence["credential_state"] == credential_state
+    assert "must-not-escape" not in str(evidence)
+
+
 def test_model_catalog_marks_document_capable_free_legal_model():
     model = platform_llm_router._normalize_model_item(
         {

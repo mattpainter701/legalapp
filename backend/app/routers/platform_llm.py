@@ -221,6 +221,52 @@ def _usage_payload(
     }
 
 
+def _provider_error_evidence(exc: Exception) -> dict[str, Any]:
+    """Normalize provider failures without returning response bodies or IDs."""
+
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(response, "status_code", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+
+    if status == 401:
+        category = "invalid_credentials"
+        message = "Provider rejected the API credential."
+        credential_state = "invalid"
+    elif status in (402, 403):
+        category = "billing_or_provider_policy"
+        message = "Billing or provider policy blocked the canary; credential validity is indeterminate."
+        credential_state = "indeterminate_policy_block"
+    elif status == 429:
+        category = "rate_limited"
+        message = "Provider rate or quota limits blocked the canary."
+        credential_state = "accepted_but_blocked"
+    elif status == 400:
+        category = "unsupported_or_bad_request"
+        message = "Provider rejected the model or synthetic canary request."
+        credential_state = "indeterminate"
+    elif status is not None and status >= 500:
+        category = "provider_unavailable"
+        message = "Provider was unavailable during the canary."
+        credential_state = "indeterminate"
+    elif isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        category = "provider_timeout"
+        message = "Provider timed out during the canary."
+        credential_state = "indeterminate"
+    else:
+        category = "network_or_provider_error"
+        message = "Provider canary failed without a safe diagnostic response."
+        credential_state = "indeterminate"
+    return {
+        "http_status": status,
+        "error_category": category,
+        "error": message,
+        "credential_state": credential_state,
+    }
+
+
 def _route_audit_payload(
     config: dict[str, Any], reload_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -258,14 +304,17 @@ def _model_test_audit_payload(
         "key_id": str(key.id),
         "key_hint": key.key_hint,
         "model": body.model,
+        "capability": "text",
         "ok": bool(result.get("ok")),
+        "credential_state": result.get("credential_state"),
         "model_used": result.get("model_used"),
+        "http_status": result.get("http_status"),
+        "error_category": result.get("error_category"),
         "provider_latency_ms": result.get("provider_latency_ms"),
         "server_elapsed_ms": result.get("server_elapsed_ms"),
         "prompt_tokens": result.get("prompt_tokens"),
         "completion_tokens": result.get("completion_tokens"),
         "total_tokens": result.get("total_tokens"),
-        "error": result.get("error"),
     }
 
 
@@ -2144,6 +2193,9 @@ async def test_route(
         response_preview: str | None = None,
         usage: dict[str, Any] | None = None,
         error: str | None = None,
+        error_category: str | None = None,
+        credential_state: str = "valid",
+        http_status: int | None = None,
     ) -> dict[str, Any]:
         server_elapsed_ms = int((time.monotonic() - server_start) * 1000)
         payload: dict[str, Any] = {
@@ -2152,6 +2204,8 @@ async def test_route(
             "provider_latency_ms": provider_latency_ms,
             "server_elapsed_ms": server_elapsed_ms,
             "server_overhead_ms": max(0, server_elapsed_ms - provider_latency_ms),
+            "capability": "text",
+            "credential_state": credential_state,
         }
         if model_used:
             payload["model_used"] = model_used
@@ -2161,6 +2215,10 @@ async def test_route(
             payload.update(usage)
         if error:
             payload["error"] = error
+        if error_category:
+            payload["error_category"] = error_category
+        if http_status is not None:
+            payload["http_status"] = http_status
         return payload
 
     # Test the selected provider directly; route saves separately register LiteLLM aliases.
@@ -2196,7 +2254,7 @@ async def test_route(
             ).strip()
             usage = payload.get("usage") or {}
             result = _timing_response(
-                ok=True,
+                ok=text == "OK",
                 provider_latency_ms=elapsed_ms,
                 model_used=payload.get("model") or body.model,
                 response_preview=text[:120],
@@ -2205,6 +2263,12 @@ async def test_route(
                     completion_tokens=usage.get("output_tokens"),
                     elapsed_ms=elapsed_ms,
                 ),
+                error=(
+                    None
+                    if text == "OK"
+                    else "Provider responded, but the synthetic canary value was incorrect."
+                ),
+                error_category=None if text == "OK" else "unexpected_response",
             )
             await record_operator_audit(
                 db,
@@ -2231,7 +2295,7 @@ async def test_route(
         model_used = resp.model or body.model
         usage = resp.usage
         result = _timing_response(
-            ok=True,
+            ok=text == "OK",
             provider_latency_ms=elapsed_ms,
             model_used=model_used,
             response_preview=text[:120],
@@ -2241,6 +2305,12 @@ async def test_route(
                 total_tokens=getattr(usage, "total_tokens", None),
                 elapsed_ms=elapsed_ms,
             ),
+            error=(
+                None
+                if text == "OK"
+                else "Provider responded, but the synthetic canary value was incorrect."
+            ),
+            error_category=None if text == "OK" else "unexpected_response",
         )
         await record_operator_audit(
             db,
@@ -2254,10 +2324,11 @@ async def test_route(
         return result
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
+        evidence = _provider_error_evidence(exc)
         result = _timing_response(
             ok=False,
             provider_latency_ms=elapsed_ms,
-            error=str(exc)[:300],
+            **evidence,
         )
         await record_operator_audit(
             db,

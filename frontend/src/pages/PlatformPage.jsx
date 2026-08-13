@@ -1273,6 +1273,8 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
               </p>
               <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
                 {testResult.client_roundtrip_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Browser {testResult.client_roundtrip_ms}ms</span>}
+                {testResult.credential_state && <span className="rounded border border-brand-line px-2 py-0.5">Credential {testResult.credential_state.replaceAll('_', ' ')}</span>}
+                {testResult.error_category && <span className="rounded border border-brand-line px-2 py-0.5">{testResult.error_category.replaceAll('_', ' ')}</span>}
                 {testResult.server_elapsed_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Server {testResult.server_elapsed_ms}ms</span>}
                 {testResult.provider_latency_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Provider {testResult.provider_latency_ms}ms</span>}
                 {testResult.server_overhead_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Overhead {testResult.server_overhead_ms}ms</span>}

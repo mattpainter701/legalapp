@@ -250,6 +250,8 @@ async def test_model_test_records_operator_audit(
     assert logs[0].metadata_json["provider_id"] == "openrouter"
     assert logs[0].metadata_json["model"] == "google/gemma-4-31b-it:free"
     assert logs[0].metadata_json["ok"] is True
+    assert logs[0].metadata_json["capability"] == "text"
+    assert logs[0].metadata_json["credential_state"] == "valid"
     assert "Reply with exactly" not in str(logs[0].metadata_json)
 
 

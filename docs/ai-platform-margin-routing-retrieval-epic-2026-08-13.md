@@ -106,6 +106,8 @@ Unknown-price enforcement belongs to `AIP-04`.
 - [x] Add `scripts/canary_ai_capabilities.py` for redacted key inventory, local
   document extraction, and optional metered text/vision/PDF/embedding/STT probes.
 - [x] Pass the retained OpenCode key on synthetic text with `gpt-5.6-luna`.
+- [x] Make operator text canaries exact-match and secret-safe; expose credential
+  state and stable failure categories instead of raw provider response bodies.
 - [ ] Pass live OpenRouter text, image, native-PDF, 1536-dimensional embedding,
   and bounded speech-to-text canaries after key provisioning/rotation.
 - [ ] Store and rehearse the last-known-good rollback revision.

@@ -24,6 +24,9 @@ Epic and acceptance criteria:
 - [x] `AIP-02b` Add a secret-safe multimodal canary runner and local TXT/DOCX/PDF
       extraction gates; inventory found no usable local OpenRouter/OpenAI key,
       while the retained OpenCode key passed text with `gpt-5.6-luna`
+- [x] `AIP-02b.1` Redact provider failure bodies from operator model tests and
+      report credential state, stable failure category, exact synthetic-response
+      success, and timing without leaking provider workspace or response IDs
 - [ ] `AIP-02c` Provision/rotate production-owned OpenRouter capacity and pass live
       text, vision, native PDF, embeddings, and speech-to-text canaries
 - [ ] `AIP-03` Pin the demo tenant to the qualified route and pass chat, citation,
