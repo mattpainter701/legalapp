@@ -116,9 +116,7 @@ def upgrade() -> None:
     # Backfill estate_name from the legacy title column.
     op.execute("UPDATE estates SET estate_name = title WHERE estate_name IS NULL")
     op.create_index("idx_estates_matter_id", "estates", ["matter_id"])
-    op.create_index(
-        "idx_estates_client_contact_id", "estates", ["client_contact_id"]
-    )
+    op.create_index("idx_estates_client_contact_id", "estates", ["client_contact_id"])
 
     # ── estate_fiduciaries ────────────────────────────────────────────────────
     op.create_table(
@@ -294,7 +292,9 @@ def upgrade() -> None:
         _tenant_col(),
         _estate_fk(),
         sa.Column("entry_date", sa.Date(), nullable=False),
-        sa.Column("entry_type", sa.String(50), nullable=False, server_default="receipt"),
+        sa.Column(
+            "entry_type", sa.String(50), nullable=False, server_default="receipt"
+        ),
         sa.Column(
             "account_class", sa.String(50), nullable=False, server_default="principal"
         ),

@@ -29,12 +29,8 @@ def upgrade() -> None:
         sa.Column(
             "direction", sa.String(20), nullable=False, server_default="outbound"
         ),
-        sa.Column(
-            "channel", sa.String(30), nullable=False, server_default="email"
-        ),
-        sa.Column(
-            "status", sa.String(30), nullable=False, server_default="logged"
-        ),
+        sa.Column("channel", sa.String(30), nullable=False, server_default="email"),
+        sa.Column("status", sa.String(30), nullable=False, server_default="logged"),
         sa.Column("subject", sa.String(500), nullable=False),
         sa.Column("body", sa.Text(), nullable=True),
         sa.Column("summary", sa.Text(), nullable=True),
@@ -167,7 +163,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS leads_tenant_isolation ON leads")
     op.drop_table("leads")
-    op.execute(
-        "DROP POLICY IF EXISTS commlogs_tenant_isolation ON communication_logs"
-    )
+    op.execute("DROP POLICY IF EXISTS commlogs_tenant_isolation ON communication_logs")
     op.drop_table("communication_logs")

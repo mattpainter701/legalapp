@@ -33,6 +33,13 @@ def upgrade() -> None:
         "tasks",
         sa.Column("pending_action", sa.JSON(), nullable=True),
     )
+    # Cards the assistant showed for this turn. The tasks are the source of
+    # truth; this is the rendering record, so reloading a conversation shows the
+    # same proposals instead of losing them.
+    op.add_column(
+        "messages",
+        sa.Column("proposed_actions", sa.JSON(), nullable=True),
+    )
     # Off for every existing tenant. Chat actions are opted into per tenant.
     op.add_column(
         "tenant_settings",
@@ -126,4 +133,5 @@ def downgrade() -> None:
     )
     op.drop_table("task_automation_runs")
     op.drop_column("tenant_settings", "enable_chat_actions")
+    op.drop_column("messages", "proposed_actions")
     op.drop_column("tasks", "pending_action")

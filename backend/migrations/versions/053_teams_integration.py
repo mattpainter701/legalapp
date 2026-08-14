@@ -138,9 +138,7 @@ def downgrade() -> None:
         "DROP POLICY IF EXISTS tenant_isolation_teams_notification_settings "
         "ON teams_notification_settings"
     )
-    op.execute(
-        "ALTER TABLE teams_notification_settings DISABLE ROW LEVEL SECURITY"
-    )
+    op.execute("ALTER TABLE teams_notification_settings DISABLE ROW LEVEL SECURITY")
     op.drop_index(
         "idx_teams_notif_settings_tenant_id",
         table_name="teams_notification_settings",
@@ -152,10 +150,6 @@ def downgrade() -> None:
         "ON teams_channel_links"
     )
     op.execute("ALTER TABLE teams_channel_links DISABLE ROW LEVEL SECURITY")
-    op.drop_index(
-        "idx_teams_channel_links_matter_id", table_name="teams_channel_links"
-    )
-    op.drop_index(
-        "idx_teams_channel_links_tenant_id", table_name="teams_channel_links"
-    )
+    op.drop_index("idx_teams_channel_links_matter_id", table_name="teams_channel_links")
+    op.drop_index("idx_teams_channel_links_tenant_id", table_name="teams_channel_links")
     op.drop_table("teams_channel_links")

@@ -43,9 +43,7 @@ def upgrade() -> None:
         "tenants",
         sa.Column("api_key_prefix", sa.String(8), nullable=True),
     )
-    op.create_index(
-        "ix_tenants_api_key_hash", "tenants", ["api_key_hash"], unique=True
-    )
+    op.create_index("ix_tenants_api_key_hash", "tenants", ["api_key_hash"], unique=True)
 
     # Back-fill: hash existing plaintext keys in-DB, then null out the plaintext.
     # sha256() returns bytea; encode(..., 'hex') gives a 64-char hex string.

@@ -26,7 +26,9 @@ def upgrade() -> None:
     op.add_column(
         "documents", sa.Column("embedding_model", sa.String(255), nullable=True)
     )
-    op.add_column("documents", sa.Column("embedding_version", sa.Integer(), nullable=True))
+    op.add_column(
+        "documents", sa.Column("embedding_version", sa.Integer(), nullable=True)
+    )
 
 
 def downgrade() -> None:

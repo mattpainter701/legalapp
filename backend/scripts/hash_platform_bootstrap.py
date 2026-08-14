@@ -24,7 +24,9 @@ def main() -> None:
         help="Comma-separated maximum scopes",
     )
     args = parser.parse_args()
-    scopes = sorted({value.strip() for value in args.scopes.split(",") if value.strip()})
+    scopes = sorted(
+        {value.strip() for value in args.scopes.split(",") if value.strip()}
+    )
     if not scopes or set(scopes) - ALLOWED_SCOPES:
         parser.error("invalid scopes")
     raw_key = getpass.getpass("Bootstrap key (will not be echoed): ")

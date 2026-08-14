@@ -50,12 +50,16 @@ def upgrade() -> None:
         sa.Column("timezone", sa.String(100), nullable=False, server_default="UTC"),
         sa.Column("attendees", postgresql.JSONB(), nullable=True),
         sa.Column("calendar_provider", sa.String(50), nullable=True),
-        sa.Column("meeting_provider", sa.String(50), nullable=False, server_default="none"),
+        sa.Column(
+            "meeting_provider", sa.String(50), nullable=False, server_default="none"
+        ),
         sa.Column("external_calendar_event_id", sa.String(500), nullable=True),
         sa.Column("external_calendar_url", sa.Text(), nullable=True),
         sa.Column("meeting_id", sa.String(500), nullable=True),
         sa.Column("join_url", sa.Text(), nullable=True),
-        sa.Column("sync_status", sa.String(50), nullable=False, server_default="pending"),
+        sa.Column(
+            "sync_status", sa.String(50), nullable=False, server_default="pending"
+        ),
         sa.Column("sync_error", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
@@ -71,7 +75,9 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["matter_id"], ["matters.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["created_by_user_id"], ["users.id"], ondelete="SET NULL"
+        ),
     )
     op.create_index(
         "idx_scheduled_events_tenant_start",
@@ -92,7 +98,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP POLICY IF EXISTS tenant_isolation_scheduled_events ON scheduled_events")
+    op.execute(
+        "DROP POLICY IF EXISTS tenant_isolation_scheduled_events ON scheduled_events"
+    )
     op.execute("ALTER TABLE scheduled_events DISABLE ROW LEVEL SECURITY")
     op.drop_index("idx_scheduled_events_created_by", table_name="scheduled_events")
     op.drop_index("idx_scheduled_events_matter_id", table_name="scheduled_events")

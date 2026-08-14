@@ -27,15 +27,9 @@ def upgrade() -> None:
         sa.Column("tenant_id", UUID(as_uuid=True), nullable=False),
         sa.Column("title", sa.String(500), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column(
-            "task_type", sa.String(50), nullable=False, server_default="general"
-        ),
-        sa.Column(
-            "status", sa.String(50), nullable=False, server_default="pending"
-        ),
-        sa.Column(
-            "priority", sa.String(20), nullable=False, server_default="medium"
-        ),
+        sa.Column("task_type", sa.String(50), nullable=False, server_default="general"),
+        sa.Column("status", sa.String(50), nullable=False, server_default="pending"),
+        sa.Column("priority", sa.String(20), nullable=False, server_default="medium"),
         sa.Column("due_date", sa.Date(), nullable=True),
         sa.Column("due_time", sa.Time(), nullable=True),
         sa.Column(
@@ -63,9 +57,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "source", sa.String(50), nullable=False, server_default="manual"
-        ),
+        sa.Column("source", sa.String(50), nullable=False, server_default="manual"),
         sa.Column("external_ref", sa.String(500), nullable=True),
         sa.Column(
             "created_at",

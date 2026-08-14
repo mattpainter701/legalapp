@@ -64,7 +64,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
     )
-    op.create_index("idx_intake_call_drafts_tenant", "intake_call_drafts", ["tenant_id"])
+    op.create_index(
+        "idx_intake_call_drafts_tenant", "intake_call_drafts", ["tenant_id"]
+    )
     op.create_index(
         "idx_intake_call_drafts_created_by",
         "intake_call_drafts",
@@ -74,7 +76,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP POLICY IF EXISTS intake_call_drafts_tenant_isolation ON intake_call_drafts")
+    op.execute(
+        "DROP POLICY IF EXISTS intake_call_drafts_tenant_isolation ON intake_call_drafts"
+    )
     op.drop_index("idx_intake_call_drafts_created_by", table_name="intake_call_drafts")
     op.drop_index("idx_intake_call_drafts_tenant", table_name="intake_call_drafts")
     op.drop_table("intake_call_drafts")

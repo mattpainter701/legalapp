@@ -15,12 +15,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("usage_records", sa.Column("operation_type", sa.String(50), nullable=True))
+    op.add_column(
+        "usage_records", sa.Column("operation_type", sa.String(50), nullable=True)
+    )
     op.add_column("usage_records", sa.Column("query_text", sa.Text, nullable=True))
-    op.add_column("usage_records", sa.Column("rag_chunks_retrieved", sa.Integer, nullable=True))
+    op.add_column(
+        "usage_records", sa.Column("rag_chunks_retrieved", sa.Integer, nullable=True)
+    )
     op.add_column("usage_records", sa.Column("rag_source_ids", sa.JSON, nullable=True))
-    op.add_column("usage_records", sa.Column("ip_address", sa.String(45), nullable=True))
-    op.add_column("usage_records", sa.Column("user_agent", sa.String(500), nullable=True))
+    op.add_column(
+        "usage_records", sa.Column("ip_address", sa.String(45), nullable=True)
+    )
+    op.add_column(
+        "usage_records", sa.Column("user_agent", sa.String(500), nullable=True)
+    )
 
     op.create_index(
         "ix_usage_records_user_created",

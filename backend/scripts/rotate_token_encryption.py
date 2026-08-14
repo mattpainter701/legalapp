@@ -98,7 +98,11 @@ async def rotate_all(*, dry_run: bool) -> int:
             tenant_settings = await db.scalar(
                 select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
             )
-            config = dict(tenant_settings.customer_llm_config or {}) if tenant_settings else {}
+            config = (
+                dict(tenant_settings.customer_llm_config or {})
+                if tenant_settings
+                else {}
+            )
             encrypted_api_key = config.get("encrypted_api_key")
             if encrypted_api_key:
                 config["encrypted_api_key"] = rotate_token_ciphertext(encrypted_api_key)

@@ -28,14 +28,33 @@ def upgrade() -> None:
         ),
         sa.Column("tenant_id", sa.UUID(as_uuid=True), nullable=False),
         sa.Column("cache_enabled", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("cache_ttl_multiplier", sa.Float(), nullable=False, server_default="1.0"),
-        sa.Column("default_expertise_level", sa.String(50), nullable=False, server_default="mid"),
-        sa.Column("default_practice_areas", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("default_privacy_mode", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("enable_auto_memory", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("enable_pii_detection", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("enable_skill_routing", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("enable_matter_context", sa.Boolean(), nullable=False, server_default="true"),
+        sa.Column(
+            "cache_ttl_multiplier", sa.Float(), nullable=False, server_default="1.0"
+        ),
+        sa.Column(
+            "default_expertise_level",
+            sa.String(50),
+            nullable=False,
+            server_default="mid",
+        ),
+        sa.Column(
+            "default_practice_areas", sa.JSON(), nullable=False, server_default="[]"
+        ),
+        sa.Column(
+            "default_privacy_mode", sa.Boolean(), nullable=False, server_default="false"
+        ),
+        sa.Column(
+            "enable_auto_memory", sa.Boolean(), nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "enable_pii_detection", sa.Boolean(), nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "enable_skill_routing", sa.Boolean(), nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "enable_matter_context", sa.Boolean(), nullable=False, server_default="true"
+        ),
         sa.Column("max_requests_per_minute", sa.Integer(), nullable=True),
         sa.Column("max_daily_tokens", sa.Integer(), nullable=True),
         sa.Column("custom_config", sa.JSON(), nullable=True),
@@ -80,7 +99,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP POLICY IF EXISTS tenant_isolation_tenant_settings ON tenant_settings")
+    op.execute(
+        "DROP POLICY IF EXISTS tenant_isolation_tenant_settings ON tenant_settings"
+    )
     op.execute("ALTER TABLE tenant_settings DISABLE ROW LEVEL SECURITY")
     op.drop_index("idx_tenant_settings_tenant_id", table_name="tenant_settings")
     op.drop_index("uq_tenant_settings_tenant_id", table_name="tenant_settings")

@@ -27,12 +27,19 @@ def upgrade() -> None:
             server_default=sa.text("gen_random_uuid()"),
         ),
         sa.Column("tenant_id", sa.UUID(as_uuid=True), nullable=False),
-        sa.Column("source_type", sa.String(50), nullable=False,
-                  comment="time_entry | expense | flat_fee | adjustment"),
-        sa.Column("expense_category", sa.String(100), nullable=True,
-                  comment="Sub-type for expense rows (filing_fee, travel, etc.)"),
-        sa.Column("qbo_item_id", sa.String(100), nullable=False,
-                  comment="QBO Item.Id"),
+        sa.Column(
+            "source_type",
+            sa.String(50),
+            nullable=False,
+            comment="time_entry | expense | flat_fee | adjustment",
+        ),
+        sa.Column(
+            "expense_category",
+            sa.String(100),
+            nullable=True,
+            comment="Sub-type for expense rows (filing_fee, travel, etc.)",
+        ),
+        sa.Column("qbo_item_id", sa.String(100), nullable=False, comment="QBO Item.Id"),
         sa.Column("qbo_item_name", sa.String(200), nullable=False),
         sa.Column(
             "created_at",
@@ -48,11 +55,15 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.UniqueConstraint(
-            "tenant_id", "source_type", "expense_category",
+            "tenant_id",
+            "source_type",
+            "expense_category",
             name="uq_qbo_item_mappings_tenant_type_category",
         ),
     )
-    op.create_index("idx_qbo_item_mappings_tenant_id", "qbo_item_mappings", ["tenant_id"])
+    op.create_index(
+        "idx_qbo_item_mappings_tenant_id", "qbo_item_mappings", ["tenant_id"]
+    )
 
     op.execute("ALTER TABLE qbo_item_mappings ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE qbo_item_mappings FORCE ROW LEVEL SECURITY")
