@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ChatHeader from './ChatHeader'
 import ChatInput from './ChatInput'
-import ChatMessage, { linkSourceReferences } from './ChatMessage'
+import ChatMessage, { citedSourceCount, linkSourceReferences } from './ChatMessage'
 import Messages from './Messages'
 import ChatRail from './chat/ChatRail'
 
@@ -79,11 +79,68 @@ describe('Chat assistant experience', () => {
       'href',
       'https://www.courtlistener.com/opinion/675482/',
     )
-    expect(screen.getByText('Authorities Referenced')).toBeInTheDocument()
+    expect(screen.getByText('Authorities and Sources')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Link to Retrieved passage 3' })).toHaveAttribute(
       'href',
       '#source-answer-1-1',
     )
+  })
+
+  it('counts only exact source markers as citations, not every retrieved row', () => {
+    const sources = [
+      { source_id: 'authority:nd-1', case_name: 'ND authority' },
+      { source_id: 'tenant:retainer-1', case_name: 'Retainer agreement' },
+    ]
+
+    expect(citedSourceCount(
+      'The rule is supported. [source: authority:nd-1] [verify]',
+      sources,
+    )).toBe(1)
+    expect(citedSourceCount('No inline authority.', sources)).toBe(0)
+  })
+
+  it('labels uncited retrieval honestly instead of claiming every row was cited', () => {
+    const sources = [
+      {
+        source_id: 'tenant:retainer-1',
+        case_name: 'Monthly Retainer Agreement.docx',
+        source_type: 'tenant_document',
+        source_label: 'Firm context',
+      },
+    ]
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-gap',
+          role: 'assistant',
+          content: '## Authority coverage gap\n\nNo supported answer.',
+          sources,
+          created_at: '2026-08-14T22:33:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByText(/Materials Retrieved.*Not Cited/)).toBeInTheDocument()
+    expect(screen.getByText(/0 cited.*1 retrieved/)).toBeInTheDocument()
+    expect(screen.getByText('Retrieved only')).toBeInTheDocument()
+  })
+
+  it('does not present legacy generic context as an unknown legal case', () => {
+    render(
+      <ChatMessage
+        message={{
+          id: 'legacy-answer',
+          role: 'assistant',
+          content: 'Legacy answer.',
+          sources: [{ source_id: 'legacy-1', case_name: 'Unknown Case', source_type: 'general' }],
+          created_at: '2026-08-14T22:33:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.queryByText('Unknown Case')).not.toBeInTheDocument()
+    expect(screen.getByText('Retrieved context')).toBeInTheDocument()
   })
 
   it('links attached-document source tags to the authenticated LawHand download', () => {

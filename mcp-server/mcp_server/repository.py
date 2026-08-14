@@ -8,6 +8,49 @@ from .database import dict_rows
 from .query_embeddings import format_vector_literal
 
 _CITATION_RE = re.compile(r"^\s*(?P<volume>\d+)\s+(?P<reporter>.+?)\s+(?P<page>\d+)\s*$")
+_SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9]{3,}")
+_SEARCH_STOP_WORDS = {
+    "about",
+    "and",
+    "are",
+    "case",
+    "for",
+    "from",
+    "handle",
+    "have",
+    "how",
+    "now",
+    "out",
+    "state",
+    "that",
+    "the",
+    "their",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+}
+
+
+def broad_legal_websearch_query(query: str) -> str:
+    """Turn conversational questions into ranked OR recall for legal corpora.
+
+    ``websearch_to_tsquery`` treats ordinary whitespace as AND. A full chat
+    question therefore commonly returned zero rows even when the corpus held
+    opinions on the controlling issue. Keep meaningful terms, deduplicate them,
+    and let ranking plus the jurisdiction filter determine the best passages.
+    """
+    terms: list[str] = []
+    for token in _SEARCH_TERM_RE.findall(query or ""):
+        normalized = token.casefold()
+        if normalized in _SEARCH_STOP_WORDS or normalized in terms:
+            continue
+        terms.append(normalized)
+    if not terms:
+        return query
+    return " OR ".join(terms[:16])
 
 
 class CourtListenerRepository:
@@ -114,6 +157,7 @@ class CourtListenerRepository:
             filter_params.extend([effective_on, effective_on])
 
         where = " AND ".join(filters)
+        fts_query = broad_legal_websearch_query(query)
         if not query_embedding:
             sql = f"""
                 SELECT c.id::text AS chunk_id, d.id::text AS document_id,
@@ -134,7 +178,7 @@ class CourtListenerRepository:
                 ORDER BY rank DESC, d.effective_date DESC NULLS LAST
                 LIMIT %s
             """
-            params = [query, query, query, *filter_params, top_k]
+            params = [fts_query, fts_query, fts_query, *filter_params, top_k]
         else:
             vector = format_vector_literal(query_embedding)
             candidate_limit = min(max(top_k * 4, 20), 200)
@@ -209,9 +253,9 @@ class CourtListenerRepository:
                 vector,
                 vector,
                 candidate_limit,
-                query,
-                query,
-                query,
+                fts_query,
+                fts_query,
+                fts_query,
                 candidate_limit,
                 top_k,
             ]
@@ -228,6 +272,7 @@ class CourtListenerRepository:
         date_to: str | None,
     ) -> list[dict[str, Any]]:
         filters, filter_params = self._search_filters(jurisdiction, date_from, date_to)
+        fts_query = broad_legal_websearch_query(query)
         sql = f"""
             SELECT oc.id::text AS chunk_id, oc.opinion_id, oc.cluster_id, oc.chunk_index,
                    cl.case_name,
@@ -247,7 +292,7 @@ class CourtListenerRepository:
             ORDER BY rank DESC, cl.date_filed DESC NULLS LAST
             LIMIT %s
         """
-        params = [query, query, query, *filter_params, top_k]
+        params = [fts_query, fts_query, fts_query, *filter_params, top_k]
         with self.conn.cursor() as cur:
             cur.execute(sql, params)
             return dict_rows(cur)
@@ -262,6 +307,7 @@ class CourtListenerRepository:
         query_embedding: list[float],
     ) -> list[dict[str, Any]]:
         filters, filter_params = self._search_filters(jurisdiction, date_from, date_to)
+        fts_query = broad_legal_websearch_query(query)
         vector = format_vector_literal(query_embedding)
         candidate_limit = min(max(top_k * 4, 20), 200)
         sql = f"""
@@ -333,9 +379,9 @@ class CourtListenerRepository:
             vector,
             vector,
             candidate_limit,
-            query,
-            query,
-            query,
+            fts_query,
+            fts_query,
+            fts_query,
             candidate_limit,
             top_k,
         ]

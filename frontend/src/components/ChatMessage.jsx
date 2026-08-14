@@ -73,6 +73,31 @@ export function linkSourceReferences(text, sources, messageId) {
   })
 }
 
+function sourceDisplayName(src) {
+  const value = cleanSourceText(src?.case_name)
+  if (value && !/^unknown case$/i.test(value)) return value
+  return src?.source_type === 'public_authority' ? 'Unidentified authority' : 'Retrieved context'
+}
+
+export function citedSourceCount(text, sources) {
+  const sourceList = Array.isArray(sources) ? sources : []
+  const knownIds = new Set(
+    sourceList
+      .map((source) => String(source?.source_id || source?.id || '').trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const citedIds = new Set()
+  for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
+    const id = String(match[1] || '').trim().toLowerCase()
+    if (knownIds.has(id)) citedIds.add(id)
+  }
+  for (const source of sourceList) {
+    const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
+    if (id && source?.cited === true) citedIds.add(id)
+  }
+  return citedIds.size
+}
+
 function splitMarkdownSections(markdown) {
   const intro = []
   const sections = []
@@ -167,12 +192,17 @@ function sourceBadge(src) {
   return { label, classes: 'bg-brand-line/40 text-brand-muted border-brand-line' }
 }
 
-function SourcesLedger({ sources, messageId }) {
+function SourcesLedger({ sources, messageId, content }) {
   if (!sources || sources.length === 0) return null
 
   const cols = 'sm:grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
   const publicAuthorityCount = sources.filter((src) => src?.source_type === 'public_authority').length
-  const heading = publicAuthorityCount > 0 ? 'Authorities Referenced' : 'Sources & References'
+  const citedCount = citedSourceCount(content, sources)
+  const heading = citedCount === 0
+    ? 'Materials Retrieved — Not Cited'
+    : publicAuthorityCount > 0
+      ? 'Authorities and Sources'
+      : 'Sources & References'
 
   return (
     <div className="mt-5 border-t-[3px] border-brand-ink pt-4 sm:mt-10 sm:pt-6">
@@ -193,11 +223,13 @@ function SourcesLedger({ sources, messageId }) {
         <div className="divide-y divide-brand-line">
           {sources.map((src, idx) => {
             const citation = cleanSourceText(src.citation)
-            const caseName = cleanSourceText(src.case_name) || 'Unknown source'
+            const caseName = sourceDisplayName(src)
             const court = cleanSourceText(src.court)
             const excerpt = cleanSourceText(src.excerpt)
             const href = sourceHref(src)
             const badge = sourceBadge(src)
+            const wasCited = src?.cited === true
+              || new RegExp(`\\[source:\\s*${String(src?.source_id || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'i').test(content || '')
             const locator = cleanSourceText(src.locator)
             const anchor = sourceAnchor(messageId, idx)
 
@@ -218,6 +250,9 @@ function SourcesLedger({ sources, messageId }) {
                     </div>
                     <span className={`mt-1 inline-flex w-fit items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest font-mono border ${badge.classes}`}>
                       {badge.label}
+                    </span>
+                    <span className={`ml-2 mt-1 inline-flex w-fit border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${wasCited ? 'border-brand-green/20 bg-brand-green/10 text-brand-green' : 'border-brand-line bg-brand-surface-2 text-brand-muted'}`}>
+                      {wasCited ? 'Cited' : 'Retrieved only'}
                     </span>
                     {locator && (
                       <a
@@ -315,7 +350,7 @@ function countSourcesByType(sources) {
   return counts
 }
 
-function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
+function ReferenceTrail({ referenceContext, sources, content, variant = 'assistant' }) {
   const sourceCounts = countSourcesByType(sources)
   const contextCounts = referenceContext?.counts || {}
   const counts = {
@@ -329,7 +364,8 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
     (counts.matter + counts.uploads + counts.firm + counts.courtlistener)
   )
   const sourceCount = formatCount(referenceContext?.source_count ?? (Array.isArray(sources) ? sources.length : 0))
-  const status = referenceContext?.status || (sourceCount ? 'Sources attached to answer' : '')
+  const actualCitedCount = formatCount(referenceContext?.cited_count ?? citedSourceCount(content, sources))
+  const status = referenceContext?.status || (sourceCount ? 'Materials retrieved for source audit' : '')
   const hasAny = counts.total > 0 || sourceCount > 0 || status
   if (!hasAny) return null
 
@@ -356,7 +392,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
         </span>
         {sourceCount > 0 && (
           <span className={`font-mono font-bold ${valueClasses}`}>
-            {sourceCount} cited
+            {actualCitedCount} cited · {sourceCount} retrieved
           </span>
         )}
         {chips.map(({ icon: Icon, label, value }) => (
@@ -520,7 +556,7 @@ function AssistantWorkingState({ progress, compact = false }) {
             <div key={source.source_id || source.case_name} className="animate-fade-in border border-brand-line bg-brand-surface px-3 py-2">
               <div className="flex items-center gap-2">
                 <BookOpen className="h-3.5 w-3.5 shrink-0 text-brand-gold" />
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-brand-ink">{source.case_name}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-brand-ink">{sourceDisplayName(source)}</span>
                 <span className="shrink-0 font-mono text-[9px] uppercase text-brand-muted">{source.source_label}</span>
               </div>
               {(source.citation || source.locator) && (
@@ -606,6 +642,7 @@ export default function ChatMessage({ message }) {
             <ReferenceTrail
               referenceContext={message.referenceContext}
               sources={message.sources}
+              content={content}
               variant="user"
             />
           </div>
@@ -648,7 +685,7 @@ export default function ChatMessage({ message }) {
             ) : (
               <AssistantWorkingState progress={message.progress} />
             )}
-            {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
+            {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} content={content} />}
           </div>
           {/* Outside responseCopyRef: copying an analysis should yield the
               analysis, not the approval controls. */}
@@ -664,6 +701,7 @@ export default function ChatMessage({ message }) {
             <ReferenceTrail
               referenceContext={message.referenceContext}
               sources={message.sources}
+              content={content}
             />
           )}
         </div>

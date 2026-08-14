@@ -28,7 +28,7 @@ from mcp_server.loader import (
     should_keep_cluster,
 )
 from mcp_server.query_embeddings import QueryEmbeddingClient, format_vector_literal
-from mcp_server.repository import CourtListenerRepository
+from mcp_server.repository import CourtListenerRepository, broad_legal_websearch_query
 from mcp_server.schema import SCHEMA_SQL
 from mcp_server.tools import TOOL_NAMES, build_tool_manifest
 from mcp_server.worker_config import WorkerConfig, partition_sql
@@ -318,6 +318,18 @@ def test_repository_search_falls_back_to_fts_when_query_embedding_unavailable():
     assert "websearch_to_tsquery" in sql
     assert "source_url" in sql
     assert "{0,cite}" in sql
+
+
+def test_conversational_legal_query_uses_ranked_or_recall_instead_of_all_terms():
+    query = broad_legal_websearch_query(
+        "ND case with out of state CA parents mom is resident now; how to handle "
+        "jurisdiction for a divorce?"
+    )
+
+    assert "jurisdiction" in query
+    assert "divorce" in query
+    assert " OR " in query
+    assert "handle" not in query
 
 
 def test_repository_searches_general_authority_with_effective_date_filters():

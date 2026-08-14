@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, List, Tuple
@@ -16,6 +17,97 @@ from app.services.mcp_product import record_internal_chat_mcp_usage
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+_RETRIEVAL_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'-]{2,}")
+_RETRIEVAL_STOP_WORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "case",
+    "for",
+    "from",
+    "handle",
+    "have",
+    "how",
+    "into",
+    "now",
+    "out",
+    "state",
+    "that",
+    "the",
+    "their",
+    "there",
+    "this",
+    "was",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "with",
+}
+_PUBLIC_JURISDICTIONS = (
+    (re.compile(r"\b(?:north\s+dakota|n\.?d\.?)\b", re.IGNORECASE), "nd", "ND"),
+    (re.compile(r"\b(?:south\s+dakota|s\.?d\.?)\b", re.IGNORECASE), "sd", "SD"),
+    (re.compile(r"\b(?:minnesota|mn)\b", re.IGNORECASE), "minn", "MN"),
+    (re.compile(r"\b(?:montana|mt)\b", re.IGNORECASE), "mont", "MT"),
+)
+
+
+def _retrieval_terms(value: str | None) -> set[str]:
+    """Return meaningful lexical terms used by the private-result safety gate."""
+    return {
+        token.casefold()
+        for token in _RETRIEVAL_TOKEN_RE.findall(value or "")
+        if token.casefold() not in _RETRIEVAL_STOP_WORDS
+    }
+
+
+def filter_private_retrieval_results(question: str, chunks: list[dict]) -> list[dict]:
+    """Remove nearest-neighbour filler that has no defensible query relationship.
+
+    A vector index always returns *something*, even when every document is about a
+    different matter.  Keep a result when it has either strong semantic similarity
+    or meaningful lexical overlap.  This is deliberately applied only to private
+    firm material; public-authority search has its own ranking and provenance.
+    """
+    query_terms = _retrieval_terms(question)
+    required_overlap = 1 if len(query_terms) <= 2 else 2
+    retained: list[dict] = []
+    for chunk in chunks:
+        searchable = " ".join(
+            str(chunk.get(key) or "")
+            for key in (
+                "document_title",
+                "case_name",
+                "citation",
+                "section_path",
+                "content",
+            )
+        )
+        overlap = len(query_terms.intersection(_retrieval_terms(searchable)))
+        try:
+            similarity = float(chunk.get("similarity") or 0.0)
+        except (TypeError, ValueError):
+            similarity = 0.0
+        if overlap >= required_overlap or similarity >= 0.60:
+            chunk["lexical_overlap"] = overlap
+            retained.append(chunk)
+    return retained
+
+
+def infer_public_jurisdiction(query: str, tool_name: str) -> str | None:
+    """Map explicit MVP-state references to each MCP corpus's jurisdiction key."""
+    for pattern, courtlistener_id, authority_id in _PUBLIC_JURISDICTIONS:
+        if pattern.search(query or ""):
+            return (
+                authority_id
+                if tool_name == "search_legal_authorities"
+                else courtlistener_id
+            )
+    return None
 
 
 async def _connected_providers(
@@ -119,22 +211,34 @@ async def search_chunks_fts(
     tsquery syntax. The query is normalized: punctuation stripped, lowercased,
     and OR'd together for broad recall.
     """
+    terms = sorted(_retrieval_terms(query))
+    if not terms:
+        return []
+    # websearch_to_tsquery understands explicit OR and safely parses the bound
+    # value. Broad recall is paired with filter_private_retrieval_results(), so
+    # a single generic legal word cannot leak an unrelated firm document.
+    fts_query = " OR ".join(terms)
+
     sql = text("""
         SELECT
-            id::text,
-            content,
-            case_name,
-            citation,
-            court,
-            decision_date,
-            chunk_index,
-            section_path,
-            clause_type,
-            ts_rank(fts, plainto_tsquery('english', :query)) AS fts_rank,
+            c.id::text,
+            c.content,
+            c.case_name,
+            c.citation,
+            c.court,
+            c.decision_date,
+            c.chunk_index,
+            c.section_path,
+            c.clause_type,
+            c.document_id::text AS document_id,
+            d.filename AS document_title,
+            ts_rank(c.fts, websearch_to_tsquery('english', :query)) AS fts_rank,
             0.0 AS similarity
-        FROM chunks
-        WHERE tenant_id = CAST(:tenant_id AS uuid)
-          AND fts @@ plainto_tsquery('english', :query)
+        FROM chunks c
+        LEFT JOIN documents d
+          ON d.id = c.document_id AND d.tenant_id = c.tenant_id
+        WHERE c.tenant_id = CAST(:tenant_id AS uuid)
+          AND c.fts @@ websearch_to_tsquery('english', :query)
         ORDER BY fts_rank DESC
         LIMIT :top_k
     """)
@@ -144,7 +248,7 @@ async def search_chunks_fts(
         {
             "tenant_id": tenant_id,
             "top_k": top_k,
-            "query": query,
+            "query": fts_query,
         },
     )
     rows = result.fetchall()
@@ -160,6 +264,8 @@ async def search_chunks_fts(
             "chunk_index": row.chunk_index,
             "section_path": row.section_path or "",
             "clause_type": row.clause_type or "general",
+            "document_id": row.document_id,
+            "document_title": row.document_title,
             "similarity": float(row.fts_rank),
             "source": "tenant_document_fts",
         }
@@ -184,20 +290,24 @@ async def search_chunks(
 
     sql = text("""
         SELECT
-            id::text,
-            content,
-            case_name,
-            citation,
-            court,
-            decision_date,
-            chunk_index,
-            section_path,
-            clause_type,
-            1 - (embedding <=> CAST(:vec AS vector)) AS similarity
-        FROM chunks
-        WHERE tenant_id = CAST(:tenant_id AS uuid)
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:vec AS vector)
+            c.id::text,
+            c.content,
+            c.case_name,
+            c.citation,
+            c.court,
+            c.decision_date,
+            c.chunk_index,
+            c.section_path,
+            c.clause_type,
+            c.document_id::text AS document_id,
+            d.filename AS document_title,
+            1 - (c.embedding <=> CAST(:vec AS vector)) AS similarity
+        FROM chunks c
+        LEFT JOIN documents d
+          ON d.id = c.document_id AND d.tenant_id = c.tenant_id
+        WHERE c.tenant_id = CAST(:tenant_id AS uuid)
+          AND c.embedding IS NOT NULL
+        ORDER BY c.embedding <=> CAST(:vec AS vector)
         LIMIT :top_k
     """)
 
@@ -217,6 +327,8 @@ async def search_chunks(
             "chunk_index": row.chunk_index,
             "section_path": row.section_path or "",
             "clause_type": row.clause_type or "general",
+            "document_id": row.document_id,
+            "document_title": row.document_title,
             "similarity": float(row.similarity),
             "source": "tenant_document",
         }
@@ -383,6 +495,7 @@ async def _call_public_mcp_search(
     tool_name: str,
     query: str,
     top_k: int,
+    jurisdiction: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     started_at = time.monotonic()
     outcome = {
@@ -392,9 +505,12 @@ async def _call_public_mcp_search(
         "latency_ms": 0,
     }
     try:
+        arguments: dict[str, Any] = {"query": query, "top_k": top_k}
+        if jurisdiction:
+            arguments["jurisdiction"] = jurisdiction
         response = await client.post(
             url,
-            json={"name": tool_name, "arguments": {"query": query, "top_k": top_k}},
+            json={"name": tool_name, "arguments": arguments},
             headers={"X-Clarity-Internal-Key": settings.MCP_UPSTREAM_API_KEY},
         )
         outcome["status_code"] = response.status_code
@@ -447,9 +563,21 @@ async def search_courtlistener_mcp(
     timeout = httpx.Timeout(12.0, connect=3.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         case_result, authority_result = await asyncio.gather(
-            _call_public_mcp_search(client, url, "search_caselaw", query, top_k),
             _call_public_mcp_search(
-                client, url, "search_legal_authorities", query, top_k
+                client,
+                url,
+                "search_caselaw",
+                query,
+                top_k,
+                infer_public_jurisdiction(query, "search_caselaw"),
+            ),
+            _call_public_mcp_search(
+                client,
+                url,
+                "search_legal_authorities",
+                query,
+                top_k,
+                infer_public_jurisdiction(query, "search_legal_authorities"),
             ),
         )
     case_response, case_outcome = case_result
@@ -484,8 +612,17 @@ async def build_rag_context(chunks: List[dict]) -> str:
 
     parts = []
     for i, chunk in enumerate(chunks, start=1):
-        case_name = chunk.get("case_name") or "Unknown Case"
-        citation = chunk.get("citation") or "No Citation"
+        is_public = str(chunk.get("source") or "").casefold() in {
+            "courtlistener_mcp",
+            "legal_authority_mcp",
+            "public_courtlistener",
+        }
+        source_title = (
+            chunk.get("case_name")
+            if is_public
+            else chunk.get("document_title") or chunk.get("case_name")
+        ) or ("Unidentified authority" if is_public else "Firm document")
+        citation = chunk.get("citation") or ""
         court = chunk.get("court") or ""
         decision_date = chunk.get("decision_date") or ""
         content = chunk.get("content", "")
@@ -496,7 +633,7 @@ async def build_rag_context(chunks: List[dict]) -> str:
         source_url = _public_source_url(chunk)
 
         source_id = str(chunk.get("id") or "").strip()
-        header_parts = [f"[{i}] {case_name}"]
+        header_parts = [f"[{i}] {source_title}"]
         if source_id:
             header_parts.append(f"[source: {source_id}]")
         if citation:
@@ -611,15 +748,10 @@ async def full_rag_query(
         public_search,
     )
     mcp_outcomes = list(getattr(public_chunks, "mcp_outcomes", []))
-    if (
-        use_mcp_public
-        and not public_chunks
-        and mcp_outcomes
-        and all(int(item.get("status_code") or 500) >= 400 for item in mcp_outcomes)
-    ):
-        # Preserve public research during an MCP outage using the existing
-        # local public-authority index. This path is intentionally only used
-        # when both MCP tools failed, not for a legitimate zero-result search.
+    if use_mcp_public and not public_chunks:
+        # A zero-result remote search is still a coverage gap. Preserve access
+        # to the already-synced CourtListener bulk index whether the MCP tools
+        # failed or simply found nothing for the phrasing used by the caller.
         try:
             public_embedding = await embedding_service.embed_public_query(question)
             public_chunks = await search_public_chunks(
@@ -658,9 +790,12 @@ async def full_rag_query(
             logger.exception("Failed to record internal CourtListener MCP usage")
 
     # Fuse private dense + FTS results via RRF
-    fused_private = reciprocal_rank_fusion(
-        dense_results=dense_chunks,
-        fts_results=fts_results,
+    fused_private = filter_private_retrieval_results(
+        question,
+        reciprocal_rank_fusion(
+            dense_results=dense_chunks,
+            fts_results=fts_results,
+        ),
     )
 
     # Limit fused results and append public chunks

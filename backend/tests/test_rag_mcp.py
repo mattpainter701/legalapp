@@ -111,6 +111,17 @@ def test_mcp_json_items_extracts_tool_json_payloads():
     assert rag._mcp_json_items(response_data)[0]["chunk_id"] == "abc"
 
 
+def test_public_search_infers_explicit_nd_jurisdiction_for_each_corpus():
+    query = "ND parents; analyze divorce jurisdiction"
+
+    assert rag.infer_public_jurisdiction(query, "search_caselaw") == "nd"
+    assert rag.infer_public_jurisdiction(query, "search_legal_authorities") == "ND"
+    assert (
+        rag.infer_public_jurisdiction("general contract question", "search_caselaw")
+        is None
+    )
+
+
 def test_mcp_item_to_chunk_tags_courtlistener_source():
     chunk = rag._mcp_item_to_chunk(
         {
@@ -195,6 +206,48 @@ def test_mcp_authority_item_to_chunk_preserves_freshness_and_authority_type():
     assert chunk["official_status"] == "official"
     assert chunk["last_successful_sync_at"] == "2026-07-31T12:00:00Z"
     assert chunk["url"].startswith("https://www.medicaid.gov/")
+
+
+def test_private_retrieval_gate_drops_nearest_neighbor_filler():
+    chunks = [
+        {
+            "id": "retainer",
+            "document_title": "Monthly Retainer Agreement.docx",
+            "content": "California forum selection and monthly invoices.",
+            "similarity": 0.42,
+        },
+        {
+            "id": "family-law",
+            "document_title": "ND divorce jurisdiction research.docx",
+            "content": "North Dakota divorce jurisdiction and child custody.",
+            "similarity": 0.55,
+        },
+    ]
+
+    retained = rag.filter_private_retrieval_results(
+        "ND parents divorce custody jurisdiction",
+        chunks,
+    )
+
+    assert [item["id"] for item in retained] == ["family-law"]
+
+
+def test_private_retrieval_gate_keeps_strong_semantic_match_without_shared_words():
+    chunks = [
+        {
+            "id": "semantic",
+            "content": "A merger triggers the counterparty approval requirement.",
+            "similarity": 0.72,
+        }
+    ]
+
+    assert (
+        rag.filter_private_retrieval_results(
+            "What happens on a change of control?",
+            chunks,
+        )
+        == chunks
+    )
 
 
 @pytest.mark.asyncio
@@ -304,8 +357,10 @@ async def test_full_rag_query_records_mcp_usage_in_isolated_session(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_tools_fail(
+@pytest.mark.parametrize("status_codes", [(503, 502), (200, 200)])
+async def test_full_rag_query_falls_back_to_local_public_index_when_mcp_has_no_results(
     monkeypatch,
+    status_codes,
 ):
     class Embeddings:
         public_calls = 0
@@ -349,13 +404,13 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
             [
                 {
                     "tool_name": "search_caselaw",
-                    "status_code": 503,
+                    "status_code": status_codes[0],
                     "result_count": 0,
                     "latency_ms": 12,
                 },
                 {
                     "tool_name": "search_legal_authorities",
-                    "status_code": 502,
+                    "status_code": status_codes[1],
                     "result_count": 0,
                     "latency_ms": 14,
                 },
@@ -390,8 +445,8 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
     assert chunks[0]["id"] == "local-public-1"
     assert "Local public authority fallback" in context
     assert recorded == [
-        ("search_caselaw", 503),
-        ("search_legal_authorities", 502),
+        ("search_caselaw", status_codes[0]),
+        ("search_legal_authorities", status_codes[1]),
     ]
     assert len(context_binds) == 2
 
