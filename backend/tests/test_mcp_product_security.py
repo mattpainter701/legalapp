@@ -44,9 +44,7 @@ def test_product_access_is_globally_fail_closed(monkeypatch):
         ({"stripe_customer_id": None}, 402),
     ],
 )
-def test_product_access_rechecks_tenant_and_billing(
-    monkeypatch, overrides, status_code
-):
+def test_product_access_rechecks_tenant_and_billing(monkeypatch, overrides, status_code):
     _enable_product(monkeypatch)
     with pytest.raises(HTTPException) as exc:
         mcp_product.ensure_mcp_product_access(_tenant(**overrides))
@@ -181,7 +179,9 @@ async def test_resolved_key_is_denied_immediately_when_tenant_deactivates(
 
 def test_upstream_headers_never_forward_user_credentials(monkeypatch):
     monkeypatch.setattr(mcp.settings, "MCP_UPSTREAM_API_KEY", "service-secret")
-    assert mcp._upstream_auth_headers() == {"X-Clarity-Internal-Key": "service-secret"}
+    assert mcp._upstream_auth_headers() == {
+        "X-Clarity-Internal-Key": "service-secret"
+    }
 
 
 @pytest.mark.asyncio

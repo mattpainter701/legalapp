@@ -92,10 +92,7 @@ async def test_matter_field_options_returns_unique_firm_used_values(client):
 
     assert response.status_code == 200, response.text
     data = response.json()
-    assert (
-        len([value for value in data["matter_types"] if value.lower() == "family law"])
-        == 1
-    )
+    assert len([value for value in data["matter_types"] if value.lower() == "family law"]) == 1
     assert data["roles"] == ["Petitioner", "Respondent"]
     assert data["jurisdictions"] == ["Minnesota", "North Dakota"]
     assert data["counterparties"] == ["Acme Holdings", "Beta LLC"]

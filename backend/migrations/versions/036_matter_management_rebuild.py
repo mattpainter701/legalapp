@@ -38,7 +38,9 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    op.create_index("idx_matters_partner_attorney", "matters", ["partner_attorney_id"])
+    op.create_index(
+        "idx_matters_partner_attorney", "matters", ["partner_attorney_id"]
+    )
 
     # ── matters: retention / archival ───────────────────────────────────────────
     op.add_column(
@@ -77,7 +79,9 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    op.create_index("idx_conversations_matter_id", "conversations", ["matter_id"])
+    op.create_index(
+        "idx_conversations_matter_id", "conversations", ["matter_id"]
+    )
 
 
 def downgrade() -> None:

@@ -807,10 +807,9 @@ def test_reviewed_static_pdf_schema_keeps_server_discovered_placements():
     )
 
     assert validated["fields"][0]["name"] == "party_name"
-    assert (
-        validated["fields"][0]["pdf_overlays"]
-        == discovered["fields"][0]["pdf_overlays"]
-    )
+    assert validated["fields"][0]["pdf_overlays"] == discovered["fields"][0][
+        "pdf_overlays"
+    ]
     assert len(validated["fields"][0]["pdf_overlays"]) == 2
 
 
@@ -2274,8 +2273,7 @@ async def test_pdf_intake_rejects_empty_non_form_and_active_documents(
     )
     assert analysis.status_code == 200
     assert any(
-        "No reusable field locations" in warning
-        for warning in analysis.json()["warnings"]
+        "No reusable field locations" in warning for warning in analysis.json()["warnings"]
     )
     create = await client.post(
         "/api/templates/intake/create",

@@ -5,7 +5,6 @@ Revises: 001
 Create Date: 2024-01-02 00:00:00.000000
 
 """
-
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -55,9 +54,7 @@ def upgrade() -> None:
             "tenant_id", "plugin_name", name="uq_practice_profiles_tenant_plugin"
         ),
     )
-    op.create_index(
-        "ix_practice_profiles_tenant_id", "practice_profiles", ["tenant_id"]
-    )
+    op.create_index("ix_practice_profiles_tenant_id", "practice_profiles", ["tenant_id"])
 
     # ── 2. matters ────────────────────────────────────────────────────────────
     op.create_table(
@@ -81,9 +78,7 @@ def upgrade() -> None:
         sa.Column("role", sa.String(100), nullable=False),
         sa.Column("counterparty", sa.String(500), nullable=False),
         sa.Column("jurisdiction", sa.String(300), nullable=False),
-        sa.Column(
-            "status", sa.String(100), nullable=False, server_default="threatened"
-        ),
+        sa.Column("status", sa.String(100), nullable=False, server_default="threatened"),
         sa.Column("stage", sa.String(200), nullable=True),
         sa.Column("source", sa.String(500), nullable=True),
         sa.Column("risk_level", sa.String(50), nullable=True),

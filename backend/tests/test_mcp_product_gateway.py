@@ -267,7 +267,9 @@ async def test_source_health_sanitizes_operator_errors(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr(mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021")
+    monkeypatch.setattr(
+        mcp.settings, "MCP_SERVER_URL", "http://courtlistener-mcp:8021"
+    )
     monkeypatch.setattr(mcp, "_require_mcp_identity", require_identity)
     monkeypatch.setattr(mcp, "_proxy_post", proxy)
 

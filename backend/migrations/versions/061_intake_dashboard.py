@@ -85,9 +85,7 @@ def upgrade() -> None:
             name="uq_legacy_call_records_source",
         ),
     )
-    op.create_index(
-        "idx_legacy_call_records_tenant", "legacy_call_records", ["tenant_id"]
-    )
+    op.create_index("idx_legacy_call_records_tenant", "legacy_call_records", ["tenant_id"])
     op.create_index(
         "idx_legacy_call_records_phone",
         "legacy_call_records",
@@ -122,9 +120,7 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column(
-            "is_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
-        ),
+        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column(
             "created_by_user_id",
             UUID(as_uuid=True),
@@ -164,17 +160,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP POLICY IF EXISTS partner_rotation_state_tenant_isolation ON partner_rotation_state"
-    )
-    op.drop_index(
-        "idx_partner_rotation_state_tenant", table_name="partner_rotation_state"
-    )
+    op.execute("DROP POLICY IF EXISTS partner_rotation_state_tenant_isolation ON partner_rotation_state")
+    op.drop_index("idx_partner_rotation_state_tenant", table_name="partner_rotation_state")
     op.drop_table("partner_rotation_state")
 
-    op.execute(
-        "DROP POLICY IF EXISTS legacy_call_records_tenant_isolation ON legacy_call_records"
-    )
+    op.execute("DROP POLICY IF EXISTS legacy_call_records_tenant_isolation ON legacy_call_records")
     op.drop_index("idx_legacy_call_records_call_date", table_name="legacy_call_records")
     op.drop_index("idx_legacy_call_records_name", table_name="legacy_call_records")
     op.drop_index("idx_legacy_call_records_phone", table_name="legacy_call_records")

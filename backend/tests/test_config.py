@@ -70,7 +70,9 @@ def test_token_encryption_key_invalid_raises():
     os.environ["DATABASE_URL"] = "postgresql://test"
     os.environ["SECRET_KEY"] = "test-secret"
 
-    with pytest.raises(ValueError, match="must be a valid Fernet key"):
+    with pytest.raises(
+        ValueError, match="must be a valid Fernet key"
+    ):
         settings = Settings()
         validate_token_encryption_key(settings)
 

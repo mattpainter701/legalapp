@@ -33,22 +33,11 @@ def _json_default(value):
 
 async def _main() -> None:
     parser = argparse.ArgumentParser(description="Import legacy call records from CSV.")
-    parser.add_argument(
-        "csv_path", help="Path to CSV exported from the legacy intake app"
-    )
+    parser.add_argument("csv_path", help="Path to CSV exported from the legacy intake app")
     parser.add_argument("--tenant-id", required=True, help="Target LawHand tenant UUID")
     parser.add_argument("--source-system", default="legacy_csv")
-    parser.add_argument(
-        "--import",
-        dest="do_import",
-        action="store_true",
-        help="Write rows to the archive table",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate only; default unless --import is supplied",
-    )
+    parser.add_argument("--import", dest="do_import", action="store_true", help="Write rows to the archive table")
+    parser.add_argument("--dry-run", action="store_true", help="Validate only; default unless --import is supplied")
     args = parser.parse_args()
 
     tenant_id = uuid.UUID(args.tenant_id)

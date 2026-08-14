@@ -39,30 +39,14 @@ def _enable_rls_direct(table: str) -> None:
 
 def upgrade() -> None:
     # ── 1. Expand mediation_cases ──────────────────────────────────────────────
-    op.add_column(
-        "mediation_cases", sa.Column("case_name", sa.String(500), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("party_a", sa.String(300), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("party_b", sa.String(300), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("dispute_type", sa.String(150), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("mediation_stage", sa.String(100), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("mediator", sa.String(300), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("attorney", sa.String(300), nullable=True)
-    )
-    op.add_column(
-        "mediation_cases", sa.Column("claim_value", sa.String(100), nullable=True)
-    )
+    op.add_column("mediation_cases", sa.Column("case_name", sa.String(500), nullable=True))
+    op.add_column("mediation_cases", sa.Column("party_a", sa.String(300), nullable=True))
+    op.add_column("mediation_cases", sa.Column("party_b", sa.String(300), nullable=True))
+    op.add_column("mediation_cases", sa.Column("dispute_type", sa.String(150), nullable=True))
+    op.add_column("mediation_cases", sa.Column("mediation_stage", sa.String(100), nullable=True))
+    op.add_column("mediation_cases", sa.Column("mediator", sa.String(300), nullable=True))
+    op.add_column("mediation_cases", sa.Column("attorney", sa.String(300), nullable=True))
+    op.add_column("mediation_cases", sa.Column("claim_value", sa.String(100), nullable=True))
     op.add_column(
         "mediation_cases",
         sa.Column("scheduled_session", sa.DateTime(timezone=True), nullable=True),
@@ -97,8 +81,7 @@ def upgrade() -> None:
 
     # ── 2. Expand mediation_case_events ────────────────────────────────────────
     op.add_column(
-        "mediation_case_events",
-        sa.Column("session_type", sa.String(100), nullable=True),
+        "mediation_case_events", sa.Column("session_type", sa.String(100), nullable=True)
     )
     op.add_column(
         "mediation_case_events", sa.Column("added_by", sa.String(300), nullable=True)
@@ -136,22 +119,10 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("is_initiator", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-    op.create_index(
-        "ix_mediation_parties_tenant_id", "mediation_parties", ["tenant_id"]
-    )
+    op.create_index("ix_mediation_parties_tenant_id", "mediation_parties", ["tenant_id"])
     op.create_index("ix_mediation_parties_case_id", "mediation_parties", ["case_id"])
 
     # ── 4. mediation_invites ───────────────────────────────────────────────────
@@ -182,20 +153,11 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-    op.create_index(
-        "ix_mediation_invites_tenant_id", "mediation_invites", ["tenant_id"]
-    )
+    op.create_index("ix_mediation_invites_tenant_id", "mediation_invites", ["tenant_id"])
     op.create_index("ix_mediation_invites_case_id", "mediation_invites", ["case_id"])
-    op.create_index(
-        "ix_mediation_invites_token_hash", "mediation_invites", ["token_hash"]
-    )
+    op.create_index("ix_mediation_invites_token_hash", "mediation_invites", ["token_hash"])
 
     # ── 5. mediation_assets ────────────────────────────────────────────────────
     op.create_table(
@@ -239,18 +201,8 @@ def upgrade() -> None:
         sa.Column("opposing_decided_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("dispute_reason", sa.Text(), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
     op.create_index("ix_mediation_assets_tenant_id", "mediation_assets", ["tenant_id"])
     op.create_index("ix_mediation_assets_case_id", "mediation_assets", ["case_id"])
@@ -294,19 +246,10 @@ def upgrade() -> None:
         sa.Column("file_size", sa.Integer(), nullable=True),
         sa.Column("storage_path", sa.String(1000), nullable=True),
         sa.Column("description", sa.String(500), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-    op.create_index(
-        "ix_mediation_documents_tenant_id", "mediation_documents", ["tenant_id"]
-    )
-    op.create_index(
-        "ix_mediation_documents_case_id", "mediation_documents", ["case_id"]
-    )
+    op.create_index("ix_mediation_documents_tenant_id", "mediation_documents", ["tenant_id"])
+    op.create_index("ix_mediation_documents_case_id", "mediation_documents", ["case_id"])
 
     # ── 7. mediation_proposals ─────────────────────────────────────────────────
     op.create_table(
@@ -339,25 +282,11 @@ def upgrade() -> None:
         sa.Column("title", sa.String(300), nullable=False),
         sa.Column("body", sa.Text(), nullable=True),
         sa.Column("status", sa.String(30), nullable=False, server_default="open"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-    op.create_index(
-        "ix_mediation_proposals_tenant_id", "mediation_proposals", ["tenant_id"]
-    )
-    op.create_index(
-        "ix_mediation_proposals_case_id", "mediation_proposals", ["case_id"]
-    )
+    op.create_index("ix_mediation_proposals_tenant_id", "mediation_proposals", ["tenant_id"])
+    op.create_index("ix_mediation_proposals_case_id", "mediation_proposals", ["case_id"])
 
     # ── 8. Row-Level Security ──────────────────────────────────────────────────
     for table in (

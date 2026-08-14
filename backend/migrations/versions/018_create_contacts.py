@@ -66,7 +66,9 @@ def upgrade() -> None:
     )
 
     op.create_index("idx_contacts_tenant_id", "contacts", ["tenant_id"])
-    op.create_index("idx_contacts_tenant_email", "contacts", ["tenant_id", "email"])
+    op.create_index(
+        "idx_contacts_tenant_email", "contacts", ["tenant_id", "email"]
+    )
     op.create_index(
         "idx_contacts_tenant_last_name", "contacts", ["tenant_id", "last_name"]
     )
@@ -88,7 +90,9 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    op.create_index("idx_matters_client_contact_id", "matters", ["client_contact_id"])
+    op.create_index(
+        "idx_matters_client_contact_id", "matters", ["client_contact_id"]
+    )
 
 
 def downgrade() -> None:

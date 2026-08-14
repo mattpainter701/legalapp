@@ -106,20 +106,12 @@ def _conn_string(args: argparse.Namespace, database: str | None = None) -> str:
     elif os.getenv("LEGACY_SQLSERVER_CONNECTION_STRING"):
         conn = os.environ["LEGACY_SQLSERVER_CONNECTION_STRING"]
     else:
-        driver = (
-            args.driver
-            or os.getenv("LEGACY_SQLSERVER_DRIVER")
-            or "ODBC Driver 18 for SQL Server"
-        )
+        driver = args.driver or os.getenv("LEGACY_SQLSERVER_DRIVER") or "ODBC Driver 18 for SQL Server"
         server = args.server or os.getenv("LEGACY_SQLSERVER_HOST")
         db = database or args.database or os.getenv("LEGACY_SQLSERVER_DATABASE")
         user = args.username or os.getenv("LEGACY_SQLSERVER_USER")
         password = args.password or os.getenv("LEGACY_SQLSERVER_PASSWORD")
-        trust_cert = (
-            "yes"
-            if args.trust_server_certificate
-            else os.getenv("LEGACY_SQLSERVER_TRUST_CERT", "yes")
-        )
+        trust_cert = "yes" if args.trust_server_certificate else os.getenv("LEGACY_SQLSERVER_TRUST_CERT", "yes")
         encrypt = os.getenv("LEGACY_SQLSERVER_ENCRYPT", "yes")
         if not server:
             raise SystemExit("Provide --server or LEGACY_SQLSERVER_HOST.")
@@ -168,28 +160,22 @@ def safe_table_ref(value: str) -> str:
 
 def list_databases(args: argparse.Namespace) -> None:
     with connect(args, database=None) as conn:
-        rows = (
-            conn.cursor()
-            .execute(
-                """
+        rows = conn.cursor().execute(
+            """
             SELECT name
             FROM sys.databases
             WHERE state = 0
               AND name NOT IN ('master', 'model', 'msdb', 'tempdb')
             ORDER BY name
             """
-            )
-            .fetchall()
-        )
+        ).fetchall()
     for row in rows:
         print(row.name)
 
 
 def fetch_columns(conn) -> list[ColumnInfo]:
-    rows = (
-        conn.cursor()
-        .execute(
-            """
+    rows = conn.cursor().execute(
+        """
         SELECT
             TABLE_SCHEMA,
             TABLE_NAME,
@@ -202,9 +188,7 @@ def fetch_columns(conn) -> list[ColumnInfo]:
         WHERE TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
         ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
         """
-        )
-        .fetchall()
-    )
+    ).fetchall()
     return [
         ColumnInfo(
             schema=row.TABLE_SCHEMA,
@@ -220,10 +204,8 @@ def fetch_columns(conn) -> list[ColumnInfo]:
 
 
 def fetch_row_counts(conn) -> dict[str, int]:
-    rows = (
-        conn.cursor()
-        .execute(
-            """
+    rows = conn.cursor().execute(
+        """
         SELECT
             SCHEMA_NAME(t.schema_id) AS schema_name,
             t.name AS table_name,
@@ -233,12 +215,8 @@ def fetch_row_counts(conn) -> dict[str, int]:
         WHERE p.index_id IN (0, 1)
         GROUP BY t.schema_id, t.name
         """
-        )
-        .fetchall()
-    )
-    return {
-        f"{row.schema_name}.{row.table_name}": int(row.rows_count or 0) for row in rows
-    }
+    ).fetchall()
+    return {f"{row.schema_name}.{row.table_name}": int(row.rows_count or 0) for row in rows}
 
 
 def score_table(schema: str, table: str, columns: list[ColumnInfo]) -> dict[str, Any]:
@@ -256,18 +234,8 @@ def score_table(schema: str, table: str, columns: list[ColumnInfo]) -> dict[str,
                 score += weight
                 reasons.append(f"column:{col.column}")
                 break
-    tabs3_hits = sorted(
-        {
-            word
-            for word in TABS3_KEYWORDS
-            if word in text or any(word in c.column.lower() for c in columns)
-        }
-    )
-    return {
-        "score": score,
-        "reasons": sorted(set(reasons)),
-        "tabs3_practicemaster_hints": tabs3_hits,
-    }
+    tabs3_hits = sorted({word for word in TABS3_KEYWORDS if word in text or any(word in c.column.lower() for c in columns)})
+    return {"score": score, "reasons": sorted(set(reasons)), "tabs3_practicemaster_hints": tabs3_hits}
 
 
 def redact_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -283,9 +251,7 @@ def redact_row(row: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-def sample_rows(
-    conn, table_ref: str, sample_size: int, redact: bool
-) -> list[dict[str, Any]]:
+def sample_rows(conn, table_ref: str, sample_size: int, redact: bool) -> list[dict[str, Any]]:
     cursor = conn.cursor().execute(f"SELECT TOP {int(sample_size)} * FROM {table_ref}")
     columns = [col[0] for col in cursor.description]
     rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -323,23 +289,16 @@ def inspect_database(args: argparse.Namespace) -> None:
                 )
             tables.append(table_info)
 
-    tables.sort(
-        key=lambda item: (item["candidate_score"], item["row_count_estimate"]),
-        reverse=True,
-    )
+    tables.sort(key=lambda item: (item["candidate_score"], item["row_count_estimate"]), reverse=True)
     report = {
         "database": args.database,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "table_count": len(tables),
-        "candidate_tables": [t for t in tables if t["candidate_score"] > 0][
-            : args.candidate_limit
-        ],
+        "candidate_tables": [t for t in tables if t["candidate_score"] > 0][: args.candidate_limit],
         "tables": tables,
     }
 
-    Path(args.out).write_text(
-        json.dumps(report, indent=2, default=_json_default), encoding="utf-8"
-    )
+    Path(args.out).write_text(json.dumps(report, indent=2, default=_json_default), encoding="utf-8")
     if args.markdown:
         write_markdown_report(report, Path(args.markdown))
     print(f"Wrote schema report: {args.out}")
@@ -368,14 +327,10 @@ def write_markdown_report(report: dict[str, Any], path: Path) -> None:
     lines.extend(["", "## Candidate Columns", ""])
     for table in report["candidate_tables"]:
         full_name = f"{table['schema']}.{table['table']}"
-        lines.extend(
-            [f"### `{full_name}`", "", "| Column | Type | Nullable |", "|-|-|-|"]
-        )
+        lines.extend([f"### `{full_name}`", "", "| Column | Type | Nullable |", "|-|-|-|"])
         for col in table["columns"]:
             length = f"({col['max_length']})" if col["max_length"] else ""
-            lines.append(
-                f"| `{col['column']}` | {col['data_type']}{length} | {col['nullable']} |"
-            )
+            lines.append(f"| `{col['column']}` | {col['data_type']}{length} | {col['nullable']} |")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -410,9 +365,7 @@ def export_calls(args: argparse.Namespace) -> None:
     limit = f"TOP {int(args.limit)} " if args.limit else ""
     where = f" WHERE {args.where}" if args.where else ""
     if args.where and (";" in args.where or "--" in args.where or "/*" in args.where):
-        raise SystemExit(
-            "--where must be a simple predicate without comments or semicolons"
-        )
+        raise SystemExit("--where must be a simple predicate without comments or semicolons")
 
     sql = f"SELECT {limit}* FROM {table_ref}{where}"
     with connect(args) as conn:
@@ -422,9 +375,7 @@ def export_calls(args: argparse.Namespace) -> None:
 
     out_path = Path(args.out)
     with out_path.open("w", newline="", encoding="utf-8-sig") as handle:
-        raw_columns = [
-            col for col in source_columns if col not in set(mapping.values())
-        ]
+        raw_columns = [col for col in source_columns if col not in set(mapping.values())]
         fieldnames = canonical + [f"raw__{col}" for col in raw_columns]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -434,9 +385,7 @@ def export_calls(args: argparse.Namespace) -> None:
             for target, source_col in mapping.items():
                 output[target] = source.get(source_col, "")
             if not output["source_row_id"]:
-                output["source_row_id"] = str(
-                    source.get("ID") or source.get("Id") or source.get("id") or idx
-                )
+                output["source_row_id"] = str(source.get("ID") or source.get("Id") or source.get("id") or idx)
             for col in raw_columns:
                 output[f"raw__{col}"] = source.get(col, "")
             writer.writerow(output)
@@ -444,31 +393,14 @@ def export_calls(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Read-only legacy SQL Server inspector/exporter."
-    )
-    parser.add_argument(
-        "--connection-string",
-        help="Full ODBC connection string; env LEGACY_SQLSERVER_CONNECTION_STRING also works.",
-    )
-    parser.add_argument(
-        "--driver", help="ODBC driver name, default ODBC Driver 18 for SQL Server."
-    )
-    parser.add_argument(
-        "--server", help="SQL Server host or host,port. Env LEGACY_SQLSERVER_HOST."
-    )
-    parser.add_argument(
-        "--database", help="Database name. Env LEGACY_SQLSERVER_DATABASE."
-    )
+    parser = argparse.ArgumentParser(description="Read-only legacy SQL Server inspector/exporter.")
+    parser.add_argument("--connection-string", help="Full ODBC connection string; env LEGACY_SQLSERVER_CONNECTION_STRING also works.")
+    parser.add_argument("--driver", help="ODBC driver name, default ODBC Driver 18 for SQL Server.")
+    parser.add_argument("--server", help="SQL Server host or host,port. Env LEGACY_SQLSERVER_HOST.")
+    parser.add_argument("--database", help="Database name. Env LEGACY_SQLSERVER_DATABASE.")
     parser.add_argument("--username", help="SQL login. Env LEGACY_SQLSERVER_USER.")
-    parser.add_argument(
-        "--password", help="SQL password. Env LEGACY_SQLSERVER_PASSWORD."
-    )
-    parser.add_argument(
-        "--trust-server-certificate",
-        action="store_true",
-        help="Set TrustServerCertificate=yes.",
-    )
+    parser.add_argument("--password", help="SQL password. Env LEGACY_SQLSERVER_PASSWORD.")
+    parser.add_argument("--trust-server-certificate", action="store_true", help="Set TrustServerCertificate=yes.")
     parser.add_argument("--timeout", type=int, default=15)
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -478,32 +410,16 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_cmd.add_argument("--out", default="legacy-sqlserver-schema.json")
     inspect_cmd.add_argument("--markdown", default="legacy-sqlserver-schema.md")
     inspect_cmd.add_argument("--candidate-limit", type=int, default=30)
-    inspect_cmd.add_argument(
-        "--samples",
-        type=int,
-        default=0,
-        help="Include TOP N sample rows for likely tables.",
-    )
+    inspect_cmd.add_argument("--samples", type=int, default=0, help="Include TOP N sample rows for likely tables.")
     inspect_cmd.add_argument("--sample-min-score", type=int, default=15)
     inspect_cmd.add_argument("--unredacted-samples", action="store_true")
 
     export_cmd = sub.add_parser("export-calls")
-    export_cmd.add_argument(
-        "--table", required=True, help="Source table as TABLE or SCHEMA.TABLE."
-    )
-    export_cmd.add_argument(
-        "--map",
-        action="append",
-        default=[],
-        help="Canonical=SourceColumn mapping; repeatable.",
-    )
-    export_cmd.add_argument(
-        "--where", help="Optional simple WHERE predicate, without the WHERE keyword."
-    )
+    export_cmd.add_argument("--table", required=True, help="Source table as TABLE or SCHEMA.TABLE.")
+    export_cmd.add_argument("--map", action="append", default=[], help="Canonical=SourceColumn mapping; repeatable.")
+    export_cmd.add_argument("--where", help="Optional simple WHERE predicate, without the WHERE keyword.")
     export_cmd.add_argument("--limit", type=int, help="Optional TOP N row limit.")
-    export_cmd.add_argument(
-        "--out", required=True, help="Output CSV for import_legacy_call_records.py."
-    )
+    export_cmd.add_argument("--out", required=True, help="Output CSV for import_legacy_call_records.py.")
     return parser
 
 

@@ -26,12 +26,8 @@ def upgrade() -> None:
         ),
         sa.Column("key", sa.String(100), nullable=False),
         sa.Column("value", sa.JSON(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()")
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
         sa.UniqueConstraint("key", name="uq_platform_settings_key"),
     )
     op.alter_column(
