@@ -3,38 +3,11 @@ from typing import Any, List, Tuple
 
 from app.services.pii_detection import detect_pii, scrub_pii
 
-PROHIBITED_PHRASES = [
-    "as an ai",
-    "as an language model",
-    "i am an ai",
-    "i'm an ai",
-    "deepseek",
-    "claude",
-    "gpt",
-    "openai",
-    "anthropic",
-    "language model",
-    "large language model",
-    "llm",
-    "artificial intelligence",
-]
-
-# Replacements for prohibited phrases
-PHRASE_REPLACEMENTS = {
-    "as an ai": "as a legal research assistant",
-    "as an language model": "as a legal research assistant",
-    "i am an ai": "I am a legal research assistant",
-    "i'm an ai": "I am a legal research assistant",
-    "deepseek": "the legal research system",
-    "claude": "the legal research system",
-    "gpt": "the legal research system",
-    "openai": "the legal research provider",
-    "anthropic": "the legal research provider",
-    "language model": "legal research system",
-    "large language model": "legal research system",
-    "llm": "legal research system",
-    "artificial intelligence": "legal research technology",
-}
+# PROHIBITED_PHRASES / PHRASE_REPLACEMENTS were removed deliberately. Blind
+# substitution of provider and AI terminology corrupts substantive legal work:
+# an AI-governance memo or a vendor contract review has to be able to say
+# "artificial intelligence", "training", or a named provider. Response
+# sanitation is limited to internal prompt tags — see sanitize_response().
 
 INTERNAL_CONTEXT_TAG_RE = re.compile(
     r"\[\s*FIRM\s+CONTEXT\s*(?::\s*([^\]]+?))?\s*\]",
@@ -56,12 +29,6 @@ CITATION_PATTERN = re.compile(
     """,
     re.VERBOSE,
 )
-
-
-def check_prohibited_phrases(text: str) -> bool:
-    """Returns True if any prohibited phrases are found (case-insensitive)."""
-    text_lower = text.lower()
-    return any(phrase in text_lower for phrase in PROHIBITED_PHRASES)
 
 
 def sanitize_response(text: str) -> str:

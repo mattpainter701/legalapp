@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 
@@ -29,6 +30,7 @@ from app.services.durable_jobs import enqueue_job, get_tenant_job, serialize_job
 from app.utils.text_processing import chunk_text, extract_text
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 embedding_service = EmbeddingService()
@@ -145,9 +147,16 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
                 await db.commit()
                 return
 
-            # Embed chunks in batches
-            embeddings = await embedding_service.embed_batch(chunks_text)
-            if len(embeddings) != len(chunks_text):
+            # Embed chunks in batches. Retrieval is hybrid (pgvector + Postgres
+            # FTS), and the FTS half needs only the chunk rows. When no
+            # embedding provider is configured, persisting the text keeps the
+            # document searchable and citable instead of discarding it — a
+            # partially-indexed document is far better than an invisible one.
+            keyword_only = not embedding_service.client
+            embeddings = (
+                [] if keyword_only else await embedding_service.embed_batch(chunks_text)
+            )
+            if not keyword_only and len(embeddings) != len(chunks_text):
                 doc.status = "error"
                 doc.error_message = "Embedding service returned an incomplete result; indexing was not saved"
                 await db.commit()
@@ -155,16 +164,14 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
 
             # Insert chunks
             chunk_objects = []
-            for idx, (chunk_content, embedding) in enumerate(
-                zip(chunks_text, embeddings)
-            ):
+            for idx, chunk_content in enumerate(chunks_text):
                 chunk_obj = Chunk(
                     id=uuid.uuid4(),
                     tenant_id=uuid.UUID(tenant_id),
                     document_id=doc.id,
                     content=chunk_content,
                     chunk_index=idx,
-                    embedding=embedding,
+                    embedding=None if keyword_only else embeddings[idx],
                 )
                 chunk_objects.append(chunk_obj)
 
@@ -176,6 +183,16 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             doc.indexed_at = datetime.now(timezone.utc)
             doc.embedding_model = embedding_service.model
             doc.embedding_version = 1
+            if keyword_only:
+                # A null embedding_model on a ready document is the signal that
+                # retrieval is keyword-only. Log it too: silently demoing
+                # keyword search as if it were semantic retrieval is worse than
+                # the degraded result itself.
+                logger.warning(
+                    "Document %s indexed keyword-only: no embedding provider is "
+                    "configured, so semantic retrieval is unavailable",
+                    document_id,
+                )
             await db.commit()
 
         except Exception as exc:

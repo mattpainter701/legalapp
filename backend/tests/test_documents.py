@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from app.routers.documents import _persist_uploaded_document
 from app.routers.documents import _is_allowed_upload
@@ -182,3 +183,60 @@ async def test_chat_attachment_download_is_hidden_from_other_tenant_user(
     response = await client.get(f"/api/documents/{document.id}/download")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_indexing_without_an_embedding_provider_stays_keyword_searchable(
+    monkeypatch, test_tenant, db_session, tmp_path
+):
+    """A missing embedding provider must not make documents invisible to RAG.
+
+    Retrieval is hybrid (pgvector + Postgres FTS) and the FTS half needs only
+    the chunk rows. Failing the whole document left tenants with zero
+    retrievable sources and no citations, which is worse than keyword-only
+    recall.
+    """
+    from app.models.document import Chunk
+    from app.routers import documents as documents_router
+
+    file_path = tmp_path / "engagement-letter.txt"
+    file_path.write_bytes(
+        b"Redwood Outdoor Supply outside general counsel engagement letter. "
+        b"The included retainer covers forty-five attorney hours each month."
+    )
+    document = Document(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        filename="engagement-letter.txt",
+        content_type="text/plain",
+        file_size=file_path.stat().st_size,
+        storage_path=str(file_path),
+        status="pending",
+        chunk_count=0,
+    )
+    db_session.add(document)
+    await db_session.commit()
+
+    monkeypatch.setattr(documents_router.embedding_service, "client", None)
+    monkeypatch.setattr(documents_router.embedding_service, "model", None)
+
+    await documents_router._process_document(str(document.id), str(test_tenant.id))
+
+    await db_session.refresh(document)
+    assert document.status == "ready"
+    assert document.chunk_count > 0
+    # A null embedding_model on a ready document is the keyword-only signal.
+    assert document.embedding_model is None
+
+    chunks = (
+        (
+            await db_session.execute(
+                select(Chunk).where(Chunk.document_id == document.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(chunks) == document.chunk_count
+    assert all(chunk.embedding is None for chunk in chunks)
+    assert any("forty-five attorney hours" in chunk.content for chunk in chunks)

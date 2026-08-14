@@ -1,5 +1,4 @@
 from app.utils.guardrails import (
-    check_prohibited_phrases,
     sanitize_response,
     check_has_citation,
     apply_guardrails,
@@ -13,7 +12,6 @@ from app.utils.text_processing import (
 )
 
 __all__ = [
-    "check_prohibited_phrases",
     "sanitize_response",
     "check_has_citation",
     "apply_guardrails",
