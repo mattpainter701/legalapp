@@ -71,6 +71,24 @@ async def _approved_email_task(db_session, tenant, user, matter, *, version=1):
     return task
 
 
+async def _drain_background_tasks() -> None:
+    """Let _fire_and_log's detached task finish before asserting on sends.
+
+    Execution is intentionally post-commit and out-of-band, so an HTTP response
+    can return before the send runs. Awaiting the pending tasks keeps these
+    assertions deterministic instead of racing the event loop.
+    """
+    import asyncio
+
+    pending = [
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and not task.done()
+    ]
+    if pending:
+        await asyncio.wait(pending, timeout=5)
+
+
 @pytest.mark.asyncio
 async def test_approving_a_drafted_email_sends_it_once(
     db_session, test_tenant, test_user, monkeypatch
@@ -81,7 +99,11 @@ async def test_approving_a_drafted_email_sends_it_once(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     assert len(sender.calls) == 1
@@ -107,7 +129,11 @@ async def test_repeated_approval_never_sends_a_second_copy(
 
     for _ in range(3):
         await task_automation.run_task_automation(
-            task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+            task.id,
+            test_tenant.id,
+            from_status="review",
+            to_status="in_progress",
+            actor_user_id=test_user.id,
         )
 
     assert len(sender.calls) == 1
@@ -137,6 +163,7 @@ async def test_concurrent_approvals_resolve_to_one_send(
                 task.id,
                 test_tenant.id,
                 from_status="review",
+                to_status="in_progress",
                 actor_user_id=test_user.id,
             )
             for _ in range(4)
@@ -162,7 +189,11 @@ async def test_unconfigured_delivery_is_not_recorded_as_sent(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     run = await db_session.scalar(
@@ -186,11 +217,19 @@ async def test_a_failed_run_can_be_retried_and_then_succeeds(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
     sender.result = EmailDeliveryResult.SENT
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     assert len(sender.calls) == 2
@@ -211,7 +250,11 @@ async def test_a_raising_handler_records_failure_without_corrupting_the_task(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     run = await db_session.scalar(
@@ -236,7 +279,11 @@ async def test_automation_only_runs_on_approval_out_of_review(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="in_progress", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="in_progress",
+        to_status="completed",
+        actor_user_id=test_user.id,
     )
 
     assert sender.calls == []
@@ -268,7 +315,11 @@ async def test_a_task_without_a_pending_action_sends_nothing(
     await db_session.commit()
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     assert sender.calls == []
@@ -295,7 +346,11 @@ async def test_an_unknown_action_type_fails_closed(
     await db_session.commit()
 
     await task_automation.run_task_automation(
-        task.id, test_tenant.id, from_status="review", actor_user_id=test_user.id
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     assert sender.calls == []
@@ -318,7 +373,11 @@ async def test_another_tenant_cannot_trigger_this_tenants_automation(
     task = await _approved_email_task(db_session, test_tenant, test_user, matter)
 
     await task_automation.run_task_automation(
-        task.id, uuid.uuid4(), from_status="review", actor_user_id=test_user.id
+        task.id,
+        uuid.uuid4(),
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
     )
 
     assert sender.calls == []
@@ -427,3 +486,106 @@ async def test_another_tenant_cannot_edit_this_firms_draft(
     assert response.status_code == 404
     await db_session.refresh(foreign_task)
     assert foreign_task.pending_action["body"] == "Confidential."
+
+
+@pytest.mark.parametrize("to_status", ["cancelled", "waiting", "completed", "review"])
+@pytest.mark.asyncio
+async def test_only_approval_into_active_work_sends(
+    db_session, test_tenant, test_user, monkeypatch, to_status
+):
+    """Leaving Review is not the same as approving.
+
+    Cancelling a drafted client email must never send it — that is the worst
+    possible inversion of the attorney's intent. Nor should parking it in
+    Waiting, or marking the task done without acting on the draft.
+    """
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    await task_automation.run_task_automation(
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status=to_status,
+        actor_user_id=test_user.id,
+    )
+
+    assert sender.calls == []
+    run_count = await db_session.scalar(
+        select(func.count())
+        .select_from(TaskAutomationRun)
+        .where(TaskAutomationRun.task_id == task.id)
+    )
+    assert run_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_drafted_email_over_http_sends_nothing(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """End-to-end guard on the real approval surface."""
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    response = await client.post(
+        f"/api/tasks/{task.id}/transition",
+        json={
+            "to_status": "cancelled",
+            "expected_version": task.version,
+            "reason": "Client called instead; no letter needed.",
+        },
+    )
+
+    assert response.status_code == 200
+    # Must drain: asserting before the detached task runs would pass even when
+    # the send does happen, which is exactly how this bug stayed invisible.
+    await _drain_background_tasks()
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_approving_over_http_does_send(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    response = await client.post(
+        f"/api/tasks/{task.id}/transition",
+        json={"to_status": "in_progress", "expected_version": task.version},
+    )
+
+    assert response.status_code == 200
+    await _drain_background_tasks()
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_generic_patch_cannot_approve_without_executing(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """Both status-changing endpoints must agree on what approval means.
+
+    Before this was centralized, PATCH could move a task out of Review — which
+    the board treats as approval — while silently never running the action, so
+    an attorney would believe a client had been emailed.
+    """
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    response = await client.patch(
+        f"/api/tasks/{task.id}",
+        json={"status": "in_progress", "expected_version": task.version},
+    )
+
+    assert response.status_code == 200
+    await _drain_background_tasks()
+    assert len(sender.calls) == 1

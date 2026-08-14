@@ -33,8 +33,23 @@ from app.services.task_workflow import append_task_event
 
 logger = logging.getLogger(__name__)
 
-# Only a transition out of Review counts as approval of the drafted action.
+# Approval is a specific move, not merely leaving Review. Cancelling a drafted
+# client email must never send it — that inverts the attorney's intent — and
+# parking it in Waiting or closing the task without acting are not approvals
+# either. Only accepting the draft into active work executes it.
 APPROVAL_FROM_STATUS = "review"
+APPROVAL_TO_STATUSES = frozenset({"in_progress"})
+
+
+def transition_is_approval(from_status: str | None, to_status: str | None) -> bool:
+    """Whether this status change means "execute the drafted action".
+
+    The single definition both status-changing endpoints consult. Keeping it here
+    rather than in a router is the point: the rule was previously expressed at
+    the call site, where the transition endpoint sent on cancellation and the
+    generic PATCH approved without ever executing.
+    """
+    return from_status == APPROVAL_FROM_STATUS and to_status in APPROVAL_TO_STATUSES
 
 
 def automation_idempotency_key(task: Task, from_status: str) -> str:
@@ -144,6 +159,7 @@ async def run_task_automation(
     tenant_id,
     *,
     from_status: str,
+    to_status: str,
     actor_user_id=None,
 ) -> None:
     """Execute an approved task's pending action, at most once.
@@ -152,8 +168,11 @@ async def run_task_automation(
     because the request session is gone by then. A failure here records evidence
     and never rolls the task back: the attorney's approval is a real decision
     that happened, and hiding it would be worse than a visible failed run.
+
+    Re-checks the approval rule itself rather than trusting the caller, so a new
+    call site cannot reintroduce a send-on-cancel.
     """
-    if from_status != APPROVAL_FROM_STATUS:
+    if not transition_is_approval(from_status, to_status):
         return
 
     async with async_session_maker() as db:
@@ -234,3 +253,39 @@ async def run_task_automation(
                 exc_info=True,
             )
             await db.rollback()
+
+
+def dispatch_task_automation_if_approved(
+    task: Task,
+    *,
+    from_status: str | None,
+    to_status: str | None,
+    actor_user_id=None,
+) -> bool:
+    """Fire the automation for an approving transition. Returns whether it fired.
+
+    The one entry point every status-changing endpoint uses, so the definition of
+    approval cannot drift between them. Dispatch is fire-and-forget on purpose:
+    the transition is already committed, and a delivery problem must not undo a
+    decision the attorney actually made.
+    """
+    if not transition_is_approval(from_status, to_status):
+        return False
+    if not task.pending_action:
+        return False
+
+    # Imported here to avoid a cycle: task_notifications imports task models.
+    from app.services.task_notifications import _fire_and_log
+
+    _fire_and_log(
+        run_task_automation(
+            task.id,
+            task.tenant_id,
+            from_status=from_status,
+            to_status=to_status,
+            actor_user_id=actor_user_id,
+        ),
+        task_id=str(task.id),
+        action="pending_action",
+    )
+    return True

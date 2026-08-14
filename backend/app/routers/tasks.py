@@ -32,13 +32,12 @@ from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
 from app.services.task_history import record_customer_contact, record_task_event
 from app.services.task_notifications import (
-    _fire_and_log,
     notify_task_created,
     notify_task_updated,
     remove_task_from_calendars,
     task_calendar_user_id,
 )
-from app.services.task_automation import run_task_automation
+from app.services.task_automation import dispatch_task_automation_if_approved
 from app.services.task_workflow import (
     TaskVersionConflict,
     TaskWorkflowError,
@@ -1046,21 +1045,14 @@ async def transition_task_status(
             assignment_changed=False,
             previous_calendar_user_id=previous_calendar_user_id,
         )
-    if changed and previous_status == "review" and task.pending_action:
-        # The attorney just approved drafted work out of Review. Execution is
-        # deliberately post-commit and out-of-band: the approval is already
-        # durable, and a delivery failure must not undo the human's decision.
-        # run_task_automation is exactly-once, so a double-clicked Approve or a
-        # retried request cannot send a client two copies.
-        _fire_and_log(
-            run_task_automation(
-                task.id,
-                tenant_uuid,
-                from_status=previous_status,
-                actor_user_id=current_user.id,
-            ),
-            task_id=str(task.id),
-            action="pending_action",
+    if changed:
+        # What counts as approval lives in task_automation, not here, so this
+        # endpoint and the generic PATCH cannot disagree about it.
+        dispatch_task_automation_if_approved(
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
         )
     logger.info(
         "task_board_transition_success tenant_id=%s user_id=%s task_id=%s "
@@ -1424,6 +1416,16 @@ async def update_task(
         assignment_changed=reassigned,
         previous_calendar_user_id=previous_calendar_user_id,
         assignment_note=assignment_note,
+    )
+
+    # This endpoint can also move a task out of Review, which the board presents
+    # as approval. Without this it would approve drafted work and never execute
+    # it, leaving an attorney believing a client had been emailed.
+    dispatch_task_automation_if_approved(
+        task,
+        from_status=previous_status,
+        to_status=task.status,
+        actor_user_id=current_user.id,
     )
 
     return TaskResponse.model_validate(task)

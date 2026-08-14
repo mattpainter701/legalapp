@@ -52,6 +52,18 @@ describe('assistant action proposals in chat', () => {
     expect(screen.queryByRole('button', { name: /edit draft/i })).not.toBeInTheDocument()
   })
 
+  it('does not claim the client was contacted before delivery completes', async () => {
+    const onApprove = vi.fn().mockResolvedValue({})
+    render(<ActionProposalCard proposal={emailProposal} onApprove={onApprove} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+
+    // Delivery runs out-of-band, so "sent" would be a claim we cannot back.
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(/Delivery is in progress/i)
+    expect(status).not.toHaveTextContent(/Approved and sent/i)
+  })
+
   it('approves without edits when the draft is untouched', async () => {
     const onApprove = vi.fn().mockResolvedValue({})
     render(<ActionProposalCard proposal={emailProposal} onApprove={onApprove} />)
@@ -60,7 +72,7 @@ describe('assistant action proposals in chat', () => {
 
     // undefined edits means the caller skips the draft PATCH entirely.
     await waitFor(() => expect(onApprove).toHaveBeenCalledWith(emailProposal, undefined))
-    expect(await screen.findByText(/Approved and sent/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Delivery is in progress/i)).toBeInTheDocument()
   })
 
   it('sends the edited body when the attorney rewrites the draft', async () => {
@@ -102,7 +114,7 @@ describe('assistant action proposals in chat', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Task changed')
     // Still actionable rather than stuck in a spinner.
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
-    expect(await screen.findByText(/Approved and sent/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Delivery is in progress/i)).toBeInTheDocument()
   })
 
   it('can be dismissed without approving', async () => {

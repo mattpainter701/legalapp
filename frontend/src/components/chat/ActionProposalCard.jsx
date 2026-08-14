@@ -124,10 +124,15 @@ export default function ActionProposalCard({ proposal, onApprove, onDismiss }) {
       {state === 'approved' ? (
         <p
           role="status"
-          className="mt-3 flex items-center gap-1.5 text-[12px] font-semibold text-brand-accent"
+          className="mt-3 flex items-start gap-1.5 text-[12px] font-semibold text-brand-accent"
         >
-          <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
-          {isEmail ? 'Approved and sent.' : 'Approved and moved into active work.'}
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />
+          {/* Delivery runs out-of-band after the approval commits, so this must
+              not claim the client was contacted — the approval is what we know
+              happened. The task's automation record carries the real outcome. */}
+          {isEmail
+            ? 'Approved. Delivery is in progress — the task shows the outcome once it completes.'
+            : 'Approved and moved into active work.'}
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
