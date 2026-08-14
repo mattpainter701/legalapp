@@ -26,7 +26,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
 from app.models.plugin import Matter
-from app.models.task import Task, TaskEvent
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
@@ -37,7 +37,10 @@ from app.services.task_notifications import (
     remove_task_from_calendars,
     task_calendar_user_id,
 )
-from app.services.task_automation import dispatch_task_automation_if_approved
+from app.services.task_automation import (
+    dispatch_task_automation_if_approved,
+    enqueue_durable_automation,
+)
 from app.services.task_workflow import (
     TaskVersionConflict,
     TaskWorkflowError,
@@ -62,6 +65,7 @@ from app.schemas.task import (
     TaskCardPerson,
     TaskContactedRequest,
     TaskCreate,
+    TaskDeliveryState,
     TaskEventListResponse,
     TaskEventResponse,
     TaskListResponse,
@@ -153,6 +157,30 @@ async def _require_task_references_for_tenant(
         await require_task_references_for_tenant(db, tenant_id, values)
     except TaskWorkflowError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+async def _latest_delivery(db: AsyncSession, task: Task) -> TaskDeliveryState | None:
+    """Most recent automation attempt for a task, if any.
+
+    Read separately rather than joined onto the list query: only a handful of
+    tasks ever carry an action, and the board renders hundreds of cards.
+    """
+    run = await db.scalar(
+        select(TaskAutomationRun)
+        .where(TaskAutomationRun.task_id == task.id)
+        .order_by(TaskAutomationRun.created_at.desc())
+        .limit(1)
+    )
+    return TaskDeliveryState.model_validate(run) if run else None
+
+
+async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResponse:
+    response = TaskResponse.model_validate(task)
+    # Only assistant-drafted work can carry an action, so skip the extra read
+    # for the overwhelming majority of tasks.
+    if task.source == "assistant":
+        response.delivery = await _latest_delivery(db, task)
+    return response
 
 
 def _task_card_from_row(row) -> TaskBoardCard:
@@ -1034,6 +1062,17 @@ async def transition_task_status(
             actor=current_user,
             note=task.closed_reason,
         )
+    if changed:
+        # Before the commit on purpose: the queued delivery row and its durable
+        # job land in the same transaction as the approval, so there is no window
+        # where a task is approved but the send is unrecorded.
+        await enqueue_durable_automation(
+            db,
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
+        )
     await db.commit()
     await db.refresh(task)
     if changed:
@@ -1065,7 +1104,7 @@ async def transition_task_status(
         changed,
         task.version,
     )
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -1082,7 +1121,7 @@ async def get_task(
         task.viewed_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.post("/{task_id}/view", response_model=TaskResponse)
@@ -1404,6 +1443,16 @@ async def update_task(
         updates or reassigned or (closed_reason and not transition_changed)
     ) and not transition_changed:
         increment_task_version(task)
+
+    # Same transactional enqueue as the transition endpoint, for the same reason:
+    # this endpoint can also approve drafted work out of Review.
+    await enqueue_durable_automation(
+        db,
+        task,
+        from_status=previous_status,
+        to_status=task.status,
+        actor_user_id=current_user.id,
+    )
 
     await db.commit()
     await db.refresh(task)

@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
+from app.models.document import Chunk, Document
 from app.models.matter_party import MatterParty
 from app.models.plugin import Matter
 from app.models.task import Task
@@ -55,6 +56,73 @@ class ChatToolContext:
     @property
     def tenant_id(self) -> uuid.UUID:
         return self.user.tenant_id
+
+
+async def _resolve_source_chips(
+    context: ChatToolContext, source_ids: list[str]
+) -> list[dict[str, Any]]:
+    """Turn model-supplied source ids into verified, linkable citations.
+
+    Resolved server-side rather than rendered from the model's strings: an id the
+    model invented would otherwise appear to the attorney as a real citation with
+    a real link. Anything that does not resolve to a document in this tenant is
+    dropped, so a chip on the card always points at something that exists.
+    """
+    document_ids: dict[uuid.UUID, str] = {}
+    chunk_ids: list[uuid.UUID] = []
+    for raw in source_ids[:10]:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        candidate = value.split(":", 1)[1] if value.startswith("document:") else value
+        try:
+            parsed = uuid.UUID(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value.startswith("document:"):
+            document_ids[parsed] = value
+        else:
+            chunk_ids.append(parsed)
+
+    # A retrieved chunk cites its parent document.
+    if chunk_ids:
+        rows = (
+            await context.db.execute(
+                select(Chunk.id, Chunk.document_id).where(
+                    Chunk.id.in_(chunk_ids),
+                    Chunk.tenant_id == context.tenant_id,
+                    Chunk.document_id.isnot(None),
+                )
+            )
+        ).all()
+        for chunk_id, document_id in rows:
+            document_ids.setdefault(document_id, str(chunk_id))
+
+    if not document_ids:
+        return []
+
+    documents = (
+        (
+            await context.db.execute(
+                select(Document).where(
+                    Document.id.in_(list(document_ids)),
+                    Document.tenant_id == context.tenant_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "source_id": document_ids[document.id],
+            "label": document.filename or "Attached document",
+            # Same origin-relative form chat citations use, so the frontend
+            # re-bases it on the configured API origin.
+            "url": f"/api/documents/{document.id}/download",
+        }
+        for document in documents
+    ]
 
 
 async def _require_matter(context: ChatToolContext, matter_id: uuid.UUID) -> Matter:
@@ -259,6 +327,7 @@ async def propose_task(
             "Approving moves this task into active work. Nothing is sent."
         ),
         "pending_action": None,
+        "sources": await _resolve_source_chips(context, args.source_ids),
     }
 
 
@@ -295,6 +364,7 @@ async def propose_client_email(
 
     # Order follows the model's request, but every address came from the database.
     to = [resolved[party_id] for party_id in requested]
+    chips = await _resolve_source_chips(context, args.source_ids)
     action = EmailClientAction(
         type="email_client",
         to=to,
@@ -302,6 +372,7 @@ async def propose_client_email(
         body=args.body,
         matter_id=args.matter_id,
         source_ids=args.source_ids[:10],
+        sources=chips,
     )
     task = await _create_proposed_task(
         context,
@@ -327,4 +398,5 @@ async def propose_client_email(
             "Edit the draft first if anything is wrong."
         ),
         "pending_action": action.model_dump(mode="json"),
+        "sources": chips,
     }

@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 APPROVAL_FROM_STATUS = "review"
 APPROVAL_TO_STATUSES = frozenset({"in_progress"})
 
+TASK_AUTOMATION_JOB = "task_automation"
+
+# Delivery states an attorney may see. Only "sent" means the client was contacted.
+DELIVERY_STATUSES = ("queued", "sending", "sent", "failed")
+TERMINAL_DELIVERY_STATUSES = ("sent", "failed")
+
 
 def transition_is_approval(from_status: str | None, to_status: str | None) -> bool:
     """Whether this status change means "execute the drafted action".
@@ -62,6 +68,44 @@ def automation_idempotency_key(task: Task, from_status: str) -> str:
     return f"approve:{from_status}:v{task.version or 0}"
 
 
+async def enqueue_automation_run(
+    db: AsyncSession,
+    task: Task,
+    *,
+    from_status: str,
+    actor_user_id=None,
+) -> TaskAutomationRun | None:
+    """Record the intent to send, inside the caller's transaction.
+
+    This is what makes delivery durable. The queued row commits atomically with
+    the status change, so a process that dies between approval and send leaves
+    behind a record the worker will pick up — previously that send was simply
+    lost, with the attorney told it was approved.
+
+    Does not commit: the caller owns the transaction, which is the whole point.
+    """
+    action_type = str((task.pending_action or {}).get("type") or "")
+    if not action_type:
+        return None
+    stmt = (
+        pg_insert(TaskAutomationRun)
+        .values(
+            tenant_id=task.tenant_id,
+            task_id=task.id,
+            action_type=action_type,
+            idempotency_key=automation_idempotency_key(task, from_status),
+            status="queued",
+            triggered_by_user_id=actor_user_id,
+        )
+        # An existing row already covers this approval — including one still
+        # sending or already sent. Never reset it here.
+        .on_conflict_do_nothing(constraint="uq_task_automation_runs_task_key")
+        .returning(TaskAutomationRun.id)
+    )
+    await db.execute(stmt)
+    return None
+
+
 async def _claim_run(
     db: AsyncSession,
     task: Task,
@@ -70,37 +114,39 @@ async def _claim_run(
     idempotency_key: str,
     actor_user_id,
 ) -> TaskAutomationRun | None:
-    """Atomically claim the right to execute, or return None.
+    """Atomically move a run from queued/failed into sending, or return None.
 
-    One statement, so concurrency is resolved by Postgres rather than by
-    read-then-write in application code. ``DO UPDATE ... WHERE status='failed'``
-    means a previous failure can be retried while a pending or succeeded run
-    blocks: the update matches no row, nothing is returned, and the caller
-    no-ops instead of sending a second copy.
+    A conditional UPDATE, so concurrency is resolved by Postgres rather than by
+    read-then-write in application code. ``sending`` is excluded so a concurrent
+    attempt cannot start a second send, and ``sent`` is excluded so nothing can
+    resend. Losing this race is the expected exactly-once path, not an error.
+
+    Upserts a row when none exists so a direct call still works without a prior
+    enqueue; the unique constraint keeps that safe under concurrency.
     """
-    stmt = (
+    claim = (
         pg_insert(TaskAutomationRun)
         .values(
             tenant_id=task.tenant_id,
             task_id=task.id,
             action_type=action_type,
             idempotency_key=idempotency_key,
-            status="pending",
+            status="sending",
             triggered_by_user_id=actor_user_id,
         )
         .on_conflict_do_update(
             constraint="uq_task_automation_runs_task_key",
             set_={
-                "status": "pending",
+                "status": "sending",
                 "error_message": None,
                 "triggered_by_user_id": actor_user_id,
                 "completed_at": None,
             },
-            where=TaskAutomationRun.status == "failed",
+            where=TaskAutomationRun.status.in_(("queued", "failed")),
         )
         .returning(TaskAutomationRun.id)
     )
-    run_id = await db.scalar(stmt)
+    run_id = await db.scalar(claim)
     if run_id is None:
         return None
     await db.commit()
@@ -226,7 +272,7 @@ async def run_task_automation(
                     exc_info=True,
                 )
 
-            run.status = "succeeded" if succeeded else "failed"
+            run.status = "sent" if succeeded else "failed"
             run.error_message = None if succeeded else detail[:500]
             run.completed_at = datetime.now(timezone.utc)
             append_task_event(
@@ -262,12 +308,16 @@ def dispatch_task_automation_if_approved(
     to_status: str | None,
     actor_user_id=None,
 ) -> bool:
-    """Fire the automation for an approving transition. Returns whether it fired.
+    """Start the automation for an approving transition. Returns whether it did.
 
     The one entry point every status-changing endpoint uses, so the definition of
-    approval cannot drift between them. Dispatch is fire-and-forget on purpose:
-    the transition is already committed, and a delivery problem must not undo a
-    decision the attorney actually made.
+    approval cannot drift between them.
+
+    Two mechanisms, deliberately: the durable job guarantees the send eventually
+    happens even if this process dies, and the immediate attempt makes it happen
+    now rather than on the worker's next drain. Running both is safe precisely
+    because execution is exactly-once — whichever gets there second finds the run
+    already claimed and no-ops.
     """
     if not transition_is_approval(from_status, to_status):
         return False
@@ -289,3 +339,65 @@ def dispatch_task_automation_if_approved(
         action="pending_action",
     )
     return True
+
+
+async def enqueue_durable_automation(
+    db: AsyncSession,
+    task: Task,
+    *,
+    from_status: str | None,
+    to_status: str | None,
+    actor_user_id=None,
+) -> bool:
+    """Persist the send intent in the caller's transaction. Must precede commit.
+
+    Writes both the queued run (the attorney-visible delivery state) and a
+    durable job (the worker's instruction). Both are idempotent and neither
+    commits, so they land atomically with the approval or not at all — there is
+    no window in which a task is approved but the send is unrecorded.
+    """
+    if not transition_is_approval(from_status, to_status):
+        return False
+    if not task.pending_action:
+        return False
+
+    from app.services.durable_jobs import enqueue_job
+
+    await enqueue_automation_run(
+        db, task, from_status=from_status, actor_user_id=actor_user_id
+    )
+    await enqueue_job(
+        db,
+        tenant_id=task.tenant_id,
+        kind=TASK_AUTOMATION_JOB,
+        # Same key as the run, so a retried approval reuses one job.
+        idempotency_key=f"{task.id}:{automation_idempotency_key(task, from_status)}",
+        payload={
+            "task_id": str(task.id),
+            "from_status": from_status,
+            "to_status": to_status,
+            "actor_user_id": str(actor_user_id) if actor_user_id else None,
+        },
+    )
+    return True
+
+
+async def run_task_automation_job(row) -> dict[str, Any]:
+    """Durable-job entry point.
+
+    Safe to run after an immediate attempt already succeeded: the claim will not
+    match a ``sent`` run, so this becomes a no-op rather than a second send. The
+    tenant comes from the job row, never from its payload.
+    """
+    payload = row.payload or {}
+    task_id = payload.get("task_id")
+    if not task_id:
+        return {"ignored": "missing_task_id"}
+    await run_task_automation(
+        task_id,
+        row.tenant_id,
+        from_status=str(payload.get("from_status") or ""),
+        to_status=str(payload.get("to_status") or ""),
+        actor_user_id=payload.get("actor_user_id"),
+    )
+    return {"task_id": task_id}

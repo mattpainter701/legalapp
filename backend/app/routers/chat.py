@@ -689,6 +689,48 @@ def _conversation_belongs_to_user(conv: Conversation, user) -> bool:
     return str(conv.user_id) == str(user.id)
 
 
+def _record_action_usage(
+    db, user, *, question, route, outcome, conversation_id=None
+) -> None:
+    """Bill the chat action pass like any other completion."""
+    if outcome.tokens_in or outcome.tokens_out:
+        action_model = str(route.model or "")
+        db.add(
+            UsageRecord(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                conversation_id=conversation_id,
+                requested_route=getattr(route, "requested_route", None),
+                resolved_route=route.resolved_route,
+                gateway_provider=getattr(route, "gateway_provider", None),
+                gateway_alias=getattr(route, "gateway_alias", None),
+                final_model=action_model[:200],
+                model_used=action_model[:100],
+                tokens_in=outcome.tokens_in,
+                tokens_out=outcome.tokens_out,
+                # BYOK routes bill the tenant's own provider account, so the
+                # platform charges nothing — same rule as the chat completion.
+                cost_usd=(
+                    Decimal("0")
+                    if route.resolved_route == "customer"
+                    else calculate_cost(
+                        tokens_in=outcome.tokens_in,
+                        tokens_out=outcome.tokens_out,
+                        model=action_model,
+                        billing_tier=(
+                            user.tenant.billing_tier if user.tenant else "payg"
+                        ),
+                    )
+                ),
+                # Distinct operation_type so action spend can be separated from
+                # answer spend when reviewing margin.
+                operation_type="chat_action",
+                query_text=retained_gateway_query_text(question),
+            )
+        )
+
+
 async def _propose_followthrough_actions(
     db,
     user,
@@ -729,13 +771,42 @@ async def _propose_followthrough_actions(
         return [], ""
 
     if outcome.halted_reason == "actions_disabled":
+        # Never ran, so there is nothing to bill.
         return [], ""
     if outcome.halted_reason:
+        # Worth seeing in logs: a budget exhaustion or rejected tool means the
+        # assistant wanted to act and could not.
         logger.info(
             "chat_action_pass_halted reason=%s steps=%s",
             outcome.halted_reason,
             outcome.steps_used,
         )
+
+    # Meter the action pass even when it proposed nothing. It is a real second
+    # round trip against the same route, and leaving it unrecorded understates
+    # cost per conversation and corrupts margin analysis.
+    #
+    # Guarded because this helper promises never to break the answer: a billing
+    # write must not be able to cost the attorney their analysis. A failure here
+    # is logged loudly since it means spend went unrecorded.
+    try:
+        _record_action_usage(
+            db,
+            user,
+            question=question,
+            route=route,
+            outcome=outcome,
+            conversation_id=conversation_id,
+        )
+    except Exception:
+        logger.warning(
+            "chat_action_usage_unrecorded tenant_id=%s tokens_in=%s tokens_out=%s",
+            user.tenant_id,
+            outcome.tokens_in,
+            outcome.tokens_out,
+            exc_info=True,
+        )
+
     if outcome.needs_input:
         # Asking beats guessing at an owner, a deadline, or a recipient.
         return [], f"\n\n**Before I prepare that:** {outcome.needs_input}"

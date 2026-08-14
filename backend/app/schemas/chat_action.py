@@ -105,6 +105,9 @@ class EmailClientAction(ChatActionModel):
     body: str = Field(min_length=1, max_length=20_000)
     matter_id: UUID
     source_ids: list[str] = Field(default_factory=list, max_length=10)
+    # Server-resolved {source_id, label, url} for the documents this draft cites.
+    # Resolved rather than echoed so a chip cannot link somewhere unverified.
+    sources: list[dict] = Field(default_factory=list, max_length=10)
 
 
 PendingAction = Annotated[

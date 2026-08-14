@@ -394,3 +394,97 @@ async def test_model_unavailable_is_reported_not_raised(
 
     assert outcome.halted_reason == "model_unavailable"
     assert outcome.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_the_action_pass_is_metered_as_its_own_operation(
+    db_session, test_tenant, test_user
+):
+    """The second round trip must be billed, not absorbed silently.
+
+    Leaving it unrecorded understates cost per conversation and corrupts margin
+    analysis, which is exactly the number this product prices against.
+    """
+    from app.models.conversation import UsageRecord
+    from app.routers.chat import _propose_followthrough_actions
+
+    await _enable_actions(db_session, test_tenant)
+    matter, party, _contact = await _matter_with_client(
+        db_session, test_tenant, test_user
+    )
+    llm = _ScriptedLLM(
+        [
+            {
+                "outcome": "tool_call",
+                "tool": "propose_client_email",
+                "arguments": {
+                    "matter_id": str(matter.id),
+                    "recipient_party_ids": [str(party.id)],
+                    "title": "Request certificate",
+                    "subject": "Certificate",
+                    "body": "Please send it.",
+                },
+            }
+        ]
+    )
+    import app.routers.chat as chat_router
+
+    original = chat_router.chat_action_agent
+    chat_router.chat_action_agent = ChatActionAgent(llm)
+    try:
+        proposals, note = await _propose_followthrough_actions(
+            db_session,
+            test_user,
+            question="Ask Redwood for the certificate",
+            answer="The certificate is missing from the file.",
+            rag_context="",
+            route=_Route(),
+            conversation_id=None,
+            use_premium=False,
+        )
+    finally:
+        chat_router.chat_action_agent = original
+
+    assert proposals
+    assert "work board" in note
+
+    usage = (
+        (
+            await db_session.execute(
+                select(UsageRecord).where(UsageRecord.operation_type == "chat_action")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(usage) == 1
+    assert usage[0].tokens_in > 0
+    assert usage[0].tokens_out > 0
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_tenant_is_never_billed_for_an_action_pass(
+    db_session, test_tenant, test_user
+):
+    from app.models.conversation import UsageRecord
+    from app.routers.chat import _propose_followthrough_actions
+
+    proposals, note = await _propose_followthrough_actions(
+        db_session,
+        test_user,
+        question="Ask Redwood for the certificate",
+        answer="Some analysis.",
+        rag_context="",
+        route=_Route(),
+        conversation_id=None,
+        use_premium=False,
+    )
+
+    assert proposals == []
+    assert note == ""
+    count = await db_session.scalar(
+        select(func.count())
+        .select_from(UsageRecord)
+        .where(UsageRecord.operation_type == "chat_action")
+    )
+    assert count == 0

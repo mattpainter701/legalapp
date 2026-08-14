@@ -236,9 +236,31 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
           </span>
         </p>
       )}
+      {(task.pending_action?.sources || []).length > 0 && (
+        <ul data-testid="task-source-chips" className="mt-2 flex flex-wrap gap-1">
+          {task.pending_action.sources.map((source) => (
+            <li key={source.source_id}>
+              <span className="inline-flex max-w-[12rem] items-center gap-1 rounded-full border border-brand-line bg-brand-bg-soft px-2 py-0.5 text-[10px] text-brand-muted">
+                <FileCheck2 size={10} className="shrink-0" />
+                <span className="truncate">{source.label}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       {task.source === 'assistant' && (
         <p className="mt-1.5 text-[10px] uppercase tracking-wider text-brand-muted">
           Drafted by the assistant
+        </p>
+      )}
+      {task.delivery?.status === 'failed' && (
+        <p role="alert" className="mt-2 rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-red-800">
+          Not sent: {task.delivery.error_message || 'delivery failed'}
+        </p>
+      )}
+      {task.delivery?.status === 'sent' && (
+        <p className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
+          <Check size={11} /> Sent to the client
         </p>
       )}
 

@@ -73,11 +73,12 @@ def upgrade() -> None:
         ),
         sa.Column("action_type", sa.String(50), nullable=False),
         sa.Column("idempotency_key", sa.String(200), nullable=False),
+        # queued -> sending -> sent | failed
         sa.Column(
             "status",
             sa.String(20),
             nullable=False,
-            server_default=sa.text("'pending'"),
+            server_default=sa.text("'queued'"),
         ),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column(

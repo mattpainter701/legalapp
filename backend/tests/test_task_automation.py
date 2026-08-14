@@ -112,7 +112,7 @@ async def test_approving_a_drafted_email_sends_it_once(
     run = await db_session.scalar(
         select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
     )
-    assert run.status == "succeeded"
+    assert run.status == "sent"
     assert run.error_message is None
     assert run.completed_at is not None
 
@@ -236,7 +236,7 @@ async def test_a_failed_run_can_be_retried_and_then_succeeds(
     run = await db_session.scalar(
         select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
     )
-    assert run.status == "succeeded"
+    assert run.status == "sent"
 
 
 @pytest.mark.asyncio
@@ -589,3 +589,154 @@ async def test_the_generic_patch_cannot_approve_without_executing(
     assert response.status_code == 200
     await _drain_background_tasks()
     assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_approval_records_a_queued_delivery_in_the_same_transaction(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """Durability: the send intent must be committed with the approval.
+
+    A process that dies between the two previously lost the send entirely while
+    telling the attorney the work was approved.
+    """
+    from app.models.durable_job import DurableJob
+    from app.services.task_automation import TASK_AUTOMATION_JOB
+
+    # Delivery never runs, standing in for a worker that has not drained yet.
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    monkeypatch.setattr(
+        task_automation, "dispatch_task_automation_if_approved", lambda *a, **k: False
+    )
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    response = await client.post(
+        f"/api/tasks/{task.id}/transition",
+        json={"to_status": "in_progress", "expected_version": task.version},
+    )
+    assert response.status_code == 200
+
+    # A durable job survives the process, so the send is recoverable.
+    job = await db_session.scalar(
+        select(DurableJob).where(
+            DurableJob.tenant_id == test_tenant.id,
+            DurableJob.kind == TASK_AUTOMATION_JOB,
+        )
+    )
+    assert job is not None
+    assert job.payload["task_id"] == str(task.id)
+
+
+@pytest.mark.asyncio
+async def test_the_worker_delivers_a_queued_send(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    class _Job:
+        tenant_id = test_tenant.id
+        payload = {
+            "task_id": str(task.id),
+            "from_status": "review",
+            "to_status": "in_progress",
+            "actor_user_id": str(test_user.id),
+        }
+
+    result = await task_automation.run_task_automation_job(_Job())
+
+    assert result["task_id"] == str(task.id)
+    assert len(sender.calls) == 1
+    run = await db_session.scalar(
+        select(TaskAutomationRun).where(TaskAutomationRun.task_id == task.id)
+    )
+    assert run.status == "sent"
+
+
+@pytest.mark.asyncio
+async def test_the_worker_does_not_resend_after_an_immediate_attempt_succeeded(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    """Both mechanisms fire by design; exactly-once is what makes that safe."""
+    sender = _RecordingSender()
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    await task_automation.run_task_automation(
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
+    )
+
+    class _Job:
+        tenant_id = test_tenant.id
+        payload = {
+            "task_id": str(task.id),
+            "from_status": "review",
+            "to_status": "in_progress",
+            "actor_user_id": str(test_user.id),
+        }
+
+    await task_automation.run_task_automation_job(_Job())
+
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_run_in_flight_is_never_claimed_twice(
+    db_session, test_tenant, test_user
+):
+    """A 'sending' run must block a second claim, not just a 'sent' one."""
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+    key = task_automation.automation_idempotency_key(task, "review")
+
+    first = await task_automation._claim_run(
+        db_session,
+        task,
+        action_type="email_client",
+        idempotency_key=key,
+        actor_user_id=test_user.id,
+    )
+    assert first is not None and first.status == "sending"
+
+    second = await task_automation._claim_run(
+        db_session,
+        task,
+        action_type="email_client",
+        idempotency_key=key,
+        actor_user_id=test_user.id,
+    )
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_delivery_state_is_reported_on_the_task(
+    client, db_session, test_tenant, test_user, monkeypatch
+):
+    """The attorney needs the real outcome, not just "approved"."""
+    sender = _RecordingSender(result=EmailDeliveryResult.FAILED)
+    monkeypatch.setattr(task_automation, "email_service", sender)
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    await task_automation.run_task_automation(
+        task.id,
+        test_tenant.id,
+        from_status="review",
+        to_status="in_progress",
+        actor_user_id=test_user.id,
+    )
+
+    body = (await client.get(f"/api/tasks/{task.id}")).json()
+
+    assert body["delivery"]["status"] == "failed"
+    assert body["delivery"]["action_type"] == "email_client"
+    assert body["delivery"]["error_message"]

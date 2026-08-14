@@ -20,7 +20,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
-import { API_BASE_URL, approveProposedTask } from '../api'
+import { API_BASE_URL, approveProposedTask, waitForTaskDelivery } from '../api'
 import ActionProposalCard from './chat/ActionProposalCard'
 
 function cleanSourceText(value) {
@@ -657,6 +657,7 @@ export default function ChatMessage({ message }) {
               key={proposal.task_id}
               proposal={proposal}
               onApprove={(item, edits) => approveProposedTask(item.task_id, edits)}
+              onAwaitDelivery={(item) => waitForTaskDelivery(item.task_id)}
             />
           ))}
           {hasAssistantContent && (

@@ -60,8 +60,8 @@ describe('assistant action proposals in chat', () => {
 
     // Delivery runs out-of-band, so "sent" would be a claim we cannot back.
     const status = await screen.findByRole('status')
-    expect(status).toHaveTextContent(/Delivery is in progress/i)
-    expect(status).not.toHaveTextContent(/Approved and sent/i)
+    expect(status).toHaveTextContent(/Not yet confirmed sent/i)
+    expect(status).not.toHaveTextContent(/Sent to the client/i)
   })
 
   it('approves without edits when the draft is untouched', async () => {
@@ -72,7 +72,7 @@ describe('assistant action proposals in chat', () => {
 
     // undefined edits means the caller skips the draft PATCH entirely.
     await waitFor(() => expect(onApprove).toHaveBeenCalledWith(emailProposal, undefined))
-    expect(await screen.findByText(/Delivery is in progress/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Not yet confirmed sent/i)).toBeInTheDocument()
   })
 
   it('sends the edited body when the attorney rewrites the draft', async () => {
@@ -114,7 +114,7 @@ describe('assistant action proposals in chat', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Task changed')
     // Still actionable rather than stuck in a spinner.
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
-    expect(await screen.findByText(/Delivery is in progress/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Not yet confirmed sent/i)).toBeInTheDocument()
   })
 
   it('can be dismissed without approving', async () => {
@@ -125,5 +125,79 @@ describe('assistant action proposals in chat', () => {
 
     expect(screen.queryByTestId('action-proposal')).not.toBeInTheDocument()
     expect(onApprove).not.toHaveBeenCalled()
+  })
+})
+
+describe('confirmed delivery reporting', () => {
+  it('claims the client was contacted only once delivery is confirmed sent', async () => {
+    const onAwaitDelivery = vi.fn().mockResolvedValue({ status: 'sent' })
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn().mockResolvedValue({})}
+        onAwaitDelivery={onAwaitDelivery}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+
+    expect(await screen.findByText(/Sent to the client/i)).toBeInTheDocument()
+    expect(onAwaitDelivery).toHaveBeenCalledWith(emailProposal)
+  })
+
+  it('reports a failed send as not sent, with the reason and a retry path', async () => {
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn().mockResolvedValue({})}
+        onAwaitDelivery={vi.fn().mockResolvedValue({
+          status: 'failed',
+          error_message: 'Email delivery did not complete (unconfigured)',
+        })}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/Not sent/i)
+    expect(alert).toHaveTextContent(/unconfigured/i)
+    expect(alert).toHaveTextContent(/approve it again to retry/i)
+    // A failure must never read as success.
+    expect(alert).not.toHaveTextContent(/Sent to the client/i)
+  })
+
+  it('does not claim success when the outcome is still unknown', async () => {
+    // Polling gave up without a terminal state — the honest answer is "unknown",
+    // not reassurance.
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn().mockResolvedValue({})}
+        onAwaitDelivery={vi.fn().mockResolvedValue({ status: 'sending' })}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(/Not yet confirmed sent/i)
+    expect(status).not.toHaveTextContent(/Sent to the client/i)
+  })
+
+  it('still confirms a plain task without waiting on delivery', async () => {
+    const onAwaitDelivery = vi.fn()
+    render(
+      <ActionProposalCard
+        proposal={taskProposal}
+        onApprove={vi.fn().mockResolvedValue({})}
+        onAwaitDelivery={onAwaitDelivery}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    expect(await screen.findByText(/moved into active work/i)).toBeInTheDocument()
+    expect(onAwaitDelivery).not.toHaveBeenCalled()
   })
 })

@@ -255,9 +255,13 @@ class TaskAutomationRun(Base):
     # audit what ran without rehydrating a possibly-cleared task payload.
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
-    # "pending" | "succeeded" | "failed"
+    # "queued" -> "sending" -> "sent" | "failed"
+    #
+    # Distinguishing queued from sending matters to the attorney: "we have not
+    # tried yet" and "we tried and do not know the outcome" are different states,
+    # and only "sent" means the client was actually contacted.
     status: Mapped[str] = mapped_column(
-        String(20), default="pending", server_default="pending", nullable=False
+        String(20), default="queued", server_default="queued", nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

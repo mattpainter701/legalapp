@@ -1,5 +1,14 @@
 import React, { useState } from 'react'
-import { CheckCircle2, ClipboardCheck, LoaderCircle, Mail, Pencil, Send, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, X } from 'lucide-react'
+import { API_BASE_URL } from '../../api'
+
+// The backend emits document links as origin-relative `/api/...`; re-base them
+// so a deployment serving the API from another host still resolves them.
+const sourceUrl = (url) => {
+  const value = String(url || '')
+  if (!value.startsWith('/api/')) return value
+  return API_BASE_URL === '/api' ? value : `${API_BASE_URL}${value.slice('/api'.length)}`
+}
 
 /**
  * Reviewable work the assistant proposed in chat.
@@ -52,12 +61,100 @@ function EmailDraft({ pendingAction, draft, onDraftChange, editing }) {
   )
 }
 
-export default function ActionProposalCard({ proposal, onApprove, onDismiss }) {
+/**
+ * Report what is actually known about delivery.
+ *
+ * Every branch here is careful about one thing: only `sent` may claim the client
+ * was contacted. "Approved" and "sending" are not that, and an unknown outcome
+ * says so rather than defaulting to reassurance.
+ */
+function DeliveryStatus({ isEmail, delivery }) {
+  if (!isEmail) {
+    return (
+      <p role="status" className="mt-3 flex items-center gap-1.5 text-[12px] font-semibold text-brand-accent">
+        <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
+        Approved and moved into active work.
+      </p>
+    )
+  }
+
+  const status = delivery?.status
+  if (status === 'sent') {
+    return (
+      <p role="status" className="mt-3 flex items-start gap-1.5 text-[12px] font-semibold text-brand-accent">
+        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />
+        Sent to the client.
+      </p>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <div role="alert" className="mt-3 flex items-start gap-1.5 text-[12px] font-semibold text-brand-rose">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />
+        <span>
+          Not sent. {delivery?.error_message || 'Delivery failed.'} The draft is
+          still on the work board — approve it again to retry.
+        </span>
+      </div>
+    )
+  }
+  // queued, sending, or we stopped polling. Say what is true: approved, outcome
+  // not yet known. Never imply the client has it.
+  return (
+    <p role="status" className="mt-3 flex items-start gap-1.5 text-[12px] font-semibold text-brand-ink-2">
+      <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" strokeWidth={2} />
+      Approved. Not yet confirmed sent — the work board shows the delivery
+      outcome.
+    </p>
+  )
+}
+
+
+/**
+ * Documents the draft was based on.
+ *
+ * Server-resolved, so every chip links to a document that exists in this tenant
+ * — an attorney can open the source and check the draft against it before
+ * approving, which is the whole point of showing them.
+ */
+function SourceChips({ sources }) {
+  if (!sources || sources.length === 0) return null
+  return (
+    <div className="mt-3">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-brand-muted">
+        Based on
+      </p>
+      <ul className="mt-1 flex flex-wrap gap-1.5">
+        {sources.map((source) => (
+          <li key={source.source_id}>
+            <a
+              href={sourceUrl(source.url)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-[15rem] items-center gap-1 rounded-full border border-brand-line bg-brand-surface px-2 py-0.5 text-[11px] text-brand-ink-2 hover:border-brand-accent hover:text-brand-ink"
+            >
+              <FileText className="h-3 w-3 shrink-0" strokeWidth={2} />
+              <span className="truncate">{source.label}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+export default function ActionProposalCard({
+  proposal,
+  onApprove,
+  onAwaitDelivery,
+  onDismiss,
+}) {
   const pendingAction = proposal?.pending_action || null
   const isEmail = pendingAction?.type === 'email_client'
   const [draft, setDraft] = useState(pendingAction?.body || '')
   const [editing, setEditing] = useState(false)
   const [state, setState] = useState('proposed')
+  const [delivery, setDelivery] = useState(null)
   const [error, setError] = useState(null)
 
   const bodyChanged = isEmail && draft !== (pendingAction?.body || '')
@@ -68,7 +165,6 @@ export default function ActionProposalCard({ proposal, onApprove, onDismiss }) {
     setError(null)
     try {
       await onApprove(proposal, bodyChanged ? { body: draft } : undefined)
-      setState('approved')
     } catch (err) {
       setState('proposed')
       setError(
@@ -76,6 +172,17 @@ export default function ActionProposalCard({ proposal, onApprove, onDismiss }) {
           || err?.message
           || 'The task could not be approved.',
       )
+      return
+    }
+    // Approved. Delivery is separate, so keep asking until it is known rather
+    // than telling the attorney a client was contacted on the strength of the
+    // approval alone.
+    setState('approved')
+    if (!isEmail || !onAwaitDelivery) return
+    try {
+      setDelivery(await onAwaitDelivery(proposal))
+    } catch {
+      setDelivery(null)
     }
   }
 
@@ -116,24 +223,15 @@ export default function ActionProposalCard({ proposal, onApprove, onDismiss }) {
         editing={editing}
       />
 
+      <SourceChips sources={proposal.sources} />
+
       {/* Stated before the button, not after, so the consequence is read first. */}
       <p className="mt-3 text-[12px] leading-relaxed text-brand-ink-2">
         {proposal.approval_effect}
       </p>
 
       {state === 'approved' ? (
-        <p
-          role="status"
-          className="mt-3 flex items-start gap-1.5 text-[12px] font-semibold text-brand-accent"
-        >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={2} />
-          {/* Delivery runs out-of-band after the approval commits, so this must
-              not claim the client was contacted — the approval is what we know
-              happened. The task's automation record carries the real outcome. */}
-          {isEmail
-            ? 'Approved. Delivery is in progress — the task shows the outcome once it completes.'
-            : 'Approved and moved into active work.'}
-        </p>
+        <DeliveryStatus isEmail={isEmail} delivery={delivery} />
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button

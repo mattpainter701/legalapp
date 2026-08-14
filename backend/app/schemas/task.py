@@ -69,6 +69,21 @@ class TaskCreate(BaseModel):
         return v
 
 
+class TaskDeliveryState(BaseModel):
+    """Outcome of the automation for an approved task.
+
+    ``status`` is the honest answer to "was the client actually contacted":
+    queued and sending both mean not yet, and only ``sent`` means yes.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str
+    action_type: Optional[str] = None
+    error_message: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+
 class PendingActionEdit(BaseModel):
     """The only parts of a drafted action an attorney may rewrite.
 
@@ -206,6 +221,8 @@ class TaskResponse(BaseModel):
     # Drafted follow-through awaiting approval, e.g. an email_client payload.
     # Present so the board can state what approving will actually do.
     pending_action: Optional[dict] = None
+    # Set once an approval has been recorded. Absent means nothing was dispatched.
+    delivery: Optional[TaskDeliveryState] = None
     created_at: datetime
     updated_at: datetime
 
@@ -257,6 +274,7 @@ class TaskBoardCard(BaseModel):
     # Drafted follow-through this card will execute when approved out of Review.
     # The board must be able to say what approving does before it is clicked.
     pending_action: Optional[dict] = None
+    delivery: Optional[TaskDeliveryState] = None
     status_changed_at: datetime
     updated_at: datetime
 
