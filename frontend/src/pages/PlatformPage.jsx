@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
@@ -1251,7 +1251,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
     } catch (e) {
       setTestResult({
         ok: false,
-        error: e?.response?.data?.detail || 'Test failed',
+        error: apiErrorMessage(e, 'Test failed'),
         client_roundtrip_ms: Math.round(performance.now() - startedAt),
       })
     } finally { setTesting(false) }
@@ -1732,6 +1732,248 @@ function ApplyRouteMenu({ model, onApply }) {
   )
 }
 
+const ROUTE_CAPABILITY_OPTIONS = [
+  ['tool_use', 'Tools'],
+  ['structured_output', 'Structured output'],
+  ['vision', 'Vision'],
+  ['file_input', 'Files'],
+]
+
+function SmartRouteBuilder({ platformKey, presets, onApply }) {
+  const [route, setRoute] = useState('standard')
+  const [costPreference, setCostPreference] = useState('cost_optimized')
+  const [dataMode, setDataMode] = useState('customer')
+  const [maxLatency, setMaxLatency] = useState(3000)
+  const [providerScope, setProviderScope] = useState('all')
+  const [providerDiversity, setProviderDiversity] = useState(true)
+  const [capabilities, setCapabilities] = useState([])
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [testingCandidates, setTestingCandidates] = useState(false)
+  const [error, setError] = useState(null)
+
+  const changeRoute = (nextRoute) => {
+    setRoute(nextRoute)
+    setCostPreference(nextRoute === 'premium' ? 'quality' : 'cost_optimized')
+    setResult(null)
+  }
+
+  const toggleCapability = (capability) => {
+    setCapabilities((current) => (
+      current.includes(capability)
+        ? current.filter((item) => item !== capability)
+        : [...current, capability]
+    ))
+    setResult(null)
+  }
+
+  const buildRecommendation = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const data = await recommendLLMRoutes(platformKey, {
+        route,
+        cost_preference: costPreference,
+        data_mode: dataMode,
+        max_latency_ms: Number(maxLatency),
+        count: 3,
+        provider_diversity: providerDiversity,
+        provider_ids: providerScope === 'all' ? [] : [providerScope],
+        required_capabilities: ['text_input', 'instruction', ...capabilities],
+      })
+      setResult(data)
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Could not build a route recommendation.'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testRecommendation = async () => {
+    if (!result?.candidates?.length) return
+    setTestingCandidates(true)
+    setError(null)
+    const tested = []
+    for (const candidate of result.candidates) {
+      try {
+        const canary = await testLLMRoute(platformKey, {
+          key_id: candidate.key_id,
+          provider_id: candidate.provider_id,
+          model: candidate.model,
+          route: `${route}-recommendation`,
+        })
+        tested.push({
+          ...candidate,
+          canary_ok: Boolean(canary.ok),
+          canary_error: canary.error || null,
+          canary_category: canary.error_category || null,
+          latency_ms: canary.provider_latency_ms ?? candidate.latency_ms,
+        })
+      } catch (e) {
+        tested.push({
+          ...candidate,
+          canary_ok: false,
+          canary_error: apiErrorMessage(e, 'Canary request failed.'),
+          canary_category: 'platform_request_failed',
+        })
+      }
+    }
+    setResult((current) => ({ ...current, candidates: tested }))
+    setTestingCandidates(false)
+  }
+
+  const hasDemoOnlyCandidate = Boolean(
+    result?.candidates?.some((candidate) => candidate.confidential_data_allowed === false),
+  )
+  const allCandidatesPassed = Boolean(
+    result?.candidates?.length && result.candidates.every((candidate) => candidate.canary_ok),
+  )
+  const canApply = allCandidatesPassed && !hasDemoOnlyCandidate
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Settings2 size={16} className="text-brand-accent" />
+            <h2 className="font-serif font-bold text-brand-ink">Smart top-three router</h2>
+          </div>
+          <p className="text-xs text-brand-muted font-sans mt-1">Ranks one primary and two ordered failovers using legal readiness, provider health, data policy, latency, cost, and provider diversity.</p>
+        </div>
+        <button
+          type="button"
+          onClick={buildRecommendation}
+          disabled={loading}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
+        >
+          {loading ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} />}
+          {loading ? 'Ranking models…' : 'Recommend top 3'}
+        </button>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div>
+            <label htmlFor="smart-route-tier" className="block text-xs text-brand-muted font-sans mb-1">Route</label>
+            <select id="smart-route-tier" value={route} onChange={(e) => changeRoute(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="standard">Standard</option>
+              <option value="premium">Premium</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-cost" className="block text-xs text-brand-muted font-sans mb-1">Cost strategy</label>
+            <select id="smart-route-cost" value={costPreference} onChange={(e) => { setCostPreference(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="free_only">Free only</option>
+              <option value="cost_optimized">Cost optimized</option>
+              <option value="quality">Quality first</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-data" className="block text-xs text-brand-muted font-sans mb-1">Data handling</label>
+            <select id="smart-route-data" value={dataMode} onChange={(e) => { setDataMode(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="customer">Customer legal</option>
+              <option value="strict">Strict approved only</option>
+              <option value="demo">Synthetic demo</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-provider" className="block text-xs text-brand-muted font-sans mb-1">Provider scope</label>
+            <select id="smart-route-provider" value={providerScope} onChange={(e) => { setProviderScope(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="all">All stored providers</option>
+              {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-latency" className="block text-xs text-brand-muted font-sans mb-1">Maximum latency</label>
+            <select id="smart-route-latency" value={maxLatency} onChange={(e) => { setMaxLatency(Number(e.target.value)); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value={1500}>1.5 seconds</option>
+              <option value={3000}>3 seconds</option>
+              <option value={5000}>5 seconds</option>
+              <option value={10000}>10 seconds</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wider text-brand-muted font-sans">Required:</span>
+          {ROUTE_CAPABILITY_OPTIONS.map(([capability, label]) => (
+            <button
+              type="button"
+              key={capability}
+              aria-pressed={capabilities.includes(capability)}
+              onClick={() => toggleCapability(capability)}
+              className={`rounded-full border px-2.5 py-1 text-xs font-sans ${capabilities.includes(capability) ? 'border-brand-accent bg-brand-accent/10 text-brand-accent' : 'border-brand-line text-brand-muted hover:text-brand-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+          <label className="ml-auto inline-flex items-center gap-2 text-xs text-brand-ink font-sans">
+            <input type="checkbox" checked={providerDiversity} onChange={(e) => { setProviderDiversity(e.target.checked); setResult(null) }} />
+            Prefer provider diversity
+          </label>
+        </div>
+
+        {error && <p role="alert" className="text-sm text-brand-rose font-sans">{error}</p>}
+        {result && (
+          <div className="border border-brand-line rounded-lg overflow-hidden">
+            <div className="px-4 py-3 bg-brand-bg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-brand-ink font-sans">{result.candidates?.length || 0} recommended target{result.candidates?.length === 1 ? '' : 's'} for {route}</p>
+                <p className="text-xs text-brand-muted font-sans">The first target is primary; the rest are automatic ordered failovers.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!result.candidates?.length || testingCandidates}
+                  onClick={testRecommendation}
+                  className="px-3 py-1.5 text-xs font-medium font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-surface disabled:opacity-40"
+                >
+                  {testingCandidates ? 'Testing…' : `Test all ${result.candidates?.length || 0}`}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canApply}
+                  title={hasDemoOnlyCandidate ? 'Demo-only models cannot be activated on customer Standard or Premium routes.' : !allCandidatesPassed ? 'Every target needs a passing canary before it can be applied.' : 'Apply the primary and ordered failovers'}
+                  onClick={() => onApply(route, result.candidates || [])}
+                  className="px-3 py-1.5 text-xs font-medium font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-surface disabled:opacity-40"
+                >
+                  Apply recommendation
+                </button>
+              </div>
+            </div>
+            <div className="divide-y divide-brand-line">
+              {(result.candidates || []).map((candidate, index) => (
+                <div key={`${candidate.provider_id}-${candidate.model}`} className="px-4 py-3 flex flex-col lg:flex-row lg:items-center gap-2 lg:gap-4">
+                  <span className="w-20 shrink-0 text-[10px] uppercase tracking-wider text-brand-muted font-sans">{index === 0 ? 'Primary' : `Fallback ${index}`}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-mono text-brand-ink truncate">{candidate.model}</p>
+                    <p className="text-xs text-brand-muted font-sans">{candidate.provider_name} · {candidate.key_name}{candidate.is_free ? ' · Free' : ' · Paid'}{candidate.latency_ms != null ? ` · ${candidate.latency_ms}ms` : ''}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-[10px] font-sans">
+                    {candidate.canary_ok ? <span className="rounded bg-brand-accent/10 text-brand-accent px-2 py-1">Canary passed</span> : <span className="rounded bg-brand-amber/10 text-brand-amber px-2 py-1">{candidate.canary_category ? candidate.canary_category.replaceAll('_', ' ') : 'Needs canary'}</span>}
+                    <span className="rounded bg-brand-bg text-brand-muted px-2 py-1">Score {candidate.score}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {hasDemoOnlyCandidate && (
+              <div className="px-4 py-3 border-t border-brand-line bg-brand-rose/5 text-xs text-brand-rose font-sans">
+                Demo-only models are visible for comparison but cannot be applied to customer Standard or Premium routes.
+              </div>
+            )}
+            {(result.warnings || []).length > 0 && (
+              <div className="px-4 py-3 border-t border-brand-line bg-brand-amber/5 space-y-1">
+                {result.warnings.map((warning) => <p key={warning} className="text-xs text-brand-amber font-sans">{warning}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
@@ -2192,6 +2434,31 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
     })
   }
 
+  const applyRecommendation = (routeName, candidates) => {
+    if (!candidates.length) return
+    const [primary, ...fallbacks] = candidates
+    const nextRoute = {
+      key_id: primary.key_id,
+      provider_id: primary.provider_id,
+      model: primary.model,
+      capacity: primary.capacity || 100,
+      alternates: [],
+      fallbacks: fallbacks.map((candidate) => ({
+        key_id: candidate.key_id,
+        provider_id: candidate.provider_id,
+        model: candidate.model,
+        capacity: candidate.capacity || 100,
+      })),
+    }
+    if (routeName === 'standard') setStandard(nextRoute)
+    else setPremium(nextRoute)
+    setSaveResult({
+      ok: true,
+      pending: true,
+      message: `Applied the top ${candidates.length} ${routeName} targets. Test them, then Validate & Activate to publish the route.`,
+    })
+  }
+
   const handleSave = async () => {
     if (validationIssues.length > 0) {
       setSaveResult({ ok: false, error: validationIssues[0] })
@@ -2278,6 +2545,12 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       />
 
       <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
+
+      <SmartRouteBuilder
+        platformKey={platformKey}
+        presets={presets}
+        onApply={applyRecommendation}
+      />
 
       <ModelCatalogPanel
         catalog={catalog}

@@ -1017,6 +1017,9 @@ export const refreshLLMModelCatalog = (key) =>
 export const getLLMRoutes = (key) =>
   platformApi(key).get('/platform/llm/routes').then((r) => r.data)
 
+export const recommendLLMRoutes = (key, data) =>
+  platformApi(key).post('/platform/llm/routes/recommend', data).then((r) => r.data)
+
 export const saveLLMRoutes = (key, data) =>
   platformApi(key).put('/platform/llm/routes', data).then((r) => r.data)
 
