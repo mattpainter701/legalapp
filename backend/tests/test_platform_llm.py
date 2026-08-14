@@ -131,7 +131,10 @@ async def test_route_activation_canary_has_reasoning_model_token_budget(monkeypa
     assert error is None
     assert results["premium"]["ok"] is True
     for _, _, payload in fake.calls:
-        assert payload["max_tokens"] == platform_llm_router.LLM_CANARY_MAX_TOKENS
+        assert (
+            payload["max_tokens"]
+            == platform_llm_router.ROUTE_ACTIVATION_CANARY_MAX_TOKENS
+        )
         assert payload["messages"][0]["role"] == "system"
 
 
