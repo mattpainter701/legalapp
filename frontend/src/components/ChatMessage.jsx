@@ -20,7 +20,8 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
-import { API_BASE_URL } from '../api'
+import { API_BASE_URL, approveProposedTask, waitForTaskDelivery } from '../api'
+import ActionProposalCard from './chat/ActionProposalCard'
 
 function cleanSourceText(value) {
   if (!value) return ''
@@ -649,6 +650,16 @@ export default function ChatMessage({ message }) {
             )}
             {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
           </div>
+          {/* Outside responseCopyRef: copying an analysis should yield the
+              analysis, not the approval controls. */}
+          {(message.proposed_actions || []).map((proposal) => (
+            <ActionProposalCard
+              key={proposal.task_id}
+              proposal={proposal}
+              onApprove={(item, edits) => approveProposedTask(item.task_id, edits)}
+              onAwaitDelivery={(item) => waitForTaskDelivery(item.task_id)}
+            />
+          ))}
           {hasAssistantContent && (
             <ReferenceTrail
               referenceContext={message.referenceContext}

@@ -54,6 +54,7 @@ from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.services.gateway_privacy import gateway_metadata, retained_gateway_query_text
+from app.services.chat_agent import ChatActionAgent
 from app.utils.guardrails import (
     apply_guardrails,
     check_pii_in_input,
@@ -293,6 +294,7 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 
 embedding_service = EmbeddingService()
 llm_service = LLMService()
+chat_action_agent = ChatActionAgent(llm_service)
 memory_service = MemoryService(llm_service)
 matter_context_service = MatterContextService()
 cache_manager = ExpertiseCacheManager()
@@ -677,6 +679,7 @@ def _message_to_response(msg: Message) -> MessageResponse:
         role=msg.role,
         content=msg.content,
         sources=sources,
+        proposed_actions=list(msg.proposed_actions or []),
         created_at=msg.created_at,
     )
 
@@ -684,6 +687,139 @@ def _message_to_response(msg: Message) -> MessageResponse:
 def _conversation_belongs_to_user(conv: Conversation, user) -> bool:
     """Chat conversations are private to their creator, including tenant admins."""
     return str(conv.user_id) == str(user.id)
+
+
+def _record_action_usage(
+    db, user, *, question, route, outcome, conversation_id=None
+) -> None:
+    """Bill the chat action pass like any other completion."""
+    if outcome.tokens_in or outcome.tokens_out:
+        action_model = str(route.model or "")
+        db.add(
+            UsageRecord(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                conversation_id=conversation_id,
+                requested_route=getattr(route, "requested_route", None),
+                resolved_route=route.resolved_route,
+                gateway_provider=getattr(route, "gateway_provider", None),
+                gateway_alias=getattr(route, "gateway_alias", None),
+                final_model=action_model[:200],
+                model_used=action_model[:100],
+                tokens_in=outcome.tokens_in,
+                tokens_out=outcome.tokens_out,
+                # BYOK routes bill the tenant's own provider account, so the
+                # platform charges nothing — same rule as the chat completion.
+                cost_usd=(
+                    Decimal("0")
+                    if route.resolved_route == "customer"
+                    else calculate_cost(
+                        tokens_in=outcome.tokens_in,
+                        tokens_out=outcome.tokens_out,
+                        model=action_model,
+                        billing_tier=(
+                            user.tenant.billing_tier if user.tenant else "payg"
+                        ),
+                    )
+                ),
+                # Distinct operation_type so action spend can be separated from
+                # answer spend when reviewing margin.
+                operation_type="chat_action",
+                query_text=retained_gateway_query_text(question),
+            )
+        )
+
+
+async def _propose_followthrough_actions(
+    db,
+    user,
+    *,
+    question: str,
+    answer: str,
+    rag_context: str,
+    route,
+    conversation_id,
+    use_premium: bool,
+) -> tuple[list[dict], str]:
+    """Let the assistant propose reviewable follow-through for this turn.
+
+    Deliberately runs *after* the cited answer rather than replacing it, so the
+    attorney keeps the sourced analysis whether or not any action is warranted,
+    and so chat behaves exactly as before for every tenant without the
+    entitlement (the default). Returns the proposal cards plus any text to
+    append to the answer.
+
+    Never raises: a proposal is an enhancement, and losing the analysis because
+    the action pass failed would be a worse outcome than losing the proposal.
+    """
+    try:
+        outcome = await chat_action_agent.run(
+            db=db,
+            user=user,
+            question=question,
+            # The answer is the assistant's own reasoning and is what follow-up
+            # should be based on; the retrieved context is included so a
+            # proposal can cite the same sources.
+            rag_context=f"{rag_context}\n\nDRAFT ANALYSIS:\n{answer}".strip(),
+            route=route,
+            conversation_id=conversation_id,
+            use_premium=use_premium,
+        )
+    except Exception:
+        logger.warning("chat_action_pass_failed", exc_info=True)
+        return [], ""
+
+    if outcome.halted_reason == "actions_disabled":
+        # Never ran, so there is nothing to bill.
+        return [], ""
+    if outcome.halted_reason:
+        # Worth seeing in logs: a budget exhaustion or rejected tool means the
+        # assistant wanted to act and could not.
+        logger.info(
+            "chat_action_pass_halted reason=%s steps=%s",
+            outcome.halted_reason,
+            outcome.steps_used,
+        )
+
+    # Meter the action pass even when it proposed nothing. It is a real second
+    # round trip against the same route, and leaving it unrecorded understates
+    # cost per conversation and corrupts margin analysis.
+    #
+    # Guarded because this helper promises never to break the answer: a billing
+    # write must not be able to cost the attorney their analysis. A failure here
+    # is logged loudly since it means spend went unrecorded.
+    try:
+        _record_action_usage(
+            db,
+            user,
+            question=question,
+            route=route,
+            outcome=outcome,
+            conversation_id=conversation_id,
+        )
+    except Exception:
+        logger.warning(
+            "chat_action_usage_unrecorded tenant_id=%s tokens_in=%s tokens_out=%s",
+            user.tenant_id,
+            outcome.tokens_in,
+            outcome.tokens_out,
+            exc_info=True,
+        )
+
+    if outcome.needs_input:
+        # Asking beats guessing at an owner, a deadline, or a recipient.
+        return [], f"\n\n**Before I prepare that:** {outcome.needs_input}"
+    if not outcome.proposals:
+        return [], ""
+
+    titles = ", ".join(str(p.get("title") or "work") for p in outcome.proposals)
+    note = (
+        f"\n\n**Proposed for your approval:** {titles}. "
+        "It is on the work board in Review — nothing is sent or completed "
+        "until you approve it."
+    )
+    return outcome.proposals, note
 
 
 async def _trigger_auto_memory_generation_bg(
@@ -1424,6 +1560,20 @@ async def send_message(
         body.skill if hasattr(body, "skill") and body.skill else user.default_skill
     )
     await set_tenant_context(db, str(user.tenant_id))
+
+    proposed_actions, action_note = await _propose_followthrough_actions(
+        db,
+        user,
+        question=body.content,
+        answer=cleaned_response,
+        rag_context=context_str,
+        route=route,
+        conversation_id=conv.id,
+        use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+    )
+    if action_note:
+        cleaned_response = f"{cleaned_response}{action_note}"
+
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -1435,6 +1585,7 @@ async def send_message(
         context_used=context_used if context_used else None,
         context_relevance_scores=context_scores if context_scores else None,
         pii_flags=all_pii_flags if all_pii_flags else None,
+        proposed_actions=proposed_actions or None,
     )
     db.add(assistant_msg)
 
@@ -2105,6 +2256,29 @@ async def stream_message(
                 else user.default_skill
             )
             await set_tenant_context(db, str(user.tenant_id))
+
+            # Mirrors send_message. The action pass runs after the answer has
+            # already streamed, so a proposal never delays the first token.
+            proposed_actions, action_note = await _propose_followthrough_actions(
+                db,
+                user,
+                question=body.content,
+                answer=cleaned_response,
+                rag_context=context_str,
+                route=route,
+                conversation_id=conv.id,
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            )
+            if action_note:
+                # Streamed as tokens so the client renders it inline without a
+                # second message, and persisted so a reload matches the stream.
+                yield _stream_token_event(action_note)
+                cleaned_response = f"{cleaned_response}{action_note}"
+            if proposed_actions:
+                yield _stream_progress_event(
+                    "action_proposal", {"proposed_actions": proposed_actions}
+                )
+
             assistant_msg = Message(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,
@@ -2116,6 +2290,7 @@ async def stream_message(
                 context_used=context_used if context_used else None,
                 context_relevance_scores=context_scores if context_scores else None,
                 pii_flags=all_pii_flags if all_pii_flags else None,
+                proposed_actions=proposed_actions or None,
             )
             db.add(assistant_msg)
 

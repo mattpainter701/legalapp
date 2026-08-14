@@ -36,6 +36,7 @@ class EmailDeliveryResult(str, Enum):
     NOT_REQUIRED = "not_required"
     DISABLED = "disabled"
     UNCONFIGURED = "unconfigured"
+    REAUTHORIZATION_REQUIRED = "reauthorization_required"
     INVALID_RECIPIENT = "invalid_recipient"
     FAILED = "failed"
 
@@ -44,7 +45,11 @@ class EmailDeliveryResult(str, Enum):
 
     @property
     def is_configuration_error(self) -> bool:
-        return self in {self.DISABLED, self.UNCONFIGURED}
+        return self in {
+            self.DISABLED,
+            self.UNCONFIGURED,
+            self.REAUTHORIZATION_REQUIRED,
+        }
 
 
 def email_delivery_http_error(
@@ -54,6 +59,12 @@ def email_delivery_http_error(
 ) -> tuple[int, str]:
     """Map an unsuccessful delivery outcome to a safe, actionable API error."""
 
+    if result == EmailDeliveryResult.REAUTHORIZATION_REQUIRED:
+        return (
+            503,
+            f"{action} was not completed because the connected mailbox needs "
+            "to be reauthorized with permission to send email.",
+        )
     if result in {
         EmailDeliveryResult.DISABLED,
         EmailDeliveryResult.UNCONFIGURED,

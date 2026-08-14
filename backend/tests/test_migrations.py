@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["101_doc_revisions"]
+    assert heads == ["102_chat_task_automation"]
 
 
 def test_document_revision_migration_forces_tenant_rls_and_preserves_sources():
@@ -30,6 +30,37 @@ def test_document_revision_migration_forces_tenant_rls_and_preserves_sources():
     assert "uq_doc_revisions_tenant_client_request" in source
     assert "ck_doc_revisions_approval_evidence" in source
     assert "'superseded'" in source
+
+
+def test_chat_task_automation_migration_is_exactly_once_and_defaults_off():
+    """Two properties here are load-bearing for client-facing automation.
+
+    The unique constraint is the only thing preventing a double-approved task
+    from emailing a client twice, and the false default is what stops every
+    existing tenant from inheriting assistant-proposed work on deploy.
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "102_chat_task_automation.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "102_chat_task_automation"' in source
+    assert 'down_revision = "101_doc_revisions"' in source
+    assert "uq_task_automation_runs_task_key" in source
+    assert "task_automation_runs_tenant_isolation" in source
+    assert "ALTER TABLE task_automation_runs FORCE ROW LEVEL SECURITY" in source
+    # Absence of a tenant context must deny, not raise on ''::uuid.
+    assert "NULLIF(current_setting('app.current_tenant_id', true), '')" in source
+
+    flag = source.split('"enable_chat_actions"', 1)[1].split("op.create_table", 1)[0]
+    assert 'sa.text("false")' in flag
+    assert "nullable=False" in flag
+
+    # Reversible: the downgrade must undo all three schema additions.
+    downgrade = source.split("def downgrade()", 1)[1]
+    assert "drop_table" in downgrade
+    assert '"enable_chat_actions"' in downgrade
+    assert '"pending_action"' in downgrade
 
 
 def test_task_work_board_migration_has_history_rls_and_concurrency_fields():

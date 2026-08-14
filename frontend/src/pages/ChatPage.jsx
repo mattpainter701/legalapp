@@ -468,6 +468,19 @@ export default function ChatPage() {
       let streamError = null
 
       for await (const token of streamMessage(convId, content, includePublic, usePremium, attachmentIds)) {
+        if (token?.type === 'progress' && token.event === 'action_proposal') {
+          // Reviewable work the assistant proposed. Attached to the message
+          // rather than merged into progress, since it outlives the stream.
+          const proposals = token.proposed_actions || []
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId
+                ? { ...msg, proposed_actions: proposals }
+                : msg
+            )
+          )
+          continue
+        }
         if (token?.type === 'progress') {
           streamProgress = mergeStreamProgress(streamProgress, token, content)
           const referenceContext = buildReferenceContext({ progress: streamProgress })

@@ -26,7 +26,7 @@ from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.contact import Contact, Lead
 from app.models.plugin import Matter
-from app.models.task import Task, TaskEvent
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
@@ -37,11 +37,16 @@ from app.services.task_notifications import (
     remove_task_from_calendars,
     task_calendar_user_id,
 )
+from app.services.task_automation import (
+    dispatch_task_automation_if_approved,
+    enqueue_durable_automation,
+)
 from app.services.task_workflow import (
     TaskVersionConflict,
     TaskWorkflowError,
     append_task_event,
     increment_task_version,
+    require_task_references_for_tenant,
     transition_task,
 )
 from app.schemas.task import (
@@ -60,11 +65,13 @@ from app.schemas.task import (
     TaskCardPerson,
     TaskContactedRequest,
     TaskCreate,
+    TaskDeliveryState,
     TaskEventListResponse,
     TaskEventResponse,
     TaskListResponse,
     TaskResponse,
     TaskTransitionRequest,
+    PendingActionEdit,
     TaskUpdate,
 )
 
@@ -140,37 +147,40 @@ async def _require_task_references_for_tenant(
     tenant_id: uuid.UUID,
     values: dict,
 ) -> None:
-    """Reject foreign or missing objects before a Task can reference them.
+    """HTTP adaptor over the shared tenant-reference gate.
 
-    The referenced tables use ordinary foreign keys, which prove that an ID
-    exists but do not prove that it belongs to the task's tenant.  Keep the
-    checks explicit even when PostgreSQL RLS is enabled so this invariant also
-    holds in maintenance/test contexts and cannot depend on connection state.
-    An assignee must also be active; inactive and foreign users receive the
-    same response as a missing user.
+    The rule itself lives in ``task_workflow`` so the chat assistant's proposed
+    tasks clear exactly the same gate as ones typed into the UI. This wrapper
+    only translates the service error into the 404 that callers already expect.
     """
+    try:
+        await require_task_references_for_tenant(db, tenant_id, values)
+    except TaskWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    checks = (
-        ("matter_id", Matter, "Matter not found", False),
-        ("contact_id", Contact, "Contact not found", False),
-        ("assigned_to_user_id", User, "Assigned user not found", True),
-        ("reviewer_user_id", User, "Reviewer not found", True),
+
+async def _latest_delivery(db: AsyncSession, task: Task) -> TaskDeliveryState | None:
+    """Most recent automation attempt for a task, if any.
+
+    Read separately rather than joined onto the list query: only a handful of
+    tasks ever carry an action, and the board renders hundreds of cards.
+    """
+    run = await db.scalar(
+        select(TaskAutomationRun)
+        .where(TaskAutomationRun.task_id == task.id)
+        .order_by(TaskAutomationRun.created_at.desc())
+        .limit(1)
     )
-    for field, model, detail, require_active in checks:
-        reference_id = values.get(field)
-        if reference_id is None:
-            continue
-        filters = [
-            model.id == reference_id,
-            model.tenant_id == tenant_id,
-        ]
-        if require_active:
-            filters.append(User.is_active.is_(True))
-        found_id = await db.scalar(select(model.id).where(*filters))
-        if found_id is None:
-            # A single 404 response covers both missing and foreign records so
-            # the endpoint does not become a cross-tenant ID oracle.
-            raise HTTPException(status_code=404, detail=detail)
+    return TaskDeliveryState.model_validate(run) if run else None
+
+
+async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResponse:
+    response = TaskResponse.model_validate(task)
+    # Only assistant-drafted work can carry an action, so skip the extra read
+    # for the overwhelming majority of tasks.
+    if task.source == "assistant":
+        response.delivery = await _latest_delivery(db, task)
+    return response
 
 
 def _task_card_from_row(row) -> TaskBoardCard:
@@ -229,6 +239,7 @@ def _task_card_from_row(row) -> TaskBoardCard:
         source=task.source,
         external_ref=task.external_ref,
         version=task.version,
+        pending_action=task.pending_action,
         status_changed_at=task.status_changed_at,
         updated_at=task.updated_at,
     )
@@ -1051,6 +1062,17 @@ async def transition_task_status(
             actor=current_user,
             note=task.closed_reason,
         )
+    if changed:
+        # Before the commit on purpose: the queued delivery row and its durable
+        # job land in the same transaction as the approval, so there is no window
+        # where a task is approved but the send is unrecorded.
+        await enqueue_durable_automation(
+            db,
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
+        )
     await db.commit()
     await db.refresh(task)
     if changed:
@@ -1061,6 +1083,15 @@ async def transition_task_status(
             calendar_changed=True,
             assignment_changed=False,
             previous_calendar_user_id=previous_calendar_user_id,
+        )
+    if changed:
+        # What counts as approval lives in task_automation, not here, so this
+        # endpoint and the generic PATCH cannot disagree about it.
+        dispatch_task_automation_if_approved(
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
         )
     logger.info(
         "task_board_transition_success tenant_id=%s user_id=%s task_id=%s "
@@ -1073,7 +1104,7 @@ async def transition_task_status(
         changed,
         task.version,
     )
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -1090,7 +1121,7 @@ async def get_task(
         task.viewed_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.post("/{task_id}/view", response_model=TaskResponse)
@@ -1171,6 +1202,77 @@ async def mark_customer_contacted(
     )
     if not transitioned:
         increment_task_version(task)
+    await db.commit()
+    await db.refresh(task)
+    return TaskResponse.model_validate(task)
+
+
+@router.patch("/{task_id}/pending-action", response_model=TaskResponse)
+async def update_pending_action(
+    task_id: uuid.UUID,
+    payload: PendingActionEdit,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revise the text of a drafted action before approving it.
+
+    Narrow on purpose. Only the subject and body are editable: recipients were
+    resolved from the matter's own parties, and accepting them here would undo
+    that guarantee. Editing also bumps the task version, which rotates the
+    automation idempotency key — so a draft that was edited after a failed send
+    is allowed to run again, while re-approving an unchanged draft still
+    collides and cannot send twice.
+    """
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(Task)
+        .where(
+            Task.id == task_id,
+            Task.tenant_id == uuid.UUID(tenant_id),
+        )
+        .with_for_update()
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.pending_action:
+        raise HTTPException(
+            status_code=409, detail="This task has no drafted action to edit"
+        )
+    if task.status != "review":
+        # Once approved, the draft is history. Editing it would misrepresent
+        # what was actually sent.
+        raise HTTPException(
+            status_code=409,
+            detail="Only a task still in Review can have its draft edited",
+        )
+    if (
+        payload.expected_version is not None
+        and payload.expected_version != task.version
+    ):
+        conflict = TaskVersionConflict()
+        raise HTTPException(
+            status_code=conflict.status_code, detail=conflict.detail
+        ) from None
+
+    updates = payload.model_dump(exclude_none=True, exclude={"expected_version"})
+    if not updates:
+        return TaskResponse.model_validate(task)
+
+    # Replace the whole mapping: SQLAlchemy does not track in-place JSON edits.
+    action = dict(task.pending_action)
+    action.update(updates)
+    task.pending_action = action
+    increment_task_version(task)
+    append_task_event(
+        db,
+        task,
+        event_type="draft_edited",
+        actor_user_id=current_user.id,
+        metadata={"fields": sorted(updates)},
+    )
     await db.commit()
     await db.refresh(task)
     return TaskResponse.model_validate(task)
@@ -1342,6 +1444,16 @@ async def update_task(
     ) and not transition_changed:
         increment_task_version(task)
 
+    # Same transactional enqueue as the transition endpoint, for the same reason:
+    # this endpoint can also approve drafted work out of Review.
+    await enqueue_durable_automation(
+        db,
+        task,
+        from_status=previous_status,
+        to_status=task.status,
+        actor_user_id=current_user.id,
+    )
+
     await db.commit()
     await db.refresh(task)
 
@@ -1353,6 +1465,16 @@ async def update_task(
         assignment_changed=reassigned,
         previous_calendar_user_id=previous_calendar_user_id,
         assignment_note=assignment_note,
+    )
+
+    # This endpoint can also move a task out of Review, which the board presents
+    # as approval. Without this it would approve drafted work and never execute
+    # it, leaving an attorney believing a client had been emailed.
+    dispatch_task_automation_if_approved(
+        task,
+        from_status=previous_status,
+        to_status=task.status,
+        actor_user_id=current_user.id,
     )
 
     return TaskResponse.model_validate(task)

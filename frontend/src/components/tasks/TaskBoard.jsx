@@ -23,6 +23,7 @@ import {
   GripVertical,
   History,
   Loader2,
+  Mail,
   MessageSquareText,
   PhoneOutgoing,
   Scale,
@@ -222,6 +223,46 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       {task.status === 'review' && task.reviewer && (
         <p className="mt-2 flex items-center gap-1 text-[11px] text-violet-700"><Eye size={11} /> Review by {task.reviewer.label}</p>
       )}
+      {/* Approving this card will actually do something outward-facing, so say
+          so on the card itself rather than only in the confirm dialog. */}
+      {task.pending_action?.type === 'email_client' && (
+        <p
+          data-testid="pending-action-badge"
+          className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2"
+        >
+          <Mail size={11} className="mt-0.5 shrink-0" />
+          <span>
+            Approving emails {(task.pending_action.to || []).join(', ')}
+          </span>
+        </p>
+      )}
+      {(task.pending_action?.sources || []).length > 0 && (
+        <ul data-testid="task-source-chips" className="mt-2 flex flex-wrap gap-1">
+          {task.pending_action.sources.map((source) => (
+            <li key={source.source_id}>
+              <span className="inline-flex max-w-[12rem] items-center gap-1 rounded-full border border-brand-line bg-brand-bg-soft px-2 py-0.5 text-[10px] text-brand-muted">
+                <FileCheck2 size={10} className="shrink-0" />
+                <span className="truncate">{source.label}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {task.source === 'assistant' && (
+        <p className="mt-1.5 text-[10px] uppercase tracking-wider text-brand-muted">
+          Drafted by the assistant
+        </p>
+      )}
+      {task.delivery?.status === 'failed' && (
+        <p role="alert" className="mt-2 rounded-lg bg-red-50 px-2 py-1.5 text-[11px] text-red-800">
+          Not sent: {task.delivery.error_message || 'delivery failed'}
+        </p>
+      )}
+      {task.delivery?.status === 'sent' && (
+        <p className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
+          <Check size={11} /> Sent to the client
+        </p>
+      )}
 
       <div className="mt-3 flex items-center justify-between border-t border-brand-line/70 pt-2">
         <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted">
@@ -349,6 +390,23 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close move dialog" className="rounded p-1 text-brand-muted hover:bg-brand-bg-soft"><X size={17} /></button>
         </header>
         <div className="space-y-4 px-5 py-4">
+          {/* The board is an approval surface for assistant-drafted work, so a
+              move that will send outbound client correspondence has to name the
+              recipients before the operator confirms it. */}
+          {request.task.status === 'review'
+            && request.task.pending_action?.type === 'email_client'
+            && target !== 'review' && (
+            <div role="note" className="rounded-lg border border-brand-accent/40 bg-brand-accent/[0.06] px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-brand-accent-2">
+                <Mail size={12} /> This approval sends an email
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">
+                To {(request.task.pending_action.to || []).join(', ')} — subject
+                “{request.task.pending_action.subject}”. Open the task to read
+                or edit the draft before approving.
+              </p>
+            </div>
+          )}
           {target === 'waiting' && (
             <>
               <div>
@@ -518,7 +576,14 @@ export default function TaskBoard({ data, loading, error, scope, onRetry, onTran
   const requestDestination = task => setMoveRequest({ task, toStatus: null })
   const selectDestination = (task, toStatus) => {
     if (!toStatus || toStatus === task.status) { setMoveRequest(null); return }
-    const needsDialog = ['waiting', 'review', 'completed', 'cancelled'].includes(toStatus) || ['completed', 'cancelled'].includes(task.status)
+    // Approving drafted work out of Review executes it — for an email_client
+    // action that means real outbound client correspondence. Those moves always
+    // confirm, even for destinations that are otherwise a one-click drag: a
+    // mis-drop must not be able to email a client.
+    const executesPendingAction = task.status === 'review' && Boolean(task.pending_action)
+    const needsDialog = executesPendingAction
+      || ['waiting', 'review', 'completed', 'cancelled'].includes(toStatus)
+      || ['completed', 'cancelled'].includes(task.status)
     if (needsDialog) setMoveRequest({ task, toStatus })
     else performTransition(task, toStatus).catch(() => {})
   }

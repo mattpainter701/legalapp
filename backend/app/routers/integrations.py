@@ -31,6 +31,10 @@ from app.services.teams_gate import missing_teams_scopes
 from app.services.token_vault import decrypt_token, encrypt_token, revoke_provider_token
 from app.services.integration_observability import apply_scope_audit, missing_scopes
 from app.services.durable_jobs import enqueue_job
+from app.services.connected_mail import (
+    GOOGLE_MAIL_SEND_SCOPE,
+    MICROSOFT_MAIL_SEND_SCOPE,
+)
 from app.services.tenant_oauth_apps import (
     get_tenant_oauth_app,
     get_zoom_phone_webhook_secret,
@@ -226,11 +230,15 @@ async def _consume_state(request: Request, state: str) -> tuple[bool, dict | Non
 
 # ── Admin Connect flows (tenant-wide admin consent) ────────────────────────
 
-MICROSOFT_ADMIN_SCOPES = "offline_access User.Read.All Mail.Read Files.ReadWrite.All Sites.Read.All Calendars.ReadWrite"
+MICROSOFT_ADMIN_SCOPES = (
+    f"offline_access User.Read.All Mail.Read {MICROSOFT_MAIL_SEND_SCOPE} "
+    "Files.ReadWrite.All Sites.Read.All Calendars.ReadWrite"
+)
 GOOGLE_ADMIN_SCOPES = (
     "openid email profile "
     "https://www.googleapis.com/auth/admin.directory.user.readonly "
     "https://www.googleapis.com/auth/gmail.readonly "
+    f"{GOOGLE_MAIL_SEND_SCOPE} "
     "https://www.googleapis.com/auth/calendar "
     "https://www.googleapis.com/auth/drive"
 )
@@ -238,10 +246,12 @@ GOOGLE_ADMIN_SCOPES = (
 # Per-user (intent=user) scopes. These MUST be used for both the authorize URL
 # and the token exchange so the two can never drift apart.
 MICROSOFT_USER_SCOPES = (
-    "offline_access User.Read Mail.Read Files.ReadWrite.All Calendars.ReadWrite"
+    f"offline_access User.Read Mail.Read {MICROSOFT_MAIL_SEND_SCOPE} "
+    "Files.ReadWrite.All Calendars.ReadWrite"
 )
 GOOGLE_USER_SCOPES = (
     "https://www.googleapis.com/auth/gmail.readonly "
+    f"{GOOGLE_MAIL_SEND_SCOPE} "
     "https://www.googleapis.com/auth/calendar "
     "https://www.googleapis.com/auth/drive"
 )

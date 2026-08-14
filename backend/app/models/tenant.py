@@ -139,6 +139,13 @@ class TenantSettings(Base):
     enable_task_board: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
     )
+    # Deliberately OFF by default, unlike every flag above it. Chat actions let
+    # the assistant put proposed work — including drafted client email — onto a
+    # firm's board, so it is enabled per tenant after review rather than
+    # inherited silently by every existing tenant on deploy.
+    enable_chat_actions: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
 
     # Rate limiting
     max_requests_per_minute: Mapped[int | None] = mapped_column(nullable=True)

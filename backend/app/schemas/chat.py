@@ -54,6 +54,9 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     sources: List[SourceCitation] = []
+    # Reviewable work the assistant proposed on this turn. Empty for every
+    # tenant without chat actions enabled, which is the default.
+    proposed_actions: List[dict] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

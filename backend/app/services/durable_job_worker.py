@@ -24,6 +24,9 @@ from app.services.durable_jobs import (
 ZOOM_PHONE_CALL_JOB = "zoom_phone_call_import"
 ZOOM_PHONE_RECONCILE_JOB = "zoom_phone_reconcile"
 ZOOM_PHONE_JOB_KINDS = {ZOOM_PHONE_CALL_JOB, ZOOM_PHONE_RECONCILE_JOB}
+# Declared here rather than imported so the worker's kind table stays readable
+# in one place; task_automation owns the same literal.
+TASK_AUTOMATION_JOB = "task_automation"
 _ZOOM_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,255}$")
 
 
@@ -354,6 +357,10 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 result = await deliver_mcp_meter_event(row.payload)
             elif row.kind == "user_sync":
                 result = await _run_user_sync(row)
+            elif row.kind == TASK_AUTOMATION_JOB:
+                from app.services.task_automation import run_task_automation_job
+
+                result = await run_task_automation_job(row)
             elif row.kind == ZOOM_PHONE_CALL_JOB:
                 result = await _run_zoom_phone_call_import(row)
             elif row.kind == ZOOM_PHONE_RECONCILE_JOB:
