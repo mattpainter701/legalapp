@@ -57,7 +57,8 @@ LEGAL_READY_LATENCY_MS = 3000
 MIN_LEGAL_CONTEXT_LENGTH = 16000
 RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
 CONFIDENTIAL_DATA_BLOCK_CODE = "confidential_data_not_allowed"
-LLM_CANARY_MAX_TOKENS = 32
+PROVIDER_CANARY_MAX_TOKENS = 32
+ROUTE_ACTIVATION_CANARY_MAX_TOKENS = 256
 
 ZEN_FREE_MODELS = {
     "big-pickle",
@@ -1456,7 +1457,7 @@ async def _probe_litellm_aliases(
                             {"role": "user", "content": "Reply with exactly OK"},
                         ],
                         "temperature": 0,
-                        "max_tokens": LLM_CANARY_MAX_TOKENS,
+                        "max_tokens": ROUTE_ACTIVATION_CANARY_MAX_TOKENS,
                     },
                 )
                 elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -2387,7 +2388,7 @@ async def test_route(
                     },
                     json={
                         "model": body.model,
-                        "max_tokens": LLM_CANARY_MAX_TOKENS,
+                        "max_tokens": PROVIDER_CANARY_MAX_TOKENS,
                         "temperature": 0,
                         "system": "Follow the user's output format exactly.",
                         "messages": [
@@ -2451,7 +2452,7 @@ async def test_route(
                 },
                 {"role": "user", "content": "Reply with exactly: OK"},
             ],
-            max_tokens=LLM_CANARY_MAX_TOKENS,
+            max_tokens=PROVIDER_CANARY_MAX_TOKENS,
             temperature=0,
         )
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
