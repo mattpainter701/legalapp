@@ -86,6 +86,64 @@ describe('Chat assistant experience', () => {
     )
   })
 
+  it('links attached-document source tags to the authenticated LawHand download', () => {
+    const sources = [
+      {
+        source_id: 'document:atlas-loi',
+        case_name: 'Project Atlas Letter of Intent.docx',
+        citation: 'Project Atlas Letter of Intent.docx',
+        url: '/api/documents/atlas-loi/download',
+        source_type: 'tenant_document',
+        source_label: 'Attached document',
+        locator: 'LOI §§5–9',
+      },
+    ]
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-attachment',
+          role: 'assistant',
+          content: 'The exclusivity covenant is binding. [source: document:atlas-loi] [verify]',
+          sources,
+          created_at: '2026-08-13T20:26:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
+      'href',
+      '#source-answer-attachment-1',
+    )
+    expect(
+      screen.getByRole('link', { name: 'Project Atlas Letter of Intent.docx' }),
+    ).toHaveAttribute('href', '/api/documents/atlas-loi/download')
+    expect(screen.getByText('Sources & References')).toBeInTheDocument()
+  })
+
+  it('renders consent trackers as semantic Markdown tables', () => {
+    const content = [
+      '| Contract / item | Trigger | Required action | Priority |',
+      '|---|---|---|---:|',
+      '| Orion Enterprise MSA | Merger deemed assignment | Obtain written consent | Critical |',
+    ].join('\n')
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-consent-table',
+          role: 'assistant',
+          content,
+          created_at: '2026-08-13T20:26:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Contract / item' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Orion Enterprise MSA' })).toBeInTheDocument()
+  })
+
   it('uses the available chat width and lets readers collapse answer sections', async () => {
     const user = userEvent.setup()
     render(

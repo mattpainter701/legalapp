@@ -14,6 +14,7 @@ from app.routers.chat import (
     _clean_source_text,
     _conversation_belongs_to_user,
     _join_context_sections,
+    _message_to_response,
     _source_dict_from_chunk,
     _stream_activity_event,
     _stream_progress_event,
@@ -21,7 +22,7 @@ from app.routers.chat import (
     _stream_token_event,
 )
 from app.schemas.chat import ChatAttachmentResponse
-from app.models.conversation import Conversation
+from app.models.conversation import Conversation, Message
 from app.models.document import Chunk, Document
 from app.models.plugin import Matter
 from app.models.tenant import TenantSettings
@@ -393,6 +394,36 @@ def test_chat_attachment_response_serializes_uuid_id_to_string():
     assert response.id == str(doc_id)
 
 
+def test_message_response_preserves_attachment_link_and_locator():
+    document_id = uuid.uuid4()
+    message = Message(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(),
+        role="assistant",
+        content=f"The LOI is binding in part. [source: document:{document_id}]",
+        sources=[
+            {
+                "source_id": f"document:{document_id}",
+                "case_name": "Project Atlas Letter of Intent.docx",
+                "citation": "Project Atlas Letter of Intent.docx",
+                "court": "Uploaded attachment",
+                "excerpt": "Sections 5 through 9 are binding.",
+                "url": f"/api/documents/{document_id}/download",
+                "source_type": "tenant_document",
+                "source_label": "Attached document",
+                "locator": "LOI §§5–9",
+            }
+        ],
+        created_at=datetime.now(timezone.utc),
+    )
+
+    response = _message_to_response(message)
+
+    assert response.sources[0].url == f"/api/documents/{document_id}/download"
+    assert response.sources[0].locator == "LOI §§5–9"
+
+
 @pytest.mark.asyncio
 async def test_create_and_list_conversation(
     client: AsyncClient, mock_llm, mock_embeddings
@@ -726,8 +757,16 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
     context = mock_llm.call_args.kwargs["context"]
     assert "ACTIVE_CONVERSATION_ATTACHMENT_TEXT" in context
     assert "active-attachment.txt" in context
+    assert f"Source ID: document:{active_doc_id}" in context
+    assert f"[source: document:{active_doc_id}]" in context
+    assert f"/api/documents/{active_doc_id}/download" in context
     assert "OTHER_CONVERSATION_ATTACHMENT_TEXT" not in context
     assert "other-attachment.txt" not in context
+    source = resp.json()["sources"][0]
+    assert source["source_id"] == f"document:{active_doc_id}"
+    assert source["case_name"] == "active-attachment.txt"
+    assert source["url"] == f"/api/documents/{active_doc_id}/download"
+    assert source["locator"] == "Full attached document"
 
 
 @pytest.mark.asyncio

@@ -100,6 +100,11 @@ def _normalize_source_url(value: str | None) -> str | None:
         return None
     if url.startswith("//"):
         return f"https:{url}"
+    # Authenticated LawHand document links are intentionally origin-relative so
+    # they work in local, staging, and production environments.  CourtListener
+    # paths use a different namespace (for example ``/opinion/...``).
+    if url.startswith("/api/"):
+        return url
     if url.startswith("/"):
         return f"https://www.courtlistener.com{url}"
     if url.startswith("http://") or url.startswith("https://"):
@@ -540,18 +545,19 @@ async def _build_attachment_context(
     user,
     conversation: Conversation,
     attachment_ids: list[str] | None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """Inject session-attachment text directly into context (Tier 1 — no embeddings).
 
     For documents that were chunked/embedded (chunk_count > 0), use the stored
     chunks. Otherwise extract text on-demand from the file on disk.
     """
     if not attachment_ids:
-        return ""
+        return "", []
     try:
         from app.utils.text_processing import extract_text as _extract_text
 
         attachment_parts = []
+        attachment_sources: list[dict] = []
         for aid in attachment_ids:
             doc_result = await db.execute(
                 select(Document).where(
@@ -588,18 +594,48 @@ async def _build_attachment_context(
                 )
 
             if text:
+                source_id = f"document:{doc.id}"
+                source_url = f"/api/documents/{doc.id}/download"
                 attachment_parts.append(
-                    f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
+                    "\n".join(
+                        [
+                            f"[Attachment: {doc.filename or 'Untitled'}]",
+                            f"Source ID: {source_id}",
+                            f"URL: {source_url}",
+                            (
+                                "Citation instruction: cite every factual finding from "
+                                f"this file with [source: {source_id}] and state the "
+                                "section, page, paragraph, or schedule row in the finding."
+                            ),
+                            text[:4000],
+                        ]
+                    )
+                )
+                attachment_sources.append(
+                    {
+                        "source_id": source_id,
+                        "case_name": doc.filename or "Untitled attachment",
+                        "citation": doc.filename or "Attached document",
+                        "court": "Uploaded attachment",
+                        "excerpt": _clean_source_text(text, 300),
+                        "url": source_url,
+                        "source_type": "tenant_document",
+                        "source_label": "Attached document",
+                        "locator": "Full attached document",
+                    }
                 )
 
         if attachment_parts:
             return (
-                "--- Attached Files (session-only, not saved to project) ---\n\n"
-                + "\n\n---\n\n".join(attachment_parts)
+                (
+                    "--- Attached Files (session-only, not saved to project) ---\n\n"
+                    + "\n\n---\n\n".join(attachment_parts)
+                ),
+                attachment_sources,
             )
     except Exception:
         logger.warning("Failed to build attachment context", exc_info=True)
-    return ""
+    return "", []
 
 
 def _conversation_to_response(
@@ -632,6 +668,7 @@ def _message_to_response(msg: Message) -> MessageResponse:
                     url=_source_url_from_chunk(s),
                     source_type=source_type,
                     source_label=s.get("source_label") or _source_label(source_type),
+                    locator=_clean_source_text(s.get("locator"), 160) or None,
                 )
             )
     return MessageResponse(
@@ -1128,7 +1165,7 @@ async def send_message(
             matter_cloud_folder,
             cache_hit_matter,
         ),
-        attachment_context,
+        (attachment_context, attachment_sources),
         memory_context,
         route,
         cached_rag,
@@ -1319,11 +1356,18 @@ async def send_message(
         tokens_out += tokens_out2
 
     # Build source citations from retrieved chunks with relevance scores
-    source_dicts = []
-    context_used = []
-    context_scores = {}
+    source_dicts = list(attachment_sources)
+    context_used = [
+        source["source_id"] for source in attachment_sources if source.get("source_id")
+    ]
+    context_scores = {source_id: 1.0 for source_id in context_used}
     seen_citations: dict[str, str] = {}
     source_aliases: dict[str, str] = {}
+    for source in attachment_sources:
+        source_id = source.get("source_id")
+        for citation_key in (source.get("citation"), source.get("case_name")):
+            if source_id and citation_key:
+                seen_citations[str(citation_key)] = str(source_id)
     for chunk in chunks:
         chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
         citation_key = chunk.get("citation") or chunk.get("case_name") or ""
@@ -1677,7 +1721,7 @@ async def stream_message(
                     matter_cloud_folder,
                     cache_hit_matter,
                 ),
-                attachment_context,
+                (attachment_context, attachment_sources),
                 memory_context,
                 route,
                 cached_rag,
@@ -1965,11 +2009,20 @@ async def stream_message(
                 )
 
             # Build source citations from chunks
-            source_dicts = []
-            context_used = []
-            context_scores = {}
+            source_dicts = list(attachment_sources)
+            context_used = [
+                source["source_id"]
+                for source in attachment_sources
+                if source.get("source_id")
+            ]
+            context_scores = {source_id: 1.0 for source_id in context_used}
             seen_citations: dict[str, str] = {}
             source_aliases: dict[str, str] = {}
+            for source in attachment_sources:
+                source_id = source.get("source_id")
+                for citation_key in (source.get("citation"), source.get("case_name")):
+                    if source_id and citation_key:
+                        seen_citations[str(citation_key)] = str(source_id)
             for chunk in chunks:
                 chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
                 citation_key = chunk.get("citation") or chunk.get("case_name") or ""
