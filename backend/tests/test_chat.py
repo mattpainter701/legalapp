@@ -14,6 +14,7 @@ from app.routers.chat import (
     _clean_source_text,
     _conversation_belongs_to_user,
     _join_context_sections,
+    _mark_cited_sources,
     _message_to_response,
     _source_dict_from_chunk,
     _stream_activity_event,
@@ -32,6 +33,7 @@ from app.services.llm_routing import resolve_llm_route
 from app.services.rag import build_rag_context
 from app.utils.guardrails import (
     consolidate_unverified_model_knowledge,
+    enforce_legal_citation_integrity,
     reconcile_retrieved_source_attribution,
     validate_citation_confidence,
 )
@@ -77,6 +79,25 @@ async def test_rag_context_exposes_absolute_source_url_to_model():
     )
 
     assert "URL: https://www.courtlistener.com/opinion/675482/" in context
+
+
+@pytest.mark.asyncio
+async def test_rag_context_labels_private_document_without_fake_case_metadata():
+    context = await build_rag_context(
+        [
+            {
+                "id": "tenant:chunk-1",
+                "source": "tenant_document",
+                "document_title": "Monthly Retainer Agreement.docx",
+                "content": "Invoices are due monthly.",
+                "similarity": 0.71,
+            }
+        ]
+    )
+
+    assert "Monthly Retainer Agreement.docx" in context
+    assert "Unknown Case" not in context
+    assert "No Citation" not in context
 
 
 def test_matching_retrieved_citation_is_not_left_as_model_knowledge():
@@ -137,6 +158,55 @@ def test_unverified_model_knowledge_is_kept_when_a_retrieved_source_is_cited():
 
     assert consolidated == answer
     assert count == 0
+
+
+def test_nd_jurisdiction_answer_without_retrieved_authority_fails_closed():
+    unsafe_answer = (
+        "North Dakota can decide custody even if California is the home state. "
+        "[model knowledge]"
+    )
+    guarded, blocked = enforce_legal_citation_integrity(
+        "ND case with out of state CA parents; how to handle jurisdiction for a divorce?",
+        unsafe_answer,
+        [
+            {
+                "source_id": "tenant:retainer-1",
+                "case_name": "Monthly Retainer Agreement.docx",
+            }
+        ],
+    )
+
+    assert blocked is True
+    assert guarded.startswith("## Authority coverage gap")
+    assert "North Dakota can decide custody" not in guarded
+    assert "not cited" in guarded
+
+
+def test_legal_answer_with_exact_source_and_no_model_claims_passes():
+    answer = "The quoted rule applies. [source: authority:nd-1] [verify]"
+    guarded, blocked = enforce_legal_citation_integrity(
+        "What is the North Dakota divorce jurisdiction rule?",
+        answer,
+        [{"source_id": "authority:nd-1"}],
+    )
+
+    assert guarded == answer
+    assert blocked is False
+
+
+def test_legal_answer_with_citation_still_blocks_unverified_model_claims():
+    answer = (
+        "The statute states the residence rule. [source: authority:nd-1] [verify] "
+        "A special appearance always waives jurisdiction. [model knowledge]"
+    )
+    guarded, blocked = enforce_legal_citation_integrity(
+        "Analyze jurisdiction for a divorce",
+        answer,
+        [{"source_id": "authority:nd-1"}],
+    )
+
+    assert blocked is True
+    assert "special appearance" not in guarded
 
 
 def test_existing_valid_source_marker_replaces_model_tag_with_verify():
@@ -242,8 +312,9 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
         "excerpt": "Evidence rulings are reviewed for abuse of discretion.",
         "url": "https://www.courtlistener.com/opinion/4347183/",
         "source_type": "public_authority",
-        "source_label": "Cited authority",
+        "source_label": "Public authority",
         "locator": None,
+        "cited": False,
     }
 
 
@@ -261,7 +332,7 @@ def test_legal_authority_mcp_source_is_public_and_linked():
     )
 
     assert source["source_type"] == "public_authority"
-    assert source["source_label"] == "Cited authority"
+    assert source["source_label"] == "Public authority"
     assert source["url"].startswith("https://www.supremecourt.ohio.gov/")
 
 
@@ -288,6 +359,39 @@ def test_source_locator_distinguishes_retrieval_passage_from_legal_pinpoint():
 
     assert passage["locator"] == "Retrieved passage 8"
     assert exact["locator"] == "Article IV > Termination · Page 12 · Lines 4-8"
+
+
+def test_private_chunk_uses_document_identity_and_download_link_not_unknown_case():
+    source = _source_dict_from_chunk(
+        {
+            "id": "tenant:chunk-7",
+            "source": "tenant_document",
+            "clause_type": "general",
+            "document_id": "d5e31180-d44c-42c3-96be-4897f05fd1f4",
+            "document_title": "Monthly Retainer Agreement.docx",
+            "content": "The retainer renews monthly.",
+            "chunk_index": 2,
+        }
+    )
+
+    assert source["case_name"] == "Monthly Retainer Agreement.docx"
+    assert source["citation"] == "Monthly Retainer Agreement.docx"
+    assert source["source_type"] == "tenant_document"
+    assert source["source_label"] == "Firm context"
+    assert source["url"].endswith(
+        "/documents/d5e31180-d44c-42c3-96be-4897f05fd1f4/download"
+    )
+    assert "Unknown Case" not in source.values()
+
+
+def test_mark_cited_sources_distinguishes_retrieved_from_used():
+    rows = _mark_cited_sources(
+        "Supported. [source: authority:nd-1] [verify]",
+        [{"source_id": "authority:nd-1"}, {"source_id": "tenant:retainer-1"}],
+    )
+
+    assert rows[0]["cited"] is True
+    assert rows[1]["cited"] is False
 
 
 def test_stream_source_counts_classifies_local_and_public_context():

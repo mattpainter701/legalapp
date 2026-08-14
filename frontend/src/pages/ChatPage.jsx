@@ -159,7 +159,7 @@ function buildReferenceContext({ progress, sources, status } = {}) {
   return {
     counts,
     source_count: sourceList.length,
-    status: status || progress?.status || (sourceList.length ? 'Sources attached to answer' : ''),
+    status: status || progress?.status || (sourceList.length ? 'Materials retrieved for source audit' : ''),
     complete: Boolean(progress?.complete),
   }
 }

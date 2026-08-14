@@ -59,6 +59,7 @@ from app.utils.guardrails import (
     apply_guardrails,
     check_pii_in_input,
     consolidate_unverified_model_knowledge,
+    enforce_legal_citation_integrity,
     prepare_provider_messages,
     prepare_provider_text,
     reconcile_retrieved_source_attribution,
@@ -121,6 +122,9 @@ def _source_url_from_chunk(chunk: dict) -> str | None:
     opinion_id = chunk.get("opinion_id")
     if opinion_id:
         return f"https://www.courtlistener.com/opinion/{opinion_id}/"
+    document_id = chunk.get("document_id")
+    if document_id:
+        return f"/api/documents/{document_id}/download"
     for key in ("citation", "content", "excerpt"):
         raw = chunk.get(key)
         if not raw:
@@ -135,8 +139,8 @@ def _source_url_from_chunk(chunk: dict) -> str | None:
 
 def _source_label(source_type: str | None) -> str:
     labels = {
-        "public_authority": "Cited authority",
-        "courtlistener_mcp": "Cited authority",
+        "public_authority": "Public authority",
+        "courtlistener_mcp": "Public authority",
         "cloud": "Cloud context",
         "matter_context": "Matter context",
         "tenant_document": "Firm context",
@@ -181,18 +185,34 @@ def _source_locator_from_chunk(chunk: dict) -> str | None:
 
 
 def _source_dict_from_chunk(chunk: dict) -> dict:
-    raw_source = chunk.get("source") or ""
-    source_type = chunk.get("clause_type") or raw_source or "public_authority"
+    raw_source = str(chunk.get("source") or "")
     if raw_source in {
         "courtlistener_mcp",
         "legal_authority_mcp",
         "public_courtlistener",
     }:
         source_type = "public_authority"
+    elif raw_source.startswith("tenant_document"):
+        source_type = "tenant_document"
+    elif raw_source in {"matter_context", "cloud"}:
+        source_type = raw_source
+    else:
+        source_type = str(chunk.get("source_type") or raw_source or "context")
+
+    is_public = source_type == "public_authority"
+    title = (
+        chunk.get("case_name")
+        if is_public
+        else chunk.get("document_title") or chunk.get("case_name")
+    )
+    title = title or ("Unidentified authority" if is_public else "Firm document")
+    citation = chunk.get("citation") or (
+        chunk.get("document_title") if not is_public else ""
+    )
     return {
         "source_id": str(chunk.get("id")) if chunk.get("id") is not None else None,
-        "case_name": _clean_source_text(chunk.get("case_name"), 180) or "Unknown Case",
-        "citation": _clean_source_text(chunk.get("citation"), 120),
+        "case_name": _clean_source_text(title, 180),
+        "citation": _clean_source_text(citation, 120),
         "court": _clean_source_text(chunk.get("court"), 120) or None,
         "excerpt": _clean_source_text(
             chunk.get("content") or chunk.get("excerpt"), 300
@@ -201,7 +221,25 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "source_type": source_type,
         "source_label": _source_label(source_type),
         "locator": _source_locator_from_chunk(chunk),
+        "cited": False,
     }
+
+
+def _mark_cited_sources(text: str, sources: list[dict]) -> list[dict]:
+    """Record which retrieved rows the final answer actually references."""
+    cited_ids = {
+        value.strip().casefold() for value in _SOURCE_REFERENCE_RE.findall(text or "")
+    }
+    return [
+        {
+            **source,
+            "cited": bool(
+                source.get("source_id")
+                and str(source["source_id"]).strip().casefold() in cited_ids
+            ),
+        }
+        for source in sources
+    ]
 
 
 def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
@@ -335,7 +373,7 @@ def _is_public_authority_chunk(chunk: dict) -> bool:
         in {"courtlistener_mcp", "legal_authority_mcp", "public_courtlistener"}
         or chunk.get("source_type") == "public_authority"
         or chunk.get("clause_type") == "public_authority"
-        or chunk.get("source_label") == "Cited authority"
+        or chunk.get("source_label") in {"Cited authority", "Public authority"}
     )
 
 
@@ -1537,6 +1575,17 @@ async def send_message(
         cleaned_response,
         _citation_validation_sources(source_dicts, chunks, cloud_hits),
     )
+    cleaned_response, citation_gap = enforce_legal_citation_integrity(
+        body.content,
+        cleaned_response,
+        source_dicts,
+    )
+    if citation_gap:
+        logger.warning(
+            "Blocked unsupported legal-research answer conversation_id=%s",
+            conv.id,
+        )
+    source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
 
     # Track matter context usage if provided
     if effective_matter_id:
@@ -2209,6 +2258,17 @@ async def stream_message(
                 cleaned_response,
                 _citation_validation_sources(source_dicts, chunks, cloud_hits),
             )
+            cleaned_response, citation_gap = enforce_legal_citation_integrity(
+                body.content,
+                cleaned_response,
+                source_dicts,
+            )
+            if citation_gap:
+                logger.warning(
+                    "Blocked unsupported streamed legal-research answer conversation_id=%s",
+                    conv.id,
+                )
+            source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
             latency_breakdown["validation_ms"] = int(
                 (time.monotonic() - validation_started_at) * 1000
             )

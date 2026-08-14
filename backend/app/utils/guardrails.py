@@ -86,6 +86,12 @@ def prepare_provider_messages(
 
 _SETTLED_TAG_RE = re.compile(r"\[settled\]", re.IGNORECASE)
 _SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
+_LEGAL_RESEARCH_RE = re.compile(
+    r"\b(?:case\s+law|citation|court|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
+    r"elements?|governing\s+law|jurisdiction|legal\s+(?:authority|standard|research)|"
+    r"precedent|statute|statutory|limitations?\s+period|uccjea)\b",
+    re.IGNORECASE,
+)
 _QUOTED_SPAN_RE = re.compile(r'["“]([^"”]{20,})["”]')
 
 
@@ -186,6 +192,51 @@ def consolidate_unverified_model_knowledge(
         "governing jurisdiction's current law before relying on it.\n\n"
     )
     return f"{source_note}{cleaned}", replacements
+
+
+def requires_retrieved_legal_authority(question: str | None) -> bool:
+    """Identify questions where an uncited legal conclusion is unsafe to publish."""
+    return bool(_LEGAL_RESEARCH_RE.search(question or ""))
+
+
+def enforce_legal_citation_integrity(
+    question: str | None,
+    text: str,
+    sources: list[dict[str, Any]] | None,
+) -> tuple[str, bool]:
+    """Fail closed when a legal-research answer cites no retrieved evidence.
+
+    A disclaimer does not cure an unsupported jurisdiction-specific answer. For
+    research questions, require at least one exact source id that was actually
+    supplied to the model. The bounded response is intentionally non-substantive:
+    it reports the coverage gap without recycling unverified model claims.
+    """
+    if not requires_retrieved_legal_authority(question):
+        return text, False
+
+    known_ids = {
+        str(row.get("source_id") or row.get("id") or "").strip().casefold()
+        for row in sources or []
+        if row.get("source_id") or row.get("id")
+    }
+    cited_ids = {
+        value.strip().casefold() for value in _SOURCE_REF_RE.findall(text or "")
+    }
+    if known_ids.intersection(cited_ids) and not _MODEL_ATTRIBUTION_RE.search(
+        text or ""
+    ):
+        return text, False
+
+    coverage_gap = (
+        "## Authority coverage gap\n\n"
+        "I couldn't verify a legal answer to this question from a retrieved "
+        "statute, rule, case, or supplied document. I won't present an uncited "
+        "jurisdiction-specific conclusion or label unrelated material as support.\n\n"
+        "Retry after the public-authority index is available, narrow the "
+        "jurisdiction and issue, or attach the controlling sources. Any materials "
+        "shown below were retrieved for review but were **not cited** as authority."
+    )
+    return coverage_gap, True
 
 
 def validate_citation_confidence(

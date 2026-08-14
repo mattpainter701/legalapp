@@ -46,6 +46,7 @@ class SourceCitation(BaseModel):
     source_type: Optional[str] = None
     source_label: Optional[str] = None
     locator: Optional[str] = None
+    cited: bool = False
 
 
 class MessageResponse(BaseModel):
