@@ -37,6 +37,13 @@ def _llm_error_msg(exc: Exception) -> str:
     return f"LiteLLM Gateway API error: {_clean_llm_error(exc)}"
 
 
+def _empty_llm_response_msg() -> str:
+    return (
+        "The selected model returned no visible answer. "
+        "Retry this message or select a different model."
+    )
+
+
 # Public OpenAI-compatible endpoints for tenant BYOK providers that don't
 # require a tenant-supplied endpoint. Copilot (Azure OpenAI) always requires
 # a tenant-supplied endpoint — Azure deployments are per-resource.
@@ -230,7 +237,7 @@ class LLMService:
             use_premium=use_premium,
             customer_api_key=customer_api_key,
         )
-        last_error: APIError | APIConnectionError | None = None
+        last_error: APIError | APIConnectionError | RuntimeError | None = None
         for candidate in candidates:
             request_id = str(uuid.uuid4())
             logger.debug("LLM complete request_id=%s model=%s", request_id, candidate)
@@ -264,6 +271,28 @@ class LLMService:
                             "tokens_out": tokens_out,
                         }
                     )
+                if not response_text.strip():
+                    finish_reason = (
+                        getattr(response.choices[0], "finish_reason", None)
+                        if response.choices
+                        else None
+                    )
+                    logger.error(
+                        "LLM completion returned no visible content "
+                        "model=%s finish_reason=%s completion_tokens=%s",
+                        candidate,
+                        finish_reason,
+                        tokens_out,
+                    )
+                    last_error = RuntimeError(_empty_llm_response_msg())
+                    if candidate != candidates[-1]:
+                        logger.warning(
+                            "LiteLLM model %s returned no visible content, "
+                            "trying fallback",
+                            candidate,
+                        )
+                        continue
+                    raise last_error
                 return response_text, tokens_in, tokens_out
             except (APIError, APIConnectionError) as e:
                 elapsed_ms = (time.monotonic() - t0) * 1000
@@ -323,6 +352,8 @@ class LLMService:
             )
             t0 = time.monotonic()
             first_token_recorded = False
+            finish_reason = None
+            reasoning_content_seen = False
             try:
                 create_kwargs: dict = dict(
                     model=candidate,
@@ -348,7 +379,19 @@ class LLMService:
                             usage_sink["tokens_out"] = (
                                 chunk_usage.completion_tokens or 0
                             )
-                    content = chunk.choices[0].delta.content if chunk.choices else None
+                    choice = chunk.choices[0] if chunk.choices else None
+                    if choice and getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason
+                    delta = choice.delta if choice else None
+                    content = getattr(delta, "content", None) if delta else None
+                    if delta:
+                        reasoning_content = getattr(delta, "reasoning_content", None)
+                        if reasoning_content is None:
+                            model_extra = getattr(delta, "model_extra", None) or {}
+                            reasoning_content = model_extra.get("reasoning_content")
+                        reasoning_content_seen = reasoning_content_seen or bool(
+                            reasoning_content
+                        )
                     if content:
                         if not first_token_recorded:
                             ttft_ms = (time.monotonic() - t0) * 1000
@@ -356,8 +399,21 @@ class LLMService:
                             first_token_recorded = True
                         yield content
                 if not first_token_recorded:
-                    # Empty response — still record latency
+                    # A reasoning model can consume the entire output budget in
+                    # hidden reasoning and still return HTTP 200. Treat that as
+                    # a failed completion instead of persisting a blank answer.
                     _record_latency(candidate, (time.monotonic() - t0) * 1000)
+                    completion_tokens = int((usage_sink or {}).get("tokens_out") or 0)
+                    logger.error(
+                        "LLM stream returned no visible content "
+                        "model=%s finish_reason=%s completion_tokens=%s "
+                        "reasoning_content_seen=%s",
+                        candidate,
+                        finish_reason,
+                        completion_tokens,
+                        reasoning_content_seen,
+                    )
+                    raise RuntimeError(_empty_llm_response_msg())
                 return
             except (APIError, APIConnectionError) as e:
                 elapsed_ms = (time.monotonic() - t0) * 1000

@@ -555,7 +555,10 @@ def _model_data_policy(
             "data_policy": "training_or_improvement_possible",
             "confidential_data_allowed": False,
         }
-    if provider_id == "opencode-go" and model_id.lower().startswith("deepseek-v4-"):
+    # OpenCode documents the Go plan as zero-retention with no model training
+    # across its curated provider set, not only for the DeepSeek entries.
+    # https://opencode.ai/docs/go/#privacy
+    if provider_id == "opencode-go":
         return {
             "data_policy": "zero_retention",
             "confidential_data_allowed": True,

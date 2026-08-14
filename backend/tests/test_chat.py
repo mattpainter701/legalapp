@@ -816,6 +816,39 @@ async def test_stream_message_persists_cloud_sources(
 
 
 @pytest.mark.asyncio
+async def test_stream_message_does_not_persist_blank_model_failure(
+    client: AsyncClient,
+    mock_embeddings,
+):
+    conv = (await client.post("/api/conversations", json={})).json()
+
+    async def empty_model_failure(*args, **kwargs):
+        if False:
+            yield ""
+        raise RuntimeError("The selected model returned no visible answer")
+
+    with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
+        rag.return_value = ("", [], [])
+        with patch("app.services.llm.LLMService.stream_complete", empty_model_failure):
+            async with client.stream(
+                "POST",
+                f"/api/conversations/{conv['id']}/messages/stream",
+                json={
+                    "content": "Analyze jurisdiction",
+                    "include_public": False,
+                    "use_premium_llm": False,
+                },
+            ) as resp:
+                body = "".join([part async for part in resp.aiter_text()])
+
+    assert resp.status_code == 200
+    assert "[ERROR: Assistant service temporarily unavailable" in body
+    assert "[STREAM_COMPLETE]" not in body
+    detail = (await client.get(f"/api/conversations/{conv['id']}")).json()
+    assert [message["role"] for message in detail["messages"]] == ["user"]
+
+
+@pytest.mark.asyncio
 async def test_premium_message_uses_tenant_premium_route(
     client: AsyncClient,
     db_session,
