@@ -94,6 +94,46 @@ def test_provider_route_builder_litellm_model_prefixes():
     assert "api_base" not in anthropic["litellm_params"]
 
 
+@pytest.mark.asyncio
+async def test_route_activation_canary_has_reasoning_model_token_budget(monkeypatch):
+    fake = _FakeLiteLLMClient(
+        [
+            _FakeLiteLLMResponse(
+                200,
+                {
+                    "model": "deepseek-v4-flash",
+                    "choices": [{"message": {"content": "OK"}}],
+                },
+            ),
+            _FakeLiteLLMResponse(
+                200,
+                {
+                    "model": "deepseek-v4-pro",
+                    "choices": [{"message": {"content": "OK"}}],
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
+    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake
+    )
+
+    valid, results, error = await platform_llm_router._probe_litellm_aliases(
+        {"standard": "clarity-standard-r1", "premium": "clarity-premium-r1"}
+    )
+
+    assert valid is True
+    assert error is None
+    assert results["premium"]["ok"] is True
+    for _, _, payload in fake.calls:
+        assert payload["max_tokens"] == platform_llm_router.LLM_CANARY_MAX_TOKENS
+        assert payload["messages"][0]["role"] == "system"
+
+
 def test_model_catalog_capabilities_from_provider_metadata():
     model = platform_llm_router._normalize_model_item(
         {
@@ -153,9 +193,7 @@ def test_model_catalog_derives_audio_transcription_and_embedding_modalities():
         "openrouter",
     )
 
-    assert {"audio_input", "speech_to_text"}.issubset(
-        transcription["capabilities"]
-    )
+    assert {"audio_input", "speech_to_text"}.issubset(transcription["capabilities"])
     assert {"text_input", "embeddings"}.issubset(embedding["capabilities"])
 
 
