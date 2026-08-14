@@ -92,14 +92,14 @@ async def test_route_save_records_operator_audit(
 
 
 @pytest.mark.asyncio
-async def test_free_customer_route_rejection_is_audited(
+async def test_unsafe_data_policy_route_rejection_is_audited(
     client: AsyncClient, db_session, monkeypatch
 ):
-    standard_key = await _add_provider_key(db_session)
+    standard_key = await _add_provider_key(db_session, provider_id="opencode-zen")
     premium_key = await _add_provider_key(db_session, provider_id="anthropic")
 
     async def reload_must_not_run(*_args, **_kwargs):
-        raise AssertionError("blocked free capacity must not reach LiteLLM")
+        raise AssertionError("unsafe upstream data policy must not reach LiteLLM")
 
     monkeypatch.setattr(
         platform_llm_router, "_reload_litellm_routes", reload_must_not_run
@@ -112,7 +112,7 @@ async def test_free_customer_route_rejection_is_audited(
             "standard": {
                 "provider_id": standard_key.provider_id,
                 "key_id": str(standard_key.id),
-                "model": "google/gemma-4-31b-it:free",
+                "model": "nemotron-3-ultra-free",
             },
             "premium": {
                 "provider_id": premium_key.provider_id,
@@ -123,32 +123,32 @@ async def test_free_customer_route_rejection_is_audited(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "free_capacity_not_allowed"
+    assert response.json()["detail"]["code"] == "confidential_data_not_allowed"
     logs = await _audit_actions(db_session)
     assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
-    assert logs[0].metadata_json["reason"] == "free_capacity_not_allowed"
+    assert logs[0].metadata_json["reason"] == "confidential_data_not_allowed"
     assert logs[0].metadata_json["targets"] == [
         {
             "route": "standard",
             "placement": "primary",
-            "provider_id": "openrouter",
-            "model": "google/gemma-4-31b-it:free",
+            "provider_id": "opencode-zen",
+            "model": "nemotron-3-ultra-free",
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_reload_cannot_bypass_free_customer_route_policy(
+async def test_reload_cannot_bypass_unsafe_data_policy(
     client: AsyncClient, db_session, monkeypatch
 ):
-    key = await _add_provider_key(db_session)
+    key = await _add_provider_key(db_session, provider_id="opencode-zen")
     await platform_llm_router._save_route_config(
         db_session,
         {
             "standard": {
                 "provider_id": key.provider_id,
                 "key_id": str(key.id),
-                "model": "google/gemma-4-31b-it:free",
+                "model": "nemotron-3-ultra-free",
             },
             "premium": {},
         },
@@ -156,7 +156,7 @@ async def test_reload_cannot_bypass_free_customer_route_policy(
     await db_session.commit()
 
     async def reload_must_not_run(*_args, **_kwargs):
-        raise AssertionError("blocked free capacity must not reach LiteLLM")
+        raise AssertionError("unsafe upstream data policy must not reach LiteLLM")
 
     monkeypatch.setattr(
         platform_llm_router, "_reload_litellm_routes", reload_must_not_run
@@ -167,7 +167,7 @@ async def test_reload_cannot_bypass_free_customer_route_policy(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "free_capacity_not_allowed"
+    assert response.json()["detail"]["code"] == "confidential_data_not_allowed"
     logs = await _audit_actions(db_session)
     assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
 

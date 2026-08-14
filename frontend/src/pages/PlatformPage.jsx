@@ -1045,6 +1045,12 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
   const suggestedModels = preferredModelOptions(models)
+  const selectedModelIsKnown = suggestedModels.some((model) => model.id === value.model)
+  const [manualModel, setManualModel] = useState(Boolean(value.model && !selectedModelIsKnown))
+
+  useEffect(() => {
+    if (!value.model || selectedModelIsKnown) setManualModel(false)
+  }, [value.model, selectedModelIsKnown])
 
   const setField = (field, next) => {
     if (field === 'provider_id') onChange({ ...value, provider_id: next, key_id: '', model: '' })
@@ -1055,8 +1061,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   return (
     <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-[1fr_1fr_1.3fr_100px]' : 'lg:grid-cols-[1fr_1fr_1.3fr_110px]'} gap-3`}>
       <div>
-        <label htmlFor="platformpage-upstream-provider" className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
-        <select id="platformpage-upstream-provider"
+        <label htmlFor={`${modelListId}-provider`} className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
+        <select id={`${modelListId}-provider`}
           value={value.provider_id || ''}
           onChange={(e) => setField('provider_id', e.target.value)}
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
@@ -1067,8 +1073,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && selectedPreset && <p className="text-[11px] text-brand-muted mt-1 font-sans">{selectedPreset.description}</p>}
       </div>
       <div>
-        <label htmlFor="platformpage-provider-key" className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
-        <select id="platformpage-provider-key"
+        <label htmlFor={`${modelListId}-key`} className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
+        <select id={`${modelListId}-key`}
           value={value.key_id || ''}
           onChange={(e) => setField('key_id', e.target.value)}
           disabled={!value.provider_id}
@@ -1079,26 +1085,49 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         </select>
       </div>
       <div>
-        <label htmlFor="platformpage-upstream-model-id" className="block text-xs text-brand-muted font-sans mb-1">Upstream model ID</label>
-        <input id="platformpage-upstream-model-id"
-          list={modelListId}
-          value={value.model || ''}
-          onChange={(e) => setField('model', e.target.value)}
-          placeholder={placeholder}
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-        />
-        <datalist id={modelListId}>
-          {suggestedModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </datalist>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label htmlFor={`${modelListId}-model`} className="block text-xs text-brand-muted font-sans">Model</label>
+          {value.provider_id && (
+            <button
+              type="button"
+              onClick={() => { setManualModel(!manualModel); if (manualModel && !selectedModelIsKnown) setField('model', '') }}
+              className="text-[10px] text-brand-accent hover:underline font-sans"
+            >
+              {manualModel ? 'Choose catalog model' : 'Enter custom ID'}
+            </button>
+          )}
+        </div>
+        {manualModel ? (
+          <input id={`${modelListId}-model`}
+            value={value.model || ''}
+            onChange={(e) => setField('model', e.target.value)}
+            placeholder={placeholder}
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+          />
+        ) : (
+          <select id={`${modelListId}-model`}
+            value={selectedModelIsKnown ? value.model : ''}
+            onChange={(e) => setField('model', e.target.value)}
+            disabled={!value.key_id}
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface disabled:opacity-50"
+          >
+            <option value="">{value.key_id ? (suggestedModels.length ? 'Choose model' : 'No catalog models; enter custom ID') : 'Pick key first'}</option>
+            {suggestedModels.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{model.route_compatible === false ? ' — Unsupported endpoint' : ''}
+              </option>
+            ))}
+          </select>
+        )}
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
-            Suggestions prioritize legal-ready models under 3s latency when latency data is available. Manual IDs still work.
+            Provider/key-specific catalog models, ranked for legal work and latency. Custom IDs remain available.
           </p>
         )}
       </div>
       <div>
-        <label htmlFor="platformpage-capacity" className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
-        <input id="platformpage-capacity"
+        <label htmlFor={`${modelListId}-capacity`} className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
+        <input id={`${modelListId}-capacity`}
           type="number"
           min="1"
           max="1000"
@@ -1182,7 +1211,9 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
   const removeFallback = (i) => setFallbacks((route.fallbacks || []).filter((_, idx) => idx !== i))
   const modelsFor = (target) => {
     const catalog = (catalogModels || []).filter((m) => (
-      target.key_id ? m.key_id === target.key_id : !target.provider_id || m.provider_id === target.provider_id
+      target.key_id
+        ? (m.key_ids || [m.key_id]).includes(target.key_id)
+        : !target.provider_id || m.provider_id === target.provider_id
     ))
     if (target.key_id && target.key_id === route.key_id && models.length) return models
     return catalog.length ? catalog : models
@@ -1265,11 +1296,13 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
           {issues.map((issue) => <p key={issue} className="text-brand-rose">{issue}</p>)}
           {modelsError && <p className="text-brand-muted">{modelsError}</p>}
           {testResult && (
-            <div className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
+            <div className={testResult.ok ? 'text-brand-accent' : testResult.provider_reachable ? 'text-brand-amber' : 'text-brand-rose'}>
               <p>
                 {testResult.ok
                   ? `Provider test OK with ${testResult.model_used}: ${testResult.response_preview}`
-                  : `Test failed: ${testResult.error}`}
+                  : testResult.provider_reachable
+                    ? `Provider reached${testResult.model_used ? ` with ${testResult.model_used}` : ''}, but the canary response differed: ${testResult.response_preview || testResult.error}`
+                    : `Test failed: ${testResult.error}`}
               </p>
               <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
                 {testResult.client_roundtrip_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Browser {testResult.client_roundtrip_ms}ms</span>}
@@ -1612,9 +1645,9 @@ const LEGAL_TIER_LABELS = {
 }
 
 const EXCLUSION_REASON_LABELS = {
-  not_free: 'Paid model',
   not_chat_model: 'Not chat/instruction',
   not_text_chat: 'Not text chat',
+  unsupported_api_mode: 'Endpoint not supported by current adapter',
   coding_specialized: 'Coding-only/specialized',
   low_context: 'Low context',
   low_output_limit: 'Low output limit',
@@ -1625,7 +1658,10 @@ const EXCLUSION_REASON_LABELS = {
 
 function ApplyRouteMenu({ model, onApply }) {
   const [open, setOpen] = useState(false)
-  const canApply = Boolean(model.key_id && model.provider_id && model.id)
+  const canApply = Boolean(
+    model.key_id && model.provider_id && model.id &&
+    model.route_compatible !== false && model.confidential_data_allowed !== false,
+  )
 
   const routeGroups = [
     {
@@ -1661,7 +1697,7 @@ function ApplyRouteMenu({ model, onApply }) {
         type="button"
         onClick={() => setOpen(!open)}
         disabled={!canApply}
-        title={canApply ? 'Apply this model to a LiteLLM route' : 'This catalog row is missing provider or key metadata'}
+        title={canApply ? 'Apply this model to a LiteLLM route' : 'This model is not approved for customer legal traffic or needs another API adapter'}
         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Apply
@@ -1698,21 +1734,28 @@ function ApplyRouteMenu({ model, onApply }) {
 
 function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('recommended')
+  const [filter, setFilter] = useState('all')
+  const [providerFilter, setProviderFilter] = useState('all')
   const [capFilter, setCapFilter] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const models = catalog?.models || []
+  const providerCounts = models.reduce((counts, model) => {
+    counts[model.provider_id] = (counts[model.provider_id] || 0) + 1
+    return counts
+  }, {})
 
   const baseFiltered = models.filter((model) => {
     const q = query.trim().toLowerCase()
     const reasonText = (model.exclusion_reasons || []).map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(' ')
     const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name, model.legal_tier, reasonText].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
     const matchesFilter =
+      filter === 'all' ||
       (filter === 'recommended' && model.legal_tier === 'recommended') ||
       (filter === 'free_legal' && model.is_free && model.legal_eligible) ||
       (filter === 'all_free' && model.is_free) ||
       (filter === 'excluded' && model.legal_tier === 'excluded')
-    return matchesQuery && matchesFilter
+    const matchesProvider = providerFilter === 'all' || model.provider_id === providerFilter
+    return matchesQuery && matchesFilter && matchesProvider
   })
 
   const capabilityCounts = baseFiltered.reduce((counts, model) => {
@@ -1760,15 +1803,27 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         </div>
       </div>
 
-      <div className="px-5 py-3 border-b border-brand-line flex flex-col md:flex-row gap-3">
+      <div className="px-5 py-3 border-b border-brand-line flex flex-col lg:flex-row gap-3">
         <input
           value={query}
           onChange={(e) => { setQuery(e.target.value); setShowAll(false) }}
           placeholder="Search model, provider, or key"
           className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
         />
-        <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0">
+        <select
+          aria-label="Catalog provider"
+          value={providerFilter}
+          onChange={(e) => { setProviderFilter(e.target.value); setShowAll(false) }}
+          className="border border-brand-line rounded-lg px-3 py-2 text-xs font-sans bg-brand-surface"
+        >
+          <option value="all">All providers ({models.length})</option>
+          {Object.entries(providerCounts).sort(([a], [b]) => a.localeCompare(b)).map(([providerId, count]) => (
+            <option key={providerId} value={providerId}>{models.find((model) => model.provider_id === providerId)?.provider_name || providerId} ({count})</option>
+          ))}
+        </select>
+        <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0 overflow-x-auto">
           {[
+            ['all', 'All'],
             ['recommended', 'Recommended'],
             ['free_legal', 'Free Legal'],
             ['all_free', 'All Free'],
@@ -1840,6 +1895,9 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
                   {model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
+                  {!model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-bg text-brand-muted px-1.5 py-0.5 rounded border border-brand-line font-sans">Paid</span>}
+                  {model.confidential_data_allowed === false && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-rose/10 text-brand-rose px-1.5 py-0.5 rounded font-sans" title="Synthetic or sanitized demo data only">Demo-only data policy</span>}
+                  {model.route_compatible === false && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">Unsupported endpoint</span>}
                   {model.is_new && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
                   {tier && (
                     <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border font-sans ${tier.color}`} title={reasons.length ? reasons.map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(', ') : tier.label}>
@@ -1862,6 +1920,7 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                 </div>
                 <p className="text-xs text-brand-muted font-sans mt-1">
                   {model.provider_name || model.provider_id} · {model.key_name || 'key'}
+                  {model.api_mode ? ` · ${model.api_mode.replaceAll('_', ' ')}` : ''}
                   {model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
                   {hasPricing ? ` · $${pricing.prompt}/$${pricing.completion}` : ''}
                   {model.latency_ms != null ? ` · ${model.latency_ms}ms latency` : ''}
