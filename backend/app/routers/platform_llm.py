@@ -1184,7 +1184,9 @@ def _recommend_route_targets(
         candidate_key_ids.sort(key=_key_rank, reverse=True)
         key_id = candidate_key_ids[0]
         selected_health = health.get((provider_id, model_id, key_id))
-        if selected_health and _canary_failure_is_current(selected_health, current_time):
+        if selected_health and _canary_failure_is_current(
+            selected_health, current_time
+        ):
             # Every available key for this model must be currently failing before
             # the model is removed. A second, untested key remains eligible.
             healthy_or_unknown = [
@@ -1291,9 +1293,13 @@ def _recommend_route_targets(
             f"Only {len(selected)} model(s) met the current criteria; requested {criteria.count}."
         )
     if any(item["confidential_data_allowed"] is None for item in selected):
-        warnings.append("One or more selected providers still require a data-terms review.")
+        warnings.append(
+            "One or more selected providers still require a data-terms review."
+        )
     if any(not item["canary_ok"] for item in selected):
-        warnings.append("Test every selected target before activation; some lack a recent passing canary.")
+        warnings.append(
+            "Test every selected target before activation; some lack a recent passing canary."
+        )
 
     return {
         "route": criteria.route,
@@ -2320,8 +2326,7 @@ async def recommend_routes(
             "candidate_count": len(recommendation["candidates"]),
             "eligible_count": recommendation["eligible_count"],
             "providers": [
-                candidate["provider_id"]
-                for candidate in recommendation["candidates"]
+                candidate["provider_id"] for candidate in recommendation["candidates"]
             ],
             "models": [
                 candidate["model"] for candidate in recommendation["candidates"]
