@@ -248,7 +248,55 @@ def test_model_catalog_excludes_slow_free_model():
     assert "slow_latency" in model["exclusion_reasons"]
 
 
-def test_customer_route_policy_finds_free_primary_alternate_and_fallback():
+def test_paid_go_model_is_eligible_and_not_excluded_for_cost():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"},
+        "opencode-go",
+    )
+
+    assert model["economic_tier"] == "paid"
+    assert model["api_mode"] == "chat_completions"
+    assert model["route_compatible"] is True
+    assert model["legal_eligible"] is True
+    assert "not_free" not in model["exclusion_reasons"]
+
+
+def test_zen_free_model_is_cataloged_as_demo_only():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "big-pickle", "name": "Big Pickle"},
+        "opencode-zen",
+    )
+
+    assert model["is_free"] is True
+    assert model["confidential_data_allowed"] is False
+    assert model["data_policy"] == "training_or_improvement_possible"
+
+
+def test_catalog_merge_preserves_all_provider_keys_without_duplicate_models():
+    models = platform_llm_router._merge_catalog_models(
+        [
+            {
+                "id": "deepseek-v4-pro",
+                "provider_id": "opencode-go",
+                "key_id": "key-a",
+                "key_name": "Go A",
+            },
+            {
+                "id": "deepseek-v4-pro",
+                "provider_id": "opencode-go",
+                "key_id": "key-b",
+                "key_name": "Go B",
+            },
+        ]
+    )
+
+    assert len(models) == 1
+    assert models[0]["key_ids"] == ["key-a", "key-b"]
+    assert models[0]["key_count"] == 2
+    assert models[0]["key_name"] == "2 stored keys"
+
+
+def test_customer_route_policy_blocks_only_unsafe_zen_free_capacity():
     config = {
         "standard": {
             "provider_id": "openrouter",
@@ -272,15 +320,16 @@ def test_customer_route_policy_finds_free_primary_alternate_and_fallback():
         },
     }
 
-    blocked = platform_llm_router._free_capacity_targets(config, {"models": []})
+    blocked = platform_llm_router._confidential_data_unsafe_targets(
+        config, {"models": []}
+    )
 
     assert [(item["route"], item["placement"]) for item in blocked] == [
         ("standard", "alternate[0]"),
-        ("standard", "fallback[0]"),
     ]
 
 
-def test_customer_route_policy_uses_zero_priced_catalog_metadata():
+def test_customer_route_policy_uses_catalog_data_policy_metadata():
     config = {
         "standard": {
             "provider_id": "provider-a",
@@ -294,11 +343,12 @@ def test_customer_route_policy_uses_zero_priced_catalog_metadata():
                 "provider_id": "provider-a",
                 "id": "model-without-free-suffix",
                 "pricing": {"prompt": "0", "completion": "0.000000"},
+                "confidential_data_allowed": False,
             }
         ]
     }
 
-    blocked = platform_llm_router._free_capacity_targets(config, catalog)
+    blocked = platform_llm_router._confidential_data_unsafe_targets(config, catalog)
 
     assert blocked == [
         {
@@ -332,23 +382,23 @@ async def test_customer_route_policy_rejection_commits_audit(monkeypatch):
     request = object()
 
     with pytest.raises(platform_llm_router.HTTPException) as raised:
-        await platform_llm_router._enforce_customer_route_capacity_policy(
+        await platform_llm_router._enforce_customer_route_data_policy(
             request,
             db,
             {
                 "standard": {
-                    "provider_id": "openrouter",
-                    "model": "google/gemma-4-31b-it:free",
+                    "provider_id": "opencode-zen",
+                    "model": "nemotron-3-ultra-free",
                 },
                 "premium": {},
             },
         )
 
     assert raised.value.status_code == 409
-    assert raised.value.detail["code"] == "free_capacity_not_allowed"
+    assert raised.value.detail["code"] == "confidential_data_not_allowed"
     assert db.committed is True
     assert audit_call["action"] == "llm.routes_activation_blocked"
-    assert audit_call["metadata"]["reason"] == "free_capacity_not_allowed"
+    assert audit_call["metadata"]["reason"] == "confidential_data_not_allowed"
 
 
 def test_litellm_reload_payload_builds_aliases_and_reports_stale_targets(monkeypatch):

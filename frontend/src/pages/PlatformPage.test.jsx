@@ -122,15 +122,15 @@ describe('platform AI routing', () => {
     expect(await screen.findByText(/Saved and reloaded LiteLLM/)).toBeInTheDocument()
   })
 
-  it('shows the paid-capacity policy message from a structured rejection', async () => {
+  it('shows the confidential-data policy message from a structured rejection', async () => {
     const user = userEvent.setup()
     saveLLMRoutes.mockRejectedValue({
       response: {
         status: 409,
         data: {
           detail: {
-            code: 'free_capacity_not_allowed',
-            message: 'Standard and Premium customer routes require paid capacity.',
+            code: 'confidential_data_not_allowed',
+            message: 'This model is approved only for synthetic or sanitized demo data.',
           },
         },
       },
@@ -140,8 +140,43 @@ describe('platform AI routing', () => {
     await user.click(await screen.findByRole('button', { name: 'Validate & Activate' }))
 
     expect(
-      await screen.findByText('Standard and Premium customer routes require paid capacity.'),
+      await screen.findByText('This model is approved only for synthetic or sanitized demo data.'),
     ).toBeInTheDocument()
+  })
+
+  it('shows every catalog provider and uses provider-key-specific model selects', async () => {
+    getLLMProviderKeys.mockResolvedValue({
+      keys: [
+        { id: 'key-1', name: 'Production', provider_id: 'openrouter' },
+        { id: 'key-go', name: 'Go', provider_id: 'opencode-go' },
+        { id: 'key-zen', name: 'Zen', provider_id: 'opencode-zen' },
+      ],
+    })
+    getLLMProviderPresets.mockResolvedValue({
+      providers: [
+        { id: 'openrouter', name: 'OpenRouter', description: 'Router' },
+        { id: 'opencode-go', name: 'OpenCode Go', description: 'Go' },
+        { id: 'opencode-zen', name: 'OpenCode Zen', description: 'Zen' },
+      ],
+    })
+    getLLMModelCatalog.mockResolvedValue({
+      model_count: 4,
+      models: [
+        { id: 'provider/standard', name: 'Standard', provider_id: 'openrouter', provider_name: 'OpenRouter', key_id: 'key-1', key_ids: ['key-1'], legal_eligible: true, legal_tier: 'usable' },
+        { id: 'provider/premium', name: 'Premium', provider_id: 'openrouter', provider_name: 'OpenRouter', key_id: 'key-1', key_ids: ['key-1'], legal_eligible: true, legal_tier: 'recommended' },
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', provider_id: 'opencode-go', provider_name: 'OpenCode Go', key_id: 'key-go', key_ids: ['key-go'], legal_eligible: true, legal_tier: 'recommended' },
+        { id: 'laguna-s-2.1-free', name: 'Laguna', provider_id: 'opencode-zen', provider_name: 'OpenCode Zen', key_id: 'key-zen', key_ids: ['key-zen'], is_free: true, legal_eligible: true, legal_tier: 'usable', confidential_data_allowed: false },
+      ],
+    })
+
+    renderRouting()
+
+    const providerFilter = await screen.findByRole('combobox', { name: 'Catalog provider' })
+    expect(providerFilter).toHaveTextContent('OpenRouter (2)')
+    expect(providerFilter).toHaveTextContent('OpenCode Go (1)')
+    expect(providerFilter).toHaveTextContent('OpenCode Zen (1)')
+    expect(screen.getAllByRole('combobox', { name: 'Model' })).toHaveLength(2)
+    expect(screen.getByText('Demo-only data policy')).toBeInTheDocument()
   })
 
   it('surfaces a key deletion conflict from an active route', async () => {

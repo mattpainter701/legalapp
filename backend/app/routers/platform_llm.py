@@ -56,7 +56,17 @@ LLM_MODEL_CATALOG_KEY = "llm_model_catalog_v1"
 LEGAL_READY_LATENCY_MS = 3000
 MIN_LEGAL_CONTEXT_LENGTH = 16000
 RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
-FREE_CAPACITY_BLOCK_CODE = "free_capacity_not_allowed"
+CONFIDENTIAL_DATA_BLOCK_CODE = "confidential_data_not_allowed"
+
+ZEN_FREE_MODELS = {
+    "big-pickle",
+    "deepseek-v4-flash-free",
+    "hy3-free",
+    "laguna-s-2.1-free",
+    "mimo-v2.5-free",
+    "nemotron-3-ultra-free",
+    "nemotron-3.5-lightning-free",
+}
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -342,8 +352,10 @@ def operator_debug_mode_audit_payload(
     }
 
 
-def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
+def _is_free_model(model_id: str, item: dict[str, Any], provider_id: str = "") -> bool:
     mid = (model_id or "").lower()
+    if provider_id == "opencode-zen" and mid in ZEN_FREE_MODELS:
+        return True
     if ":free" in mid or mid.endswith("-free"):
         return True
     pricing = item.get("pricing") if isinstance(item, dict) else None
@@ -358,14 +370,15 @@ def _is_free_model(model_id: str, item: dict[str, Any]) -> bool:
     return False
 
 
-def _free_capacity_targets(
+def _confidential_data_unsafe_targets(
     config: dict[str, Any], catalog: dict[str, Any]
 ) -> list[dict[str, str]]:
-    """Return customer-route targets backed by explicitly free capacity.
+    """Return customer routes whose upstream terms permit training/retention.
 
-    Model IDs are checked even when the catalog is empty or stale. When a live
-    catalog row is available, its normalized pricing metadata also participates
-    so a zero-priced model without a conventional ``:free`` suffix is blocked.
+    OpenCode documents its free Zen endpoints as evaluation capacity whose data
+    may be collected or used to improve models. Customer aliases can carry
+    privileged or confidential material, so those models remain demo/lab-only.
+    Free capacity from providers with an acceptable data policy is not blocked.
     """
 
     catalog_rows = catalog.get("models", []) if isinstance(catalog, dict) else []
@@ -386,7 +399,11 @@ def _free_capacity_targets(
         if not provider_id or not model_id:
             return
         row = catalog_index.get((provider_id, model_id), {})
-        if _is_free_model(model_id, row):
+        confidential_data_allowed = row.get("confidential_data_allowed")
+        is_unsafe_zen_free = provider_id == "opencode-zen" and _is_free_model(
+            model_id, row, provider_id
+        )
+        if confidential_data_allowed is False or is_unsafe_zen_free:
             blocked.append(
                 {
                     "route": route_name,
@@ -411,16 +428,16 @@ def _free_capacity_targets(
     return blocked
 
 
-async def _enforce_customer_route_capacity_policy(
+async def _enforce_customer_route_data_policy(
     request: Request,
     db: AsyncSession,
     config: dict[str, Any],
 ) -> None:
-    """Reject customer aliases backed by free capacity and audit the attempt."""
+    """Reject customer aliases whose upstream data terms are not confidential-safe."""
 
     catalog = await _get_model_catalog(db)
-    free_capacity_targets = _free_capacity_targets(config, catalog)
-    if not free_capacity_targets:
+    unsafe_targets = _confidential_data_unsafe_targets(config, catalog)
+    if not unsafe_targets:
         return
     await record_operator_audit(
         db,
@@ -429,22 +446,64 @@ async def _enforce_customer_route_capacity_policy(
         resource_type="llm_route_config",
         resource_id=LLM_ROUTE_CONFIG_KEY,
         metadata={
-            "reason": FREE_CAPACITY_BLOCK_CODE,
-            "targets": free_capacity_targets,
+            "reason": CONFIDENTIAL_DATA_BLOCK_CODE,
+            "targets": unsafe_targets,
         },
     )
     await db.commit()
     raise HTTPException(
         status_code=409,
         detail={
-            "code": FREE_CAPACITY_BLOCK_CODE,
+            "code": CONFIDENTIAL_DATA_BLOCK_CODE,
             "message": (
-                "Standard and Premium customer routes require paid capacity. "
-                "Use a separate lab-only alias for free models."
+                "This model's upstream data policy is not approved for customer "
+                "legal traffic. Use it only with synthetic or sanitized demo data."
             ),
-            "targets": free_capacity_targets,
+            "targets": unsafe_targets,
         },
     )
+
+
+def _provider_api_mode(provider_id: str, model_id: str) -> str:
+    """Return the provider endpoint family required by a catalog model."""
+
+    mid = (model_id or "").lower()
+    if provider_id == "anthropic":
+        return "messages"
+    if provider_id not in {"opencode-zen", "opencode-go"}:
+        return "chat_completions"
+    if mid.startswith(("gpt-", "grok-", "muse-")):
+        return "responses"
+    if mid.startswith("gemini-"):
+        return "google"
+    if mid.startswith(("claude-", "qwen")):
+        return "messages"
+    if provider_id == "opencode-go" and mid.startswith("minimax-"):
+        return "messages"
+    return "chat_completions"
+
+
+def _route_compatible(provider_id: str, model_id: str) -> bool:
+    mode = _provider_api_mode(provider_id, model_id)
+    return mode == "chat_completions" or (
+        provider_id == "anthropic" and mode == "messages"
+    )
+
+
+def _model_data_policy(
+    provider_id: str, model_id: str, is_free: bool
+) -> dict[str, Any]:
+    if provider_id == "opencode-zen" and is_free:
+        return {
+            "data_policy": "training_or_improvement_possible",
+            "confidential_data_allowed": False,
+        }
+    if provider_id == "opencode-go" and model_id.lower().startswith("deepseek-v4-"):
+        return {
+            "data_policy": "zero_retention",
+            "confidential_data_allowed": True,
+        }
+    return {"data_policy": "provider_terms", "confidential_data_allowed": None}
 
 
 def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
@@ -460,6 +519,15 @@ def _derive_capabilities(item: dict, provider_id: str) -> list[str]:
     if not isinstance(supported_parameters, list):
         supported_parameters = []
     supported = {str(param).lower() for param in supported_parameters}
+
+    # OpenCode and DeepSeek return intentionally sparse /models rows. Their
+    # chat-completions endpoints are still instruction/text interfaces, so add
+    # only that safe baseline rather than inventing vision/audio capabilities.
+    if _route_compatible(provider_id, model_id) and not any(
+        term in model_id
+        for term in ("embed", "rerank", "moderation", "audio", "speech", "tts")
+    ):
+        caps.update({"text_input", "instruction"})
 
     # 1. Architecture modality (OpenRouter)
     architecture = item.get("architecture") or {}
@@ -694,6 +762,7 @@ def _legal_model_eligibility(
     context_length: Any,
     max_completion_tokens: Any,
     latency_ms: int | None,
+    route_compatible: bool = True,
 ) -> dict[str, Any]:
     caps = set(capabilities)
     text = _model_text(model_id, item.get("name"), item.get("description"))
@@ -706,8 +775,10 @@ def _legal_model_eligibility(
     badges: list[str] = []
     score = 0
 
-    if not is_free:
-        exclusion_reasons.append("not_free")
+    if not route_compatible:
+        exclusion_reasons.append("unsupported_api_mode")
+    else:
+        score += 1
 
     non_chat_terms = (
         "embedding",
@@ -837,7 +908,9 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         else item.get("max_completion_tokens")
     )
     capabilities = _derive_capabilities(item, provider_id)
-    is_free = _is_free_model(mid, item)
+    is_free = _is_free_model(mid, item, provider_id)
+    api_mode = _provider_api_mode(provider_id, mid)
+    route_compatible = _route_compatible(provider_id, mid)
     latency_ms = _extract_latency_ms(item)
     eligibility = _legal_model_eligibility(
         item,
@@ -847,7 +920,9 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
         context_length=ctx,
         max_completion_tokens=max_completion_tokens,
         latency_ms=latency_ms,
+        route_compatible=route_compatible,
     )
+    data_policy = _model_data_policy(provider_id, mid, is_free)
     return {
         "id": mid,
         "name": item.get("name") or mid,
@@ -858,6 +933,9 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
             item.get("pricing") if isinstance(item.get("pricing"), dict) else None
         ),
         "is_free": is_free,
+        "economic_tier": "free" if is_free else "paid",
+        "api_mode": api_mode,
+        "route_compatible": route_compatible,
         "modality": (
             architecture.get("modality") if isinstance(architecture, dict) else None
         ),
@@ -868,35 +946,102 @@ def _normalize_model_item(item: Any, provider_id: str) -> dict | None:
             else []
         ),
         "capabilities": capabilities,
+        **data_policy,
         **eligibility,
     }
 
 
 def _hydrate_legal_eligibility(model: dict[str, Any]) -> dict[str, Any]:
-    """Add eligibility fields to older saved catalog rows."""
-    if "legal_eligible" in model and "legal_tier" in model:
-        return model
+    """Recompute eligibility for saved rows as catalog policy evolves."""
     hydrated = dict(model)
+    provider_id = str(hydrated.get("provider_id") or "")
+    model_id = str(hydrated.get("id") or "")
+    capabilities = sorted(
+        set(hydrated.get("capabilities") or []).union(
+            _derive_capabilities(hydrated, provider_id)
+        )
+    )
+    is_free = _is_free_model(model_id, hydrated, provider_id)
+    api_mode = _provider_api_mode(provider_id, model_id)
+    route_compatible = _route_compatible(provider_id, model_id)
     eligibility = _legal_model_eligibility(
         hydrated,
-        model_id=str(hydrated.get("id") or ""),
-        capabilities=hydrated.get("capabilities") or [],
-        is_free=bool(hydrated.get("is_free")),
+        model_id=model_id,
+        capabilities=capabilities,
+        is_free=is_free,
         context_length=hydrated.get("context_length"),
         max_completion_tokens=hydrated.get("max_completion_tokens"),
         latency_ms=_extract_latency_ms(hydrated),
+        route_compatible=route_compatible,
+    )
+    hydrated.update(
+        {
+            "capabilities": capabilities,
+            "is_free": is_free,
+            "economic_tier": "free" if is_free else "paid",
+            "api_mode": api_mode,
+            "route_compatible": route_compatible,
+            **_model_data_policy(provider_id, model_id, is_free),
+        }
     )
     hydrated.update(eligibility)
     return hydrated
 
 
+def _merge_catalog_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate provider/model rows while preserving every key choice."""
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for model in models:
+        provider_id = str(model.get("provider_id") or "")
+        model_id = str(model.get("id") or "")
+        if not provider_id or not model_id:
+            continue
+        ident = (provider_id, model_id)
+        key_ids = [str(value) for value in model.get("key_ids", []) if value]
+        if model.get("key_id"):
+            key_ids.append(str(model["key_id"]))
+        key_names = [str(value) for value in model.get("key_names", []) if value]
+        if model.get("key_name"):
+            key_names.append(str(model["key_name"]))
+
+        if ident not in merged:
+            merged[ident] = dict(model)
+            merged[ident]["key_ids"] = list(dict.fromkeys(key_ids))
+            merged[ident]["key_names"] = list(dict.fromkeys(key_names))
+            continue
+
+        current = merged[ident]
+        current["key_ids"] = list(
+            dict.fromkeys([*(current.get("key_ids") or []), *key_ids])
+        )
+        current["key_names"] = list(
+            dict.fromkeys([*(current.get("key_names") or []), *key_names])
+        )
+        current["is_new"] = bool(current.get("is_new") or model.get("is_new"))
+
+    for model in merged.values():
+        key_ids = model.get("key_ids") or []
+        key_names = model.get("key_names") or []
+        model["key_count"] = len(key_ids)
+        if key_ids:
+            model["key_id"] = key_ids[0]
+        if len(key_names) == 1:
+            model["key_name"] = key_names[0]
+        elif key_names:
+            model["key_name"] = f"{len(key_names)} stored keys"
+    return list(merged.values())
+
+
 def _hydrate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
     hydrated = dict(catalog or {})
-    models = [
-        _hydrate_legal_eligibility(model)
-        for model in hydrated.get("models", [])
-        if isinstance(model, dict)
-    ]
+    models = _merge_catalog_models(
+        [
+            _hydrate_legal_eligibility(model)
+            for model in hydrated.get("models", [])
+            if isinstance(model, dict)
+        ]
+    )
     hydrated["models"] = models
     hydrated["model_count"] = len(models)
     hydrated["free_count"] = sum(1 for model in models if model.get("is_free"))
@@ -909,6 +1054,7 @@ def _hydrate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
     hydrated["excluded_count"] = sum(
         1 for model in models if model.get("legal_tier") == "excluded"
     )
+    hydrated["new_count"] = sum(1 for model in models if model.get("is_new"))
     return hydrated
 
 
@@ -1433,7 +1579,7 @@ async def _check_litellm_gateway(
 
 
 async def _fetch_models_from_provider(
-    base_url: str, models_url: str, plaintext_key: str
+    base_url: str, models_url: str, plaintext_key: str, provider_id: str
 ) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -1449,9 +1595,8 @@ async def _fetch_models_from_provider(
                 items = data
             models = []
             for item in items:
-                model = _normalize_model_item(item, "")
+                model = _normalize_model_item(item, provider_id)
                 if model:
-                    model["provider_id"] = ""
                     models.append(model)
             return sorted(models, key=lambda m: m["id"])
     except Exception as exc:
@@ -1725,7 +1870,7 @@ async def fetch_provider_models(
 
     try:
         models = await _fetch_models_from_provider(
-            preset["base_url"], preset["models_url"], plaintext
+            preset["base_url"], preset["models_url"], plaintext, key.provider_id
         )
     except Exception as exc:
         raise HTTPException(
@@ -1735,7 +1880,9 @@ async def fetch_provider_models(
     for model in models:
         model["provider_id"] = key.provider_id
         model["key_id"] = str(key.id)
+        model["key_ids"] = [str(key.id)]
         model["key_name"] = key.name
+        model["key_names"] = [key.name]
     return {
         "models": models,
         "provider_id": key.provider_id,
@@ -1755,12 +1902,8 @@ async def get_model_catalog(request: Request, db: AsyncSession = Depends(get_db)
 async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get_db)):
     _require_platform_key(request)
     previous = await _get_model_catalog(db)
-    previous_by_key = {
-        (
-            item.get("provider_id"),
-            item.get("key_id"),
-            item.get("id"),
-        ): item
+    previous_by_model = {
+        (item.get("provider_id"), item.get("id")): item
         for item in previous.get("models", [])
         if isinstance(item, dict)
     }
@@ -1786,10 +1929,11 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
             return [item for item in fetched if item], "preset"
         plaintext = decrypt_token(key.encrypted_key)
         fetched = await _fetch_models_from_provider(
-            preset["base_url"], preset["models_url"], plaintext
+            preset["base_url"],
+            preset["models_url"],
+            plaintext,
+            key.provider_id,
         )
-        for item in fetched:
-            item["provider_id"] = key.provider_id
         return fetched, "provider"
 
     results = await asyncio.gather(
@@ -1813,8 +1957,8 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
             continue
         fetched, source = result
         for item in fetched:
-            ident = (key.provider_id, str(key.id), item["id"])
-            previous_item = previous_by_key.get(ident) or {}
+            ident = (key.provider_id, item["id"])
+            previous_item = previous_by_model.get(ident) or {}
             first_seen = previous_item.get("first_seen_at") or refreshed_at.isoformat()
             try:
                 first_seen_dt = datetime.fromisoformat(first_seen)
@@ -1823,19 +1967,21 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
             item.update(
                 {
                     "key_id": str(key.id),
+                    "key_ids": [str(key.id)],
                     "key_name": key.name,
+                    "key_names": [key.name],
                     "provider_name": preset.get("name", key.provider_id),
                     "source": source,
                     "first_seen_at": first_seen,
                     "last_seen_at": refreshed_at.isoformat(),
-                    "is_new": ident not in previous_by_key
+                    "is_new": ident not in previous_by_model
                     or first_seen_dt >= new_cutoff,
                 }
             )
             models.append(item)
 
     models = sorted(
-        models,
+        _merge_catalog_models(models),
         key=lambda item: (
             not item.get("is_new"),
             not item.get("is_free"),
@@ -2074,7 +2220,7 @@ async def save_routes(
         "standard": _normalize_route_entry(body.standard),
         "premium": _normalize_route_entry(body.premium),
     }
-    await _enforce_customer_route_capacity_policy(request, db, config)
+    await _enforce_customer_route_data_policy(request, db, config)
     aliases = _managed_route_aliases(config)
     reload_result = await _reload_litellm_routes(
         config,
@@ -2132,7 +2278,7 @@ async def get_gateway_status(request: Request, db: AsyncSession = Depends(get_db
 async def reload_routes(request: Request, db: AsyncSession = Depends(get_db)):
     _require_platform_key(request)
     config = await _get_route_config(db)
-    await _enforce_customer_route_capacity_policy(request, db, config)
+    await _enforce_customer_route_data_policy(request, db, config)
     keys_result = await db.execute(select(LLMProviderKey))
     keys_by_id = {str(k.id): k for k in keys_result.scalars().all()}
     activation = config.get("activation", {}) or {}
@@ -2194,6 +2340,7 @@ async def test_route(
         error_category: str | None = None,
         credential_state: str = "valid",
         http_status: int | None = None,
+        provider_reachable: bool = False,
     ) -> dict[str, Any]:
         server_elapsed_ms = int((time.monotonic() - server_start) * 1000)
         payload: dict[str, Any] = {
@@ -2204,6 +2351,7 @@ async def test_route(
             "server_overhead_ms": max(0, server_elapsed_ms - provider_latency_ms),
             "capability": "text",
             "credential_state": credential_state,
+            "provider_reachable": provider_reachable,
         }
         if model_used:
             payload["model_used"] = model_used
@@ -2234,8 +2382,9 @@ async def test_route(
                     },
                     json={
                         "model": body.model,
-                        "max_tokens": 10,
+                        "max_tokens": 32,
                         "temperature": 0,
+                        "system": "Follow the user's output format exactly.",
                         "messages": [
                             {"role": "user", "content": "Reply with exactly: OK"}
                         ],
@@ -2267,6 +2416,7 @@ async def test_route(
                     else "Provider responded, but the synthetic canary value was incorrect."
                 ),
                 error_category=None if text == "OK" else "unexpected_response",
+                provider_reachable=True,
             )
             await record_operator_audit(
                 db,
@@ -2281,11 +2431,22 @@ async def test_route(
 
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=plaintext, base_url=preset["base_url"])
+        client = AsyncOpenAI(
+            api_key=plaintext,
+            base_url=preset["base_url"],
+            timeout=20.0,
+            max_retries=0,
+        )
         resp = await client.chat.completions.create(
             model=body.model,
-            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
-            max_tokens=10,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Follow the user's output format exactly.",
+                },
+                {"role": "user", "content": "Reply with exactly: OK"},
+            ],
+            max_tokens=32,
             temperature=0,
         )
         elapsed_ms = int((time.monotonic() - provider_start) * 1000)
@@ -2309,6 +2470,7 @@ async def test_route(
                 else "Provider responded, but the synthetic canary value was incorrect."
             ),
             error_category=None if text == "OK" else "unexpected_response",
+            provider_reachable=True,
         )
         await record_operator_audit(
             db,
