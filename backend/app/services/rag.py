@@ -633,7 +633,6 @@ async def full_rag_query(
     if use_mcp_public:
         try:
             async with async_session_maker() as usage_db:
-                await set_tenant_context(usage_db, str(tenant_id))
                 outcomes = mcp_outcomes or [
                     {
                         "tool_name": "search_caselaw",
@@ -643,6 +642,9 @@ async def full_rag_query(
                     }
                 ]
                 for outcome in outcomes:
+                    # Each usage write commits. The tenant GUC is transaction-
+                    # local, so rebind it before every subsequent RLS insert.
+                    await set_tenant_context(usage_db, str(tenant_id))
                     await record_internal_chat_mcp_usage(
                         db=usage_db,
                         tenant_id=uuid.UUID(str(tenant_id)),

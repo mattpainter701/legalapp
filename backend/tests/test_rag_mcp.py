@@ -325,6 +325,7 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
             return None
 
     recorded = []
+    context_binds = []
 
     async def fake_fts(**kwargs):
         return []
@@ -364,6 +365,9 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
     async def fake_record_usage(**kwargs):
         recorded.append((kwargs["tool_name"], kwargs["status_code"]))
 
+    async def fake_set_tenant_context(db, tenant_id):
+        context_binds.append((db, tenant_id))
+
     embeddings = Embeddings()
     monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
     monkeypatch.setattr(rag, "search_chunks_fts", fake_fts)
@@ -371,7 +375,7 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
     monkeypatch.setattr(rag, "search_public_chunks", fake_public)
     monkeypatch.setattr(rag, "search_courtlistener_mcp", fake_mcp)
     monkeypatch.setattr(rag, "async_session_maker", lambda: UsageSession())
-    monkeypatch.setattr(rag, "set_tenant_context", lambda *args: _async_none())
+    monkeypatch.setattr(rag, "set_tenant_context", fake_set_tenant_context)
     monkeypatch.setattr(rag, "record_internal_chat_mcp_usage", fake_record_usage)
 
     context, chunks = await rag.full_rag_query(
@@ -389,6 +393,7 @@ async def test_full_rag_query_falls_back_to_local_public_index_when_both_mcp_too
         ("search_caselaw", 503),
         ("search_legal_authorities", 502),
     ]
+    assert len(context_binds) == 2
 
 
 async def _async_none():

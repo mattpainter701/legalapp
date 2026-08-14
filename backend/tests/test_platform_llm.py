@@ -387,6 +387,16 @@ def test_paid_go_model_is_eligible_and_not_excluded_for_cost():
     assert "not_free" not in model["exclusion_reasons"]
 
 
+def test_all_go_models_inherit_documented_zero_retention_policy():
+    model = platform_llm_router._normalize_model_item(
+        {"id": "mimo-v2.5", "name": "MiMo V2.5"},
+        "opencode-go",
+    )
+
+    assert model["data_policy"] == "zero_retention"
+    assert model["confidential_data_allowed"] is True
+
+
 def test_zen_free_model_is_cataloged_as_demo_only():
     model = platform_llm_router._normalize_model_item(
         {"id": "big-pickle", "name": "Big Pickle"},
