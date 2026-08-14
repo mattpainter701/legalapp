@@ -69,6 +69,20 @@ class TaskCreate(BaseModel):
         return v
 
 
+class PendingActionEdit(BaseModel):
+    """The only parts of a drafted action an attorney may rewrite.
+
+    Recipients are absent on purpose. They were resolved server-side from the
+    matter's own parties, and letting them be re-supplied here would reopen the
+    hole that resolution closes — an edit endpoint is just as reachable by a
+    confused or malicious caller as a tool argument is.
+    """
+
+    subject: Optional[str] = Field(None, min_length=1, max_length=300)
+    body: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    expected_version: Optional[int] = Field(None, ge=1)
+
+
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -189,6 +203,9 @@ class TaskResponse(BaseModel):
     version: int = 1
     source: str
     external_ref: Optional[str]
+    # Drafted follow-through awaiting approval, e.g. an email_client payload.
+    # Present so the board can state what approving will actually do.
+    pending_action: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -237,6 +254,9 @@ class TaskBoardCard(BaseModel):
     source: str
     external_ref: Optional[str] = None
     version: int
+    # Drafted follow-through this card will execute when approved out of Review.
+    # The board must be able to say what approving does before it is clicked.
+    pending_action: Optional[dict] = None
     status_changed_at: datetime
     updated_at: datetime
 

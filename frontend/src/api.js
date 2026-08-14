@@ -1102,6 +1102,31 @@ export const updateTask = (id, data) =>
 export const transitionTask = (id, data) =>
   api.post(`/tasks/${id}/transition`, data).then(r => r.data)
 
+// Revise the subject/body of an assistant-drafted action before approving it.
+// Recipients are intentionally not editable — they are resolved server-side
+// from the matter's own parties.
+export const updateTaskPendingAction = (id, data) =>
+  api.patch(`/tasks/${id}/pending-action`, data).then(r => r.data)
+
+/**
+ * Approve assistant-proposed work: optionally save an edited draft, then move
+ * the task out of Review, which is what triggers the deterministic automation.
+ *
+ * The edit is saved first and its returned version is used for the transition,
+ * because editing bumps the task version and a stale expected_version would be
+ * rejected as a conflict.
+ */
+export const approveProposedTask = async (id, { body, subject } = {}) => {
+  let version
+  if (body !== undefined || subject !== undefined) {
+    const edited = await updateTaskPendingAction(id, { body, subject })
+    version = edited.version
+  } else {
+    version = (await getTask(id)).version
+  }
+  return transitionTask(id, { to_status: 'in_progress', expected_version: version })
+}
+
 export const getTaskEvents = (id, params = {}) =>
   api.get(`/tasks/${id}/events`, { params }).then(r => r.data)
 

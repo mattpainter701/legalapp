@@ -68,6 +68,7 @@ from app.schemas.task import (
     TaskListResponse,
     TaskResponse,
     TaskTransitionRequest,
+    PendingActionEdit,
     TaskUpdate,
 )
 
@@ -211,6 +212,7 @@ def _task_card_from_row(row) -> TaskBoardCard:
         source=task.source,
         external_ref=task.external_ref,
         version=task.version,
+        pending_action=task.pending_action,
         status_changed_at=task.status_changed_at,
         updated_at=task.updated_at,
     )
@@ -1169,6 +1171,77 @@ async def mark_customer_contacted(
     )
     if not transitioned:
         increment_task_version(task)
+    await db.commit()
+    await db.refresh(task)
+    return TaskResponse.model_validate(task)
+
+
+@router.patch("/{task_id}/pending-action", response_model=TaskResponse)
+async def update_pending_action(
+    task_id: uuid.UUID,
+    payload: PendingActionEdit,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revise the text of a drafted action before approving it.
+
+    Narrow on purpose. Only the subject and body are editable: recipients were
+    resolved from the matter's own parties, and accepting them here would undo
+    that guarantee. Editing also bumps the task version, which rotates the
+    automation idempotency key — so a draft that was edited after a failed send
+    is allowed to run again, while re-approving an unchanged draft still
+    collides and cannot send twice.
+    """
+    tenant_id = str(current_user.tenant_id)
+    await set_tenant_context(db, tenant_id)
+
+    result = await db.execute(
+        select(Task)
+        .where(
+            Task.id == task_id,
+            Task.tenant_id == uuid.UUID(tenant_id),
+        )
+        .with_for_update()
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.pending_action:
+        raise HTTPException(
+            status_code=409, detail="This task has no drafted action to edit"
+        )
+    if task.status != "review":
+        # Once approved, the draft is history. Editing it would misrepresent
+        # what was actually sent.
+        raise HTTPException(
+            status_code=409,
+            detail="Only a task still in Review can have its draft edited",
+        )
+    if (
+        payload.expected_version is not None
+        and payload.expected_version != task.version
+    ):
+        conflict = TaskVersionConflict()
+        raise HTTPException(
+            status_code=conflict.status_code, detail=conflict.detail
+        ) from None
+
+    updates = payload.model_dump(exclude_none=True, exclude={"expected_version"})
+    if not updates:
+        return TaskResponse.model_validate(task)
+
+    # Replace the whole mapping: SQLAlchemy does not track in-place JSON edits.
+    action = dict(task.pending_action)
+    action.update(updates)
+    task.pending_action = action
+    increment_task_version(task)
+    append_task_event(
+        db,
+        task,
+        event_type="draft_edited",
+        actor_user_id=current_user.id,
+        metadata={"fields": sorted(updates)},
+    )
     await db.commit()
     await db.refresh(task)
     return TaskResponse.model_validate(task)

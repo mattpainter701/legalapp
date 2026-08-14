@@ -322,3 +322,108 @@ async def test_another_tenant_cannot_trigger_this_tenants_automation(
     )
 
     assert sender.calls == []
+
+
+@pytest.mark.asyncio
+async def test_editing_a_draft_cannot_change_its_recipients(
+    client, db_session, test_tenant, test_user
+):
+    """The edit endpoint must not reopen what recipient resolution closed."""
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+
+    response = await client.patch(
+        f"/api/tasks/{task.id}/pending-action",
+        json={
+            "body": "Revised: please send it by Friday.",
+            "to": ["attacker@evil.example"],
+        },
+    )
+
+    assert response.status_code == 200
+    await db_session.refresh(task)
+    assert task.pending_action["body"] == "Revised: please send it by Friday."
+    # The unknown field was ignored, not applied.
+    assert task.pending_action["to"] == ["ops@redwood.example"]
+
+
+@pytest.mark.asyncio
+async def test_editing_a_draft_rotates_the_idempotency_key(
+    db_session, test_tenant, test_user
+):
+    """An edited draft may send again; an unchanged one may not.
+
+    Editing bumps task.version, which the key is derived from. Without this a
+    failed-then-corrected draft could never be sent.
+    """
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(
+        db_session, test_tenant, test_user, matter, version=1
+    )
+
+    first_key = task_automation.automation_idempotency_key(task, "review")
+    task.version = 2
+    second_key = task_automation.automation_idempotency_key(task, "review")
+
+    assert first_key != second_key
+
+
+@pytest.mark.asyncio
+async def test_an_approved_draft_can_no_longer_be_edited(
+    client, db_session, test_tenant, test_user
+):
+    """Editing after the fact would misrepresent what was actually sent."""
+    matter = await _matter(db_session, test_tenant, test_user)
+    task = await _approved_email_task(db_session, test_tenant, test_user, matter)
+    task.status = "in_progress"
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/tasks/{task.id}/pending-action",
+        json={"body": "Too late."},
+    )
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_another_tenant_cannot_edit_this_firms_draft(
+    client, db_session, test_tenant, test_user
+):
+    from app.models.tenant import Tenant
+
+    other = Tenant(
+        id=uuid.uuid4(),
+        name="Other Firm",
+        domain=f"other-{uuid.uuid4().hex[:8]}.com",
+        billing_tier="payg",
+        is_active=True,
+    )
+    db_session.add(other)
+    await db_session.flush()
+    foreign_task = Task(
+        id=uuid.uuid4(),
+        tenant_id=other.id,
+        title="Their drafted email",
+        status="review",
+        source="assistant",
+        pending_action={
+            "type": "email_client",
+            "to": ["their-client@other.example"],
+            "subject": "Confidential",
+            "body": "Confidential.",
+            "matter_id": str(uuid.uuid4()),
+            "source_ids": [],
+        },
+    )
+    db_session.add(foreign_task)
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/tasks/{foreign_task.id}/pending-action",
+        json={"body": "Injected content."},
+    )
+
+    assert response.status_code == 404
+    await db_session.refresh(foreign_task)
+    assert foreign_task.pending_action["body"] == "Confidential."

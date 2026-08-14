@@ -167,4 +167,75 @@ describe('TaskBoard', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('This task changed after it was loaded.')
     expect(screen.getAllByText('Review discovery responses').length).toBeGreaterThan(0)
   })
+
+  it('names the recipients before an approval that will send a client email', async () => {
+    const user = userEvent.setup()
+    const drafted = {
+      ...task,
+      id: 'task-draft',
+      title: 'Request insurance certificate',
+      status: 'review',
+      source: 'assistant',
+      reviewer: { id: 'user-1', label: 'Test Attorney' },
+      pending_action: {
+        type: 'email_client',
+        to: ['gc@redwood.example'],
+        subject: 'Certificate of insurance',
+        body: 'Please send the current certificate.',
+        matter_id: 'matter-1',
+        source_ids: [],
+      },
+    }
+    const draftedData = {
+      ...data,
+      columns: data.columns.map((column) =>
+        column.status === 'review'
+          ? { ...column, total: 1, items: [drafted] }
+          : { ...column, total: 0, items: [] },
+      ),
+    }
+    render(<TaskBoard {...props} data={draftedData} />)
+
+    // Visible on the card itself, not only in the dialog.
+    expect(screen.getAllByTestId('pending-action-badge')[0]).toHaveTextContent(
+      'Approving emails gc@redwood.example',
+    )
+    expect(screen.getAllByText(/Drafted by the assistant/).length).toBeGreaterThan(0)
+
+    await user.click(
+      screen.getAllByRole('button', {
+        name: 'Choose a destination for Request insurance certificate',
+      })[0],
+    )
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+
+    const notice = await screen.findByRole('note')
+    expect(notice).toHaveTextContent('This approval sends an email')
+    expect(notice).toHaveTextContent('gc@redwood.example')
+  })
+
+  it('does not warn about sending for an ordinary review task', async () => {
+    const user = userEvent.setup()
+    const plain = { ...task, id: 'task-plain', status: 'review', pending_action: null }
+    const plainData = {
+      ...data,
+      columns: data.columns.map((column) =>
+        column.status === 'review'
+          ? { ...column, total: 1, items: [plain] }
+          : { ...column, total: 0, items: [] },
+      ),
+    }
+    render(<TaskBoard {...props} data={plainData} />)
+
+    expect(screen.queryByTestId('pending-action-badge')).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getAllByRole('button', {
+        name: 'Choose a destination for Review discovery responses',
+      })[0],
+    )
+    await user.click(screen.getByRole('button', { name: /^In Progress/ }))
+
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
 })
