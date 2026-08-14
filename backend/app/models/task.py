@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
@@ -133,11 +134,18 @@ class Task(Base):
         Integer, default=1, server_default="1", nullable=False
     )
 
-    # "manual" | "email_agent" | "calendar_sync"
+    # "manual" | "email_agent" | "calendar_sync" | "assistant"
     source: Mapped[str] = mapped_column(
         String(50), default="manual", server_default="manual"
     )
     external_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Deterministic follow-through the board runs when this task is approved out
+    # of Review, e.g. ``{"type": "email_client", "to": [...], "body": ...}``.
+    # The assistant may draft the payload but never executes it: approval is a
+    # human transition, and execution is a plain hook with no model in the path.
+    # ``TaskAutomationRun`` makes that execution exactly-once.
+    pending_action: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -201,4 +209,68 @@ class TaskEvent(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default="now()",
         nullable=False,
+    )
+
+
+class TaskAutomationRun(Base):
+    """One attempt to execute a task's ``pending_action``.
+
+    Existence of a row is the claim on the work. The unique constraint on
+    ``(task_id, idempotency_key)`` is what makes an outbound client email
+    exactly-once: a replayed webhook, a double-clicked Approve, or two
+    concurrent transitions all collide on the insert, and the loser no-ops
+    instead of sending a second copy.
+    """
+
+    __tablename__ = "task_automation_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id", "idempotency_key", name="uq_task_automation_runs_task_key"
+        ),
+        Index(
+            "idx_task_automation_runs_tenant_status",
+            "tenant_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default="gen_random_uuid()",
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Matches ``pending_action["type"]``, kept denormalized so an operator can
+    # audit what ran without rehydrating a possibly-cleared task payload.
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    # "pending" | "succeeded" | "failed"
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending", nullable=False
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default="now()",
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

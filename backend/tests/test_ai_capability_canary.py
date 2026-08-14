@@ -74,8 +74,7 @@ def test_live_evidence_blocks_unconfigured_keys_without_calling_provider(
 ):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "OPENROUTER_API_KEY=configured only on production host\n"
-        "DEEPSEEK_API_KEY=\n",
+        "OPENROUTER_API_KEY=configured only on production host\n" "DEEPSEEK_API_KEY=\n",
         encoding="utf-8",
     )
     args = canary.parse_args(["--live", "--env-file", str(env_file)])

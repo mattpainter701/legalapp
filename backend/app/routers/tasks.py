@@ -32,16 +32,19 @@ from app.models.user import User
 from app.services.email import email_delivery_http_error, email_service
 from app.services.task_history import record_customer_contact, record_task_event
 from app.services.task_notifications import (
+    _fire_and_log,
     notify_task_created,
     notify_task_updated,
     remove_task_from_calendars,
     task_calendar_user_id,
 )
+from app.services.task_automation import run_task_automation
 from app.services.task_workflow import (
     TaskVersionConflict,
     TaskWorkflowError,
     append_task_event,
     increment_task_version,
+    require_task_references_for_tenant,
     transition_task,
 )
 from app.schemas.task import (
@@ -140,37 +143,16 @@ async def _require_task_references_for_tenant(
     tenant_id: uuid.UUID,
     values: dict,
 ) -> None:
-    """Reject foreign or missing objects before a Task can reference them.
+    """HTTP adaptor over the shared tenant-reference gate.
 
-    The referenced tables use ordinary foreign keys, which prove that an ID
-    exists but do not prove that it belongs to the task's tenant.  Keep the
-    checks explicit even when PostgreSQL RLS is enabled so this invariant also
-    holds in maintenance/test contexts and cannot depend on connection state.
-    An assignee must also be active; inactive and foreign users receive the
-    same response as a missing user.
+    The rule itself lives in ``task_workflow`` so the chat assistant's proposed
+    tasks clear exactly the same gate as ones typed into the UI. This wrapper
+    only translates the service error into the 404 that callers already expect.
     """
-
-    checks = (
-        ("matter_id", Matter, "Matter not found", False),
-        ("contact_id", Contact, "Contact not found", False),
-        ("assigned_to_user_id", User, "Assigned user not found", True),
-        ("reviewer_user_id", User, "Reviewer not found", True),
-    )
-    for field, model, detail, require_active in checks:
-        reference_id = values.get(field)
-        if reference_id is None:
-            continue
-        filters = [
-            model.id == reference_id,
-            model.tenant_id == tenant_id,
-        ]
-        if require_active:
-            filters.append(User.is_active.is_(True))
-        found_id = await db.scalar(select(model.id).where(*filters))
-        if found_id is None:
-            # A single 404 response covers both missing and foreign records so
-            # the endpoint does not become a cross-tenant ID oracle.
-            raise HTTPException(status_code=404, detail=detail)
+    try:
+        await require_task_references_for_tenant(db, tenant_id, values)
+    except TaskWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _task_card_from_row(row) -> TaskBoardCard:
@@ -1061,6 +1043,22 @@ async def transition_task_status(
             calendar_changed=True,
             assignment_changed=False,
             previous_calendar_user_id=previous_calendar_user_id,
+        )
+    if changed and previous_status == "review" and task.pending_action:
+        # The attorney just approved drafted work out of Review. Execution is
+        # deliberately post-commit and out-of-band: the approval is already
+        # durable, and a delivery failure must not undo the human's decision.
+        # run_task_automation is exactly-once, so a double-clicked Approve or a
+        # retried request cannot send a client two copies.
+        _fire_and_log(
+            run_task_automation(
+                task.id,
+                tenant_uuid,
+                from_status=previous_status,
+                actor_user_id=current_user.id,
+            ),
+            task_id=str(task.id),
+            action="pending_action",
         )
     logger.info(
         "task_board_transition_success tenant_id=%s user_id=%s task_id=%s "

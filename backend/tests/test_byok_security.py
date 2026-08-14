@@ -39,4 +39,6 @@ def test_copilot_endpoint_accepts_only_provider_owned_domain():
         )
         == "https://firm-one.openai.azure.com/openai/v1/"
     )
-    assert validate_customer_llm_deployment("copilot", "legal-gpt-4.1") == "legal-gpt-4.1"
+    assert (
+        validate_customer_llm_deployment("copilot", "legal-gpt-4.1") == "legal-gpt-4.1"
+    )

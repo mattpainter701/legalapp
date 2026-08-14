@@ -62,9 +62,7 @@ AUTH_CALL_NAMES_LITERAL = {
     "_require_platform_key",
     "authenticate_product_request",
     "verify_platform_bootstrap_key",
-} | {
-    f.__name__ for f in CANONICAL_AUTH_FUNCS
-}
+} | {f.__name__ for f in CANONICAL_AUTH_FUNCS}
 
 # ── Explicit allowlist of intentionally public/differently-authenticated routes ──
 # (methods, path) -> reason. Reviewed 2026-07-02 against the live route table;

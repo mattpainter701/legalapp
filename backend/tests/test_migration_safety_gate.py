@@ -136,7 +136,7 @@ def test_ci_exposes_named_tenant_data_safety_gate() -> None:
         encoding="utf-8"
     )
     assert "refs/tags/production:refs/tags/production" in workflow_text
-    assert 'MIGRATION_DIFF_BASE=$migration_diff_base' in workflow_text
+    assert "MIGRATION_DIFF_BASE=$migration_diff_base" in workflow_text
 
 
 def test_production_deploy_pins_commit_and_requires_its_ci_run() -> None:
