@@ -352,9 +352,7 @@ def operator_debug_mode_audit_payload(
     }
 
 
-def _is_free_model(
-    model_id: str, item: dict[str, Any], provider_id: str = ""
-) -> bool:
+def _is_free_model(model_id: str, item: dict[str, Any], provider_id: str = "") -> bool:
     mid = (model_id or "").lower()
     if provider_id == "opencode-zen" and mid in ZEN_FREE_MODELS:
         return True
