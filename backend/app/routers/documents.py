@@ -55,6 +55,17 @@ def _is_allowed_upload(filename: str, content_type: str | None) -> bool:
 
 
 def _document_to_response(doc: Document) -> DocumentResponse:
+    retrieval_mode = "not_indexed"
+    indexing_warning = None
+    if doc.status in {"ready", "indexed"} and doc.chunk_count:
+        if doc.embedding_model:
+            retrieval_mode = "semantic_hybrid"
+        else:
+            retrieval_mode = "keyword_only"
+            indexing_warning = (
+                "Semantic retrieval is unavailable; this document is searchable "
+                "by keyword only."
+            )
     return DocumentResponse(
         id=str(doc.id),
         filename=doc.filename,
@@ -67,6 +78,8 @@ def _document_to_response(doc: Document) -> DocumentResponse:
         source_modified_at=doc.source_modified_at,
         embedding_model=doc.embedding_model,
         embedding_version=doc.embedding_version,
+        retrieval_mode=retrieval_mode,
+        indexing_warning=indexing_warning,
         indexing_error=doc.error_message if doc.status == "error" else None,
     )
 
@@ -152,15 +165,8 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             # embedding provider is configured, persisting the text keeps the
             # document searchable and citable instead of discarding it — a
             # partially-indexed document is far better than an invisible one.
-            keyword_only = not embedding_service.client
-            embeddings = (
-                [] if keyword_only else await embedding_service.embed_batch(chunks_text)
-            )
-            if not keyword_only and len(embeddings) != len(chunks_text):
-                doc.status = "error"
-                doc.error_message = "Embedding service returned an incomplete result; indexing was not saved"
-                await db.commit()
-                return
+            embeddings = await embedding_service.embed_batch(chunks_text)
+            keyword_only = len(embeddings) == 0
 
             # Insert chunks
             chunk_objects = []
@@ -181,8 +187,8 @@ async def _process_document(document_id: str, tenant_id: str) -> None:
             doc.status = "ready"
             doc.chunk_count = len(chunk_objects)
             doc.indexed_at = datetime.now(timezone.utc)
-            doc.embedding_model = embedding_service.model
-            doc.embedding_version = 1
+            doc.embedding_model = None if keyword_only else embedding_service.model
+            doc.embedding_version = None if keyword_only else 1
             if keyword_only:
                 # A null embedding_model on a ready document is the signal that
                 # retrieval is keyword-only. Log it too: silently demoing

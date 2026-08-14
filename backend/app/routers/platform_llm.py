@@ -421,12 +421,14 @@ def _is_free_model(model_id: str, item: dict[str, Any], provider_id: str = "") -
 def _confidential_data_unsafe_targets(
     config: dict[str, Any], catalog: dict[str, Any]
 ) -> list[dict[str, str]]:
-    """Return customer routes whose upstream terms permit training/retention.
+    """Return customer routes not affirmatively approved for confidential data.
 
     OpenCode documents its free Zen endpoints as evaluation capacity whose data
     may be collected or used to improve models. Customer aliases can carry
     privileged or confidential material, so those models remain demo/lab-only.
     Free capacity from providers with an acceptable data policy is not blocked.
+    Missing catalog rows and unknown provider terms fail closed: absence of an
+    approval is not authorization to transmit privileged client material.
     """
 
     catalog_rows = catalog.get("models", []) if isinstance(catalog, dict) else []
@@ -451,13 +453,19 @@ def _confidential_data_unsafe_targets(
         is_unsafe_zen_free = provider_id == "opencode-zen" and _is_free_model(
             model_id, row, provider_id
         )
-        if confidential_data_allowed is False or is_unsafe_zen_free:
+        if confidential_data_allowed is not True or is_unsafe_zen_free:
             blocked.append(
                 {
                     "route": route_name,
                     "placement": placement,
                     "provider_id": provider_id,
                     "model": model_id,
+                    "data_policy": str(row.get("data_policy") or "unknown"),
+                    "reason": (
+                        "not_approved"
+                        if confidential_data_allowed is None
+                        else "disallowed"
+                    ),
                 }
             )
 
@@ -504,8 +512,9 @@ async def _enforce_customer_route_data_policy(
         detail={
             "code": CONFIDENTIAL_DATA_BLOCK_CODE,
             "message": (
-                "This model's upstream data policy is not approved for customer "
-                "legal traffic. Use it only with synthetic or sanitized demo data."
+                "Every customer route target must be affirmatively approved for "
+                "confidential legal traffic. Review its upstream terms or use it "
+                "only with synthetic or sanitized demo data."
             ),
             "targets": unsafe_targets,
         },
@@ -1154,9 +1163,7 @@ def _recommend_route_targets(
         if not model.get("legal_eligible") or model.get("legal_tier") == "excluded":
             continue
         confidential = model.get("confidential_data_allowed")
-        if criteria.data_mode == "strict" and confidential is not True:
-            continue
-        if criteria.data_mode == "customer" and confidential is False:
+        if criteria.data_mode in {"strict", "customer"} and confidential is not True:
             continue
         if criteria.cost_preference == "free_only" and not model.get("is_free"):
             continue

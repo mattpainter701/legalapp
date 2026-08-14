@@ -9,6 +9,7 @@ export default function DocumentItem({ doc, onDelete }) {
     ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(doc.indexed_at))
     : null
   const passageCount = Number(doc.chunk_count || 0)
+  const isKeywordOnly = isIndexed && doc.retrieval_mode === 'keyword_only'
 
   return (
     <div className="group flex min-h-14 items-center gap-3 border-b border-brand-line px-3 py-2 text-sm last:border-0 hover:bg-brand-bg-soft">
@@ -20,7 +21,14 @@ export default function DocumentItem({ doc, onDelete }) {
           {filename}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-          {isIndexed ? (
+          {isKeywordOnly ? (
+            <span
+              className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-brand-amber"
+              title={doc.indexing_warning || 'Semantic retrieval is unavailable.'}
+            >
+              <CheckCircle2 className="w-3 h-3" /> Keyword only
+            </span>
+          ) : isIndexed ? (
             <span className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest text-brand-accent">
               <CheckCircle2 className="w-3 h-3" /> Indexed
             </span>
@@ -37,6 +45,11 @@ export default function DocumentItem({ doc, onDelete }) {
             <span className="text-[10px] text-brand-muted">
               {passageCount.toLocaleString()} {passageCount === 1 ? 'passage' : 'passages'}
               {indexedDate ? ` · ${indexedDate}` : ''}
+            </span>
+          )}
+          {isKeywordOnly && doc.indexing_warning && (
+            <span className="truncate text-[10px] text-brand-amber" title={doc.indexing_warning}>
+              Semantic search unavailable
             </span>
           )}
           {!isIndexed && !isProcessing && doc.indexing_error && (
