@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { format } from 'date-fns'
 import {
   Book,
@@ -32,7 +33,12 @@ function cleanSourceText(value) {
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
-  if (url?.startsWith('/')) return `https://www.courtlistener.com${url}`
+  if (url?.startsWith('/api/')) return url
+  if (url?.startsWith('/')) {
+    const isPublicAuthority = src?.source_type === 'public_authority'
+      || src?.source_label === 'Cited authority'
+    return isPublicAuthority ? `https://www.courtlistener.com${url}` : url
+  }
   const citation = cleanSourceText(src?.citation)
   if (citation.startsWith('http://') || citation.startsWith('https://')) return citation
   return ''
@@ -98,7 +104,7 @@ function CollapsibleMarkdown({ content }) {
 
   return (
     <>
-      {intro && <ReactMarkdown components={markdownComponents}>{intro}</ReactMarkdown>}
+      {intro && <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{intro}</ReactMarkdown>}
       {sections.length > 0 && (
         <div className="mb-3 flex justify-end">
           <button
@@ -127,7 +133,7 @@ function CollapsibleMarkdown({ content }) {
               <span>{title}</span>
             </button>
             <div className="pb-2" hidden={!isOpen}>
-              <ReactMarkdown components={markdownComponents}>{section.body.join('\n').trim()}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{section.body.join('\n').trim()}</ReactMarkdown>
             </div>
           </section>
         )

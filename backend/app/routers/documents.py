@@ -10,6 +10,7 @@ from fastapi import (
     UploadFile,
     File,
 )
+from fastapi.responses import FileResponse, RedirectResponse
 import asyncio
 import hashlib
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from app.config import get_settings
 from app.database import get_db, set_tenant_context, async_session_maker
 from app.middleware.tenant import get_current_user
 from app.models.document import Document, Chunk
+from app.models.conversation import Conversation
 from app.schemas.document import DocumentResponse, DocumentList
 from app.services.embeddings import EmbeddingService
 from app.services.durable_jobs import enqueue_job, get_tenant_job, serialize_job
@@ -362,3 +364,51 @@ async def get_document_status(
         raise HTTPException(status_code=404, detail="Document not found")
 
     return _document_to_response(doc)
+
+
+@router.get("/{document_id}/download")
+async def download_document(
+    document_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download a tenant document without bypassing private-chat ownership.
+
+    Tenant-library documents (``conversation_id IS NULL``) follow the same
+    tenant visibility as ``GET /api/documents``. Session attachments remain
+    private to the user who owns the linked conversation.
+    """
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.tenant_id == user.tenant_id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.conversation_id is not None:
+        conversation_owner = await db.scalar(
+            select(Conversation.user_id).where(
+                Conversation.id == doc.conversation_id,
+                Conversation.tenant_id == user.tenant_id,
+            )
+        )
+        if conversation_owner is None or str(conversation_owner) != str(user.id):
+            # Preserve the same non-enumerating behavior as a missing document.
+            raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.storage_path and doc.storage_path.startswith(("http://", "https://")):
+        return RedirectResponse(doc.storage_path)
+    if not doc.storage_path or not os.path.exists(doc.storage_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        path=doc.storage_path,
+        filename=doc.filename,
+        media_type=doc.content_type or "application/octet-stream",
+    )
