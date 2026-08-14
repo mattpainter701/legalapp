@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_maker, set_tenant_context
 from app.models.task import Task, TaskAutomationRun
 from app.schemas.chat_action import EmailClientAction
+from app.services.connected_mail import send_client_email
 from app.services.email import email_service
 from app.services.task_workflow import append_task_event
 
@@ -158,7 +159,12 @@ async def _claim_run(
 # ── Action handlers ─────────────────────────────────────────────────────────
 
 
-async def _run_email_client(task: Task, payload: dict[str, Any]) -> tuple[bool, str]:
+async def _run_email_client(
+    db: AsyncSession,
+    task: Task,
+    payload: dict[str, Any],
+    actor_user_id,
+) -> tuple[bool, str]:
     """Send the approved client email. Returns (succeeded, detail)."""
     try:
         action = EmailClientAction.model_validate(payload)
@@ -167,18 +173,22 @@ async def _run_email_client(task: Task, payload: dict[str, Any]) -> tuple[bool, 
         # or tampering. Never improvise a partial send.
         return False, "The stored email draft is not a valid action payload"
 
-    result = await email_service.send_email(
+    delivery = await send_client_email(
+        db,
+        tenant_id=task.tenant_id,
+        actor_user_id=actor_user_id,
         to=list(action.to),
         subject=action.subject,
         html_body=_body_to_html(action.body),
         text_body=action.body,
+        smtp_service=email_service,
     )
-    if result:
-        return True, result.value
+    if delivery.result:
+        return True, delivery.detail
     # DISABLED/UNCONFIGURED must not be recorded as a send: the attorney would
     # believe the client was contacted. Leaving the run failed also keeps it
     # retryable once delivery is configured.
-    return False, f"Email delivery did not complete ({result.value})"
+    return False, delivery.detail
 
 
 def _body_to_html(body: str) -> str:
@@ -192,7 +202,10 @@ def _body_to_html(body: str) -> str:
     return "".join(paragraphs) or f"<p>{escape(body)}</p>"
 
 
-ACTION_HANDLERS: dict[str, Callable[[Task, dict], Awaitable[tuple[bool, str]]]] = {
+ACTION_HANDLERS: dict[
+    str,
+    Callable[[AsyncSession, Task, dict, Any], Awaitable[tuple[bool, str]]],
+] = {
     "email_client": _run_email_client,
 }
 
@@ -262,7 +275,9 @@ async def run_task_automation(
                 return
 
             try:
-                succeeded, detail = await handler(task, dict(task.pending_action))
+                succeeded, detail = await handler(
+                    db, task, dict(task.pending_action), actor_user_id
+                )
             except Exception as exc:
                 succeeded, detail = False, f"{type(exc).__name__}: {exc}"[:500]
                 logger.warning(
