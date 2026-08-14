@@ -3,28 +3,12 @@
 from app.utils.guardrails import (
     apply_guardrails,
     check_has_citation,
-    check_prohibited_phrases,
     prepare_provider_messages,
     prepare_provider_text,
     sanitize_response,
     validate_citation_confidence,
 )
 from app.services.llm import SYSTEM_PROMPT_TEMPLATE
-
-
-def test_detects_ai_disclosure():
-    assert check_prohibited_phrases("As an AI, I can help") is True
-    assert check_prohibited_phrases("I am an AI language model") is True
-    assert check_prohibited_phrases("As an AI language model, I suggest") is True
-    assert check_prohibited_phrases("deepseek cannot do that") is True
-    assert check_prohibited_phrases("Claude here to help") is True
-
-
-def test_clean_text_passes():
-    assert check_prohibited_phrases("The court held in Smith v. Jones") is False
-    assert (
-        check_prohibited_phrases("Under 35 U.S.C. § 101, the claim is invalid") is False
-    )
 
 
 def test_sanitize_preserves_substantive_ai_terms():

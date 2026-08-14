@@ -138,6 +138,90 @@ async def test_route_activation_canary_has_reasoning_model_token_budget(monkeypa
         assert payload["messages"][0]["role"] == "system"
 
 
+def test_both_canaries_leave_room_for_a_reasoning_pass():
+    """Reasoning models bill chain-of-thought against max_tokens.
+
+    The activation probe was already widened; the direct provider test was not,
+    so operators saw a working reasoning model report itself as broken and
+    route recommendations demoted it for lacking a passing canary.
+    """
+
+    assert platform_llm_router.ROUTE_ACTIVATION_CANARY_MAX_TOKENS >= 256
+    assert platform_llm_router.PROVIDER_CANARY_MAX_TOKENS >= 256
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["OK", "ok", "OK.", " OK \n", '"OK"', "**OK**"],
+)
+def test_canary_accepts_provider_formatting_variants(reply):
+    assert platform_llm_router.canary_answer_matches(reply) is True
+
+
+@pytest.mark.parametrize("reply", ["", None, "OKAY", "NOT OK", "I cannot comply"])
+def test_canary_rejects_non_acknowledgements(reply):
+    assert platform_llm_router.canary_answer_matches(reply) is False
+
+
+def test_canary_reports_reasoning_drain_separately_from_a_wrong_answer():
+    """An exhausted reasoning budget is a budget problem, not a dead route."""
+
+    drained_payload = {
+        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+    }
+    assert platform_llm_router._canary_reasoning_drain(drained_payload, "") is True
+    assert (
+        platform_llm_router._canary_error_category(False, True)
+        == "reasoning_budget_exhausted"
+    )
+    assert (
+        platform_llm_router._canary_error_category(False, False)
+        == "unexpected_response"
+    )
+    assert platform_llm_router._canary_error_category(True, False) is None
+
+    reasoning_only = {
+        "choices": [{"message": {"content": "", "reasoning_content": "thinking..."}}]
+    }
+    assert platform_llm_router._canary_reasoning_drain(reasoning_only, "") is True
+    # Visible content always wins: a real answer is never a drain.
+    assert platform_llm_router._canary_reasoning_drain(drained_payload, "OK") is False
+
+
+@pytest.mark.asyncio
+async def test_route_activation_names_a_drained_reasoning_budget(monkeypatch):
+    fake = _FakeLiteLLMClient(
+        [
+            _FakeLiteLLMResponse(
+                200,
+                {
+                    "model": "deepseek-v4-pro",
+                    "choices": [
+                        {"finish_reason": "length", "message": {"content": ""}}
+                    ],
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
+    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake
+    )
+
+    valid, results, error = await platform_llm_router._probe_litellm_aliases(
+        {"standard": "clarity-standard-r1"}
+    )
+
+    assert valid is False
+    assert results["standard"]["reasoning_drain"] is True
+    assert "reasoning" in error
+    # The operator must be told the provider was reached, not that it is down.
+    assert "reached the provider" in error
+
+
 def test_model_catalog_capabilities_from_provider_metadata():
     model = platform_llm_router._normalize_model_item(
         {

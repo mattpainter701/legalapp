@@ -9,6 +9,13 @@ from app.config import get_settings
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+# The public BGE encoder is several hundred MB of resident weights. Routers each
+# construct their own ``EmbeddingService`` at import time, so per-instance
+# caching loaded one copy per router and let concurrent first-queries load it
+# more than once. Cache the encoder on the module and serialize the load.
+_PUBLIC_MODEL_LOCK = asyncio.Lock()
+_PUBLIC_MODEL_STATE: dict[str, object | None] = {"model": None, "failed": False}
+
 
 def _usable_provider_key(value: str | None) -> bool:
     """Reject empty/template notes before constructing a provider client.
@@ -115,25 +122,46 @@ class EmbeddingService:
             return None
 
     async def _get_public_model(self):
-        if self.public_model is not None:
-            return self.public_model
+        """Return the process-wide BGE encoder, loading it at most once."""
 
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
-            logger.info(
-                "sentence-transformers not installed; public CourtListener RAG disabled"
-            )
+        if _PUBLIC_MODEL_STATE["model"] is not None:
+            self.public_model = _PUBLIC_MODEL_STATE["model"]
+            return self.public_model
+        if _PUBLIC_MODEL_STATE["failed"]:
             self.public_model_load_failed = True
             return None
 
-        try:
-            self.public_model = await asyncio.to_thread(
-                SentenceTransformer,
-                settings.PUBLIC_EMBEDDING_MODEL,
-            )
-            return self.public_model
-        except Exception as e:
-            logger.warning("Failed to load public embedding model: %s", e)
-            self.public_model_load_failed = True
-            return None
+        async with _PUBLIC_MODEL_LOCK:
+            # Re-check under the lock: a concurrent first-query may have
+            # finished the load (or proved it impossible) while we waited.
+            if _PUBLIC_MODEL_STATE["model"] is not None:
+                self.public_model = _PUBLIC_MODEL_STATE["model"]
+                return self.public_model
+            if _PUBLIC_MODEL_STATE["failed"]:
+                self.public_model_load_failed = True
+                return None
+
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError:
+                logger.info(
+                    "sentence-transformers not installed; public CourtListener RAG disabled"
+                )
+                _PUBLIC_MODEL_STATE["failed"] = True
+                self.public_model_load_failed = True
+                return None
+
+            try:
+                model = await asyncio.to_thread(
+                    SentenceTransformer,
+                    settings.PUBLIC_EMBEDDING_MODEL,
+                )
+            except Exception as e:
+                logger.warning("Failed to load public embedding model: %s", e)
+                _PUBLIC_MODEL_STATE["failed"] = True
+                self.public_model_load_failed = True
+                return None
+
+            _PUBLIC_MODEL_STATE["model"] = model
+            self.public_model = model
+            return model
