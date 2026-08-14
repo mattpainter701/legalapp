@@ -12,6 +12,7 @@ Endpoints:
   POST /api/platform/llm/provider-keys/sync-env       — import env vars into vault
   POST /api/platform/llm/provider-keys/{id}/fetch-models — list models from provider
   GET  /api/platform/llm/routes                       — current route config
+  POST /api/platform/llm/routes/recommend             — rank a primary + fallbacks
   PUT  /api/platform/llm/routes                       — save routes (hot-reloads LiteLLM)
   GET  /api/platform/llm/gateway/status               — LiteLLM reachability + alias status
   POST /api/platform/llm/routes/reload                — reload saved routes into LiteLLM
@@ -36,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models.llm_provider_key import LLMProviderKey
+from app.models.operator_audit import OperatorAuditLog
 from app.models.platform import PlatformSetting
 from app.services.llm_routing import (
     LITELLM_PROVIDER,
@@ -174,6 +176,43 @@ class RouteTestRequest(BaseModel):
     provider_id: str
     model: str
     route: str = "standard"
+
+
+class RouteRecommendationRequest(BaseModel):
+    route: str = "standard"
+    cost_preference: str = "cost_optimized"
+    data_mode: str = "customer"
+    max_latency_ms: int = Field(default=LEGAL_READY_LATENCY_MS, ge=250, le=30000)
+    count: int = Field(default=3, ge=1, le=5)
+    provider_diversity: bool = True
+    provider_ids: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(
+        default_factory=lambda: ["text_input", "instruction"]
+    )
+
+    @field_validator("route")
+    @classmethod
+    def _valid_route(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"standard", "premium"}:
+            raise ValueError("must be standard or premium")
+        return value
+
+    @field_validator("cost_preference")
+    @classmethod
+    def _valid_cost_preference(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"free_only", "cost_optimized", "quality"}:
+            raise ValueError("must be free_only, cost_optimized, or quality")
+        return value
+
+    @field_validator("data_mode")
+    @classmethod
+    def _valid_data_mode(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"customer", "strict", "demo"}:
+            raise ValueError("must be customer, strict, or demo")
+        return value
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1057,6 +1096,212 @@ def _hydrate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
     )
     hydrated["new_count"] = sum(1 for model in models if model.get("is_new"))
     return hydrated
+
+
+def _canary_failure_is_current(health: dict[str, Any], now: datetime) -> bool:
+    if health.get("ok"):
+        return False
+    tested_at = health.get("tested_at")
+    if not isinstance(tested_at, datetime):
+        return False
+    category = str(health.get("error_category") or "")
+    ttl = {
+        "invalid_credentials": timedelta(hours=24),
+        "billing_or_provider_policy": timedelta(hours=24),
+        "rate_limited": timedelta(minutes=15),
+        "provider_unavailable": timedelta(minutes=5),
+        "provider_timeout": timedelta(minutes=5),
+        "unexpected_response": timedelta(hours=1),
+    }.get(category, timedelta(minutes=15))
+    return tested_at >= now - ttl
+
+
+def _recommend_route_targets(
+    *,
+    catalog: dict[str, Any],
+    keys: list[dict[str, str]],
+    health: dict[tuple[str, str, str], dict[str, Any]],
+    criteria: RouteRecommendationRequest,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Rank catalog models into a primary plus ordered runtime fallbacks."""
+
+    current_time = now or datetime.now(timezone.utc)
+    keys_by_id = {str(key["id"]): key for key in keys}
+    provider_scope = set(criteria.provider_ids)
+    required = set(criteria.required_capabilities)
+    ranked: list[dict[str, Any]] = []
+
+    for model in catalog.get("models", []):
+        if not isinstance(model, dict):
+            continue
+        provider_id = str(model.get("provider_id") or "")
+        model_id = str(model.get("id") or "")
+        if not provider_id or not model_id:
+            continue
+        if provider_scope and provider_id not in provider_scope:
+            continue
+        if model.get("route_compatible") is False:
+            continue
+        if not model.get("legal_eligible") or model.get("legal_tier") == "excluded":
+            continue
+        confidential = model.get("confidential_data_allowed")
+        if criteria.data_mode == "strict" and confidential is not True:
+            continue
+        if criteria.data_mode == "customer" and confidential is False:
+            continue
+        if criteria.cost_preference == "free_only" and not model.get("is_free"):
+            continue
+        capabilities = set(model.get("capabilities") or [])
+        if not required.issubset(capabilities):
+            continue
+        latency_ms = _extract_latency_ms(model)
+        if latency_ms is not None and latency_ms > criteria.max_latency_ms:
+            continue
+
+        candidate_key_ids = [
+            str(key_id)
+            for key_id in (model.get("key_ids") or [model.get("key_id")])
+            if key_id
+            and str(key_id) in keys_by_id
+            and keys_by_id[str(key_id)].get("provider_id") == provider_id
+        ]
+        if not candidate_key_ids:
+            continue
+
+        def _key_rank(key_id: str) -> tuple[int, float]:
+            result = health.get((provider_id, model_id, key_id))
+            if not result:
+                return (1, 0)
+            tested_at = result.get("tested_at")
+            timestamp = tested_at.timestamp() if isinstance(tested_at, datetime) else 0
+            if result.get("ok"):
+                return (2, timestamp)
+            if _canary_failure_is_current(result, current_time):
+                return (0, timestamp)
+            return (1, timestamp)
+
+        candidate_key_ids.sort(key=_key_rank, reverse=True)
+        key_id = candidate_key_ids[0]
+        selected_health = health.get((provider_id, model_id, key_id))
+        if selected_health and _canary_failure_is_current(selected_health, current_time):
+            # Every available key for this model must be currently failing before
+            # the model is removed. A second, untested key remains eligible.
+            healthy_or_unknown = [
+                value
+                for value in candidate_key_ids
+                if not (
+                    health.get((provider_id, model_id, value))
+                    and _canary_failure_is_current(
+                        health[(provider_id, model_id, value)], current_time
+                    )
+                )
+            ]
+            if not healthy_or_unknown:
+                continue
+            key_id = healthy_or_unknown[0]
+            selected_health = health.get((provider_id, model_id, key_id))
+
+        tier_score = {"recommended": 500, "usable": 350, "limited": 100}.get(
+            str(model.get("legal_tier") or ""), 0
+        )
+        score = tier_score + int(model.get("legal_score") or 0) * 10
+        reasons = [str(model.get("legal_tier") or "usable").replace("_", " ")]
+        if confidential is True:
+            score += 80
+            reasons.append("confidential-data approved")
+        elif confidential is None:
+            reasons.append("provider terms require review")
+        else:
+            score -= 30
+            reasons.append("synthetic/demo data only")
+        if selected_health and selected_health.get("ok"):
+            score += 250
+            reasons.append("recent canary passed")
+        else:
+            reasons.append("canary not recently passed")
+        if latency_ms is not None:
+            score += max(0, 100 - int(latency_ms / 30))
+            reasons.append(f"{latency_ms}ms catalog latency")
+        if criteria.cost_preference == "free_only":
+            score += 100
+        elif criteria.cost_preference == "cost_optimized":
+            score += 100 if model.get("is_free") else 20
+        elif not model.get("is_free"):
+            score += 60
+
+        model_text = f"{model_id} {model.get('name') or ''}".lower()
+        if criteria.route == "premium":
+            if any(term in model_text for term in ("pro", "sonnet", "opus", "ultra")):
+                score += 60
+                reasons.append("premium-quality family")
+            if "flash" in model_text:
+                score -= 10
+        else:
+            if any(term in model_text for term in ("flash", "mini", "haiku", "gemma")):
+                score += 40
+                reasons.append("standard-efficiency family")
+
+        ranked.append(
+            {
+                "key_id": key_id,
+                "key_name": keys_by_id[key_id].get("name"),
+                "provider_id": provider_id,
+                "provider_name": model.get("provider_name") or provider_id,
+                "model": model_id,
+                "model_name": model.get("name") or model_id,
+                "capacity": 100,
+                "score": score,
+                "is_free": bool(model.get("is_free")),
+                "legal_tier": model.get("legal_tier"),
+                "data_policy": model.get("data_policy"),
+                "confidential_data_allowed": confidential,
+                "latency_ms": latency_ms,
+                "canary_ok": bool(selected_health and selected_health.get("ok")),
+                "canary_tested_at": (
+                    selected_health["tested_at"].isoformat()
+                    if selected_health
+                    and isinstance(selected_health.get("tested_at"), datetime)
+                    else None
+                ),
+                "reasons": reasons,
+            }
+        )
+
+    ranked.sort(key=lambda item: (-item["score"], item["provider_id"], item["model"]))
+    selected: list[dict[str, Any]] = []
+    if criteria.provider_diversity:
+        seen_providers: set[str] = set()
+        for candidate in ranked:
+            if candidate["provider_id"] in seen_providers:
+                continue
+            selected.append(candidate)
+            seen_providers.add(candidate["provider_id"])
+            if len(selected) >= criteria.count:
+                break
+    for candidate in ranked:
+        if len(selected) >= criteria.count:
+            break
+        if candidate not in selected:
+            selected.append(candidate)
+
+    warnings: list[str] = []
+    if len(selected) < criteria.count:
+        warnings.append(
+            f"Only {len(selected)} model(s) met the current criteria; requested {criteria.count}."
+        )
+    if any(item["confidential_data_allowed"] is None for item in selected):
+        warnings.append("One or more selected providers still require a data-terms review.")
+    if any(not item["canary_ok"] for item in selected):
+        warnings.append("Test every selected target before activation; some lack a recent passing canary.")
+
+    return {
+        "route": criteria.route,
+        "criteria": criteria.model_dump(),
+        "candidates": selected,
+        "eligible_count": len(ranked),
+        "warnings": warnings,
+    }
 
 
 def _litellm_model_name(provider_id: str, model: str) -> str:
@@ -2018,6 +2263,73 @@ async def refresh_model_catalog(request: Request, db: AsyncSession = Depends(get
     await _save_model_catalog(db, catalog)
     await db.commit()
     return catalog
+
+
+@router.post("/routes/recommend")
+async def recommend_routes(
+    request: Request,
+    body: RouteRecommendationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    _require_platform_key(request)
+    catalog = await _get_model_catalog(db)
+    key_result = await db.execute(select(LLMProviderKey))
+    keys = [
+        {"id": str(key.id), "name": key.name, "provider_id": key.provider_id}
+        for key in key_result.scalars().all()
+    ]
+
+    audit_result = await db.execute(
+        select(OperatorAuditLog)
+        .where(OperatorAuditLog.action == "llm.model_tested")
+        .order_by(OperatorAuditLog.created_at.desc())
+        .limit(250)
+    )
+    health: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for entry in audit_result.scalars().all():
+        metadata = entry.metadata_json or {}
+        ident = (
+            str(metadata.get("provider_id") or ""),
+            str(metadata.get("model") or ""),
+            str(metadata.get("key_id") or ""),
+        )
+        if not all(ident) or ident in health:
+            continue
+        health[ident] = {
+            "ok": bool(metadata.get("ok")),
+            "error_category": metadata.get("error_category"),
+            "credential_state": metadata.get("credential_state"),
+            "provider_latency_ms": metadata.get("provider_latency_ms"),
+            "tested_at": entry.created_at,
+        }
+
+    recommendation = _recommend_route_targets(
+        catalog=catalog,
+        keys=keys,
+        health=health,
+        criteria=body,
+    )
+    await record_operator_audit(
+        db,
+        request,
+        action="llm.routes_recommended",
+        resource_type="llm_route_recommendation",
+        resource_id=body.route,
+        metadata={
+            "criteria": body.model_dump(),
+            "candidate_count": len(recommendation["candidates"]),
+            "eligible_count": recommendation["eligible_count"],
+            "providers": [
+                candidate["provider_id"]
+                for candidate in recommendation["candidates"]
+            ],
+            "models": [
+                candidate["model"] for candidate in recommendation["candidates"]
+            ],
+        },
+    )
+    await db.commit()
+    return recommendation
 
 
 @router.get("/routes")

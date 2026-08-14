@@ -11,6 +11,7 @@ import {
   getLLMProviderPresets,
   getLLMRoutes,
   deleteLLMProviderKey,
+  recommendLLMRoutes,
   saveLLMRoutes,
   testLLMRoute,
 } from '../api'
@@ -23,6 +24,7 @@ vi.mock('../api', async (importOriginal) => ({
   getLLMProviderPresets: vi.fn(),
   getLLMRoutes: vi.fn(),
   deleteLLMProviderKey: vi.fn(),
+  recommendLLMRoutes: vi.fn(),
   saveLLMRoutes: vi.fn(),
   testLLMRoute: vi.fn(),
 }))
@@ -69,6 +71,16 @@ beforeEach(() => {
     fallbacks_registered: 0,
   })
   deleteLLMProviderKey.mockResolvedValue({ deleted: true })
+  recommendLLMRoutes.mockResolvedValue({
+    route: 'standard',
+    eligible_count: 3,
+    warnings: [],
+    candidates: [
+      { key_id: 'key-1', key_name: 'Production', provider_id: 'openrouter', provider_name: 'OpenRouter', model: 'provider/fast', score: 700, canary_ok: true, is_free: true },
+      { key_id: 'key-1', key_name: 'Production', provider_id: 'openrouter', provider_name: 'OpenRouter', model: 'provider/backup-a', score: 650, canary_ok: true, is_free: true },
+      { key_id: 'key-1', key_name: 'Production', provider_id: 'openrouter', provider_name: 'OpenRouter', model: 'provider/backup-b', score: 600, canary_ok: true, is_free: false },
+    ],
+  })
   testLLMRoute.mockResolvedValue({
     ok: false,
     error: 'Billing or provider policy blocked the canary; credential validity is indeterminate.',
@@ -208,5 +220,51 @@ describe('platform AI routing', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('Credential indeterminate policy block')).toBeInTheDocument()
     expect(screen.getByText('billing or provider policy')).toBeInTheDocument()
+  })
+
+  it('builds and applies a top-three route without activating it automatically', async () => {
+    const user = userEvent.setup()
+    renderRouting()
+
+    await user.click(await screen.findByRole('button', { name: 'Recommend top 3' }))
+
+    await waitFor(() => {
+      expect(recommendLLMRoutes).toHaveBeenCalledWith('platform-token', expect.objectContaining({
+        route: 'standard',
+        cost_preference: 'cost_optimized',
+        data_mode: 'customer',
+        count: 3,
+        provider_diversity: true,
+      }))
+    })
+    expect(await screen.findByText('provider/fast')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Apply recommendation' }))
+    expect(await screen.findByText(/Applied the top 3 standard targets/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Validate & Activate' }))
+    await waitFor(() => {
+      expect(saveLLMRoutes).toHaveBeenCalledWith('platform-token', expect.objectContaining({
+        standard: expect.objectContaining({
+          model: 'provider/fast',
+          fallbacks: [
+            expect.objectContaining({ model: 'provider/backup-a' }),
+            expect.objectContaining({ model: 'provider/backup-b' }),
+          ],
+        }),
+      }))
+    })
+  })
+
+  it('renders a structured model-test error as text', async () => {
+    const user = userEvent.setup()
+    testLLMRoute.mockRejectedValue({
+      response: { data: { detail: { message: 'Selected provider key is not authorized.' } } },
+    })
+    renderRouting()
+
+    const tests = await screen.findAllByRole('button', { name: 'Test provider' })
+    await user.click(tests[0])
+
+    expect(await screen.findByText('Test failed: Selected provider key is not authorized.')).toBeInTheDocument()
   })
 })

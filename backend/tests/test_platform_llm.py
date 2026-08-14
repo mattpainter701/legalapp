@@ -5,6 +5,7 @@ from httpx import AsyncClient
 
 from app.routers import platform_llm as platform_llm_router
 from app.models.llm_provider_key import LLMProviderKey
+from app.models.platform import PlatformSetting
 from tests.platform_auth_helpers import platform_headers
 
 TEST_PLATFORM_KEY = "test-platform-key-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -332,6 +333,180 @@ def test_catalog_merge_preserves_all_provider_keys_without_duplicate_models():
     assert models[0]["key_ids"] == ["key-a", "key-b"]
     assert models[0]["key_count"] == 2
     assert models[0]["key_name"] == "2 stored keys"
+
+
+def test_route_recommendation_uses_canary_health_and_customer_data_policy():
+    now = platform_llm_router.datetime.now(platform_llm_router.timezone.utc)
+    catalog = {
+        "models": [
+            {
+                "id": "deepseek-v4-pro",
+                "name": "DeepSeek V4 Pro",
+                "provider_id": "opencode-go",
+                "provider_name": "OpenCode Go",
+                "key_ids": ["key-go"],
+                "legal_eligible": True,
+                "legal_tier": "usable",
+                "legal_score": 5,
+                "route_compatible": True,
+                "capabilities": ["text_input", "instruction"],
+                "confidential_data_allowed": True,
+                "data_policy": "zero_retention",
+            },
+            {
+                "id": "deepseek-v4-pro",
+                "name": "DeepSeek V4 Pro",
+                "provider_id": "deepseek",
+                "provider_name": "DeepSeek",
+                "key_ids": ["key-direct"],
+                "legal_eligible": True,
+                "legal_tier": "usable",
+                "legal_score": 5,
+                "route_compatible": True,
+                "capabilities": ["text_input", "instruction"],
+                "confidential_data_allowed": None,
+                "data_policy": "provider_terms",
+            },
+            {
+                "id": "laguna-s-2.1-free",
+                "name": "Laguna",
+                "provider_id": "opencode-zen",
+                "provider_name": "OpenCode Zen",
+                "key_ids": ["key-zen"],
+                "legal_eligible": True,
+                "legal_tier": "usable",
+                "legal_score": 5,
+                "route_compatible": True,
+                "capabilities": ["text_input", "instruction"],
+                "is_free": True,
+                "confidential_data_allowed": False,
+                "data_policy": "training_or_improvement_possible",
+            },
+        ]
+    }
+    keys = [
+        {"id": "key-go", "name": "Go", "provider_id": "opencode-go"},
+        {"id": "key-direct", "name": "Direct", "provider_id": "deepseek"},
+        {"id": "key-zen", "name": "Zen", "provider_id": "opencode-zen"},
+    ]
+    health = {
+        ("opencode-go", "deepseek-v4-pro", "key-go"): {
+            "ok": False,
+            "error_category": "billing_or_provider_policy",
+            "tested_at": now,
+        },
+        ("deepseek", "deepseek-v4-pro", "key-direct"): {
+            "ok": True,
+            "tested_at": now,
+        },
+    }
+
+    result = platform_llm_router._recommend_route_targets(
+        catalog=catalog,
+        keys=keys,
+        health=health,
+        criteria=platform_llm_router.RouteRecommendationRequest(
+            route="premium", cost_preference="quality", data_mode="customer"
+        ),
+        now=now,
+    )
+
+    assert [candidate["provider_id"] for candidate in result["candidates"]] == [
+        "deepseek"
+    ]
+    assert result["candidates"][0]["canary_ok"] is True
+    assert any("requested 3" in warning for warning in result["warnings"])
+
+
+def test_route_recommendation_can_select_free_demo_capacity():
+    catalog = {
+        "models": [
+            {
+                "id": "laguna-s-2.1-free",
+                "provider_id": "opencode-zen",
+                "provider_name": "OpenCode Zen",
+                "key_ids": ["key-zen"],
+                "legal_eligible": True,
+                "legal_tier": "usable",
+                "legal_score": 5,
+                "route_compatible": True,
+                "capabilities": ["text_input", "instruction"],
+                "is_free": True,
+                "confidential_data_allowed": False,
+                "data_policy": "training_or_improvement_possible",
+            }
+        ]
+    }
+
+    result = platform_llm_router._recommend_route_targets(
+        catalog=catalog,
+        keys=[{"id": "key-zen", "name": "Zen", "provider_id": "opencode-zen"}],
+        health={},
+        criteria=platform_llm_router.RouteRecommendationRequest(
+            route="standard",
+            cost_preference="free_only",
+            data_mode="demo",
+            count=1,
+        ),
+    )
+
+    assert result["candidates"][0]["model"] == "laguna-s-2.1-free"
+    assert result["candidates"][0]["is_free"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_recommendation_endpoint_returns_auditable_targets(
+    client: AsyncClient, db_session
+):
+    key = LLMProviderKey(
+        id=uuid.uuid4(),
+        name="Direct DeepSeek",
+        provider_id="deepseek",
+        encrypted_key="unused",
+        key_hint="hint",
+    )
+    db_session.add(key)
+    db_session.add(
+        PlatformSetting(
+            key=platform_llm_router.LLM_MODEL_CATALOG_KEY,
+            value={
+                "models": [
+                    {
+                        "id": "deepseek-v4-pro",
+                        "name": "DeepSeek V4 Pro",
+                        "provider_id": "deepseek",
+                        "provider_name": "DeepSeek",
+                        "key_id": str(key.id),
+                        "key_ids": [str(key.id)],
+                        "legal_eligible": True,
+                        "legal_tier": "usable",
+                        "legal_score": 5,
+                        "route_compatible": True,
+                        "capabilities": ["text_input", "instruction"],
+                        "confidential_data_allowed": None,
+                        "data_policy": "provider_terms",
+                    }
+                ]
+            },
+        )
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/platform/llm/routes/recommend",
+        headers=platform_headers(),
+        json={
+            "route": "premium",
+            "cost_preference": "quality",
+            "data_mode": "customer",
+            "count": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidates"][0]["model"] == "deepseek-v4-pro"
+    assert payload["candidates"][0]["key_id"] == str(key.id)
 
 
 def test_customer_route_policy_blocks_only_unsafe_zen_free_capacity():
