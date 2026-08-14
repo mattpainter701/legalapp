@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -59,8 +60,14 @@ LEGAL_READY_LATENCY_MS = 3000
 MIN_LEGAL_CONTEXT_LENGTH = 16000
 RECOMMENDED_LEGAL_CONTEXT_LENGTH = 100000
 CONFIDENTIAL_DATA_BLOCK_CODE = "confidential_data_not_allowed"
-PROVIDER_CANARY_MAX_TOKENS = 32
-ROUTE_ACTIVATION_CANARY_MAX_TOKENS = 256
+# Reasoning models bill chain-of-thought against ``max_tokens`` and emit it
+# before any visible content, so a budget sized for the literal answer ("OK")
+# makes a healthy reasoning model look dead: 200, empty ``content``, and a
+# ``length`` finish reason. The route-activation probe already accounts for this;
+# the direct provider test needs the same headroom, because operators read its
+# verdict as "is this model usable" and route recommendations key off it.
+PROVIDER_CANARY_MAX_TOKENS = 512
+ROUTE_ACTIVATION_CANARY_MAX_TOKENS = 512
 
 ZEN_FREE_MODELS = {
     "big-pickle",
@@ -414,12 +421,14 @@ def _is_free_model(model_id: str, item: dict[str, Any], provider_id: str = "") -
 def _confidential_data_unsafe_targets(
     config: dict[str, Any], catalog: dict[str, Any]
 ) -> list[dict[str, str]]:
-    """Return customer routes whose upstream terms permit training/retention.
+    """Return customer routes not affirmatively approved for confidential data.
 
     OpenCode documents its free Zen endpoints as evaluation capacity whose data
     may be collected or used to improve models. Customer aliases can carry
     privileged or confidential material, so those models remain demo/lab-only.
     Free capacity from providers with an acceptable data policy is not blocked.
+    Missing catalog rows and unknown provider terms fail closed: absence of an
+    approval is not authorization to transmit privileged client material.
     """
 
     catalog_rows = catalog.get("models", []) if isinstance(catalog, dict) else []
@@ -444,13 +453,19 @@ def _confidential_data_unsafe_targets(
         is_unsafe_zen_free = provider_id == "opencode-zen" and _is_free_model(
             model_id, row, provider_id
         )
-        if confidential_data_allowed is False or is_unsafe_zen_free:
+        if confidential_data_allowed is not True or is_unsafe_zen_free:
             blocked.append(
                 {
                     "route": route_name,
                     "placement": placement,
                     "provider_id": provider_id,
                     "model": model_id,
+                    "data_policy": str(row.get("data_policy") or "unknown"),
+                    "reason": (
+                        "not_approved"
+                        if confidential_data_allowed is None
+                        else "disallowed"
+                    ),
                 }
             )
 
@@ -497,8 +512,9 @@ async def _enforce_customer_route_data_policy(
         detail={
             "code": CONFIDENTIAL_DATA_BLOCK_CODE,
             "message": (
-                "This model's upstream data policy is not approved for customer "
-                "legal traffic. Use it only with synthetic or sanitized demo data."
+                "Every customer route target must be affirmatively approved for "
+                "confidential legal traffic. Review its upstream terms or use it "
+                "only with synthetic or sanitized demo data."
             ),
             "targets": unsafe_targets,
         },
@@ -1147,9 +1163,7 @@ def _recommend_route_targets(
         if not model.get("legal_eligible") or model.get("legal_tier") == "excluded":
             continue
         confidential = model.get("confidential_data_allowed")
-        if criteria.data_mode == "strict" and confidential is not True:
-            continue
-        if criteria.data_mode == "customer" and confidential is False:
+        if criteria.data_mode in {"strict", "customer"} and confidential is not True:
             continue
         if criteria.cost_preference == "free_only" and not model.get("is_free"):
             continue
@@ -1433,6 +1447,66 @@ def _litellm_static_alias_matches(
 
 def _litellm_error_detail(resp: httpx.Response) -> str:
     return (resp.text or "").strip()[:300]
+
+
+_CANARY_STRIP_RE = re.compile(r"[^a-z]")
+
+
+def canary_answer_matches(text: str | None) -> bool:
+    """Return whether a canary reply is the expected acknowledgement.
+
+    The canary proves reachability and instruction-following, not formatting
+    obedience. Providers legitimately return ``OK.``, ``"OK"``, ``ok``, or wrap
+    the token in a short sentence, and reasoning models often prefix a summary
+    line. Requiring a byte-exact ``OK`` turned those healthy routes into
+    operator-visible failures, so compare on letters only.
+    """
+
+    normalized = _CANARY_STRIP_RE.sub("", (text or "").casefold())
+    return normalized == "ok"
+
+
+def _canary_error_message(canary_ok: bool, drained: bool) -> str | None:
+    """Describe a canary outcome so an operator knows what to change."""
+
+    if canary_ok:
+        return None
+    if drained:
+        return (
+            "Provider reached, but the model spent its entire "
+            f"{PROVIDER_CANARY_MAX_TOKENS}-token canary budget on reasoning and "
+            "returned no visible text. Raise the canary budget for this model."
+        )
+    return "Provider responded, but the synthetic canary value was incorrect."
+
+
+def _canary_error_category(canary_ok: bool, drained: bool) -> str | None:
+    if canary_ok:
+        return None
+    return "reasoning_budget_exhausted" if drained else "unexpected_response"
+
+
+def _canary_reasoning_drain(payload: Any, content: str) -> bool:
+    """Detect a reasoning model that spent the whole budget before answering.
+
+    A ``length``-truncated response with no visible content is a budget
+    problem, not an unreachable provider. Naming it separately keeps operators
+    from retiring a working route.
+    """
+
+    if content:
+        return False
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        finish_reason = choices[0].get("finish_reason")
+        if finish_reason in {"length", "max_tokens"}:
+            return True
+        message = choices[0].get("message")
+        if isinstance(message, dict) and message.get("reasoning_content"):
+            return True
+    if isinstance(payload, dict) and payload.get("stop_reason") == "max_tokens":
+        return True
+    return False
 
 
 async def _call_litellm_config_update(
@@ -1733,6 +1807,25 @@ async def _probe_litellm_aliases(
                     else ""
                 )
                 if not content:
+                    results[route_name] = {
+                        "alias": alias,
+                        "ok": False,
+                        "latency_ms": elapsed_ms,
+                        "model": payload.get("model"),
+                        "reasoning_drain": _canary_reasoning_drain(payload, content),
+                    }
+                    if results[route_name]["reasoning_drain"]:
+                        return (
+                            False,
+                            results,
+                            (
+                                f"Synthetic {route_name} completion spent its entire "
+                                f"{ROUTE_ACTIVATION_CANARY_MAX_TOKENS}-token budget on "
+                                "reasoning and returned no visible text. The route "
+                                "reached the provider; raise "
+                                "ROUTE_ACTIVATION_CANARY_MAX_TOKENS for this model."
+                            ),
+                        )
                     return (
                         False,
                         results,
@@ -2723,8 +2816,10 @@ async def test_route(
                 if isinstance(part, dict) and part.get("type") == "text"
             ).strip()
             usage = payload.get("usage") or {}
+            canary_ok = canary_answer_matches(text)
+            drained = _canary_reasoning_drain(payload, text)
             result = _timing_response(
-                ok=text == "OK",
+                ok=canary_ok,
                 provider_latency_ms=elapsed_ms,
                 model_used=payload.get("model") or body.model,
                 response_preview=text[:120],
@@ -2733,12 +2828,8 @@ async def test_route(
                     completion_tokens=usage.get("output_tokens"),
                     elapsed_ms=elapsed_ms,
                 ),
-                error=(
-                    None
-                    if text == "OK"
-                    else "Provider responded, but the synthetic canary value was incorrect."
-                ),
-                error_category=None if text == "OK" else "unexpected_response",
+                error=_canary_error_message(canary_ok, drained),
+                error_category=_canary_error_category(canary_ok, drained),
                 provider_reachable=True,
             )
             await record_operator_audit(
@@ -2776,8 +2867,12 @@ async def test_route(
         text = (resp.choices[0].message.content or "").strip()
         model_used = resp.model or body.model
         usage = resp.usage
+        canary_ok = canary_answer_matches(text)
+        drained = _canary_reasoning_drain(
+            resp.model_dump() if hasattr(resp, "model_dump") else {}, text
+        )
         result = _timing_response(
-            ok=text == "OK",
+            ok=canary_ok,
             provider_latency_ms=elapsed_ms,
             model_used=model_used,
             response_preview=text[:120],
@@ -2787,12 +2882,8 @@ async def test_route(
                 total_tokens=getattr(usage, "total_tokens", None),
                 elapsed_ms=elapsed_ms,
             ),
-            error=(
-                None
-                if text == "OK"
-                else "Provider responded, but the synthetic canary value was incorrect."
-            ),
-            error_category=None if text == "OK" else "unexpected_response",
+            error=_canary_error_message(canary_ok, drained),
+            error_category=_canary_error_category(canary_ok, drained),
             provider_reachable=True,
         )
         await record_operator_audit(

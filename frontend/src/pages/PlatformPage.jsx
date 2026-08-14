@@ -1048,9 +1048,12 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   const selectedModelIsKnown = suggestedModels.some((model) => model.id === value.model)
   const [manualModel, setManualModel] = useState(Boolean(value.model && !selectedModelIsKnown))
 
+  // Only a catalog match may close manual entry. Keying off an empty model
+  // snapped the field back to the dropdown the moment an operator cleared it to
+  // retype a custom ID, which silently discarded what they were typing.
   useEffect(() => {
-    if (!value.model || selectedModelIsKnown) setManualModel(false)
-  }, [value.model, selectedModelIsKnown])
+    if (selectedModelIsKnown) setManualModel(false)
+  }, [selectedModelIsKnown])
 
   const setField = (field, next) => {
     if (field === 'provider_id') onChange({ ...value, provider_id: next, key_id: '', model: '' })
@@ -1113,8 +1116,15 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
           >
             <option value="">{value.key_id ? (suggestedModels.length ? 'Choose model' : 'No catalog models; enter custom ID') : 'Pick key first'}</option>
             {suggestedModels.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{model.route_compatible === false ? ' — Unsupported endpoint' : ''}
+              // Selecting an unsupported endpoint or a model barred from
+              // customer traffic only fails later, at activation. Disable it
+              // here so the reason is visible at the point of choice.
+              <option
+                key={model.id}
+                value={model.id}
+                disabled={model.route_compatible === false || model.confidential_data_allowed === false}
+              >
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{model.route_compatible === false ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
               </option>
             ))}
           </select>

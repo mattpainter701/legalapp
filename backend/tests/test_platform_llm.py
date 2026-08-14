@@ -138,6 +138,90 @@ async def test_route_activation_canary_has_reasoning_model_token_budget(monkeypa
         assert payload["messages"][0]["role"] == "system"
 
 
+def test_both_canaries_leave_room_for_a_reasoning_pass():
+    """Reasoning models bill chain-of-thought against max_tokens.
+
+    The activation probe was already widened; the direct provider test was not,
+    so operators saw a working reasoning model report itself as broken and
+    route recommendations demoted it for lacking a passing canary.
+    """
+
+    assert platform_llm_router.ROUTE_ACTIVATION_CANARY_MAX_TOKENS >= 256
+    assert platform_llm_router.PROVIDER_CANARY_MAX_TOKENS >= 256
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["OK", "ok", "OK.", " OK \n", '"OK"', "**OK**"],
+)
+def test_canary_accepts_provider_formatting_variants(reply):
+    assert platform_llm_router.canary_answer_matches(reply) is True
+
+
+@pytest.mark.parametrize("reply", ["", None, "OKAY", "NOT OK", "I cannot comply"])
+def test_canary_rejects_non_acknowledgements(reply):
+    assert platform_llm_router.canary_answer_matches(reply) is False
+
+
+def test_canary_reports_reasoning_drain_separately_from_a_wrong_answer():
+    """An exhausted reasoning budget is a budget problem, not a dead route."""
+
+    drained_payload = {
+        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+    }
+    assert platform_llm_router._canary_reasoning_drain(drained_payload, "") is True
+    assert (
+        platform_llm_router._canary_error_category(False, True)
+        == "reasoning_budget_exhausted"
+    )
+    assert (
+        platform_llm_router._canary_error_category(False, False)
+        == "unexpected_response"
+    )
+    assert platform_llm_router._canary_error_category(True, False) is None
+
+    reasoning_only = {
+        "choices": [{"message": {"content": "", "reasoning_content": "thinking..."}}]
+    }
+    assert platform_llm_router._canary_reasoning_drain(reasoning_only, "") is True
+    # Visible content always wins: a real answer is never a drain.
+    assert platform_llm_router._canary_reasoning_drain(drained_payload, "OK") is False
+
+
+@pytest.mark.asyncio
+async def test_route_activation_names_a_drained_reasoning_budget(monkeypatch):
+    fake = _FakeLiteLLMClient(
+        [
+            _FakeLiteLLMResponse(
+                200,
+                {
+                    "model": "deepseek-v4-pro",
+                    "choices": [
+                        {"finish_reason": "length", "message": {"content": ""}}
+                    ],
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        platform_llm_router.settings, "LITELLM_BASE_URL", "http://litellm"
+    )
+    monkeypatch.setattr(platform_llm_router.settings, "LITELLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake
+    )
+
+    valid, results, error = await platform_llm_router._probe_litellm_aliases(
+        {"standard": "clarity-standard-r1"}
+    )
+
+    assert valid is False
+    assert results["standard"]["reasoning_drain"] is True
+    assert "reasoning" in error
+    # The operator must be told the provider was reached, not that it is down.
+    assert "reached the provider" in error
+
+
 def test_model_catalog_capabilities_from_provider_metadata():
     model = platform_llm_router._normalize_model_item(
         {
@@ -414,10 +498,7 @@ def test_route_recommendation_uses_canary_health_and_customer_data_policy():
         now=now,
     )
 
-    assert [candidate["provider_id"] for candidate in result["candidates"]] == [
-        "deepseek"
-    ]
-    assert result["candidates"][0]["canary_ok"] is True
+    assert result["candidates"] == []
     assert any("requested 3" in warning for warning in result["warnings"])
 
 
@@ -463,8 +544,8 @@ async def test_route_recommendation_endpoint_returns_auditable_targets(
 ):
     key = LLMProviderKey(
         id=uuid.uuid4(),
-        name="Direct DeepSeek",
-        provider_id="deepseek",
+        name="OpenCode Go",
+        provider_id="opencode-go",
         encrypted_key="unused",
         key_hint="hint",
     )
@@ -477,8 +558,8 @@ async def test_route_recommendation_endpoint_returns_auditable_targets(
                     {
                         "id": "deepseek-v4-pro",
                         "name": "DeepSeek V4 Pro",
-                        "provider_id": "deepseek",
-                        "provider_name": "DeepSeek",
+                        "provider_id": "opencode-go",
+                        "provider_name": "OpenCode Go",
                         "key_id": str(key.id),
                         "key_ids": [str(key.id)],
                         "legal_eligible": True,
@@ -486,8 +567,8 @@ async def test_route_recommendation_endpoint_returns_auditable_targets(
                         "legal_score": 5,
                         "route_compatible": True,
                         "capabilities": ["text_input", "instruction"],
-                        "confidential_data_allowed": None,
-                        "data_policy": "provider_terms",
+                        "confidential_data_allowed": True,
+                        "data_policy": "zero_retention",
                     }
                 ]
             },
@@ -512,7 +593,7 @@ async def test_route_recommendation_endpoint_returns_auditable_targets(
     assert payload["candidates"][0]["key_id"] == str(key.id)
 
 
-def test_customer_route_policy_blocks_only_unsafe_zen_free_capacity():
+def test_customer_route_policy_fails_closed_without_explicit_approval():
     config = {
         "standard": {
             "provider_id": "openrouter",
@@ -541,8 +622,12 @@ def test_customer_route_policy_blocks_only_unsafe_zen_free_capacity():
     )
 
     assert [(item["route"], item["placement"]) for item in blocked] == [
+        ("standard", "primary"),
         ("standard", "alternate[0]"),
+        ("standard", "fallback[0]"),
+        ("premium", "primary"),
     ]
+    assert all(item["reason"] == "not_approved" for item in blocked)
 
 
 def test_customer_route_policy_uses_catalog_data_policy_metadata():
@@ -572,6 +657,8 @@ def test_customer_route_policy_uses_catalog_data_policy_metadata():
             "placement": "primary",
             "provider_id": "provider-a",
             "model": "model-without-free-suffix",
+            "data_policy": "unknown",
+            "reason": "disallowed",
         }
     ]
 
@@ -986,18 +1073,43 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
 ):
     headers = platform_headers()
     standard_key = LLMProviderKey(
+        id=uuid.uuid4(),
         name="Standard key",
-        provider_id="openrouter",
+        provider_id="opencode-go",
         encrypted_key="unused",
         key_hint="test",
     )
     premium_key = LLMProviderKey(
+        id=uuid.uuid4(),
         name="Premium key",
-        provider_id="anthropic",
+        provider_id="opencode-go",
         encrypted_key="unused",
         key_hint="test",
     )
     db_session.add_all([standard_key, premium_key])
+    db_session.add(
+        PlatformSetting(
+            key=platform_llm_router.LLM_MODEL_CATALOG_KEY,
+            value={
+                "models": [
+                    {
+                        "id": "deepseek-v4-flash",
+                        "provider_id": "opencode-go",
+                        "key_ids": [str(standard_key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                    },
+                    {
+                        "id": "deepseek-v4-pro",
+                        "provider_id": "opencode-go",
+                        "key_ids": [str(premium_key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                    },
+                ]
+            },
+        )
+    )
     await db_session.commit()
     await db_session.refresh(standard_key)
     await db_session.refresh(premium_key)
@@ -1024,14 +1136,14 @@ async def test_failed_route_activation_does_not_publish_candidate_config(
         headers=headers,
         json={
             "standard": {
-                "provider_id": "openrouter",
+                "provider_id": "opencode-go",
                 "key_id": str(standard_key.id),
-                "model": "provider/standard",
+                "model": "deepseek-v4-flash",
             },
             "premium": {
-                "provider_id": "anthropic",
+                "provider_id": "opencode-go",
                 "key_id": str(premium_key.id),
-                "model": "claude-premium",
+                "model": "deepseek-v4-pro",
             },
         },
     )

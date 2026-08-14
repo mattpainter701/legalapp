@@ -15,6 +15,8 @@ class DocumentResponse(BaseModel):
     source_modified_at: datetime | None = None
     embedding_model: str | None = None
     embedding_version: int | None = None
+    retrieval_mode: str = "not_indexed"
+    indexing_warning: str | None = None
     indexing_error: str | None = None
     processing_job_id: str | None = None
 

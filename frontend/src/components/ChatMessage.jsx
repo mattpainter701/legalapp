@@ -20,6 +20,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
+import { API_BASE_URL } from '../api'
 
 function cleanSourceText(value) {
   if (!value) return ''
@@ -33,7 +34,12 @@ function cleanSourceText(value) {
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
-  if (url?.startsWith('/api/')) return url
+  // The backend emits tenant document links as origin-relative `/api/...`.
+  // Re-base them on the configured API origin so a deployment that serves the
+  // API from another host (VITE_API_URL) still resolves citation links.
+  if (url?.startsWith('/api/')) {
+    return API_BASE_URL === '/api' ? url : `${API_BASE_URL}${url.slice('/api'.length)}`
+  }
   if (url?.startsWith('/')) {
     const isPublicAuthority = src?.source_type === 'public_authority'
       || src?.source_label === 'Cited authority'
