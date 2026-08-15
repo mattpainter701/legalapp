@@ -82,6 +82,7 @@ from app.services.cloud_search import CloudSearchService
 from app.services.gateway_privacy import retained_gateway_query_text
 from app.services.llm import LLMService
 from app.services.matter_context import MatterContextService
+from app.services.user_context import build_global_user_context
 from app.services.plugins.executor import PluginExecutor
 from app.services.plugins.manifest import (
     get_plugin_manifest,
@@ -112,6 +113,22 @@ retrieval_planner = RetrievalPlanner(llm_service)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 VALID_PLUGINS = valid_plugin_names()
+
+
+async def _invalidate_plugin_matter_context(
+    tenant_id: uuid.UUID, matter_id: uuid.UUID
+) -> None:
+    """Best-effort cache invalidation for legacy plugin matter mutations."""
+    try:
+        await plugin_cache_manager.invalidate_matter_context(
+            str(matter_id), str(tenant_id)
+        )
+    except Exception:
+        logger.warning(
+            "Plugin matter context cache invalidation failed for matter %s",
+            matter_id,
+            exc_info=True,
+        )
 
 
 def _slugify(text: str) -> str:
@@ -964,6 +981,7 @@ async def run_matter_conflict_check(
 
     await db.commit()
     await db.refresh(matter)
+    await _invalidate_plugin_matter_context(user.tenant_id, matter.id)
     return _matter_to_response(matter)
 
 
@@ -1018,6 +1036,7 @@ async def update_matter(
 
     await db.commit()
     await db.refresh(matter)
+    await _invalidate_plugin_matter_context(user.tenant_id, matter.id)
     return _matter_to_response(matter)
 
 
@@ -1063,6 +1082,7 @@ async def append_matter_event(
 
     await db.commit()
     await db.refresh(event)
+    await _invalidate_plugin_matter_context(user.tenant_id, matter.id)
     return _event_to_response(event)
 
 
@@ -1636,8 +1656,12 @@ async def execute_skill(
     context = body.context or {}
     tenant_name = user.tenant.name if user.tenant else "Legal"
     context["tenant_name"] = tenant_name
+    context["global_user_context"] = build_global_user_context(user)
     matter_context = ""
     matter_uuid = None
+    matter_context_enabled = await matter_context_service.is_enabled(
+        db, user.tenant_id
+    )
     if body.matter_id:
         try:
             matter_uuid = uuid.UUID(body.matter_id)
@@ -1653,21 +1677,22 @@ async def execute_skill(
         ).scalar_one_or_none()
         if linked_matter is None:
             raise HTTPException(status_code=404, detail="Matter not found")
-        (
-            matter_context,
-            _has_pii,
-            pii_findings,
-        ) = await matter_context_service.get_safe_matter_context(
-            db=db,
-            matter_id=body.matter_id,
-            tenant_id=user.tenant_id,
-            privacy_mode=getattr(user, "privacy_mode", False),
-        )
-        if matter_context:
-            context["matter_context"] = matter_context
-            context["matter_id"] = body.matter_id
-        if pii_findings:
-            context["matter_pii_findings"] = pii_findings
+        if matter_context_enabled:
+            (
+                matter_context,
+                _has_pii,
+                pii_findings,
+            ) = await matter_context_service.get_safe_matter_context(
+                db=db,
+                matter_id=body.matter_id,
+                tenant_id=user.tenant_id,
+                privacy_mode=getattr(user, "privacy_mode", False),
+            )
+            if matter_context:
+                context["matter_context"] = matter_context
+                context["matter_id"] = body.matter_id
+            if pii_findings:
+                context["matter_pii_findings"] = pii_findings
 
     cloud_context = await _build_plugin_cloud_context(
         db=db,

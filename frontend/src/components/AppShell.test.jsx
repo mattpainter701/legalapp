@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   uploadDocument: vi.fn(),
   deleteDocument: vi.fn(),
   logout: vi.fn().mockResolvedValue(undefined),
+  updateMe: vi.fn().mockResolvedValue({}),
 }))
 
 vi.mock('./dialog/ConfirmProvider', () => ({

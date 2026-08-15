@@ -39,7 +39,10 @@ from app.routers.trust_accounting import router as trust_accounting_router
 from app.routers.firm import router as firm_branding_router
 from app.routers.contacts import router as contacts_router
 from app.routers.tasks import router as tasks_router
-from app.routers.communications import router as communications_router
+from app.routers.communications import (
+    communication_context_cache,
+    router as communications_router,
+)
 from app.routers.intake_dashboard import router as intake_dashboard_router
 from app.routers.plan import router as plan_router
 from app.routers.intake import router as intake_router
@@ -51,7 +54,7 @@ from app.routers.matters_correspondence import (
 from app.routers.reports import router as reports_router
 from app.routers.calendar import router as calendar_router
 from app.routers.document_templates import router as document_templates_router
-from app.routers.matters import router as matters_router
+from app.routers.matters import matter_context_cache_manager, router as matters_router
 from app.routers.estates import router as estates_router
 from app.routers.domestic import router as domestic_router
 from app.routers.mediation import router as mediation_router
@@ -229,6 +232,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Plugin cache manager initialization failed: {exc}")
 
+    for name, context_cache in (
+        ("matter context", matter_context_cache_manager),
+        ("communication context", communication_context_cache),
+    ):
+        try:
+            await context_cache.init()
+            logger.info("%s cache manager initialized", name.title())
+        except Exception as exc:
+            logger.warning("%s cache manager initialization failed: %s", name.title(), exc)
+
     # The official MCP SDK owns JSON-RPC lifecycle and Streamable HTTP
     # semantics. Its public endpoint remains fail-closed unless
     # MCP_PRODUCT_ENABLED is explicitly enabled.
@@ -242,6 +255,8 @@ async def lifespan(app: FastAPI):
         await app.state.redis.aclose()
     await cache_manager.close()
     await plugin_cache_manager.close()
+    await matter_context_cache_manager.close()
+    await communication_context_cache.close()
     await engine.dispose()
     logger.info("Shutdown complete")
 

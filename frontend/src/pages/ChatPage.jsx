@@ -1146,13 +1146,13 @@ export default function ChatPage() {
                 <Briefcase size={17} />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="hidden text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted sm:block">Working context</p>
+                <p className="hidden text-[10px] font-bold uppercase tracking-[0.14em] text-brand-muted sm:block">AI context</p>
                 <p className={`truncate text-xs font-semibold sm:mt-0.5 sm:text-sm ${linkedMatterId ? 'text-brand-ink' : 'text-brand-muted'}`}>
                   {linkedMatterId
-                    ? linkedMatterName
+                    ? `Using your profile + ${linkedMatterName}`
                     : activeConvId
-                      ? 'No matter linked'
-                      : 'Start a conversation to link a matter'}
+                      ? 'Using your profile'
+                      : 'Using your profile — start a conversation to add a matter'}
                   {linkedMatter?.case_number ? (
                     <span className="ml-2 font-normal text-brand-muted">{linkedMatter.case_number}</span>
                   ) : null}

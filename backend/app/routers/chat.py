@@ -58,6 +58,7 @@ from app.services.llm_routing import (
 )
 from app.services.billing import calculate_cost
 from app.services.memory_service import MemoryService
+from app.services.user_context import build_global_user_context
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.services.gateway_privacy import gateway_metadata, retained_gateway_query_text
@@ -1986,10 +1987,14 @@ async def _send_message_under_generation_lock(
 
     effective_matter = await _effective_message_matter(db, user, conv, body)
     effective_matter_id = str(effective_matter.id) if effective_matter else None
-    effective_matter_cloud_folder = (
-        effective_matter.cloud_folder if effective_matter else None
+    matter_context_enabled = bool(effective_matter) and await matter_context_service.is_enabled(
+        db, user.tenant_id
     )
-    rag_scope_key = _rag_scope_key(effective_matter_id, effective_matter_cloud_folder)
+    context_matter_id = effective_matter_id if matter_context_enabled else None
+    context_matter_cloud_folder = (
+        effective_matter.cloud_folder if matter_context_enabled else None
+    )
+    rag_scope_key = _rag_scope_key(context_matter_id, context_matter_cloud_folder)
 
     # 1a. Enforce daily token budget (fail fast before any work is done)
     await check_token_budget(db, user)
@@ -2042,28 +2047,30 @@ async def _send_message_under_generation_lock(
     #     cannot safely run concurrent statements, and opening helper sessions
     #     would defeat the one-connection-per-active-turn availability invariant.
     async def _load_matter_context_nonstream():
-        if not effective_matter_id:
+        if not context_matter_id:
             return "", [], None, False
 
         cached = await cache_manager.get_cached_matter_context(
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
+            privacy_mode=user.privacy_mode,
         )
         if cached:
-            return cached, [], effective_matter_cloud_folder, True
+            return cached, [], context_matter_cloud_folder, True
         mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
             db=db,
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=user.tenant_id,
             privacy_mode=user.privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
+            privacy_mode=user.privacy_mode,
         )
-        return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
+        return mcs, mpf if mpf else [], context_matter_cloud_folder, False
 
     async def _load_attachment_context_nonstream():
         return await _build_attachment_context(
@@ -2134,7 +2141,7 @@ async def _send_message_under_generation_lock(
                 matter_context_str=prepare_provider_text(
                     matter_context_str, user.privacy_mode
                 ),
-                matter_id=effective_matter_id,
+                matter_id=context_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
             await set_tenant_context(db, str(user.tenant_id))
@@ -2178,6 +2185,7 @@ async def _send_message_under_generation_lock(
     )
     context_str = prepare_provider_text(context_str, user.privacy_mode)
     memory_context = prepare_provider_text(memory_context, user.privacy_mode)
+    global_user_context = build_global_user_context(user)
 
     # 5. Call LLM. Conversational answers are deliberately not response-cached:
     # history and injected memory are part of the semantic input, and serving a
@@ -2199,6 +2207,7 @@ async def _send_message_under_generation_lock(
             tenant_name=tenant_name,
             context=context_str,
             memory_context=memory_context,
+            global_user_context=global_user_context,
             use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             provider=route.provider,
             model=route.model,
@@ -2253,6 +2262,7 @@ async def _send_message_under_generation_lock(
             tenant_name=tenant_name,
             context=context_str,
             memory_context=memory_context,
+            global_user_context=global_user_context,
             use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             provider=route.provider,
             model=route.model,
@@ -2336,9 +2346,9 @@ async def _send_message_under_generation_lock(
     source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
 
     # Track matter context usage if provided
-    if effective_matter_id:
-        context_used.insert(0, f"matter:{effective_matter_id}")
-        context_scores[f"matter:{effective_matter_id}"] = 1.0
+    if context_matter_id:
+        context_used.insert(0, f"matter:{context_matter_id}")
+        context_scores[f"matter:{context_matter_id}"] = 1.0
 
     # Combine PII findings from input, response, and matter context
     all_pii_flags = []
@@ -2599,10 +2609,14 @@ async def _stream_message_under_generation_lock(
             media_type="text/event-stream",
         )
     effective_matter_id = str(effective_matter.id) if effective_matter else None
-    effective_matter_cloud_folder = (
-        effective_matter.cloud_folder if effective_matter else None
+    matter_context_enabled = bool(effective_matter) and await matter_context_service.is_enabled(
+        db, user.tenant_id
     )
-    rag_scope_key = _rag_scope_key(effective_matter_id, effective_matter_cloud_folder)
+    context_matter_id = effective_matter_id if matter_context_enabled else None
+    context_matter_cloud_folder = (
+        effective_matter.cloud_folder if matter_context_enabled else None
+    )
+    rag_scope_key = _rag_scope_key(context_matter_id, context_matter_cloud_folder)
 
     # 1a. Enforce daily token budget
     try:
@@ -2659,28 +2673,30 @@ async def _stream_message_under_generation_lock(
     # This opens SSE immediately so the client can render real retrieval activity
     # instead of staring at an inert composer while all context work finishes.
     async def _load_matter_context():
-        if not effective_matter_id:
+        if not context_matter_id:
             return "", [], None, False
 
         cached = await cache_manager.get_cached_matter_context(
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
+            privacy_mode=user.privacy_mode,
         )
         if cached:
-            return cached, [], effective_matter_cloud_folder, True
+            return cached, [], context_matter_cloud_folder, True
         mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
             db=db,
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=user.tenant_id,
             privacy_mode=user.privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
-            matter_id=effective_matter_id,
+            matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
+            privacy_mode=user.privacy_mode,
         )
-        return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
+        return mcs, mpf if mpf else [], context_matter_cloud_folder, False
 
     async def _load_attachment_context_for_stream():
         return await _build_attachment_context(
@@ -2739,6 +2755,7 @@ async def _stream_message_under_generation_lock(
         (user.full_name or "").split()[0] if user.full_name else "",
         user.privacy_mode,
     )
+    stream_global_user_context = build_global_user_context(user)
     # Keep primitive identifiers for the exception path. A rollback expires ORM
     # instances; reading user/tenant attributes afterward can trigger async IO
     # outside SQLAlchemy's greenlet and hide the original stream failure.
@@ -2849,7 +2866,7 @@ async def _stream_message_under_generation_lock(
                         matter_context_str=prepare_provider_text(
                             matter_context_str, user.privacy_mode
                         ),
-                        matter_id=effective_matter_id,
+                        matter_id=context_matter_id,
                         matter_cloud_folder=matter_cloud_folder,
                     )
                 except Exception:
@@ -2953,6 +2970,7 @@ async def _stream_message_under_generation_lock(
                 tenant_name=tenant_name,
                 context=context_str,
                 memory_context=memory_context,
+                global_user_context=stream_global_user_context,
                 use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
                 provider=route.provider,
                 model=route.model,
@@ -3029,6 +3047,7 @@ async def _stream_message_under_generation_lock(
                     tenant_name=tenant_name,
                     context=context_str,
                     memory_context=memory_context,
+                    global_user_context=stream_global_user_context,
                     use_premium=_premium_for_user(
                         user, body.content, body.use_premium_llm
                     ),
@@ -3151,9 +3170,9 @@ async def _stream_message_under_generation_lock(
                 yield _stream_token_event(safe_chunk)
 
             # Track matter context usage if provided
-            if effective_matter_id:
-                context_used.insert(0, f"matter:{effective_matter_id}")
-                context_scores[f"matter:{effective_matter_id}"] = 1.0
+            if context_matter_id:
+                context_used.insert(0, f"matter:{context_matter_id}")
+                context_scores[f"matter:{context_matter_id}"] = 1.0
 
             # Combine PII findings
             all_pii_flags = []

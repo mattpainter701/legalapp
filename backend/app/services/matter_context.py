@@ -13,6 +13,7 @@ from app.models.matter_assignment import MatterAssignment
 from app.models.matter_note import MatterNote
 from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer
+from app.models.tenant import TenantSettings
 from app.services.pii_detection import detect_pii
 
 
@@ -20,10 +21,41 @@ class MatterContextService:
     """Load and prepare matter context while respecting privacy constraints."""
 
     PII_SENSITIVE_FIELDS = {
+        "description",
+        "memory_content",
         "counterparty",
         "outside_counsel",
         "initial_posture",
     }
+    MAX_DESCRIPTION_CHARS = 2_000
+    MAX_MEMORY_CHARS = 4_000
+    MAX_TEXT_FIELD_CHARS = 1_000
+    MAX_KEY_DATES = 12
+    MAX_RECENT_ITEMS = 5
+
+    async def is_enabled(
+        self,
+        db: AsyncSession,
+        tenant_id: str | uuid.UUID,
+    ) -> bool:
+        """Return the tenant's matter-context setting, defaulting on."""
+        result = await db.execute(
+            select(TenantSettings.enable_matter_context).where(
+                TenantSettings.tenant_id == tenant_id
+            )
+        )
+        enabled = result.scalar_one_or_none()
+        return True if enabled is None else bool(enabled)
+
+    @staticmethod
+    def _bounded_text(value: object, limit: int) -> str | None:
+        """Normalize prompt text and cap it before it reaches an LLM prompt."""
+        if value is None:
+            return None
+        text = " ".join(str(value).split())
+        if not text:
+            return None
+        return text[:limit] + ("…" if len(text) > limit else "")
 
     async def get_matter_context(
         self,
@@ -51,6 +83,9 @@ class MatterContextService:
         # Core matter data
         matter_data = {
             "matter_name": matter.matter_name,
+            "description": self._bounded_text(
+                matter.description, self.MAX_DESCRIPTION_CHARS
+            ),
             "matter_type": matter.matter_type,
             "practice_area": matter.practice_area,
             "primary_plugin": matter.primary_plugin,
@@ -62,6 +97,14 @@ class MatterContextService:
             "risk_level": matter.risk_level,
             "materiality": matter.materiality,
             "exposure_range": matter.exposure_range,
+            "key_dates": matter.key_dates or {},
+            "initial_posture": self._bounded_text(
+                matter.initial_posture, self.MAX_TEXT_FIELD_CHARS
+            ),
+            "memory_content": self._bounded_text(
+                matter.memory_content, self.MAX_MEMORY_CHARS
+            ),
+            "decision": matter.decision,
             "court": matter.court,
             "judge": matter.judge,
             "case_number": matter.case_number,
@@ -116,7 +159,7 @@ class MatterContextService:
         matter_data["recent_notes"] = [
             {
                 "title": n.title,
-                "content": n.content[:2000],
+                "content": self._bounded_text(n.content, 2_000),
                 "note_type": n.note_type,
                 "created_at": str(n.created_at),
             }
@@ -135,7 +178,7 @@ class MatterContextService:
             {
                 "type": e.event_type,
                 "title": e.title,
-                "content": e.content[:1000],
+                "content": self._bounded_text(e.content, 1_000),
                 "created_at": str(e.created_at),
             }
             for e in events
@@ -156,7 +199,7 @@ class MatterContextService:
                 "direction": c.direction,
                 "channel": c.channel,
                 "subject": c.subject,
-                "summary": c.summary,
+                "summary": self._bounded_text(c.summary, 1_000),
                 "occurred_at": str(c.occurred_at) if c.occurred_at else None,
             }
             for c in comms
@@ -268,6 +311,22 @@ class MatterContextService:
                 for n in scrubbed["recent_notes"]
             ]
 
+        # Free-text matter summaries, events, and correspondence can contain the
+        # same client-identifying detail as notes. Keep only safe metadata.
+        for field in ("description", "memory_content", "initial_posture"):
+            if scrubbed.get(field):
+                scrubbed[field] = "[REDACTED]"
+        if "recent_events" in scrubbed:
+            scrubbed["recent_events"] = [
+                {**event, "content": "[REDACTED]"}
+                for event in scrubbed["recent_events"]
+            ]
+        if "recent_communications" in scrubbed:
+            scrubbed["recent_communications"] = [
+                {**communication, "subject": "[REDACTED]", "summary": "[REDACTED]"}
+                for communication in scrubbed["recent_communications"]
+            ]
+
         return scrubbed
 
     def format_matter_context(
@@ -296,17 +355,37 @@ class MatterContextService:
             "stage",
             "risk_level",
             "materiality",
+            "exposure_range",
             "court",
             "judge",
             "case_number",
             "billing_cycle",
             "billing_method",
+            "decision",
         ]
         for key in core_fields:
             value = matter_data.get(key)
             if value and value != "[REDACTED]":
                 display_key = key.replace("_", " ").title()
                 lines.append(f"  {display_key}: {value}")
+
+        for key, label in (
+            ("description", "Description"),
+            ("initial_posture", "Initial Posture"),
+            ("memory_content", "Matter Memory"),
+        ):
+            value = matter_data.get(key)
+            if value and value != "[REDACTED]":
+                lines.append(f"  {label}: {value}")
+
+        key_dates = matter_data.get("key_dates")
+        if isinstance(key_dates, dict) and key_dates:
+            lines.append("  Key Dates:")
+            for label, value in list(key_dates.items())[: self.MAX_KEY_DATES]:
+                safe_label = self._bounded_text(label, 120)
+                safe_value = self._bounded_text(value, 250)
+                if safe_label and safe_value:
+                    lines.append(f"    - {safe_label}: {safe_value}")
 
         # Budget
         budget = matter_data.get("budget", {})
@@ -319,6 +398,18 @@ class MatterContextService:
             )
             if budget.get("utilization_pct"):
                 lines.append(f"  Utilization: {budget['utilization_pct']}%")
+
+        retainers = matter_data.get("retainers", [])
+        if retainers:
+            lines.append("  Active Retainers:")
+            for retainer in retainers[: self.MAX_RECENT_ITEMS]:
+                lines.append(
+                    "    - {type}: ${balance:,.2f} available of ${amount:,.2f}".format(
+                        type=retainer.get("type") or "retainer",
+                        balance=float(retainer.get("current_balance") or 0),
+                        amount=float(retainer.get("amount") or 0),
+                    )
+                )
 
         # Team
         team = matter_data.get("team", [])
@@ -361,7 +452,7 @@ class MatterContextService:
         notes = matter_data.get("recent_notes", [])
         if notes:
             lines.append("  Recent Notes:")
-            for n in notes[:5]:
+            for n in notes[: self.MAX_RECENT_ITEMS]:
                 snippet = (n.get("content") or "")[:300]
                 lines.append(
                     f"    - [{n.get('note_type')}] {n.get('title')}: {snippet}"
@@ -371,9 +462,20 @@ class MatterContextService:
         events = matter_data.get("recent_events", [])
         if events:
             lines.append("  Recent Events:")
-            for e in events[:10]:
+            for e in events[: self.MAX_RECENT_ITEMS]:
                 lines.append(
-                    f"    - [{e['type']}] {e['title']}: {e.get('content', '')[:200]}"
+                    f"    - [{e.get('type')}] {e.get('title')}: {e.get('content', '')[:200]}"
+                )
+
+        communications = matter_data.get("recent_communications", [])
+        if communications:
+            lines.append("  Recent Communications:")
+            for communication in communications[: self.MAX_RECENT_ITEMS]:
+                subject = communication.get("subject") or "(no subject)"
+                summary = communication.get("summary") or ""
+                lines.append(
+                    f"    - [{communication.get('direction')}/{communication.get('channel')}] "
+                    f"{subject}: {summary[:300]}"
                 )
 
         return "\n".join(lines)

@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Profile- and matter-aware AI context:** general chats and plugin skills now
+  receive a verified, user-managed professional profile, while matter-linked
+  work adds a bounded matter snapshot containing the summary, posture, key
+  dates, risk, financial, activity, and AI-memory fields. Privacy-scoped caches,
+  mutation invalidation, the tenant matter-context toggle, editable profile and
+  matter context surfaces, and a dismissible three-field setup prompt make the
+  feature safe and approachable for nontechnical users.
 - **Conversational matter-document revisions:** added a protected, mobile-first
   DOCX revision workspace launched from matter documents. Standard or licensed
   Premium model routes may propose at most eight exact text replacements; a

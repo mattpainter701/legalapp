@@ -270,6 +270,25 @@ describe('ChatPage guarded stream lifecycle', () => {
     expect(screen.getByText('Document One.pdf')).toBeInTheDocument()
   })
 
+  it('shows whether chat uses only a profile or a profile plus matter context', async () => {
+    shellHarness.value.conversations = [{ id: 'conversation-a', title: 'Conversation A', matter_id: 'matter-1' }]
+    apiMocks.getMattersV2.mockResolvedValue({ items: [{ id: 'matter-1', matter_name: 'Acme advisory', case_number: 'AC-42' }] })
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+
+    render(<ChatPage />)
+
+    expect(await screen.findByText('Using your profile + Acme advisory')).toBeInTheDocument()
+    expect(screen.getByText('AC-42')).toBeInTheDocument()
+  })
+
+  it('shows profile-only context when no matter is linked', async () => {
+    apiMocks.getConversation.mockResolvedValue(conversation('conversation-a', 'Conversation A'))
+
+    render(<ChatPage />)
+
+    expect(await screen.findByText('Using your profile')).toBeInTheDocument()
+  })
+
   it('does not let an old metadata retry overwrite a newly selected conversation', async () => {
     let resolveMetadataRetry
     const delayedMetadataRetry = new Promise((resolve) => { resolveMetadataRetry = resolve })

@@ -17,6 +17,10 @@ class UserDetailResponse(BaseModel):
     expertise_level: str = "mid"
     default_skill: Optional[str] = None
     privacy_mode: bool = False
+    professional_role: Optional[str] = None
+    job_title: Optional[str] = None
+    office_location: Optional[str] = None
+    primary_jurisdictions: Optional[List[str]] = None
     memory_summary: Optional[str] = None
     last_memory_update: Optional[datetime] = None
     created_at: datetime
@@ -41,6 +45,10 @@ class UserResponse(BaseModel):
     license_active: bool = True
     payg_monthly_budget: Optional[float] = None
     default_billing_rate: Optional[float] = None
+    professional_role: Optional[str] = None
+    job_title: Optional[str] = None
+    office_location: Optional[str] = None
+    primary_jurisdictions: List[str] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -1541,6 +1541,28 @@ async def test_privacy_mode_scrubs_current_and_history_before_provider(
 
 
 @pytest.mark.asyncio
+async def test_general_chat_includes_verified_global_user_profile(
+    client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
+):
+    test_user.professional_role = "Attorney"
+    test_user.job_title = "Commercial Counsel"
+    test_user.office_location = "Chicago"
+    test_user.primary_jurisdictions = ["Illinois"]
+    await db_session.commit()
+    conv = (await client.post("/api/conversations", json={})).json()
+
+    response = await client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"content": "Give me a contract checklist."},
+    )
+    assert response.status_code == 201, response.text
+    profile = mock_llm.call_args.kwargs["global_user_context"]
+    assert "Professional role: Attorney" in profile
+    assert "Job title: Commercial Counsel" in profile
+    assert "Primary jurisdictions: Illinois" in profile
+
+
+@pytest.mark.asyncio
 async def test_send_message_uses_linked_conversation_matter_context(
     client: AsyncClient,
     db_session,
@@ -1549,6 +1571,8 @@ async def test_send_message_uses_linked_conversation_matter_context(
     mock_llm,
     mock_embeddings,
 ):
+    test_user.professional_role = "Attorney"
+    test_user.primary_jurisdictions = ["North Dakota"]
     matter = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1583,6 +1607,63 @@ async def test_send_message_uses_linked_conversation_matter_context(
     assert resp.status_code == 201
     assert rag.call_args.kwargs["matter_id"] == matter_id
     assert "North Dakota Probate File" in mock_llm.call_args.kwargs["context"]
+    assert "Professional role: Attorney" in mock_llm.call_args.kwargs[
+        "global_user_context"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_disabled_matter_context_keeps_link_but_skips_injection(
+    client: AsyncClient,
+    db_session,
+    test_tenant,
+    test_user,
+    mock_llm,
+    mock_embeddings,
+):
+    db_session.add(
+        TenantSettings(
+            tenant_id=test_tenant.id,
+            enable_matter_context=False,
+        )
+    )
+    matter = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"disabled-context-{uuid.uuid4().hex[:8]}",
+        matter_name="Do Not Inject This Matter",
+        matter_type="general",
+        status="open",
+    )
+    db_session.add(matter)
+    await db_session.commit()
+    matter_id = str(matter.id)
+    conv = (
+        await client.post(
+            "/api/conversations",
+            json={"title": "Context disabled", "matter_id": matter_id},
+        )
+    ).json()
+
+    with (
+        patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag,
+        patch.object(
+            chat_router.matter_context_service,
+            "get_safe_matter_context",
+            new_callable=AsyncMock,
+        ) as matter_loader,
+    ):
+        rag.return_value = ("", [], [])
+        response = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "Give me a status.", "include_public": False},
+        )
+
+    assert response.status_code == 201, response.text
+    matter_loader.assert_not_awaited()
+    assert rag.call_args.kwargs["matter_id"] is None
+    assert "Do Not Inject This Matter" not in mock_llm.call_args.kwargs["context"]
 
 
 @pytest.mark.asyncio

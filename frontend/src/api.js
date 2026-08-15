@@ -198,6 +198,10 @@ export const getAppVersion = () =>
 
 export const getMe = (config = {}) => api.get('/auth/me', config).then((r) => r.data)
 
+// Professional context is deliberately kept with the authenticated user. It is
+// used to tailor assistance across conversations, not stored in the browser.
+export const updateMe = (data) => api.patch('/auth/me', data).then((r) => r.data)
+
 export const register = (data) =>
   api.post('/auth/register', data).then((r) => r.data)
 

@@ -143,6 +143,9 @@ class PluginExecutor:
             "dsar_context": context.get("dsar_context", ""),
             "jurisdiction": context.get("jurisdiction", "Jurisdiction not specified"),
             "chart_mode": context.get("chart_mode", "infringement"),
+            "global_user_context": context.get(
+                "global_user_context", "No verified user profile available."
+            ),
         }
 
         try:
@@ -218,6 +221,9 @@ class PluginExecutor:
                 context.get("tenant_name", "Legal"), privacy_mode
             ),
             context=prepare_provider_text(system_prompt, privacy_mode),
+            global_user_context=prepare_provider_text(
+                context.get("global_user_context", ""), privacy_mode
+            ),
             use_premium=use_premium,
             provider=route.provider,
             model=route.model,

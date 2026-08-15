@@ -5,7 +5,7 @@ from typing import Optional
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel as _PydanticBase
+from pydantic import BaseModel as _PydanticBase, Field, field_validator
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +107,10 @@ def _user_response(user: User, assignments: dict | None = None) -> UserResponse:
             if user.default_billing_rate is not None
             else None
         ),
+        professional_role=user.professional_role,
+        job_title=user.job_title,
+        office_location=user.office_location,
+        primary_jurisdictions=user.primary_jurisdictions or [],
         created_at=user.created_at,
     )
 
@@ -1496,6 +1500,36 @@ class UserPatchRequest(_PydanticBase):
         None  # None = clear cap; pass -1 to leave unchanged
     )
     default_billing_rate: Optional[float] = None  # hourly rate for time tracking
+    professional_role: Optional[str] = Field(default=None, max_length=120)
+    job_title: Optional[str] = Field(default=None, max_length=160)
+    office_location: Optional[str] = Field(default=None, max_length=255)
+    primary_jurisdictions: Optional[list[str]] = Field(default=None, max_length=25)
+
+    @field_validator("professional_role", "job_title", "office_location")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("primary_jurisdictions")
+    @classmethod
+    def validate_jurisdictions(
+        cls, value: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        if value is None:
+            return value
+        cleaned = []
+        for jurisdiction in value:
+            normalized = jurisdiction.strip()
+            if not normalized or len(normalized) > 100:
+                raise ValueError(
+                    "Each jurisdiction must be between 1 and 100 characters"
+                )
+            if normalized not in cleaned:
+                cleaned.append(normalized)
+        return cleaned
 
 
 class InviteUserRequest(_PydanticBase):
@@ -1547,6 +1581,16 @@ async def patch_user(
 
     if body.full_name is not None:
         user.full_name = body.full_name
+
+    for field in (
+        "professional_role",
+        "job_title",
+        "office_location",
+        "primary_jurisdictions",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(user, field, value)
 
     if body.premium_ai_enabled is not None:
         if body.premium_ai_enabled and not user.license_active:
