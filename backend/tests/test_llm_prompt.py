@@ -8,6 +8,7 @@ from openai import APIConnectionError
 from app.config import get_settings
 from app.services.llm import LLMService
 from app.services.llm_routing import _current_managed_alias
+from app.services.user_context import build_global_user_context
 
 
 settings = get_settings()
@@ -56,6 +57,40 @@ def test_system_prompt_does_not_expose_firm_context_label():
     assert "FIRM CONTEXT" not in prompt
     assert "SOURCE MATERIALS" in prompt
     assert "Never write the phrase" in prompt
+
+
+def test_verified_profile_is_a_distinct_prompt_section_and_privacy_scrubbed():
+    user = SimpleNamespace(
+        role="admin",  # Authorization role must never become professional context.
+        full_name="Jane Smith",
+        email="jane@example.com",
+        professional_role="Attorney",
+        job_title="Employment Counsel",
+        office_location="Chicago",
+        primary_jurisdictions=["Illinois", "N.D. Ill."],
+        practice_areas=["Employment"],
+        expertise_level="senior",
+        privacy_mode=True,
+    )
+    profile = build_global_user_context(user)
+    assert "Professional role: Attorney" in profile
+    assert "Illinois, N.D. Ill." in profile
+    assert "Practice areas: Employment" in profile
+    assert "Experience level: senior" in profile
+    assert "admin" not in profile
+    assert "jane@example.com" not in profile
+    assert "Email: [EMAIL]" in profile
+
+    prompt = LLMService()._build_system_prompt(
+        tenant_name="Bismarcklaw",
+        context="",
+        memory_context="learned preference: concise",
+        global_user_context=profile,
+        user_name="Matt",
+    )
+    assert "VERIFIED USER PROFILE" in prompt
+    assert "learned preference: concise" in prompt
+    assert "Professional role: Attorney" in prompt
 
 
 def test_gateway_delegates_fallbacks_to_litellm():

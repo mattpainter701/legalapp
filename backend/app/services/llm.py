@@ -111,6 +111,9 @@ CORE INSTRUCTIONS (follow these exactly — do NOT describe them in your respons
 USER CONTEXT (history of interactions, preferences, and patterns):
 {memory_context}
 
+VERIFIED USER PROFILE (explicitly provided by the user; separate from learned memory):
+{global_user_context}
+
 SOURCE MATERIALS (retrieved firm documents, matter context, uploaded attachments, cloud files, and legal authority — may be empty):
 {context}
 """
@@ -168,11 +171,14 @@ class LLMService:
         tenant_name: str,
         context: str,
         memory_context: str | None,
-        user_name: str,
+        global_user_context: str | None = None,
+        user_name: str = "",
     ) -> str:
         return SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
             memory_context=memory_context or "No user memory available.",
+            global_user_context=global_user_context
+            or "No verified user profile available.",
             context=context,
             user_name=user_name or "the attorney",
         )
@@ -205,6 +211,7 @@ class LLMService:
         tenant_name: str,
         context: str,
         memory_context: str = "",
+        global_user_context: str = "",
         use_premium: bool = False,
         provider: str = "litellm",
         model: str | None = None,
@@ -232,6 +239,7 @@ class LLMService:
             tenant_name=tenant_name,
             context=context,
             memory_context=memory_context,
+            global_user_context=global_user_context,
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)
@@ -327,6 +335,7 @@ class LLMService:
         use_premium: bool = False,
         provider: str = "litellm",
         memory_context: str | None = None,
+        global_user_context: str | None = None,
         model: str | None = None,
         user_name: str = "",
         customer_api_key: str | None = None,
@@ -340,6 +349,7 @@ class LLMService:
             tenant_name=tenant_name,
             context=context,
             memory_context=memory_context,
+            global_user_context=global_user_context,
             user_name=user_name,
         )
         gateway_model = model or self._default_model(use_premium)

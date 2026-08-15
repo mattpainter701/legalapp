@@ -63,9 +63,11 @@ from app.services.plugins.manifest import get_plugin_manifest
 from app.models.tenant_credential import TenantCredential
 from app.services.cloud_search import CloudSearchService
 from app.services.cloud_sync import CloudSyncService
+from app.services.cache import ExpertiseCacheManager
 
 _cloud_search = CloudSearchService()
 _cloud_sync = CloudSyncService()
+matter_context_cache_manager = ExpertiseCacheManager()
 
 router = APIRouter(prefix="/api/matters", tags=["matters"])
 logger = logging.getLogger(__name__)
@@ -93,6 +95,27 @@ async def _get_matter_or_404(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
     return matter
+
+
+async def _invalidate_matter_context_cache(
+    tenant_id: uuid.UUID, matter_id: uuid.UUID
+) -> None:
+    """Best-effort invalidation after a committed context-affecting mutation."""
+    try:
+        if (
+            matter_context_cache_manager.cache_enabled
+            and not matter_context_cache_manager.redis_client
+        ):
+            await matter_context_cache_manager.init()
+        await matter_context_cache_manager.invalidate_matter_context(
+            str(matter_id), str(tenant_id)
+        )
+    except Exception:
+        logger.warning(
+            "Matter context cache invalidation failed for matter %s",
+            matter_id,
+            exc_info=True,
+        )
 
 
 async def _share_matter_with_assignees(
@@ -1126,6 +1149,7 @@ async def update_matter(
 
     await db.commit()
     await db.refresh(matter)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     # Reload with relationships
     result = await db.execute(
@@ -1162,6 +1186,7 @@ async def close_matter(
     matter.is_closed = True
     matter.status = "closed"
     await db.commit()
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
     return None
 
 
@@ -1238,6 +1263,7 @@ async def add_assignment(
     db.add(assignment)
     await db.commit()
     await db.refresh(assignment)
+    await _invalidate_matter_context_cache(current_user.tenant_id, matter.id)
 
     # Reload with user
     result = await db.execute(
@@ -1324,6 +1350,7 @@ async def remove_assignment(
 
     await db.delete(assignment)
     await db.commit()
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
     return None
 
 
@@ -1416,6 +1443,7 @@ async def add_note(
 
     await db.commit()
     await db.refresh(note)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     return MatterNoteResponse(
         id=str(note.id),
@@ -1462,6 +1490,7 @@ async def update_note(
 
     await db.commit()
     await db.refresh(note)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     return MatterNoteResponse(
         id=str(note.id),
@@ -1502,6 +1531,7 @@ async def delete_note(
 
     await db.delete(note)
     await db.commit()
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
     return None
 
 
@@ -1621,6 +1651,7 @@ async def update_budget(
         matter.budget_notification_threshold = budget_notification_threshold
 
     await db.commit()
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     result = await db.execute(
         select(Matter)
@@ -1748,6 +1779,7 @@ async def create_retainer(
     await db.commit()
     await db.refresh(retainer)
     await db.refresh(tx)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     return RetainerResponse(
         id=str(retainer.id),
@@ -1833,6 +1865,7 @@ async def drawdown_retainer(
 
     await db.commit()
     await db.refresh(retainer)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     return RetainerResponse(
         id=str(retainer.id),
@@ -2011,6 +2044,7 @@ async def update_matter_memory(
     matter = await _get_matter_or_404(db, matter_id, user.tenant_id)
     matter.memory_content = body.content
     await db.commit()
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
     return MatterMemoryResponse(
         matter_id=str(matter.id),
         memory_content=matter.memory_content,
@@ -2166,6 +2200,7 @@ async def email_matter_client(
     db.add(log)
     await db.commit()
     await db.refresh(log)
+    await _invalidate_matter_context_cache(user.tenant_id, matter.id)
 
     if not sent:
         status_code, detail = email_delivery_http_error(sent, action="Client email")
@@ -2381,6 +2416,7 @@ async def provision_matter_cloud_folder(
 
     await db.commit()
     await db.refresh(matter)
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     return MatterCloudFolderStatus(
         status="provisioned",
@@ -2445,6 +2481,7 @@ async def remap_matter_cloud_folder(
     providers = _apply_cloud_provider_metadata(matter, provider, provider_metadata)
     await _share_matter_with_assignees(db, tenant_id, matter)
     await db.commit()
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     return MatterCloudFolderStatus(status="provisioned", providers=providers)
 
@@ -2519,6 +2556,7 @@ async def add_matter_cloud_context_folder(
 
     await _share_matter_with_assignees(db, tenant_id, matter)
     await db.commit()
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     return MatterCloudFolderStatus(status="provisioned", providers=cloud_folder)
 
@@ -2554,6 +2592,7 @@ async def remove_matter_cloud_context_folder(
     matter.cloud_folder = cloud_folder or None
 
     await db.commit()
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     status = "provisioned" if matter.cloud_folder else "not_provisioned"
     return MatterCloudFolderStatus(status=status, providers=matter.cloud_folder or {})
@@ -2604,6 +2643,7 @@ async def rename_matter_cloud_folder(
 
     providers = _apply_cloud_provider_metadata(matter, provider, provider_metadata)
     await db.commit()
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     return MatterCloudFolderStatus(status="provisioned", providers=providers)
 
@@ -2652,6 +2692,7 @@ async def sync_matter_cloud_folder(
     await _share_matter_with_assignees(db, tenant_id, matter)
     await db.commit()
     await db.refresh(matter)
+    await _invalidate_matter_context_cache(tenant_id, matter.id)
 
     sync_counts = await _cloud_sync.sync_matter_folders(
         db,

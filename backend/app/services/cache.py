@@ -273,13 +273,19 @@ class ExpertiseCacheManager:
         self,
         matter_id: str,
         tenant_id: str,
+        privacy_mode: bool = False,
     ) -> Optional[str]:
         """Retrieve cached matter context."""
         if not self.cache_enabled or not self.redis_client:
             return None
 
         try:
-            key = self._make_key("matter", tenant_id, matter_id)
+            key = self._make_key(
+                "matter",
+                tenant_id,
+                matter_id,
+                "privacy" if privacy_mode else "standard",
+            )
             cached = await self.redis_client.get(key)
             return cached
         except Exception as e:
@@ -292,18 +298,47 @@ class ExpertiseCacheManager:
         tenant_id: str,
         context: str,
         expertise_level: str = "mid",
+        privacy_mode: bool = False,
     ) -> bool:
         """Cache matter context."""
         if not self.cache_enabled or not self.redis_client:
             return False
 
         try:
-            key = self._make_key("matter", tenant_id, matter_id)
+            key = self._make_key(
+                "matter",
+                tenant_id,
+                matter_id,
+                "privacy" if privacy_mode else "standard",
+            )
             ttl = self._get_ttl(expertise_level, "matter")
             await self.redis_client.setex(key, ttl, context)
             return True
         except Exception as e:
             print(f"Cache set error: {e}")
+            return False
+
+    async def invalidate_matter_context(
+        self,
+        matter_id: str,
+        tenant_id: str,
+    ) -> bool:
+        """Remove the one cached context entry for a tenant-scoped matter."""
+        if not self.cache_enabled or not self.redis_client:
+            return False
+
+        try:
+            keys = (
+                # Clear a legacy entry too, so prior unredacted cache entries
+                # cannot remain until TTL expiry during rollout.
+                self._make_key("matter", tenant_id, matter_id),
+                self._make_key("matter", tenant_id, matter_id, "standard"),
+                self._make_key("matter", tenant_id, matter_id, "privacy"),
+            )
+            await self.redis_client.delete(*keys)
+            return True
+        except Exception as e:
+            print(f"Matter context cache invalidate error: {e}")
             return False
 
     async def invalidate_user_cache(

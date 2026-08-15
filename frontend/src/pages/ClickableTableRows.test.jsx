@@ -1,5 +1,5 @@
 import React from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,7 @@ import ProfilePage from './ProfilePage'
 import TrustAccountingPage from './TrustAccountingPage'
 
 vi.mock('../App', () => ({
-  useAuth: () => ({ user: { full_name: 'Test User', email: 'test@example.com', role: 'user' } }),
+  useAuth: () => ({ user: { full_name: 'Test User', email: 'test@example.com', role: 'user' }, refreshUser: vi.fn() }),
 }))
 
 vi.mock('../api', () => ({
@@ -39,6 +39,7 @@ vi.mock('../api', () => ({
   ]),
   getMattersV2: vi.fn().mockResolvedValue({ items: [] }),
   getTimeEntries: vi.fn().mockResolvedValue({ items: [] }),
+  updateMe: vi.fn().mockResolvedValue({}),
   listTrustAccounts: vi.fn().mockResolvedValue({
     items: [{ id: 'trust-1', account_name: 'Rivera Client Trust', current_balance: 500, is_active: true }],
     total_balance: 500,
@@ -108,5 +109,27 @@ describe('clickable table-row keyboard navigation', () => {
     await user.keyboard('{Enter}')
 
     expect(screen.getByRole('status', { name: 'Current path' })).toHaveTextContent(expectedPath)
+  })
+})
+
+describe('profile context', () => {
+  it('saves professional context as structured profile fields', async () => {
+    const { updateMe } = await import('../api')
+    const user = userEvent.setup()
+    renderPage(<ProfilePage />)
+
+    await user.type(screen.getByLabelText('Professional role'), 'Attorney')
+    await user.type(screen.getByLabelText('Job title'), 'Litigation Associate')
+    await user.type(screen.getByLabelText('Office location'), 'Chicago, IL')
+    await user.type(screen.getByLabelText('Primary jurisdictions'), 'Illinois, Wisconsin')
+    await user.click(screen.getByRole('button', { name: 'Save context' }))
+
+    await waitFor(() => expect(updateMe).toHaveBeenCalledWith({
+      professional_role: 'Attorney',
+      job_title: 'Litigation Associate',
+      office_location: 'Chicago, IL',
+      primary_jurisdictions: ['Illinois', 'Wisconsin'],
+    }))
+    expect(screen.getByText('Your profile context has been saved.')).toBeInTheDocument()
   })
 })

@@ -41,6 +41,7 @@ from app.schemas.auth import (
     ResetPasswordRequest,
     TokenResponse,
     UserInfo,
+    UserProfileUpdate,
 )
 from app.services.email import email_service
 from app.utils.oauth_security import (
@@ -1739,6 +1740,49 @@ async def get_me(
         default_route=default_route,
         plan=plan_id,
         upsell_target=upsell_target,
+        professional_role=user.professional_role,
+        job_title=user.job_title,
+        office_location=user.office_location,
+        primary_jurisdictions=user.primary_jurisdictions or [],
+    )
+
+
+@router.patch("/me", response_model=UserInfo)
+async def update_me(
+    body: UserProfileUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update only the caller's verified professional profile fields."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(user, field, value)
+    await db.commit()
+    await db.refresh(user)
+    enabled_modules, default_route = await resolve_enabled_modules(
+        db, user.tenant_id, user=user
+    )
+    plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
+    return UserInfo(
+        id=str(user.id),
+        tenant_id=str(user.tenant_id),
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        is_active=user.is_active,
+        license_active=user.license_active,
+        premium_ai_enabled=user.premium_ai_enabled,
+        created_at=user.created_at,
+        billing_tier=user.tenant.billing_tier if user.tenant else "payg",
+        enabled_modules=enabled_modules,
+        default_route=default_route,
+        plan=plan_id,
+        upsell_target=upsell_target,
+        professional_role=user.professional_role,
+        job_title=user.job_title,
+        office_location=user.office_location,
+        primary_jurisdictions=user.primary_jurisdictions or [],
     )
 
 

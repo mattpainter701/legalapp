@@ -1373,7 +1373,7 @@ export default function MatterDetailPage() {
                 <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
                   <Icon d={Icons.messageSquare} size={18} className="text-brand-accent" /> Matter Chat
                 </h2>
-                <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI conversations scoped to this matter's context and documents.</p>
+                <p className="text-[13px] text-brand-muted font-sans mt-0.5">Chats here use your professional profile together with this matter's AI Context and documents.</p>
               </div>
               <button
                 onClick={handleStartChat}
@@ -1381,6 +1381,15 @@ export default function MatterDetailPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-sans font-medium rounded-lg hover:bg-brand-ink-2 transition-colors shadow-sm disabled:opacity-50"
               >
                 <Icon d={Icons.plus} size={15} /> {startingConv ? 'Starting…' : 'Start New Chat'}
+              </button>
+            </div>
+            <div className="mx-6 mt-4 flex flex-col gap-3 rounded-xl border border-brand-accent/20 bg-brand-accent/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-sm font-semibold text-brand-ink font-sans"><Icon d={Icons.brain} size={16} className="text-brand-accent" /> AI Context</p>
+                <p className="mt-1 text-[13px] text-brand-muted font-sans">Add the case facts, goals, and preferences you want AI to keep in mind for this matter.</p>
+              </div>
+              <button onClick={() => { setActiveTab('settings'); setSettingsSection('memory') }} className="shrink-0 rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-bg-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent">
+                Edit context
               </button>
             </div>
             {cloudFiles?.connected && (
@@ -1423,7 +1432,7 @@ export default function MatterDetailPage() {
           <div className="space-y-8">
             {/* Section selector */}
             <div className="flex gap-2 border-b border-brand-line pb-0">
-              {[['memory', 'Memory', Icons.brain], ['plugin', 'Plugin Workflow', Icons.briefcase], ['shares', 'File Shares', Icons.folder], ['details', 'Edit Details', Icons.edit]].map(([key, lbl, ico]) => (
+              {[['memory', 'AI Context', Icons.brain], ['plugin', 'Plugin Workflow', Icons.briefcase], ['shares', 'File Shares', Icons.folder], ['details', 'Edit Details', Icons.edit]].map(([key, lbl, ico]) => (
                 <button
                   key={key}
                   onClick={() => setSettingsSection(key)}
@@ -1438,16 +1447,43 @@ export default function MatterDetailPage() {
               <div className="bg-brand-surface border border-brand-line rounded-2xl shadow-sm">
                 <div className="px-6 py-5 border-b border-brand-line bg-brand-bg-soft/50 rounded-t-2xl">
                   <h2 className="font-serif font-bold text-xl text-brand-ink flex items-center gap-2">
-                    <Icon d={Icons.brain} size={18} className="text-brand-accent" /> Matter Memory
+                    <Icon d={Icons.brain} size={18} className="text-brand-accent" /> AI Context
                   </h2>
-                  <p className="text-[13px] text-brand-muted font-sans mt-0.5">AI context document used when chatting about this case.</p>
+                  <p className="text-[13px] text-brand-muted font-sans mt-0.5">Give AI the case details, goals, and working preferences that should guide chats about this matter.</p>
                 </div>
                 <div className="p-6">
+                  <div className="mb-5 rounded-xl border border-brand-line bg-brand-bg-soft/40 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-brand-ink font-sans">Structured matter context</p>
+                        <p className="mt-1 text-xs text-brand-muted font-sans">The summary, jurisdiction, our role, and stage are added automatically when available.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setSettingsSection('details'); setEditing(true) }}
+                        className="shrink-0 rounded-lg border border-brand-line bg-brand-surface px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-bg-soft"
+                      >
+                        Edit matter details
+                      </button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {[
+                        ['Summary', matter.description],
+                        ['Jurisdiction', matter.jurisdiction],
+                        ['Our role', matter.role],
+                        ['Stage', matter.stage],
+                      ].map(([label, value]) => (
+                        <span key={label} className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${value ? 'bg-brand-green/10 text-brand-green' : 'bg-brand-amber/10 text-brand-amber'}`}>
+                          {label}: {value ? 'Saved' : 'Add details'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                   <textarea
                     value={memoryContent}
                     onChange={e => setMemoryContent(e.target.value)}
                     rows={20}
-                    placeholder={`# ${matter.matter_name}\n\nRecord key context, strategy notes, and facts the AI assistant should know...\n\n## Client\n## Key Issues\n## Strategy\n## Important Dates`}
+                    placeholder={`# ${matter.matter_name}\n\nAdd practical guidance for AI when working on this matter.\n\n## Client and matter overview\n## Current goals and key issues\n## Important facts and dates\n## Preferences or instructions`}
                     className={`${inputCls} resize-y font-mono text-[13px] leading-relaxed`}
                   />
                   <div className="flex items-center justify-end gap-3 mt-4">
@@ -1458,7 +1494,7 @@ export default function MatterDetailPage() {
                       className="flex items-center gap-2 px-5 py-2.5 bg-brand-ink text-white text-sm font-sans font-semibold rounded-xl hover:bg-brand-ink-2 disabled:opacity-50 transition-all shadow-sm"
                     >
                       <Icon d={Icons.save} size={15} />
-                      {memorySaving ? 'Saving…' : 'Save Memory'}
+                      {memorySaving ? 'Saving…' : 'Save AI Context'}
                     </button>
                   </div>
                 </div>
@@ -1550,6 +1586,20 @@ export default function MatterDetailPage() {
                   <div>
                     <label htmlFor="matterdetailpage-matter-type" className={labelCls}>Matter Type</label>
                     <input id="matterdetailpage-matter-type" type="text" value={editData.matter_type || ''} onChange={e => setEditData(p => ({ ...p, matter_type: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label htmlFor="matterdetailpage-jurisdiction" className={labelCls}>Jurisdiction</label>
+                      <input id="matterdetailpage-jurisdiction" type="text" value={editData.jurisdiction || ''} onChange={e => setEditData(p => ({ ...p, jurisdiction: e.target.value }))} className={inputCls} placeholder="For example, North Dakota" />
+                    </div>
+                    <div>
+                      <label htmlFor="matterdetailpage-our-role" className={labelCls}>Our Role</label>
+                      <input id="matterdetailpage-our-role" type="text" value={editData.role || ''} onChange={e => setEditData(p => ({ ...p, role: e.target.value }))} className={inputCls} placeholder="For example, plaintiff's counsel" />
+                    </div>
+                    <div>
+                      <label htmlFor="matterdetailpage-stage" className={labelCls}>Current Stage</label>
+                      <input id="matterdetailpage-stage" type="text" value={editData.stage || ''} onChange={e => setEditData(p => ({ ...p, stage: e.target.value }))} className={inputCls} placeholder="For example, discovery" />
+                    </div>
                   </div>
                   <div>
                     <label htmlFor="matterdetailpage-plugin-workflow" className={labelCls}>Plugin Workflow</label>

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
+import ProfessionalContextPrompt from './ProfessionalContextPrompt'
 import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
 import { useConfirm } from './dialog/ConfirmProvider'
@@ -365,6 +366,7 @@ export default function AppShell({ children, title }) {
 
           {/* Main content */}
           <main className="flex-1 overflow-auto [scrollbar-gutter:stable]">
+            <ProfessionalContextPrompt />
             {children}
           </main>
 

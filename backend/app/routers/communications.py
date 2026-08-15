@@ -24,8 +24,30 @@ from app.schemas.communication_log import (
     CommunicationLogResponse,
     CommunicationLogUpdate,
 )
+from app.services.cache import ExpertiseCacheManager
 
 router = APIRouter(prefix="/api/communications", tags=["communications"])
+communication_context_cache = ExpertiseCacheManager()
+
+
+async def _invalidate_communication_context(
+    tenant_id: str, matter_id: uuid.UUID | None
+) -> None:
+    if matter_id is None:
+        return
+    try:
+        if (
+            communication_context_cache.cache_enabled
+            and not communication_context_cache.redis_client
+        ):
+            await communication_context_cache.init()
+        await communication_context_cache.invalidate_matter_context(
+            str(matter_id), tenant_id
+        )
+    except Exception:
+        # The communication is already durable; cache availability must not
+        # turn a successful write into an API failure.
+        return
 
 
 @router.get("", response_model=CommunicationLogListResponse)
@@ -93,6 +115,7 @@ async def create_communication_log(
     db.add(log)
     await db.commit()
     await db.refresh(log)
+    await _invalidate_communication_context(tenant_id, log.matter_id)
     return CommunicationLogResponse.model_validate(log)
 
 
@@ -137,11 +160,15 @@ async def update_communication_log(
     if not log:
         raise HTTPException(status_code=404, detail="Communication log not found")
 
+    previous_matter_id = log.matter_id
     for field, value in payload.model_dump(exclude_none=True).items():
         setattr(log, field, value)
 
     await db.commit()
     await db.refresh(log)
+    await _invalidate_communication_context(tenant_id, previous_matter_id)
+    if log.matter_id != previous_matter_id:
+        await _invalidate_communication_context(tenant_id, log.matter_id)
     return CommunicationLogResponse.model_validate(log)
 
 
@@ -166,3 +193,4 @@ async def delete_communication_log(
 
     log.status = "deleted"
     await db.commit()
+    await _invalidate_communication_context(tenant_id, log.matter_id)

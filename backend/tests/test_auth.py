@@ -89,12 +89,35 @@ class TestJWTHelpers:
 @pytest.mark.asyncio
 class TestAuthMe:
     async def test_me_returns_user_info(self, client, test_user, test_tenant):
+        test_user.professional_role = "Attorney"
+        test_user.job_title = "Litigation Counsel"
+        test_user.office_location = "Chicago"
+        test_user.primary_jurisdictions = ["Illinois", "Northern District of Illinois"]
         resp = await client.get("/api/auth/me")
         assert resp.status_code == 200
         data = resp.json()
         assert data["email"] == test_user.email
         assert data["role"] == test_user.role
         assert data["tenant_id"] == str(test_tenant.id)
+        assert data["professional_role"] == "Attorney"
+        assert data["primary_jurisdictions"] == ["Illinois", "Northern District of Illinois"]
+
+    async def test_me_profile_patch_only_updates_professional_fields(self, client, test_user):
+        original_name = test_user.full_name
+        resp = await client.patch(
+            "/api/auth/me",
+            json={
+                "professional_role": "Paralegal",
+                "job_title": "Senior Paralegal",
+                "office_location": "Fargo",
+                "primary_jurisdictions": ["North Dakota", "North Dakota"],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["professional_role"] == "Paralegal"
+        assert data["primary_jurisdictions"] == ["North Dakota"]
+        assert data["full_name"] == original_name
 
     async def test_me_no_token_returns_401(self, db_session):
         from httpx import ASGITransport, AsyncClient
