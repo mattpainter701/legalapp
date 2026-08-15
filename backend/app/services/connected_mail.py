@@ -234,8 +234,7 @@ async def _attempt_provider(
             provider=provider,
             delivery_certainty=(
                 DELIVERY_NOT_ATTEMPTED
-                if exc.status_code is not None
-                and 400 <= exc.status_code < 500
+                if exc.status_code is not None and 400 <= exc.status_code < 500
                 else DELIVERY_OUTCOME_UNKNOWN
             ),
         )

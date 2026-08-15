@@ -344,9 +344,7 @@ async def _run_email_client(
         delivery_certainty=(
             delivery.delivery_certainty
             or (
-                DELIVERY_CONFIRMED_SENT
-                if delivery.result
-                else DELIVERY_OUTCOME_UNKNOWN
+                DELIVERY_CONFIRMED_SENT if delivery.result else DELIVERY_OUTCOME_UNKNOWN
             )
         ),
     )
@@ -374,9 +372,7 @@ async def _recipient_bindings_are_current(
             .with_for_update()
         )
     ).all()
-    current = {
-        party_id: (contact_id, email) for party_id, contact_id, email in rows
-    }
+    current = {party_id: (contact_id, email) for party_id, contact_id, email in rows}
     if len(current) != len(set(requested_ids)):
         return False
     for binding in action.recipient_bindings:

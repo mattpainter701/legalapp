@@ -69,6 +69,7 @@ async def _lock_expired_chat_attachments(session, now: datetime) -> list[Documen
     )
     return list(result.scalars().all())
 
+
 settings = get_settings()
 
 logger = logging.getLogger(__name__)

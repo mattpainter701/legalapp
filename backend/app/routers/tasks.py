@@ -174,9 +174,7 @@ def _require_action_reviewer_or_admin(task: Task, user) -> None:
     )
 
 
-async def _delivery_history(
-    db: AsyncSession, task: Task
-) -> list[TaskDeliveryState]:
+async def _delivery_history(db: AsyncSession, task: Task) -> list[TaskDeliveryState]:
     """Immutable automation attempts, newest first.
 
     Read separately rather than joined onto the list query: only a handful of

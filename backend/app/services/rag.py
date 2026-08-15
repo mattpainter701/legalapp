@@ -74,7 +74,7 @@ _PUBLIC_JURISDICTIONS = (
     (re.compile(r"\b(?:south\s+dakota|s\.?d\.?)\b", re.IGNORECASE), "sd", "SD"),
     (re.compile(r"\b(?:minnesota|mn)\b", re.IGNORECASE), "minn", "MN"),
     (re.compile(r"\b(?:montana|mt)\b", re.IGNORECASE), "mont", "MT"),
-    (re.compile(r'\b(?:california|calif\.?|ca)\b', re.IGNORECASE), 'cal', 'CA'),
+    (re.compile(r"\b(?:california|calif\.?|ca)\b", re.IGNORECASE), "cal", "CA"),
 )
 
 
@@ -120,10 +120,7 @@ def filter_private_retrieval_results(question: str, chunks: list[dict]) -> list[
         # Generic legal/location words (for example "California jurisdiction")
         # occur throughout contracts and retainers. They cannot, by themselves,
         # make those documents relevant to a divorce/custody question.
-        if (
-            similarity >= 0.70
-            or (topic_overlap > 0 and overlap >= required_overlap)
-        ):
+        if similarity >= 0.70 or (topic_overlap > 0 and overlap >= required_overlap):
             chunk["lexical_overlap"] = overlap
             chunk["topic_overlap"] = topic_overlap
             retained.append(chunk)
@@ -138,7 +135,10 @@ def _explicit_public_jurisdictions(query: str) -> list[tuple[str, str]]:
         if match:
             matches.append((match.start(), courtlistener_id, authority_id))
     matches.sort(key=lambda item: item[0])
-    return [(courtlistener_id, authority_id) for _, courtlistener_id, authority_id in matches]
+    return [
+        (courtlistener_id, authority_id)
+        for _, courtlistener_id, authority_id in matches
+    ]
 
 
 def infer_public_jurisdictions(query: str, tool_name: str) -> list[str]:
@@ -873,9 +873,7 @@ async def build_rag_context(chunks: List[dict]) -> str:
     requested_jurisdictions = tuple(
         getattr(chunks, "requested_public_jurisdictions", ())
     )
-    missing_jurisdictions = tuple(
-        getattr(chunks, "missing_public_jurisdictions", ())
-    )
+    missing_jurisdictions = tuple(getattr(chunks, "missing_public_jurisdictions", ()))
     coverage_notice = ""
     if missing_jurisdictions:
         coverage_notice = (
@@ -910,9 +908,7 @@ async def build_rag_context(chunks: List[dict]) -> str:
         clause_type = chunk.get("clause_type") or "general"
         source = chunk.get("source", "")
         source_url = _public_source_url(chunk)
-        retrieval_jurisdiction = str(
-            chunk.get("retrieval_jurisdiction") or ""
-        ).strip()
+        retrieval_jurisdiction = str(chunk.get("retrieval_jurisdiction") or "").strip()
 
         source_id = str(chunk.get("id") or "").strip()
         header_parts = [f"[{i}] {source_title}"]
@@ -923,9 +919,7 @@ async def build_rag_context(chunks: List[dict]) -> str:
         if source_url:
             header_parts.append(f"URL: {source_url}")
         if is_public and retrieval_jurisdiction:
-            header_parts.append(
-                f"Retrieval jurisdiction: {retrieval_jurisdiction}"
-            )
+            header_parts.append(f"Retrieval jurisdiction: {retrieval_jurisdiction}")
         if court:
             header_parts.append(f"Court: {court}")
         if decision_date:
@@ -998,7 +992,10 @@ async def full_rag_query(
             default=None,
             degradation_reasons=degradation_reasons,
         )
-        if public_embedding is None and "public_embedding_failed" not in degradation_reasons:
+        if (
+            public_embedding is None
+            and "public_embedding_failed" not in degradation_reasons
+        ):
             degradation_reasons.append("public_embedding_unavailable")
     else:
         try:
@@ -1152,14 +1149,13 @@ async def full_rag_query(
             degradation_reasons.append("public_fallback_failed")
             public_chunks = []
     if use_mcp_public:
+
         async def _record_mcp_usage(usage_db: AsyncSession) -> None:
             outcomes = mcp_outcomes or [
                 {
                     "tool_name": "search_caselaw",
                     "status_code": (
-                        502
-                        if "public_search_failed" in degradation_reasons
-                        else 200
+                        502 if "public_search_failed" in degradation_reasons else 200
                     ),
                     "result_count": mcp_result_count,
                     "latency_ms": None,
@@ -1473,8 +1469,9 @@ async def hybrid_rag_query(
         if not isinstance(local_result, Exception):
             raise local_result
         logger.error("Private/public RAG retrieval failed: %s", local_result)
-        pgvector_context, chunks = "", RAGChunks(
-            degradation_reasons=["local_rag_failed"]
+        pgvector_context, chunks = (
+            "",
+            RAGChunks(degradation_reasons=["local_rag_failed"]),
         )
     else:
         pgvector_context, chunks = local_result

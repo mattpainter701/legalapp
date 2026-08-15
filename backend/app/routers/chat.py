@@ -121,9 +121,7 @@ def _meaningful_source_text(value, max_length: int | None = None) -> str:
     return "" if text.casefold() in _UNKNOWN_SOURCE_TEXT else text
 
 
-def _first_meaningful_source_text(
-    *values, max_length: int | None = None
-) -> str:
+def _first_meaningful_source_text(*values, max_length: int | None = None) -> str:
     for value in values:
         text = _meaningful_source_text(value, max_length)
         if text:
@@ -150,9 +148,7 @@ def _normalize_source_url(value: str | None) -> str | None:
         return url
     if url.startswith("/"):
         return f"https://www.courtlistener.com{url}"
-    if url.startswith("www.courtlistener.com/") or url.startswith(
-        "courtlistener.com/"
-    ):
+    if url.startswith("www.courtlistener.com/") or url.startswith("courtlistener.com/"):
         return f"https://{url}"
     if url.startswith("http://") or url.startswith("https://"):
         return url
@@ -286,9 +282,7 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "locator": _source_locator_from_chunk(chunk),
         "cited": False,
     }
-    retrieval_jurisdiction = _clean_source_text(
-        chunk.get("retrieval_jurisdiction"), 20
-    )
+    retrieval_jurisdiction = _clean_source_text(chunk.get("retrieval_jurisdiction"), 20)
     if is_public and retrieval_jurisdiction:
         source_dict["retrieval_jurisdiction"] = retrieval_jurisdiction
     return source_dict
@@ -864,12 +858,15 @@ def _message_to_response(msg: Message) -> MessageResponse:
                 fallback_name = "Matter context"
             else:
                 fallback_name = "Retrieved context"
-            source_name = _first_meaningful_source_text(
-                s.get("document_title"),
-                s.get("case_name"),
-                s.get("title"),
-                max_length=180,
-            ) or fallback_name
+            source_name = (
+                _first_meaningful_source_text(
+                    s.get("document_title"),
+                    s.get("case_name"),
+                    s.get("title"),
+                    max_length=180,
+                )
+                or fallback_name
+            )
             sources.append(
                 SourceCitation(
                     source_id=s.get("source_id") or s.get("id"),
@@ -885,8 +882,7 @@ def _message_to_response(msg: Message) -> MessageResponse:
                     ),
                     locator=_clean_source_text(s.get("locator"), 160) or None,
                     retrieval_jurisdiction=(
-                        _clean_source_text(s.get("retrieval_jurisdiction"), 20)
-                        or None
+                        _clean_source_text(s.get("retrieval_jurisdiction"), 20) or None
                     ),
                     cited=bool(s.get("cited")),
                 )
@@ -1447,8 +1443,7 @@ async def list_conversations(
             .group_by(Message.conversation_id)
         )
         message_count_map = {
-            str(row.conversation_id): row.cnt
-            for row in message_count_result.fetchall()
+            str(row.conversation_id): row.cnt for row in message_count_result.fetchall()
         }
         attachment_count_result = await db.execute(
             select(Document.conversation_id, func.count(Document.id).label("cnt"))
@@ -2087,9 +2082,7 @@ async def _send_message_under_generation_lock(
         return await resolve_llm_route(
             db,
             user.tenant_id,
-            use_premium=_premium_for_user(
-                user, body.content, body.use_premium_llm
-            ),
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             requested_provider=body.provider,
         )
 
@@ -2099,16 +2092,12 @@ async def _send_message_under_generation_lock(
         matter_cloud_folder,
         cache_hit_matter,
     ) = await _load_matter_context_nonstream()
-    attachment_context, attachment_sources = (
-        await _load_attachment_context_nonstream()
-    )
+    attachment_context, attachment_sources = await _load_attachment_context_nonstream()
     memory_context = await _load_memory_context_nonstream()
     route = await _resolve_nonstream_route()
     rag_cache_revision = str(
         await db.scalar(
-            select(Tenant.rag_corpus_revision).where(
-                Tenant.id == user.tenant_id
-            )
+            select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
         )
         or 0
     )
@@ -2158,17 +2147,13 @@ async def _send_message_under_generation_lock(
                     chunks=chunks,
                     cloud_hits=cloud_hits,
                     expertise_level=user.expertise_level,
-                    skill=body.skill
-                    if hasattr(body, "skill")
-                    else user.default_skill,
+                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
                     include_public=body.include_public,
                     scope_key=rag_scope_key,
                     expected_corpus_revision=rag_cache_revision,
                 )
             else:
-                logger.info(
-                    "Skipping RAG cache write for empty or degraded retrieval"
-                )
+                logger.info("Skipping RAG cache write for empty or degraded retrieval")
         except Exception as rag_exc:
             logger.exception("RAG query failed")
             await capture_chat_error(
@@ -2725,20 +2710,18 @@ async def _stream_message_under_generation_lock(
         route = await _resolve_stream_route()
         rag_cache_revision = str(
             await db.scalar(
-                select(Tenant.rag_corpus_revision).where(
-                    Tenant.id == user.tenant_id
-                )
+                select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
             )
             or 0
         )
         cached_rag = await cache_manager.get_cached_rag_results(
-                question=body.content,
-                tenant_id=str(user.tenant_id),
-                user_id=str(user.id),
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                include_public=body.include_public,
-                scope_key=rag_scope_key,
-                corpus_revision=rag_cache_revision,
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
+            scope_key=rag_scope_key,
+            corpus_revision=rag_cache_revision,
         )
         return (
             matter_context,

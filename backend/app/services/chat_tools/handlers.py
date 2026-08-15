@@ -635,9 +635,7 @@ async def propose_client_email(
             )
         )
     ).all()
-    resolved = {
-        party_id: (contact_id, email) for party_id, contact_id, email in rows
-    }
+    resolved = {party_id: (contact_id, email) for party_id, contact_id, email in rows}
     missing = [party_id for party_id in requested if party_id not in resolved]
     if missing:
         # Deliberately does not say which id failed or why.

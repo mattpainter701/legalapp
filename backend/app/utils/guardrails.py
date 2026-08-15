@@ -263,9 +263,7 @@ def _all_substantive_units_are_cited(text: str, eligible_ids: set[str]) -> bool:
     if not units:
         return False
     for unit in units:
-        unit_ids = {
-            value.strip().casefold() for value in _SOURCE_REF_RE.findall(unit)
-        }
+        unit_ids = {value.strip().casefold() for value in _SOURCE_REF_RE.findall(unit)}
         if not eligible_ids.intersection(unit_ids):
             return False
     return True
@@ -310,8 +308,7 @@ def enforce_legal_citation_integrity(
             str(row.get("source_id") or row.get("id") or "").strip().casefold()
             for row in source_rows
             if (
-                str(row.get("source_type") or "").casefold()
-                == "public_authority"
+                str(row.get("source_type") or "").casefold() == "public_authority"
                 or str(row.get("source") or "").casefold()
                 in {
                     "courtlistener_mcp",
@@ -329,9 +326,7 @@ def enforce_legal_citation_integrity(
     if (
         eligible_ids.intersection(cited_ids)
         and not has_unknown_source
-        and not _MODEL_ATTRIBUTION_RE.search(
-        text or ""
-        )
+        and not _MODEL_ATTRIBUTION_RE.search(text or "")
         and _all_substantive_units_are_cited(text or "", eligible_ids)
     ):
         return text, False

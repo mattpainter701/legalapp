@@ -211,7 +211,9 @@ class EmailClientAction(ChatActionModel):
         )
         if bound != self.to:
             raise ValueError("Recipient bindings must match the outbound addresses")
-        document_ids = [binding.document_id for binding in self.source_document_bindings]
+        document_ids = [
+            binding.document_id for binding in self.source_document_bindings
+        ]
         if len(document_ids) != len(set(document_ids)):
             raise ValueError("Source document bindings must be unique")
         if document_ids != self.source_document_ids:

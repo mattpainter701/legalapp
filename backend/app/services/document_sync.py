@@ -37,9 +37,7 @@ def _sync_source_key(file_info: dict) -> str:
         raise ValueError("Cloud document is missing a stable provider/item identity")
     if provider in {"onedrive", "sharepoint"} and not drive_id:
         raise ValueError("Microsoft cloud document is missing its drive identity")
-    remote_identity = "|".join(
-        (provider, drive_id, remote_id)
-    )
+    remote_identity = "|".join((provider, drive_id, remote_id))
     return hashlib.sha256(remote_identity.encode("utf-8")).hexdigest()
 
 
@@ -369,9 +367,7 @@ class DocumentSyncService:
             )
             if not token:
                 return None
-            download_url = (
-                f"{GOOGLE_DRIVE_BASE}/files/{file_info['id']}?alt=media"
-            )
+            download_url = f"{GOOGLE_DRIVE_BASE}/files/{file_info['id']}?alt=media"
         else:
             return None
 

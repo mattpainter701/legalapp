@@ -120,9 +120,7 @@ async def _process_document(
             await set_tenant_context(db, tenant_id)
             # Fetch the document
             result = await db.execute(
-                select(Document)
-                .where(Document.id == document_id)
-                .with_for_update()
+                select(Document).where(Document.id == document_id).with_for_update()
             )
             doc = result.scalar_one_or_none()
 

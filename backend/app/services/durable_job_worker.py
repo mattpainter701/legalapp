@@ -126,10 +126,7 @@ async def _run_cloud_sync(row: DurableJob) -> dict:
             source_key = _sync_source_key(cloud_doc)
             lock_key = f"cloud-sync:{tenant_id}:{source_key}"
             await session.execute(
-                text(
-                    "SELECT pg_advisory_xact_lock("
-                    "hashtextextended(:lock_key, 0))"
-                ),
+                text("SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_key, 0))"),
                 {"lock_key": lock_key},
             )
             records = (
@@ -252,10 +249,7 @@ async def _run_cloud_sync(row: DurableJob) -> dict:
             # current.
             await set_tenant_context(session, tenant_id)
             await session.execute(
-                text(
-                    "SELECT pg_advisory_xact_lock("
-                    "hashtextextended(:lock_key, 0))"
-                ),
+                text("SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_key, 0))"),
                 {"lock_key": lock_key},
             )
             versions = (
@@ -299,7 +293,9 @@ async def _run_cloud_sync(row: DurableJob) -> dict:
                 ),
             )
             for version in indexed_versions:
-                desired_status = "ready" if version.id == current_version.id else "superseded"
+                desired_status = (
+                    "ready" if version.id == current_version.id else "superseded"
+                )
                 if version.status != desired_status:
                     version.status = desired_status
             imported += 1

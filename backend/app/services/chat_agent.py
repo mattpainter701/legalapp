@@ -55,26 +55,45 @@ _MAX_OBSERVATION_CHARS = 4_000
 # prepare today. These are deliberately plain tokens, not a model judgment.
 _TASK_ACTION_VERBS = frozenset(
     {
-        'add', 'adding', 'assign', 'assigning', 'create', 'creating', 'draft',
-        'drafting', 'make', 'making', 'open', 'opening', 'prepare', 'preparing',
-        'propose', 'proposing', 'put', 'schedule', 'scheduling', 'set', 'setting',
-        'track', 'tracking',
+        "add",
+        "adding",
+        "assign",
+        "assigning",
+        "create",
+        "creating",
+        "draft",
+        "drafting",
+        "make",
+        "making",
+        "open",
+        "opening",
+        "prepare",
+        "preparing",
+        "propose",
+        "proposing",
+        "put",
+        "schedule",
+        "scheduling",
+        "set",
+        "setting",
+        "track",
+        "tracking",
     }
 )
-_TASK_OBJECTS = frozenset({'followup', 'reminder', 'task', 'todo', 'workboard'})
+_TASK_OBJECTS = frozenset({"followup", "reminder", "task", "todo", "workboard"})
 _EMAIL_DRAFT_PATTERN = re.compile(
-    r'\b(?:compose|composing|draft|drafting|prepare|preparing|write|writing)\s+'
-    r'(?:(?:a|an|the)\s+)?(?:(?:client|customer)\s+)?(?:email|message)\b'
+    r"\b(?:compose|composing|draft|drafting|prepare|preparing|write|writing)\s+"
+    r"(?:(?:a|an|the)\s+)?(?:(?:client|customer)\s+)?(?:email|message)\b"
 )
 _EMAIL_SEND_PATTERN = re.compile(
-    r'\b(?:forward|forwarding|send|sending)\s+'
-    r'(?:(?:a|an|the)\s+)?(?:(?:client|customer|party|recipient)\s+)?'
-    r'(?:(?:a|an|the)\s+)?(?:email|message)\b'
+    r"\b(?:forward|forwarding|send|sending)\s+"
+    r"(?:(?:a|an|the)\s+)?(?:(?:client|customer|party|recipient)\s+)?"
+    r"(?:(?:a|an|the)\s+)?(?:email|message)\b"
 )
 _CLIENT_CONTACT_PATTERN = re.compile(
-    r'\b(?:ask|contact|email|message|notify|send)\s+(?:the\s+)?'
-    r'(?:client|customer|party|recipient)\b|'
-    r'\bfollowup\s+(?:with\s+)?(?:the\s+)?(?:client|customer|party|recipient)\b'
+    r"\b(?:ask|contact|email|message|notify|send)\s+(?:the\s+)?"
+    r"(?:client|customer|party|recipient)\b|"
+    r"\bfollowup\s+(?:with\s+)?(?:the\s+)?(?:client|customer|party|recipient)\b"
 )
 _NAMED_RECIPIENT_PATTERN = re.compile(
     r"\b(?:Ask|Contact|Email|Message|Notify)\s+(?:the\s+)?"
@@ -201,31 +220,29 @@ def _verb_precedes_object(words, verbs, objects, distance: int = 10) -> bool:
 
 
 def requests_chat_action(question: str) -> bool:
-    '''Return true only for an explicit supported follow-through request.'''
-    value = ' '.join(str(question or '').casefold().split())
+    """Return true only for an explicit supported follow-through request."""
+    value = " ".join(str(question or "").casefold().split())
     if not value:
         return False
     if _NEGATED_ACTION_PATTERN.search(value):
         return False
     for phrase, token in (
-        ('follow up', 'followup'),
-        ('follow-up', 'followup'),
-        ('to do', 'todo'),
-        ('to-do', 'todo'),
-        ('work board', 'workboard'),
+        ("follow up", "followup"),
+        ("follow-up", "followup"),
+        ("to do", "todo"),
+        ("to-do", "todo"),
+        ("work board", "workboard"),
     ):
         value = value.replace(phrase, token)
-    words = re.findall(r'[a-z0-9]+', value)
-    task_requested = _verb_precedes_object(
-        words, _TASK_ACTION_VERBS, _TASK_OBJECTS
-    )
+    words = re.findall(r"[a-z0-9]+", value)
+    task_requested = _verb_precedes_object(words, _TASK_ACTION_VERBS, _TASK_OBJECTS)
     email_requested = bool(
         _EMAIL_DRAFT_PATTERN.search(value) or _EMAIL_SEND_PATTERN.search(value)
     )
     client_contact = bool(_CLIENT_CONTACT_PATTERN.search(value))
-    named_recipient = bool(_NAMED_RECIPIENT_PATTERN.search(str(question or '')))
+    named_recipient = bool(_NAMED_RECIPIENT_PATTERN.search(str(question or "")))
     remind_me = any(
-        word == 'remind' and 'me' in words[index + 1 : index + 4]
+        word == "remind" and "me" in words[index + 1 : index + 4]
         for index, word in enumerate(words)
     )
     return (
@@ -239,57 +256,60 @@ def requests_chat_action(question: str) -> bool:
 
 @dataclass
 class _ToolSequence:
-    '''Server-owned proof that the required read chain was completed.'''
+    """Server-owned proof that the required read chain was completed."""
 
     found_matters: set[UUID] = field(default_factory=set)
     tasks_checked: set[UUID] = field(default_factory=set)
     recipients_by_matter: dict[UUID, set[UUID]] = field(default_factory=dict)
 
     def require(self, tool_name: str, arguments) -> None:
-        matter_id = getattr(arguments, 'matter_id', None)
-        if tool_name == 'find_matter':
+        matter_id = getattr(arguments, "matter_id", None)
+        if tool_name == "find_matter":
             return
         if matter_id is not None and matter_id not in self.found_matters:
             raise ChatToolError(
-                'matter_lookup_required',
-                'Call find_matter first and use a matter_id it returned',
+                "matter_lookup_required",
+                "Call find_matter first and use a matter_id it returned",
             )
-        if tool_name == 'list_matter_recipients' and matter_id not in self.tasks_checked:
+        if (
+            tool_name == "list_matter_recipients"
+            and matter_id not in self.tasks_checked
+        ):
             raise ChatToolError(
-                'task_check_required',
-                'Call list_matter_tasks before resolving recipients',
+                "task_check_required",
+                "Call list_matter_tasks before resolving recipients",
             )
-        if tool_name in {'propose_task', 'propose_client_email'}:
+        if tool_name in {"propose_task", "propose_client_email"}:
             if matter_id not in self.tasks_checked:
                 raise ChatToolError(
-                    'task_check_required',
-                    'Call list_matter_tasks before proposing work',
+                    "task_check_required",
+                    "Call list_matter_tasks before proposing work",
                 )
-        if tool_name == 'propose_client_email':
+        if tool_name == "propose_client_email":
             discovered = self.recipients_by_matter.get(matter_id)
-            requested = set(getattr(arguments, 'recipient_party_ids', ()))
+            requested = set(getattr(arguments, "recipient_party_ids", ()))
             if discovered is None or not requested.issubset(discovered):
                 raise ChatToolError(
-                    'recipient_lookup_required',
-                    'Use recipient ids returned by list_matter_recipients',
+                    "recipient_lookup_required",
+                    "Use recipient ids returned by list_matter_recipients",
                 )
 
     def observe(self, tool_name: str, arguments, result: dict[str, Any]) -> None:
-        if tool_name == 'find_matter':
-            for row in result.get('matters', ()):
+        if tool_name == "find_matter":
+            for row in result.get("matters", ()):
                 try:
-                    self.found_matters.add(UUID(str(row.get('matter_id'))))
+                    self.found_matters.add(UUID(str(row.get("matter_id"))))
                 except (AttributeError, TypeError, ValueError):
                     continue
             return
-        matter_id = getattr(arguments, 'matter_id', None)
-        if tool_name == 'list_matter_tasks' and matter_id is not None:
+        matter_id = getattr(arguments, "matter_id", None)
+        if tool_name == "list_matter_tasks" and matter_id is not None:
             self.tasks_checked.add(matter_id)
-        elif tool_name == 'list_matter_recipients' and matter_id is not None:
+        elif tool_name == "list_matter_recipients" and matter_id is not None:
             recipient_ids = set()
-            for row in result.get('recipients', ()):
+            for row in result.get("recipients", ()):
                 try:
-                    recipient_ids.add(UUID(str(row.get('recipient_party_id'))))
+                    recipient_ids.add(UUID(str(row.get("recipient_party_id"))))
                 except (AttributeError, TypeError, ValueError):
                     continue
             self.recipients_by_matter[matter_id] = recipient_ids
@@ -316,7 +336,7 @@ class ChatActionAgent:
         # Most turns are research or analysis. Do not spend a second provider
         # call unless the attorney explicitly asked for supported follow-through.
         if not requests_chat_action(question):
-            outcome.halted_reason = 'no_action_intent'
+            outcome.halted_reason = "no_action_intent"
             return outcome
 
         # Before any spend. A disabled tenant costs nothing at all.

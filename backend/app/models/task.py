@@ -269,15 +269,11 @@ class TaskAutomationRun(Base):
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    provider_message_id: Mapped[str | None] = mapped_column(
-        String(500), nullable=True
-    )
+    provider_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     delivery_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Distinguishes a confirmed no-send (safe to retry) from a transport
     # interruption where the provider may have accepted the message.
-    delivery_certainty: Mapped[str | None] = mapped_column(
-        String(30), nullable=True
-    )
+    delivery_certainty: Mapped[str | None] = mapped_column(String(30), nullable=True)
     triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
