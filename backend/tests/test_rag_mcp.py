@@ -178,9 +178,7 @@ async def test_private_fts_only_returns_global_and_selected_matter_documents(
         "Global playbook.pdf",
         "Matter A contract.pdf",
     }
-    assert {item["document_title"] for item in dense_misc} == {
-        "Global playbook.pdf"
-    }
+    assert {item["document_title"] for item in dense_misc} == {"Global playbook.pdf"}
 
 
 @pytest.mark.asyncio
@@ -257,21 +255,22 @@ def test_public_search_infers_explicit_nd_jurisdiction_for_each_corpus():
 
 
 def test_public_search_does_not_narrow_a_multi_state_question_to_first_match():
-    query = 'North Dakota parent and California parent dispute custody jurisdiction'
+    query = "North Dakota parent and California parent dispute custody jurisdiction"
 
-    assert rag.infer_public_jurisdiction(query, 'search_caselaw') is None
-    assert rag.infer_public_jurisdiction(query, 'search_legal_authorities') is None
-    assert rag.infer_public_jurisdictions(query, 'search_caselaw') == ['nd', 'cal']
-    assert rag.infer_public_jurisdictions(
-        query, 'search_legal_authorities'
-    ) == ['ND', 'CA']
+    assert rag.infer_public_jurisdiction(query, "search_caselaw") is None
+    assert rag.infer_public_jurisdiction(query, "search_legal_authorities") is None
+    assert rag.infer_public_jurisdictions(query, "search_caselaw") == ["nd", "cal"]
+    assert rag.infer_public_jurisdictions(query, "search_legal_authorities") == [
+        "ND",
+        "CA",
+    ]
 
 
 def test_public_search_infers_explicit_california_jurisdiction():
-    query = 'California corporate law assignment analysis'
+    query = "California corporate law assignment analysis"
 
-    assert rag.infer_public_jurisdiction(query, 'search_caselaw') == 'cal'
-    assert rag.infer_public_jurisdiction(query, 'search_legal_authorities') == 'CA'
+    assert rag.infer_public_jurisdiction(query, "search_caselaw") == "cal"
+    assert rag.infer_public_jurisdiction(query, "search_legal_authorities") == "CA"
 
 
 @pytest.mark.asyncio
@@ -293,56 +292,56 @@ async def test_public_search_fans_out_and_preserves_each_named_jurisdiction(
     async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
         calls.append((tool_name, jurisdiction, top_k))
         canonical = {
-            'nd': 'ND',
-            'ND': 'ND',
-            'cal': 'CA',
-            'CA': 'CA',
+            "nd": "ND",
+            "ND": "ND",
+            "cal": "CA",
+            "CA": "CA",
         }[jurisdiction]
-        score = 0.99 if canonical == 'CA' else 0.20
-        if tool_name == 'search_caselaw':
+        score = 0.99 if canonical == "CA" else 0.20
+        if tool_name == "search_caselaw":
             item = {
-                'chunk_id': f'case-{canonical}',
-                'case_name': f'{canonical} Case',
-                'content': f'{canonical} caselaw',
-                'similarity': score,
+                "chunk_id": f"case-{canonical}",
+                "case_name": f"{canonical} Case",
+                "content": f"{canonical} custody jurisdiction caselaw",
+                "similarity": score,
             }
         else:
             item = {
-                'chunk_id': f'authority-{canonical}',
-                'title': f'{canonical} Statute',
-                'content': f'{canonical} statutory authority',
-                'similarity': score - 0.01,
+                "chunk_id": f"authority-{canonical}",
+                "title": f"{canonical} Statute",
+                "content": f"{canonical} custody jurisdiction statutory authority",
+                "similarity": score - 0.01,
             }
         return (
-            {'content': [{'type': 'json', 'json': [item]}]},
+            {"content": [{"type": "json", "json": [item]}]},
             {
-                'tool_name': tool_name,
-                'status_code': 200,
-                'result_count': 0,
-                'latency_ms': 1,
+                "tool_name": tool_name,
+                "status_code": 200,
+                "result_count": 0,
+                "latency_ms": 1,
             },
         )
 
-    monkeypatch.setattr(rag.settings, 'MCP_SERVER_URL', 'http://legal-mcp:8021')
-    monkeypatch.setattr(rag.settings, 'MCP_UPSTREAM_API_KEY', 'test-key')
-    monkeypatch.setattr(rag.httpx, 'AsyncClient', FakeClient)
-    monkeypatch.setattr(rag, '_call_public_mcp_search', fake_search)
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag.settings, "MCP_UPSTREAM_API_KEY", "test-key")
+    monkeypatch.setattr(rag.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rag, "_call_public_mcp_search", fake_search)
 
     results = await rag.search_courtlistener_mcp(
-        'North Dakota and California custody jurisdiction',
+        "North Dakota and California custody jurisdiction",
         top_k=2,
     )
 
     assert set(calls) == {
-        ('search_caselaw', 'nd', 2),
-        ('search_caselaw', 'cal', 2),
-        ('search_legal_authorities', 'ND', 2),
-        ('search_legal_authorities', 'CA', 2),
+        ("search_caselaw", "nd", 2),
+        ("search_caselaw", "cal", 2),
+        ("search_legal_authorities", "ND", 2),
+        ("search_legal_authorities", "CA", 2),
     }
-    assert {item['retrieval_jurisdiction'] for item in results} == {'ND', 'CA'}
+    assert {item["retrieval_jurisdiction"] for item in results} == {"ND", "CA"}
     assert len(results) == 2
     assert len(results.mcp_outcomes) == 4
-    assert all(outcome['result_count'] == 1 for outcome in results.mcp_outcomes)
+    assert all(outcome["result_count"] == 1 for outcome in results.mcp_outcomes)
 
 
 @pytest.mark.asyncio
@@ -361,9 +360,7 @@ async def test_public_search_reports_an_empty_named_jurisdiction(monkeypatch):
 
     async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
         calls.append((tool_name, jurisdiction))
-        canonical = {"nd": "ND", "ND": "ND", "cal": "CA", "CA": "CA"}[
-            jurisdiction
-        ]
+        canonical = {"nd": "ND", "ND": "ND", "cal": "CA", "CA": "CA"}[jurisdiction]
         items = []
         if canonical == "ND":
             items = [
@@ -467,6 +464,70 @@ def test_mcp_item_to_chunk_prefers_vector_similarity_over_rrf_rank():
     assert chunk["similarity"] == 0.7234
     assert chunk["relevance_score"] == 0.7234
     assert chunk["retrieval_mode"] == "hybrid"
+
+
+def test_mcp_fts_rank_is_not_misrepresented_as_semantic_similarity():
+    chunk = rag._mcp_item_to_chunk(
+        {
+            "chunk_id": "fts-abc",
+            "case_name": "Unrelated Case",
+            "content": "A generic court passage.",
+            "rank": 0.91,
+            "keyword_rank": 0.12,
+            "similarity": None,
+            "search_source": "fts",
+        },
+        0,
+    )
+
+    assert chunk["similarity"] == 0.0
+    assert chunk["relevance_score"] == 0.12
+
+
+def test_public_retrieval_gate_rejects_generic_legal_overlap():
+    retained = rag.filter_public_retrieval_results(
+        "North Dakota child custody home-state jurisdiction",
+        [
+            {
+                "id": "irrelevant",
+                "case_name": "North Dakota v. Example",
+                "content": "The court applies state law to a criminal sentence.",
+                "similarity": 0.0,
+            },
+            {
+                "id": "relevant",
+                "case_name": "In re Child",
+                "content": "Child custody jurisdiction turns on the home state.",
+                "similarity": 0.0,
+            },
+        ],
+    )
+
+    assert [item["id"] for item in retained] == ["relevant"]
+    assert retained[0]["evidence_relevance_score"] > 0
+
+
+def test_public_retrieval_gate_reranks_evidence_independently_of_input_order():
+    retained = rag.filter_public_retrieval_results(
+        "child custody home state jurisdiction",
+        [
+            {
+                "id": "partial",
+                "content": "The court considered custody jurisdiction.",
+                "similarity": 0.68,
+                "relevance_score": 0.99,
+            },
+            {
+                "id": "direct",
+                "content": "Child custody jurisdiction turns on the child's home state.",
+                "similarity": 0.68,
+                "relevance_score": 0.10,
+            },
+        ],
+    )
+
+    assert [item["id"] for item in retained] == ["direct", "partial"]
+    assert retained[0]["retrieval_score"] == 0.10
 
 
 def test_mcp_item_to_chunk_preserves_case_links():

@@ -75,7 +75,7 @@ async def test_rag_source_id_and_quote_survive_authoritative_validation():
 
     answer = f'The court held "{quote}." [source: courtlistener:authority-1] [settled]'
     validated, downgraded = validate_citation_confidence(answer, [source])
-    assert validated.endswith("[settled]")
+    assert validated.endswith("[cited]")
     assert downgraded == 0
 
 
@@ -434,6 +434,10 @@ def test_source_dict_from_chunk_links_and_cleans_public_authority():
         "source_type": "public_authority",
         "source_label": "Public authority",
         "locator": None,
+        "relevance_score": None,
+        "authority_tier": None,
+        "official_status": None,
+        "effective_date": None,
         "cited": False,
     }
 
@@ -767,7 +771,9 @@ def test_message_response_preserves_attachment_link_and_locator():
         tenant_id=uuid.uuid4(),
         conversation_id=uuid.uuid4(),
         role="assistant",
-        content=f"The LOI is binding in part. [source: document:{document_id}]",
+        content=(
+            f"The LOI is binding in part. [source: document:{document_id}] [cited]"
+        ),
         sources=[
             {
                 "source_id": f"document:{document_id}",
@@ -779,6 +785,7 @@ def test_message_response_preserves_attachment_link_and_locator():
                 "source_type": "tenant_document",
                 "source_label": "Attached document",
                 "locator": "LOI §§5–9",
+                "relevance_score": 0.91,
                 "cited": True,
             }
         ],
@@ -789,7 +796,10 @@ def test_message_response_preserves_attachment_link_and_locator():
 
     assert response.sources[0].url == f"/api/documents/{document_id}/download"
     assert response.sources[0].locator == "LOI §§5–9"
+    assert response.sources[0].relevance_score == 0.91
     assert response.sources[0].cited is True
+    assert response.citation_annotations[0].support == "cited"
+    assert response.citation_annotations[0].source_ids == [f"document:{document_id}"]
 
 
 @pytest.mark.asyncio
@@ -852,9 +862,7 @@ async def test_conversation_responses_count_persisted_attachments(
     assert listed_by_id[attachment_only["id"]]["attachment_count"] == 1
     assert listed_by_id[empty["id"]]["attachment_count"] == 0
 
-    detail = (
-        await client.get(f"/api/conversations/{attachment_only['id']}")
-    ).json()
+    detail = (await client.get(f"/api/conversations/{attachment_only['id']}")).json()
     assert detail["conversation"]["message_count"] == 0
     assert detail["conversation"]["attachment_count"] == 1
 
@@ -1125,14 +1133,15 @@ async def test_nonstream_rag_commit_then_failure_restores_tenant_and_persists_tu
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["provider", "guardrail_retry"])
 async def test_failed_llm_call_persists_retryable_assistant_chronology(
-    failure_stage,
-    client: AsyncClient, mock_llm, mock_embeddings
+    failure_stage, client: AsyncClient, mock_llm, mock_embeddings
 ):
     conv = (await client.post("/api/conversations", json={})).json()
     guardrail_patch = patch("app.routers.chat.apply_guardrails")
     if failure_stage == "provider":
         mock_llm.side_effect = RuntimeError("provider unavailable")
-        guardrail_patch = patch("app.routers.chat.apply_guardrails", wraps=chat_router.apply_guardrails)
+        guardrail_patch = patch(
+            "app.routers.chat.apply_guardrails", wraps=chat_router.apply_guardrails
+        )
     else:
         mock_llm.side_effect = [
             ("Unsafe initial response", 10, 10),
@@ -1178,9 +1187,7 @@ async def test_busy_generation_rejects_send_and_delete_without_writing(
             f"/api/conversations/{conv['id']}/messages",
             json={"content": "This must not be written while busy."},
         )
-        delete_response = await client.delete(
-            f"/api/conversations/{conv['id']}"
-        )
+        delete_response = await client.delete(f"/api/conversations/{conv['id']}")
         with patch.object(chat_router.settings, "UPLOAD_DIR", str(tmp_path)):
             upload_response = await client.post(
                 f"/api/conversations/{conv['id']}/attachments",
@@ -1195,9 +1202,7 @@ async def test_busy_generation_rejects_send_and_delete_without_writing(
         messages = (
             (
                 await db_session.execute(
-                    select(Message).where(
-                        Message.conversation_id == conversation_id
-                    )
+                    select(Message).where(Message.conversation_id == conversation_id)
                 )
             )
             .scalars()
@@ -1207,9 +1212,7 @@ async def test_busy_generation_rejects_send_and_delete_without_writing(
         documents = (
             (
                 await db_session.execute(
-                    select(Document).where(
-                        Document.conversation_id == conversation_id
-                    )
+                    select(Document).where(Document.conversation_id == conversation_id)
                 )
             )
             .scalars()
@@ -1294,7 +1297,9 @@ async def test_stalled_upload_blocks_relink_and_delete_until_document_is_committ
         )
 
     with (
-        patch.object(chat_router, "get_current_user", AsyncMock(return_value=auth_user)),
+        patch.object(
+            chat_router, "get_current_user", AsyncMock(return_value=auth_user)
+        ),
         patch.object(chat_router.settings, "UPLOAD_DIR", str(tmp_path)),
     ):
         async with session_factory() as first_db, session_factory() as second_db:
@@ -1395,9 +1400,7 @@ async def test_upload_cleanup_respects_commit_boundary(
     documents = (
         (
             await db_session.execute(
-                select(Document).where(
-                    Document.conversation_id == conversation_id
-                )
+                select(Document).where(Document.conversation_id == conversation_id)
             )
         )
         .scalars()
@@ -1602,7 +1605,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
                 "include_public": False,
                 "use_premium_llm": False,
             },
-    )
+        )
 
     assert resp.status_code == 201
     assert rag.call_args.kwargs["matter_id"] == matter_id
@@ -1671,14 +1674,22 @@ async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
     client: AsyncClient, db_session, test_tenant, test_user, mock_llm, mock_embeddings
 ):
     matter_a = Matter(
-        id=uuid.uuid4(), tenant_id=test_tenant.id, user_id=test_user.id,
-        slug=f"json-matter-a-{uuid.uuid4().hex[:8]}", matter_name="Matter A",
-        matter_type="general", status="open",
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"json-matter-a-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter A",
+        matter_type="general",
+        status="open",
     )
     matter_b = Matter(
-        id=uuid.uuid4(), tenant_id=test_tenant.id, user_id=test_user.id,
-        slug=f"json-matter-b-{uuid.uuid4().hex[:8]}", matter_name="Matter B",
-        matter_type="general", status="open",
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"json-matter-b-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter B",
+        matter_type="general",
+        status="open",
     )
     db_session.add_all([matter_a, matter_b])
     await db_session.commit()
@@ -1689,13 +1700,19 @@ async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
         rag.return_value = ("", [], [])
         first = await client.post(
             f"/api/conversations/{conv['id']}/messages",
-            json={"content": "Analyze Matter A", "matter_id": matter_a_id,
-                  "include_public": False},
+            json={
+                "content": "Analyze Matter A",
+                "matter_id": matter_a_id,
+                "include_public": False,
+            },
         )
         second = await client.post(
             f"/api/conversations/{conv['id']}/messages",
-            json={"content": "Switch to Matter B", "matter_id": matter_b_id,
-                  "include_public": False},
+            json={
+                "content": "Switch to Matter B",
+                "matter_id": matter_b_id,
+                "include_public": False,
+            },
         )
 
     assert first.status_code == 201
@@ -1711,14 +1728,22 @@ async def test_first_sse_matter_turn_pins_conversation_and_rejects_relink(
     client: AsyncClient, db_session, test_tenant, test_user, mock_embeddings
 ):
     matter_a = Matter(
-        id=uuid.uuid4(), tenant_id=test_tenant.id, user_id=test_user.id,
-        slug=f"sse-matter-a-{uuid.uuid4().hex[:8]}", matter_name="Matter A",
-        matter_type="general", status="open",
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"sse-matter-a-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter A",
+        matter_type="general",
+        status="open",
     )
     matter_b = Matter(
-        id=uuid.uuid4(), tenant_id=test_tenant.id, user_id=test_user.id,
-        slug=f"sse-matter-b-{uuid.uuid4().hex[:8]}", matter_name="Matter B",
-        matter_type="general", status="open",
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"sse-matter-b-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter B",
+        matter_type="general",
+        status="open",
     )
     db_session.add_all([matter_a, matter_b])
     await db_session.commit()
@@ -1732,15 +1757,23 @@ async def test_first_sse_matter_turn_pins_conversation_and_rejects_relink(
         rag.return_value = ("", [], [])
         with patch("app.services.llm.LLMService.stream_complete", stream_tokens):
             async with client.stream(
-                "POST", f"/api/conversations/{conv['id']}/messages/stream",
-                json={"content": "Analyze Matter A", "matter_id": matter_a_id,
-                      "include_public": False},
+                "POST",
+                f"/api/conversations/{conv['id']}/messages/stream",
+                json={
+                    "content": "Analyze Matter A",
+                    "matter_id": matter_a_id,
+                    "include_public": False,
+                },
             ) as first:
                 first_body = "".join([part async for part in first.aiter_text()])
         async with client.stream(
-            "POST", f"/api/conversations/{conv['id']}/messages/stream",
-            json={"content": "Switch to Matter B", "matter_id": matter_b_id,
-                  "include_public": False},
+            "POST",
+            f"/api/conversations/{conv['id']}/messages/stream",
+            json={
+                "content": "Switch to Matter B",
+                "matter_id": matter_b_id,
+                "include_public": False,
+            },
         ) as second:
             second_body = "".join([part async for part in second.aiter_text()])
 
@@ -2129,15 +2162,14 @@ async def test_cancelled_stream_rolls_back_flushed_action_and_source_promotion(
         "app.routers.chat.get_current_user", new_callable=AsyncMock
     ) as current_user:
         current_user.return_value = auth_user
-        with patch(
-            "app.routers.chat.hybrid_rag_query", new_callable=AsyncMock
-        ) as rag:
+        with patch("app.routers.chat.hybrid_rag_query", new_callable=AsyncMock) as rag:
             rag.return_value = ("", [], [])
-            with patch(
-                "app.services.llm.LLMService.stream_complete", stream_tokens
-            ), patch(
-                "app.routers.chat._propose_followthrough_actions",
-                flush_action_then_stall,
+            with (
+                patch("app.services.llm.LLMService.stream_complete", stream_tokens),
+                patch(
+                    "app.routers.chat._propose_followthrough_actions",
+                    flush_action_then_stall,
+                ),
             ):
                 response = await chat_router._stream_message_under_generation_lock(
                     conv["id"],
@@ -2331,9 +2363,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                 BackgroundTasks(),
                 first_db,
             )
-            first_body_task = asyncio.create_task(
-                drain(first_response.body_iterator)
-            )
+            first_body_task = asyncio.create_task(drain(first_response.body_iterator))
             try:
                 await asyncio.wait_for(stream_started.wait(), timeout=5)
                 assert test_pool.checkedout() == baseline_checked_out + 1
@@ -2358,9 +2388,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                                 content="Concurrent non-stream request.",
                                 include_public=False,
                             ),
-                            make_request(
-                                f"/api/conversations/{conv['id']}/messages"
-                            ),
+                            make_request(f"/api/conversations/{conv['id']}/messages"),
                             BackgroundTasks(),
                             second_db,
                         )
@@ -2369,9 +2397,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                         await chat_router.update_conversation(
                             conv["id"],
                             ConversationUpdate(matter_id=str(matter_b.id)),
-                            make_request(
-                                f"/api/conversations/{conv['id']}"
-                            ),
+                            make_request(f"/api/conversations/{conv['id']}"),
                             second_db,
                         )
 
@@ -2387,9 +2413,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                         (
                             await inspect_db.execute(
                                 select(Message)
-                                .where(
-                                    Message.conversation_id == conversation_id
-                                )
+                                .where(Message.conversation_id == conversation_id)
                                 .order_by(Message.created_at, Message.id)
                             )
                         )
@@ -2397,14 +2421,10 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                         .all()
                     )
                     conversation_state = await inspect_db.scalar(
-                        select(Conversation).where(
-                            Conversation.id == conversation_id
-                        )
+                        select(Conversation).where(Conversation.id == conversation_id)
                     )
                 assert [message.role for message in in_flight] == ["user"]
-                assert in_flight[0].content == (
-                    "Draft a short internal status update."
-                )
+                assert in_flight[0].content == ("Draft a short internal status update.")
                 assert conversation_state.matter_id == matter_a.id
             finally:
                 finish_stream.set()

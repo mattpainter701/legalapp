@@ -144,6 +144,14 @@ export function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, 
         && (fallbackAssistantMessage.proposed_actions || []).length > 0
         ? { proposed_actions: fallbackAssistantMessage.proposed_actions }
         : {}),
+      ...((serverAssistant.sources || []).length === 0
+        && (fallbackAssistantMessage.sources || []).length > 0
+        ? { sources: fallbackAssistantMessage.sources }
+        : {}),
+      ...((serverAssistant.citation_annotations || []).length === 0
+        && (fallbackAssistantMessage.citation_annotations || []).length > 0
+        ? { citation_annotations: fallbackAssistantMessage.citation_annotations }
+        : {}),
     }
   }
 
@@ -791,6 +799,8 @@ export default function ChatPage() {
       let accumulatedText = ''
       let streamError = null
       let sawStreamComplete = false
+      let streamedSources = []
+      let streamedCitationAnnotations = []
 
       for await (const token of streamMessage(
         convId,
@@ -806,6 +816,22 @@ export default function ChatPage() {
         // Draining is detached from UI state, so switching remains immediate
         // and no token from this conversation can leak into another one.
         if (!isCurrentStream()) continue
+        if (token?.type === 'progress' && token.event === 'citation_metadata') {
+          streamedSources = token.sources || []
+          streamedCitationAnnotations = token.citation_annotations || []
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMsgId
+                ? {
+                    ...msg,
+                    sources: streamedSources,
+                    citation_annotations: streamedCitationAnnotations,
+                  }
+                : msg
+            )
+          )
+          continue
+        }
         if (token?.type === 'progress' && token.event === 'action_proposal') {
           // Reviewable work the assistant proposed. Attached to the message
           // rather than merged into progress, since it outlives the stream.
@@ -904,6 +930,8 @@ export default function ChatPage() {
         const fallbackAssistantMessage = {
           ...assistantMsg,
           content: accumulatedText,
+          sources: streamedSources,
+          citation_annotations: streamedCitationAnnotations,
           progress: { ...streamProgress, complete: true },
           referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
         }

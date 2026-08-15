@@ -32,6 +32,10 @@ function cleanSourceText(value) {
   return textarea.value
 }
 
+function readableSourceMeta(value) {
+  return cleanSourceText(value).replace(/[_-]+/g, ' ')
+}
+
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
@@ -56,20 +60,70 @@ export function sourceAnchor(messageId, index) {
   return `source-${safeMessageId}-${index + 1}`
 }
 
-export function linkSourceReferences(text, sources, messageId) {
+export function linkSourceReferences(text, sources, messageId, annotations = []) {
   if (!text) return ''
-  const sourceList = Array.isArray(sources) ? sources : []
+  const sourceText = String(text)
+  const sourceList = citedSources(text, sources, annotations)
   const sourceIndexes = new Map()
   sourceList.forEach((source, index) => {
     const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
     if (id && !sourceIndexes.has(id)) sourceIndexes.set(id, { source, index })
   })
 
-  return String(text).replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
+  if (Array.isArray(annotations) && annotations.length > 0) {
+    const replacements = []
+    for (const annotation of annotations) {
+      for (const marker of annotation?.source_markers || []) {
+        const entry = sourceIndexes.get(String(marker?.source_id || '').trim().toLowerCase())
+        const start = Number(marker?.start)
+        const end = Number(marker?.end)
+        if (
+          !entry
+          || !Number.isInteger(start)
+          || !Number.isInteger(end)
+          || start < 0
+          || end <= start
+          || end > sourceText.length
+        ) continue
+        const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
+        replacements.push({ start, end, value: `[[${entry.index + 1}]](${href})` })
+      }
+
+      const primaryId = annotation?.source_ids?.[0]
+      const primaryEntry = sourceIndexes.get(String(primaryId || '').trim().toLowerCase())
+      const tagStart = Number(annotation?.support_tag?.start)
+      const tagEnd = Number(annotation?.support_tag?.end)
+      if (
+        primaryEntry
+        && ['cited', 'verify'].includes(annotation?.support)
+        && Number.isInteger(tagStart)
+        && Number.isInteger(tagEnd)
+        && tagStart >= 0
+        && tagEnd > tagStart
+        && tagEnd <= sourceText.length
+      ) {
+        replacements.push({
+          start: tagStart,
+          end: tagEnd,
+          value: `[${annotation.support}](#${sourceAnchor(messageId, primaryEntry.index)})`,
+        })
+      }
+    }
+    if (replacements.length > 0) {
+      let rendered = sourceText
+      for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+        rendered = `${rendered.slice(0, replacement.start)}${replacement.value}${rendered.slice(replacement.end)}`
+      }
+      return rendered
+    }
+  }
+
+  return sourceText.replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
     const entry = sourceIndexes.get(String(rawId || '').trim().toLowerCase())
     if (!entry) return '**[source]**'
     const label = `[${entry.index + 1}]`
-    return `[${label}](#${sourceAnchor(messageId, entry.index)})`
+    const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
+    return `[${label}](${href})`
   })
 }
 
@@ -79,23 +133,31 @@ function sourceDisplayName(src) {
   return src?.source_type === 'public_authority' ? 'Unidentified authority' : 'Retrieved context'
 }
 
-export function citedSourceCount(text, sources) {
+export function citedSources(text, sources, annotations = []) {
   const sourceList = Array.isArray(sources) ? sources : []
-  const knownIds = new Set(
-    sourceList
-      .map((source) => String(source?.source_id || source?.id || '').trim().toLowerCase())
-      .filter(Boolean),
-  )
   const citedIds = new Set()
-  for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
-    const id = String(match[1] || '').trim().toLowerCase()
-    if (knownIds.has(id)) citedIds.add(id)
+  if (Array.isArray(annotations) && annotations.length > 0) {
+    for (const annotation of annotations) {
+      for (const sourceId of annotation?.source_ids || []) {
+        const id = String(sourceId || '').trim().toLowerCase()
+        if (id) citedIds.add(id)
+      }
+    }
+  } else {
+    for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
+      const id = String(match[1] || '').trim().toLowerCase()
+      if (id) citedIds.add(id)
+    }
   }
-  for (const source of sourceList) {
+  const hasStructuredAnnotations = Array.isArray(annotations) && annotations.length > 0
+  return sourceList.filter((source) => {
     const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
-    if (id && source?.cited === true) citedIds.add(id)
-  }
-  return citedIds.size
+    return Boolean(id && (citedIds.has(id) || (!hasStructuredAnnotations && source?.cited === true)))
+  })
+}
+
+export function citedSourceCount(text, sources, annotations = []) {
+  return citedSources(text, sources, annotations).length
 }
 
 function splitMarkdownSections(markdown) {
@@ -192,17 +254,12 @@ function sourceBadge(src) {
   return { label, classes: 'bg-brand-line/40 text-brand-muted border-brand-line' }
 }
 
-function SourcesLedger({ sources, messageId, content }) {
+function SourcesLedger({ sources, messageId }) {
   if (!sources || sources.length === 0) return null
 
   const cols = 'sm:grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
   const publicAuthorityCount = sources.filter((src) => src?.source_type === 'public_authority').length
-  const citedCount = citedSourceCount(content, sources)
-  const heading = citedCount === 0
-    ? 'Materials Retrieved — Not Cited'
-    : publicAuthorityCount > 0
-      ? 'Authorities and Sources'
-      : 'Sources & References'
+  const heading = publicAuthorityCount > 0 ? 'Cited Authorities and Sources' : 'Cited Sources'
 
   return (
     <div className="mt-5 border-t-[3px] border-brand-ink pt-4 sm:mt-10 sm:pt-6">
@@ -228,10 +285,15 @@ function SourcesLedger({ sources, messageId, content }) {
             const excerpt = cleanSourceText(src.excerpt)
             const href = sourceHref(src)
             const badge = sourceBadge(src)
-            const wasCited = src?.cited === true
-              || new RegExp(`\\[source:\\s*${String(src?.source_id || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'i').test(content || '')
             const locator = cleanSourceText(src.locator)
             const anchor = sourceAnchor(messageId, idx)
+            const relevance = Number(src?.relevance_score)
+            const evidenceMeta = [
+              readableSourceMeta(src?.official_status),
+              readableSourceMeta(src?.authority_tier),
+              src?.effective_date ? `effective ${cleanSourceText(src.effective_date)}` : '',
+              Number.isFinite(relevance) && relevance > 0 ? `${Math.round(relevance * 100)}% match` : '',
+            ].filter(Boolean)
 
             return (
               <div
@@ -251,9 +313,14 @@ function SourcesLedger({ sources, messageId, content }) {
                     <span className={`mt-1 inline-flex w-fit items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest font-mono border ${badge.classes}`}>
                       {badge.label}
                     </span>
-                    <span className={`ml-2 mt-1 inline-flex w-fit border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${wasCited ? 'border-brand-green/20 bg-brand-green/10 text-brand-green' : 'border-brand-line bg-brand-surface-2 text-brand-muted'}`}>
-                      {wasCited ? 'Cited' : 'Retrieved only'}
+                    <span className="ml-2 mt-1 inline-flex w-fit border border-brand-green/20 bg-brand-green/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-brand-green">
+                      Cited
                     </span>
+                    {evidenceMeta.length > 0 && (
+                      <span className="ml-2 mt-1 inline-flex w-fit font-mono text-[9px] uppercase tracking-wide text-brand-muted">
+                        {evidenceMeta.join(' · ')}
+                      </span>
+                    )}
                     {locator && (
                       <a
                         href={`#${anchor}`}
@@ -350,7 +417,7 @@ function countSourcesByType(sources) {
   return counts
 }
 
-function ReferenceTrail({ referenceContext, sources, content, variant = 'assistant' }) {
+function ReferenceTrail({ referenceContext, sources, content, annotations, variant = 'assistant' }) {
   const sourceCounts = countSourcesByType(sources)
   const contextCounts = referenceContext?.counts || {}
   const counts = {
@@ -364,7 +431,7 @@ function ReferenceTrail({ referenceContext, sources, content, variant = 'assista
     (counts.matter + counts.uploads + counts.firm + counts.courtlistener)
   )
   const sourceCount = formatCount(referenceContext?.source_count ?? (Array.isArray(sources) ? sources.length : 0))
-  const actualCitedCount = formatCount(referenceContext?.cited_count ?? citedSourceCount(content, sources))
+  const actualCitedCount = formatCount(referenceContext?.cited_count ?? citedSourceCount(content, sources, annotations))
   const status = referenceContext?.status || (sourceCount ? 'Materials retrieved for source audit' : '')
   const hasAny = counts.total > 0 || sourceCount > 0 || status
   if (!hasAny) return null
@@ -576,7 +643,9 @@ function AssistantWorkingState({ progress, compact = false }) {
 export default function ChatMessage({ message }) {
   const isUser = message.role === 'user'
   const content = message.content || ''
-  const renderedContent = linkSourceReferences(content, message.sources, message.id)
+  const annotations = message.citation_annotations || []
+  const displayedSources = citedSources(content, message.sources, annotations)
+  const renderedContent = linkSourceReferences(content, displayedSources, message.id, annotations)
   const hasAssistantContent = content.trim().length > 0
   const timestamp = message.created_at
     ? format(new Date(message.created_at), 'h:mm a')
@@ -643,6 +712,7 @@ export default function ChatMessage({ message }) {
               referenceContext={message.referenceContext}
               sources={message.sources}
               content={content}
+              annotations={annotations}
               variant="user"
             />
           </div>
@@ -685,7 +755,7 @@ export default function ChatMessage({ message }) {
             ) : (
               <AssistantWorkingState progress={message.progress} />
             )}
-            {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} content={content} />}
+            {hasAssistantContent && <SourcesLedger sources={displayedSources} messageId={message.id} />}
           </div>
           {/* Outside responseCopyRef: copying an analysis should yield the
               analysis, not the approval controls. */}
@@ -706,6 +776,7 @@ export default function ChatMessage({ message }) {
               referenceContext={message.referenceContext}
               sources={message.sources}
               content={content}
+              annotations={annotations}
             />
           )}
         </div>

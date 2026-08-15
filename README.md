@@ -34,6 +34,44 @@ Public MCP access is release-gated and must remain disabled.
 No AI output is a substitute for professional review. A displayed citation or
 source label is a review aid, not a guarantee that authority remains good law.
 
+### Chat evidence and citation contract
+
+Legal-chat answers use three review states:
+
+- `cited` means the claim points to an exact retrieved source and the cited
+  passage directly supports the claim. Faithful paraphrases are allowed.
+- `verify` means the proposition, application, or inference still requires
+  attorney confirmation. A source may be linked for context without upgrading
+  the proposition to `cited`.
+- `model` means general model knowledge rather than retrieved firm material or
+  public authority.
+
+Retrieval and evidence review are separate stages. Tenant material is protected
+by a lexical/semantic relevance gate. Public-authority search uses broad recall,
+then independently reranks candidates using semantic similarity, meaningful
+issue-term coverage, and phrase coverage. Generic matches such as only the word
+"court," "law," or a jurisdiction name are excluded. FTS rank is never reported
+as semantic similarity.
+
+The API returns `citation_annotations` for every tagged claim. Each annotation
+contains stable character offsets, the normalized review state, exact source
+IDs, source-marker spans, and the review-tag span. The browser uses this
+structured contract to bind claims, tags, and sources; bracket parsing remains
+only as a compatibility fallback for an in-flight or older client. Because the
+annotations are deterministically rebuilt from persisted Markdown, existing
+conversations receive the structured contract without a database migration.
+
+Only sources actually bound to answer claims appear in the visible citation
+ledger. Retrieval counts remain in the reference audit, so unused search results
+are observable without being presented as support. Inline citation numbers open
+the original authority or authenticated firm document, while a linked `cited`
+or `verify` badge jumps to the supporting excerpt in the response ledger.
+
+Source metadata may include an independent match score, authority tier, official
+status, jurisdiction, effective date, and locator when the upstream corpus
+provides them. These fields assist review; they do not perform citator treatment
+checks or guarantee that an authority remains current, controlling, or unmodified.
+
 ## Runtime architecture
 
 ```mermaid
