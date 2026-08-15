@@ -109,9 +109,7 @@ class UserProfileUpdate(BaseModel):
 
     @field_validator("primary_jurisdictions")
     @classmethod
-    def normalize_jurisdictions(
-        cls, value: Optional[list[str]]
-    ) -> list[str]:
+    def normalize_jurisdictions(cls, value: Optional[list[str]]) -> list[str]:
         if value is None:
             # The persisted JSON column is non-null; explicit null means clear.
             return []

@@ -366,6 +366,7 @@ export default function AppShell({ children, title }) {
 
           {/* Main content */}
           <main className="flex-1 overflow-auto [scrollbar-gutter:stable]">
+            <ProfessionalContextPrompt />
             {children}
           </main>
 
@@ -398,7 +399,6 @@ export default function AppShell({ children, title }) {
           </nav>
         </div>
       </div>
-      <ProfessionalContextPrompt />
     </AppShellContext.Provider>
   )
 }

@@ -39,6 +39,11 @@ describe('ProfessionalContextPrompt', () => {
       </MemoryRouter>,
     )
 
+    const prompt = screen.getByRole('region', {
+      name: 'Help AI understand your work',
+    })
+    expect(prompt).not.toHaveClass('fixed')
+
     await user.type(screen.getByLabelText('Professional role'), 'Paralegal')
     await user.type(screen.getByLabelText('Office location'), 'Fargo, ND')
     await user.type(
@@ -54,7 +59,7 @@ describe('ProfessionalContextPrompt', () => {
     }))
     expect(refreshUser).toHaveBeenCalled()
     expect(
-      screen.queryByRole('dialog', { name: 'Help AI understand your work' }),
+      screen.queryByRole('region', { name: 'Help AI understand your work' }),
     ).not.toBeInTheDocument()
   })
 })

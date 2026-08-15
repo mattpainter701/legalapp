@@ -1659,9 +1659,7 @@ async def execute_skill(
     context["global_user_context"] = build_global_user_context(user)
     matter_context = ""
     matter_uuid = None
-    matter_context_enabled = await matter_context_service.is_enabled(
-        db, user.tenant_id
-    )
+    matter_context_enabled = await matter_context_service.is_enabled(db, user.tenant_id)
     if body.matter_id:
         try:
             matter_uuid = uuid.UUID(body.matter_id)

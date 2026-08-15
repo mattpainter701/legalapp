@@ -281,7 +281,10 @@ class ExpertiseCacheManager:
 
         try:
             key = self._make_key(
-                "matter", tenant_id, matter_id, "privacy" if privacy_mode else "standard"
+                "matter",
+                tenant_id,
+                matter_id,
+                "privacy" if privacy_mode else "standard",
             )
             cached = await self.redis_client.get(key)
             return cached
@@ -303,7 +306,10 @@ class ExpertiseCacheManager:
 
         try:
             key = self._make_key(
-                "matter", tenant_id, matter_id, "privacy" if privacy_mode else "standard"
+                "matter",
+                tenant_id,
+                matter_id,
+                "privacy" if privacy_mode else "standard",
             )
             ttl = self._get_ttl(expertise_level, "matter")
             await self.redis_client.setex(key, ttl, context)

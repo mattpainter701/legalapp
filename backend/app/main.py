@@ -240,7 +240,9 @@ async def lifespan(app: FastAPI):
             await context_cache.init()
             logger.info("%s cache manager initialized", name.title())
         except Exception as exc:
-            logger.warning("%s cache manager initialization failed: %s", name.title(), exc)
+            logger.warning(
+                "%s cache manager initialization failed: %s", name.title(), exc
+            )
 
     # The official MCP SDK owns JSON-RPC lifecycle and Streamable HTTP
     # semantics. Its public endpoint remains fail-closed unless

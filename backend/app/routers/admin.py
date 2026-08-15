@@ -1515,9 +1515,7 @@ class UserPatchRequest(_PydanticBase):
 
     @field_validator("primary_jurisdictions")
     @classmethod
-    def validate_jurisdictions(
-        cls, value: Optional[list[str]]
-    ) -> Optional[list[str]]:
+    def validate_jurisdictions(cls, value: Optional[list[str]]) -> Optional[list[str]]:
         if value is None:
             return value
         cleaned = []

@@ -19,9 +19,7 @@ def build_global_user_context(user: Any, *, privacy_mode: bool | None = None) ->
     role: it controls application access and is not a statement of profession.
     """
     privacy_mode = bool(
-        getattr(user, "privacy_mode", False)
-        if privacy_mode is None
-        else privacy_mode
+        getattr(user, "privacy_mode", False) if privacy_mode is None else privacy_mode
     )
     values = (
         ("Name", getattr(user, "full_name", None)),

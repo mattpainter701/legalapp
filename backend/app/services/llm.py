@@ -177,7 +177,8 @@ class LLMService:
         return SYSTEM_PROMPT_TEMPLATE.format(
             tenant_name=tenant_name,
             memory_context=memory_context or "No user memory available.",
-            global_user_context=global_user_context or "No verified user profile available.",
+            global_user_context=global_user_context
+            or "No verified user profile available.",
             context=context,
             user_name=user_name or "the attorney",
         )

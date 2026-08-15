@@ -1987,9 +1987,9 @@ async def _send_message_under_generation_lock(
 
     effective_matter = await _effective_message_matter(db, user, conv, body)
     effective_matter_id = str(effective_matter.id) if effective_matter else None
-    matter_context_enabled = bool(effective_matter) and await matter_context_service.is_enabled(
-        db, user.tenant_id
-    )
+    matter_context_enabled = bool(
+        effective_matter
+    ) and await matter_context_service.is_enabled(db, user.tenant_id)
     context_matter_id = effective_matter_id if matter_context_enabled else None
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None
@@ -2609,9 +2609,9 @@ async def _stream_message_under_generation_lock(
             media_type="text/event-stream",
         )
     effective_matter_id = str(effective_matter.id) if effective_matter else None
-    matter_context_enabled = bool(effective_matter) and await matter_context_service.is_enabled(
-        db, user.tenant_id
-    )
+    matter_context_enabled = bool(
+        effective_matter
+    ) and await matter_context_service.is_enabled(db, user.tenant_id)
     context_matter_id = effective_matter_id if matter_context_enabled else None
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None

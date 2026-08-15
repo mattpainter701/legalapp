@@ -12,7 +12,7 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["103_task_action_delivery_audit"]
+    assert heads == ["104_user_professional_context"]
 
 
 def test_document_revision_migration_forces_tenant_rls_and_preserves_sources():

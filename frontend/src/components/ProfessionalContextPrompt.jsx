@@ -87,9 +87,9 @@ export default function ProfessionalContextPrompt() {
 
   return (
     <aside
-      role="dialog"
+      role="region"
       aria-labelledby="professional-context-title"
-      className="fixed bottom-[5.25rem] right-3 z-40 w-[calc(100%-1.5rem)] max-w-md rounded-2xl border border-brand-line bg-brand-surface p-5 shadow-xl lg:bottom-5 lg:right-5"
+      className="mx-3 mt-3 rounded-2xl border border-brand-line bg-brand-surface p-5 shadow-sm md:mx-6 md:mt-5"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -110,7 +110,7 @@ export default function ProfessionalContextPrompt() {
         </button>
       </div>
 
-      <form onSubmit={save} className="mt-4 grid gap-3">
+      <form onSubmit={save} className="mt-4 grid gap-3 sm:grid-cols-3">
         {[
           ['professional_role', 'Professional role', 'Attorney, paralegal, secretary…'],
           ['office_location', 'Office location', 'Chicago, IL'],
@@ -130,8 +130,8 @@ export default function ProfessionalContextPrompt() {
             />
           </label>
         ))}
-        {error && <p role="alert" className="text-xs text-brand-rose">{error}</p>}
-        <div className="flex justify-end">
+        {error && <p role="alert" className="text-xs text-brand-rose sm:col-span-3">{error}</p>}
+        <div className="flex justify-end sm:col-span-3">
           <button
             type="submit"
             disabled={saving}
