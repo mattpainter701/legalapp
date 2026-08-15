@@ -1,54 +1,186 @@
 import asyncio
+import json
+import uuid
 
 import pytest
 
 import app.services.rag as rag
+from app.models.document import Chunk, Document
+from app.models.conversation import Conversation
+from app.models.plugin import Matter
 from app.services.cache import ExpertiseCacheManager
 
 
 @pytest.mark.asyncio
-async def test_hybrid_rag_runs_local_and_connected_retrieval_concurrently(monkeypatch):
-    started = set()
-    both_started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def wait_for_peer(name, result, **kwargs):
-        started.add(name)
-        if len(started) == 2:
-            both_started.set()
-        await release.wait()
-        return result
+async def test_hybrid_rag_serializes_db_phases_on_supplied_session(monkeypatch):
+    supplied_db = object()
+    calls = []
+    tenant_context_calls = []
 
     async def local(**kwargs):
-        return await wait_for_peer("local", ("local context", [{"id": "local"}]))
+        assert kwargs["db"] is supplied_db
+        assert kwargs["reuse_db_for_usage"] is True
+        calls.append("local")
+        return "local context", [{"id": "local"}]
 
     async def connected(**kwargs):
-        return await wait_for_peer(
-            "connected", ("cloud context", [{"id": "cloud"}], "smb context")
-        )
+        assert kwargs["db"] is supplied_db
+        assert calls == ["local"]
+        calls.append("connected")
+        return "cloud context", [{"id": "cloud"}], "smb context"
+
+    async def set_context(db, tenant_id):
+        tenant_context_calls.append((db, tenant_id))
 
     monkeypatch.setattr(rag, "full_rag_query", local)
     monkeypatch.setattr(rag, "_connected_source_query", connected)
+    monkeypatch.setattr(rag, "set_tenant_context", set_context)
 
-    task = asyncio.create_task(
-        rag.hybrid_rag_query(
-            db=object(),
-            embedding_service=object(),
-            question="contract indemnity",
-            tenant_id="00000000-0000-0000-0000-000000000001",
-        )
+    context, chunks, cloud_hits = await rag.hybrid_rag_query(
+        db=supplied_db,
+        embedding_service=object(),
+        question="contract indemnity",
+        tenant_id="00000000-0000-0000-0000-000000000001",
     )
-    await asyncio.wait_for(both_started.wait(), timeout=0.25)
-    assert not task.done()
 
-    release.set()
-    context, chunks, cloud_hits = await task
-
+    assert calls == ["local", "connected"]
     assert "local context" in context
     assert "cloud context" in context
     assert "smb context" in context
     assert chunks == [{"id": "local"}]
     assert cloud_hits == [{"id": "cloud"}]
+    assert tenant_context_calls == [
+        (supplied_db, "00000000-0000-0000-0000-000000000001")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_fts_only_returns_global_and_selected_matter_documents(
+    db_session,
+    test_tenant,
+    test_user,
+):
+    matter_a = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"matter-a-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter A",
+        matter_type="corporate",
+    )
+    matter_b = Matter(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        slug=f"matter-b-{uuid.uuid4().hex[:8]}",
+        matter_name="Matter B",
+        matter_type="corporate",
+    )
+    db_session.add_all([matter_a, matter_b])
+    await db_session.flush()
+    private_conversation = Conversation(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        title="Unrelated misc chat",
+    )
+    db_session.add(private_conversation)
+    await db_session.flush()
+    documents = [
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            filename="Global playbook.pdf",
+            status="ready",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            filename="Matter A contract.pdf",
+            status="ready",
+            matter_id=matter_a.id,
+        ),
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            filename="Matter B contract.pdf",
+            status="ready",
+            matter_id=matter_b.id,
+        ),
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            filename="Superseded Matter A contract.pdf",
+            status="superseded",
+            matter_id=matter_a.id,
+        ),
+        Document(
+            id=uuid.uuid4(),
+            tenant_id=test_tenant.id,
+            user_id=test_user.id,
+            filename="Private chat attachment.pdf",
+            status="ready",
+            conversation_id=private_conversation.id,
+        ),
+    ]
+    db_session.add_all(documents)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            Chunk(
+                id=uuid.uuid4(),
+                tenant_id=test_tenant.id,
+                document_id=document.id,
+                content="unicornclause change control provision",
+                chunk_index=0,
+                embedding=[1.0, *([0.0] * 1535)],
+            )
+            for document in documents
+        ]
+    )
+    await db_session.commit()
+
+    scoped = await rag.search_chunks_fts(
+        db_session,
+        "unicornclause",
+        str(test_tenant.id),
+        matter_id=str(matter_a.id),
+    )
+    misc = await rag.search_chunks_fts(
+        db_session,
+        "unicornclause",
+        str(test_tenant.id),
+        matter_id=None,
+    )
+    dense_scoped = await rag.search_chunks(
+        db_session,
+        [1.0, *([0.0] * 1535)],
+        str(test_tenant.id),
+        matter_id=str(matter_a.id),
+    )
+    dense_misc = await rag.search_chunks(
+        db_session,
+        [1.0, *([0.0] * 1535)],
+        str(test_tenant.id),
+        matter_id=None,
+    )
+
+    assert {item["document_title"] for item in scoped} == {
+        "Global playbook.pdf",
+        "Matter A contract.pdf",
+    }
+    assert {item["document_title"] for item in misc} == {"Global playbook.pdf"}
+    assert {item["document_title"] for item in dense_scoped} == {
+        "Global playbook.pdf",
+        "Matter A contract.pdf",
+    }
+    assert {item["document_title"] for item in dense_misc} == {
+        "Global playbook.pdf"
+    }
 
 
 @pytest.mark.asyncio
@@ -90,6 +222,8 @@ async def test_connected_source_planner_timeout_is_additive(monkeypatch):
     )
 
     assert result == ("", [], "")
+    assert result.degraded is True
+    assert result.degradation_reasons == ("connected_planner_timeout",)
 
 
 def test_mcp_json_items_extracts_tool_json_payloads():
@@ -122,6 +256,161 @@ def test_public_search_infers_explicit_nd_jurisdiction_for_each_corpus():
     )
 
 
+def test_public_search_does_not_narrow_a_multi_state_question_to_first_match():
+    query = 'North Dakota parent and California parent dispute custody jurisdiction'
+
+    assert rag.infer_public_jurisdiction(query, 'search_caselaw') is None
+    assert rag.infer_public_jurisdiction(query, 'search_legal_authorities') is None
+    assert rag.infer_public_jurisdictions(query, 'search_caselaw') == ['nd', 'cal']
+    assert rag.infer_public_jurisdictions(
+        query, 'search_legal_authorities'
+    ) == ['ND', 'CA']
+
+
+def test_public_search_infers_explicit_california_jurisdiction():
+    query = 'California corporate law assignment analysis'
+
+    assert rag.infer_public_jurisdiction(query, 'search_caselaw') == 'cal'
+    assert rag.infer_public_jurisdiction(query, 'search_legal_authorities') == 'CA'
+
+
+@pytest.mark.asyncio
+async def test_public_search_fans_out_and_preserves_each_named_jurisdiction(
+    monkeypatch,
+):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    calls = []
+
+    async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
+        calls.append((tool_name, jurisdiction, top_k))
+        canonical = {
+            'nd': 'ND',
+            'ND': 'ND',
+            'cal': 'CA',
+            'CA': 'CA',
+        }[jurisdiction]
+        score = 0.99 if canonical == 'CA' else 0.20
+        if tool_name == 'search_caselaw':
+            item = {
+                'chunk_id': f'case-{canonical}',
+                'case_name': f'{canonical} Case',
+                'content': f'{canonical} caselaw',
+                'similarity': score,
+            }
+        else:
+            item = {
+                'chunk_id': f'authority-{canonical}',
+                'title': f'{canonical} Statute',
+                'content': f'{canonical} statutory authority',
+                'similarity': score - 0.01,
+            }
+        return (
+            {'content': [{'type': 'json', 'json': [item]}]},
+            {
+                'tool_name': tool_name,
+                'status_code': 200,
+                'result_count': 0,
+                'latency_ms': 1,
+            },
+        )
+
+    monkeypatch.setattr(rag.settings, 'MCP_SERVER_URL', 'http://legal-mcp:8021')
+    monkeypatch.setattr(rag.settings, 'MCP_UPSTREAM_API_KEY', 'test-key')
+    monkeypatch.setattr(rag.httpx, 'AsyncClient', FakeClient)
+    monkeypatch.setattr(rag, '_call_public_mcp_search', fake_search)
+
+    results = await rag.search_courtlistener_mcp(
+        'North Dakota and California custody jurisdiction',
+        top_k=2,
+    )
+
+    assert set(calls) == {
+        ('search_caselaw', 'nd', 2),
+        ('search_caselaw', 'cal', 2),
+        ('search_legal_authorities', 'ND', 2),
+        ('search_legal_authorities', 'CA', 2),
+    }
+    assert {item['retrieval_jurisdiction'] for item in results} == {'ND', 'CA'}
+    assert len(results) == 2
+    assert len(results.mcp_outcomes) == 4
+    assert all(outcome['result_count'] == 1 for outcome in results.mcp_outcomes)
+
+
+@pytest.mark.asyncio
+async def test_public_search_reports_an_empty_named_jurisdiction(monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    calls = []
+
+    async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
+        calls.append((tool_name, jurisdiction))
+        canonical = {"nd": "ND", "ND": "ND", "cal": "CA", "CA": "CA"}[
+            jurisdiction
+        ]
+        items = []
+        if canonical == "ND":
+            items = [
+                {
+                    "chunk_id": f"{tool_name}-nd",
+                    "case_name": "North Dakota Authority",
+                    "title": "North Dakota Authority",
+                    "content": "North Dakota authority only.",
+                    "similarity": 0.8,
+                }
+            ]
+        return (
+            {"content": [{"type": "json", "json": items}]},
+            {
+                "tool_name": tool_name,
+                "status_code": 200,
+                "result_count": 0,
+                "latency_ms": 1,
+            },
+        )
+
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag.settings, "MCP_UPSTREAM_API_KEY", "test-key")
+    monkeypatch.setattr(rag.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rag, "_call_public_mcp_search", fake_search)
+
+    results = await rag.search_courtlistener_mcp(
+        "North Dakota and California custody jurisdiction",
+        top_k=4,
+    )
+
+    assert set(calls) == {
+        ("search_caselaw", "nd"),
+        ("search_caselaw", "cal"),
+        ("search_legal_authorities", "ND"),
+        ("search_legal_authorities", "CA"),
+    }
+    assert results.requested_jurisdictions == ("ND", "CA")
+    assert results.missing_jurisdictions == ("CA",)
+    assert {item["retrieval_jurisdiction"] for item in results} == {"ND"}
+    assert [
+        outcome["result_count"]
+        for outcome in results.mcp_outcomes
+        if outcome["jurisdiction"] in {"cal", "CA"}
+    ] == [0, 0]
+
+
 def test_mcp_item_to_chunk_tags_courtlistener_source():
     chunk = rag._mcp_item_to_chunk(
         {
@@ -139,6 +428,25 @@ def test_mcp_item_to_chunk_tags_courtlistener_source():
     assert chunk["source"] == "courtlistener_mcp"
     assert chunk["court"] == "North Dakota Supreme Court"
     assert chunk["relevance_score"] == 0.7
+
+
+def test_public_source_response_surfaces_retrieval_jurisdiction():
+    from app.routers.chat import _source_dict_from_chunk
+    from app.schemas.chat import SourceCitation
+
+    source = _source_dict_from_chunk(
+        {
+            "id": "courtlistener:nd-source",
+            "source": "courtlistener_mcp",
+            "case_name": "North Dakota Authority",
+            "content": "Retrieved authority.",
+            "retrieval_jurisdiction": "ND",
+        }
+    )
+    response = SourceCitation(**source)
+
+    assert source["retrieval_jurisdiction"] == "ND"
+    assert response.retrieval_jurisdiction == "ND"
 
 
 def test_mcp_item_to_chunk_prefers_vector_similarity_over_rrf_rank():
@@ -232,6 +540,36 @@ def test_private_retrieval_gate_drops_nearest_neighbor_filler():
     assert [item["id"] for item in retained] == ["family-law"]
 
 
+def test_private_retrieval_gate_rejects_generic_california_jurisdiction_overlap():
+    chunks = [
+        {
+            "id": "vendor-contract",
+            "document_title": "Cloud Services Agreement.docx",
+            "content": (
+                "The parties submit to the exclusive jurisdiction of the courts "
+                "in California."
+            ),
+            "similarity": 0.55,
+        },
+        {
+            "id": "family-law",
+            "document_title": "Family Law Research Memo.docx",
+            "content": (
+                "Divorce, custody, abuse, and the child's home state determine "
+                "the interstate filing analysis."
+            ),
+            "similarity": 0.55,
+        },
+    ]
+
+    retained = rag.filter_private_retrieval_results(
+        "California spouse, North Dakota resident, divorce jurisdiction, custody, abuse",
+        chunks,
+    )
+
+    assert [item["id"] for item in retained] == ["family-law"]
+
+
 def test_private_retrieval_gate_keeps_strong_semantic_match_without_shared_words():
     chunks = [
         {
@@ -299,7 +637,243 @@ async def test_full_rag_query_uses_mcp_without_legacy_public_embedding(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_full_rag_query_records_mcp_usage_in_isolated_session(monkeypatch):
+async def test_full_rag_marks_partial_multi_jurisdiction_coverage_uncacheable(
+    monkeypatch,
+):
+    class Embeddings:
+        async def embed_text(self, text):
+            return [0.1, 0.2]
+
+        async def embed_public_query(self, text):
+            raise AssertionError("a nonempty MCP result must not use bulk fallback")
+
+    class UsageSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def fake_fts(**kwargs):
+        return []
+
+    async def fake_dense(**kwargs):
+        return []
+
+    async def fake_mcp(query, top_k):
+        return rag.MCPPublicResults(
+            [
+                {
+                    "id": "courtlistener:nd-only",
+                    "content": "North Dakota authority only.",
+                    "case_name": "North Dakota Authority",
+                    "source": "courtlistener_mcp",
+                    "retrieval_jurisdiction": "ND",
+                    "similarity": 0.9,
+                }
+            ],
+            [],
+            requested_jurisdictions=["ND", "CA"],
+            missing_jurisdictions=["CA"],
+        )
+
+    async def noop_async(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag, "search_chunks_fts", fake_fts)
+    monkeypatch.setattr(rag, "search_chunks", fake_dense)
+    monkeypatch.setattr(rag, "search_courtlistener_mcp", fake_mcp)
+    monkeypatch.setattr(rag, "async_session_maker", lambda: UsageSession())
+    monkeypatch.setattr(rag, "set_tenant_context", noop_async)
+    monkeypatch.setattr(rag, "record_internal_chat_mcp_usage", noop_async)
+
+    context, chunks = await rag.full_rag_query(
+        db=object(),
+        embedding_service=Embeddings(),
+        question="North Dakota and California custody jurisdiction",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        include_public=True,
+    )
+
+    assert chunks.requested_public_jurisdictions == ("ND", "CA")
+    assert chunks.missing_public_jurisdictions == ("CA",)
+    assert "public_jurisdiction_incomplete" in chunks.degradation_reasons
+    assert chunks.degraded is True
+    assert rag.rag_result_is_cacheable(context, chunks) is False
+    assert "Requested jurisdictions: ND, CA." in context
+    assert "No public authority was retrieved for: CA." in context
+    assert "do not state or imply" in context
+    assert "Retrieval jurisdiction: ND" in context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failing_stage", "expected_reason"),
+    [
+        ("embedding", "tenant_embedding_failed"),
+        ("fts", "tenant_fts_failed"),
+        ("dense", "tenant_dense_failed"),
+    ],
+)
+async def test_full_rag_query_preserves_mcp_results_when_tenant_retrieval_fails(
+    monkeypatch,
+    failing_stage,
+    expected_reason,
+):
+    class Embeddings:
+        async def embed_text(self, text):
+            if failing_stage == "embedding":
+                raise RuntimeError("tenant embedding unavailable")
+            return [0.1, 0.2]
+
+        async def embed_public_query(self, text):
+            raise AssertionError("MCP result should prevent legacy fallback")
+
+    class UsageSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def fake_fts(**kwargs):
+        if failing_stage == "fts":
+            raise RuntimeError("tenant FTS unavailable")
+        return []
+
+    async def fake_dense(**kwargs):
+        if failing_stage == "dense":
+            raise RuntimeError("tenant dense search unavailable")
+        return []
+
+    async def fake_mcp(query, top_k):
+        await asyncio.sleep(0)
+        return [
+            {
+                "id": "courtlistener:preserved",
+                "content": "Preserved public authority",
+                "case_name": "Preserved v. Authority",
+                "source": "courtlistener_mcp",
+                "similarity": 0.9,
+            }
+        ]
+
+    async def noop_async(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag, "search_chunks_fts", fake_fts)
+    monkeypatch.setattr(rag, "search_chunks", fake_dense)
+    monkeypatch.setattr(rag, "search_courtlistener_mcp", fake_mcp)
+    monkeypatch.setattr(rag, "async_session_maker", lambda: UsageSession())
+    monkeypatch.setattr(rag, "set_tenant_context", noop_async)
+    monkeypatch.setattr(rag, "record_internal_chat_mcp_usage", noop_async)
+
+    context, chunks = await rag.full_rag_query(
+        db=object(),
+        embedding_service=Embeddings(),
+        question="public authority despite tenant search failure",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        include_public=True,
+    )
+
+    assert [chunk["id"] for chunk in chunks] == ["courtlistener:preserved"]
+    assert "Preserved public authority" in context
+    assert chunks.degraded is True
+    assert expected_reason in chunks.degradation_reasons
+    assert rag.rag_result_is_cacheable(context, chunks) is False
+
+
+def test_rag_result_cacheability_requires_healthy_nonempty_retrieval():
+    healthy = rag.RAGChunks([{"id": "healthy"}])
+    degraded = rag.RAGChunks(
+        [{"id": "partial"}],
+        degradation_reasons=["tenant_fts_failed"],
+    )
+    incomplete_jurisdiction = rag.RAGChunks(
+        [{"id": "nd-only"}],
+        requested_public_jurisdictions=["ND", "CA"],
+        missing_public_jurisdictions=["CA"],
+    )
+
+    assert rag.rag_result_is_cacheable("healthy context", healthy) is True
+    assert rag.rag_result_is_cacheable("", rag.RAGChunks(), []) is False
+    assert rag.rag_result_is_cacheable("partial context", degraded) is False
+    assert (
+        rag.rag_result_is_cacheable(
+            "North Dakota-only context", incomplete_jurisdiction
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_rag_keeps_local_failure_marked_when_cloud_succeeds(monkeypatch):
+    async def failed_local(**kwargs):
+        raise RuntimeError("local retrieval failed")
+
+    async def successful_connected(**kwargs):
+        return "cloud context", [{"id": "cloud"}], ""
+
+    async def set_context(*_args):
+        return None
+
+    monkeypatch.setattr(rag, "full_rag_query", failed_local)
+    monkeypatch.setattr(rag, "_connected_source_query", successful_connected)
+    monkeypatch.setattr(rag, "set_tenant_context", set_context)
+
+    context, chunks, cloud_hits = await rag.hybrid_rag_query(
+        db=object(),
+        embedding_service=object(),
+        question="contract indemnity",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    assert "cloud context" in context
+    assert cloud_hits == [{"id": "cloud"}]
+    assert chunks.degraded is True
+    assert chunks.degradation_reasons == ("local_rag_failed",)
+    assert rag.rag_result_is_cacheable(context, chunks, cloud_hits) is False
+
+
+@pytest.mark.asyncio
+async def test_hybrid_rag_marks_swallowed_connected_outage_as_uncacheable(monkeypatch):
+    async def healthy_local(**kwargs):
+        return "local context", rag.RAGChunks([{"id": "local"}])
+
+    async def degraded_connected(**kwargs):
+        return rag.ConnectedSourceResults(
+            degradation_reasons=["connected_cloud_failed"]
+        )
+
+    async def set_context(*_args):
+        return None
+
+    monkeypatch.setattr(rag, "full_rag_query", healthy_local)
+    monkeypatch.setattr(rag, "_connected_source_query", degraded_connected)
+    monkeypatch.setattr(rag, "set_tenant_context", set_context)
+
+    context, chunks, cloud_hits = await rag.hybrid_rag_query(
+        db=object(),
+        embedding_service=object(),
+        question="find the client contract",
+        tenant_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    assert context == "local context"
+    assert cloud_hits == []
+    assert chunks.degraded is True
+    assert chunks.degradation_reasons == ("connected_cloud_failed",)
+    assert rag.rag_result_is_cacheable(context, chunks, cloud_hits) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reuse_db_for_usage", [False, True])
+async def test_full_rag_query_records_mcp_usage_in_selected_session(
+    monkeypatch,
+    reuse_db_for_usage,
+):
     class Embeddings:
         async def embed_text(self, text):
             return [0.1, 0.2]
@@ -347,13 +921,16 @@ async def test_full_rag_query_records_mcp_usage_in_isolated_session(monkeypatch)
         tenant_id="00000000-0000-0000-0000-000000000001",
         user_id="00000000-0000-0000-0000-000000000002",
         include_public=True,
+        reuse_db_for_usage=reuse_db_for_usage,
     )
 
-    assert ("context", "usage-session", "00000000-0000-0000-0000-000000000001") in calls
-    assert ("usage", "usage-session", 1) in calls
-    assert not any(
-        call[1] is request_db for call in calls if call[0] in {"context", "usage"}
-    )
+    expected_db = request_db if reuse_db_for_usage else "usage-session"
+    assert (
+        "context",
+        expected_db,
+        "00000000-0000-0000-0000-000000000001",
+    ) in calls
+    assert ("usage", expected_db, 1) in calls
 
 
 @pytest.mark.asyncio
@@ -498,6 +1075,43 @@ async def test_rag_cache_splits_public_and_private_contexts():
 
 
 @pytest.mark.asyncio
+async def test_rag_cache_ignores_pre_health_gate_payloads():
+    class FakeRedis:
+        def __init__(self):
+            self.values = {}
+
+        async def get(self, key):
+            return self.values.get(key)
+
+        async def setex(self, key, ttl, value):
+            self.values[key] = value
+
+    manager = ExpertiseCacheManager()
+    manager.cache_enabled = True
+    manager.redis_client = FakeRedis()
+    await manager.set_cached_rag_results(
+        question="stale question",
+        tenant_id="tenant",
+        user_id="user",
+        context_str="possibly degraded context",
+        chunks=[{"id": "old"}],
+    )
+    key = next(iter(manager.redis_client.values))
+    payload = json.loads(manager.redis_client.values[key])
+    payload.pop("cache_version")
+    manager.redis_client.values[key] = json.dumps(payload)
+
+    assert (
+        await manager.get_cached_rag_results(
+            "stale question",
+            "tenant",
+            "user",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_rag_cache_splits_matter_scopes():
     class FakeRedis:
         def __init__(self):
@@ -541,3 +1155,69 @@ async def test_rag_cache_splits_matter_scopes():
         scope_key="matter:one",
     )
     assert cached == ("matter one context", [], [])
+
+
+@pytest.mark.asyncio
+async def test_tenant_rag_revision_invalidates_hashed_long_scope_keys():
+    class FakeRedis:
+        def __init__(self):
+            self.values = {}
+
+        async def get(self, key):
+            return self.values.get(key)
+
+        async def setex(self, key, ttl, value):
+            self.values[key] = value
+
+        async def incr(self, key):
+            value = int(self.values.get(key, 0)) + 1
+            self.values[key] = str(value)
+            return value
+
+    manager = ExpertiseCacheManager()
+    manager.cache_enabled = True
+    manager.redis_client = FakeRedis()
+    long_scope = "cloud-folder:" + ("nested/" * 80)
+
+    await manager.set_cached_rag_results(
+        question="same contract question",
+        tenant_id="tenant",
+        user_id="user",
+        context_str="old contract version",
+        chunks=[{"id": "old"}],
+        scope_key=long_scope,
+    )
+    assert any(
+        key.startswith("rag:") and len(key) == len("rag:") + 32
+        for key in manager.redis_client.values
+    )
+    assert await manager.get_cached_rag_results(
+        "same contract question",
+        "tenant",
+        "user",
+        scope_key=long_scope,
+    )
+
+    retrieval_revision = await manager.get_rag_corpus_revision("tenant")
+    assert await manager.invalidate_tenant_rag_cache("tenant") is True
+    assert (
+        await manager.set_cached_rag_results(
+            question="same contract question",
+            tenant_id="tenant",
+            user_id="user",
+            context_str="late stale retrieval",
+            chunks=[{"id": "late-old"}],
+            scope_key=long_scope,
+            expected_corpus_revision=retrieval_revision,
+        )
+        is True
+    )
+    assert (
+        await manager.get_cached_rag_results(
+            "same contract question",
+            "tenant",
+            "user",
+            scope_key=long_scope,
+        )
+        is None
+    )

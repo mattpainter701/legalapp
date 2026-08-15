@@ -159,6 +159,47 @@ async def test_matter_search_never_returns_another_firms_matters(
 
 
 @pytest.mark.asyncio
+async def test_matter_search_finds_a_matter_by_its_client_name(
+    db_session, test_tenant, test_user
+):
+    matter, _party, contact = await _own_matter(db_session, test_tenant, test_user)
+    matter.matter_name = "Opaque engagement 4821"
+    matter.client_contact_id = contact.id
+    contact.organization_name = "Cybersafe Holdings"
+    await db_session.commit()
+    context = ChatToolContext(db=db_session, user=test_user)
+    tool = resolve_tool("find_matter")
+
+    result = await tool.handler(context, tool.parse_arguments({"query": "Cybersafe"}))
+    wildcard = await tool.handler(context, tool.parse_arguments({"query": "%"}))
+
+    assert [row["matter_id"] for row in result["matters"]] == [str(matter.id)]
+    assert wildcard["matters"] == []
+
+
+@pytest.mark.asyncio
+async def test_normalized_duplicate_open_task_is_rejected(
+    db_session, test_tenant, test_user
+):
+    matter, _party, _contact = await _own_matter(db_session, test_tenant, test_user)
+    context = ChatToolContext(db=db_session, user=test_user)
+    tool = resolve_tool("propose_task")
+
+    first = await tool.handler(
+        context,
+        tool.parse_arguments({"matter_id": str(matter.id), "title": "  Follow   Up  "}),
+    )
+    with pytest.raises(ChatToolError) as exc:
+        await tool.handler(
+            context,
+            tool.parse_arguments({"matter_id": str(matter.id), "title": "follow up"}),
+        )
+
+    assert first["version"] >= 1
+    assert exc.value.code == "duplicate_task"
+
+
+@pytest.mark.asyncio
 async def test_a_foreign_party_id_cannot_become_an_email_recipient(
     db_session, test_tenant, test_user
 ):
@@ -294,6 +335,59 @@ async def test_a_legitimate_proposal_only_ever_addresses_matter_parties(
     )
 
     # Address came from the database, not from the caller.
+    assert result["pending_action"]["to"] == [contact.email]
+
+
+@pytest.mark.asyncio
+async def test_proposal_deduplicates_party_addresses_case_insensitively(
+    db_session, test_tenant, test_user
+):
+    matter, first_party, contact = await _own_matter(db_session, test_tenant, test_user)
+    duplicate_party = MatterParty(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=matter.id,
+        contact_id=contact.id,
+        role="billing_contact",
+    )
+    case_variant_contact = Contact(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        first_name="Dana",
+        last_name="Reyes duplicate",
+        email=contact.email.upper(),
+    )
+    db_session.add_all([duplicate_party, case_variant_contact])
+    await db_session.flush()
+    case_variant_party = MatterParty(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        matter_id=matter.id,
+        contact_id=case_variant_contact.id,
+        role="other",
+    )
+    db_session.add(case_variant_party)
+    await db_session.commit()
+    context = ChatToolContext(db=db_session, user=test_user)
+    tool = resolve_tool("propose_client_email")
+
+    result = await tool.handler(
+        context,
+        tool.parse_arguments(
+            {
+                "matter_id": str(matter.id),
+                "recipient_party_ids": [
+                    str(first_party.id),
+                    str(duplicate_party.id),
+                    str(case_variant_party.id),
+                ],
+                "title": "Request certificate",
+                "subject": "Certificate of insurance",
+                "body": "Please send the current certificate.",
+            }
+        ),
+    )
+
     assert result["pending_action"]["to"] == [contact.email]
 
 

@@ -89,9 +89,24 @@ _SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
 _LEGAL_RESEARCH_RE = re.compile(
     r"\b(?:case\s+law|citation|court|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
     r"elements?|governing\s+law|jurisdiction|legal\s+(?:authority|standard|research)|"
-    r"precedent|statute|statutory|limitations?\s+period|uccjea)\b",
+    r"precedent|statute|statutory|limitations?\s+period|uccjea|"
+    r"binding|non[-\s]?binding|assignment|change[-\s]of[-\s]control|"
+    r"material\s+contracts?|board\s+(?:consent|authority|authorization)|"
+    r"contract(?:ual)?\s+(?:analysis|review|schedule|provision))\b",
     re.IGNORECASE,
 )
+_PUBLIC_AUTHORITY_QUESTION_RE = re.compile(
+    r"\b(?:case\s+law|citation|courts?|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
+    r"jurisdiction|legal\s+(?:authority|standard|research)|precedent|statute|statutory|"
+    r"limitations?\s+period|uccjea)\b",
+    re.IGNORECASE,
+)
+_SUPPLIED_SOURCE_RE = re.compile(
+    r"\b(?:attach(?:ed|ment)?|exhibits?|provided|supplied|uploaded)\b",
+    re.IGNORECASE,
+)
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
+_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 _QUOTED_SPAN_RE = re.compile(r'["“]([^"”]{20,})["”]')
 
 
@@ -199,6 +214,61 @@ def requires_retrieved_legal_authority(question: str | None) -> bool:
     return bool(_LEGAL_RESEARCH_RE.search(question or ""))
 
 
+def _substantive_source_units(text: str) -> list[str]:
+    """Return prose/list/table units that should carry their own source tag.
+
+    The answer contract tells the model to put one finding per paragraph, list
+    item, or schedule row. This parser deliberately enforces that visible
+    structure rather than pretending a single citation anywhere proves an
+    entire memo. Headings, table separators, and the standard review footer are
+    presentation, not findings.
+    """
+    units: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", text or ""):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+        split_lines = len(lines) > 1 and any(
+            line.startswith("|") or _LIST_ITEM_RE.match(line) for line in lines
+        )
+        candidates = lines if split_lines else [" ".join(lines)]
+        for index, candidate in enumerate(candidates):
+            value = candidate.strip()
+            if not value or value.startswith("#") or _TABLE_SEPARATOR_RE.match(value):
+                continue
+            if value.startswith("---") or "Prepared for" in value:
+                continue
+            # A Markdown table's first row is a label row when immediately
+            # followed by its separator. Data rows remain enforceable units.
+            if (
+                value.startswith("|")
+                and index + 1 < len(candidates)
+                and _TABLE_SEPARATOR_RE.match(candidates[index + 1])
+            ):
+                continue
+            plain = re.sub(r"[`*_>#|]", " ", value)
+            plain = re.sub(r"\[[^\]]+\]\([^)]*\)", " ", plain)
+            words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", plain)
+            # Short labels such as "Board authority" or "Next steps" are
+            # headings even when authored as bold text rather than Markdown #.
+            if len(words) < 6:
+                continue
+            units.append(value)
+    return units
+
+
+def _all_substantive_units_are_cited(text: str, eligible_ids: set[str]) -> bool:
+    units = _substantive_source_units(text)
+    if not units:
+        return False
+    for unit in units:
+        unit_ids = {value.strip().casefold() for value in _SOURCE_REF_RE.findall(unit)}
+        if not eligible_ids.intersection(unit_ids):
+            return False
+    return True
+
+
 def enforce_legal_citation_integrity(
     question: str | None,
     text: str,
@@ -214,16 +284,50 @@ def enforce_legal_citation_integrity(
     if not requires_retrieved_legal_authority(question):
         return text, False
 
+    source_rows = sources or []
     known_ids = {
         str(row.get("source_id") or row.get("id") or "").strip().casefold()
-        for row in sources or []
+        for row in source_rows
         if row.get("source_id") or row.get("id")
     }
     cited_ids = {
         value.strip().casefold() for value in _SOURCE_REF_RE.findall(text or "")
     }
-    if known_ids.intersection(cited_ids) and not _MODEL_ATTRIBUTION_RE.search(
-        text or ""
+    # A fabricated id must not hide behind one valid citation. The frontend has
+    # no trustworthy target for it, and rendering a generic "source" badge would
+    # make the legal answer look better-supported than it is.
+    has_unknown_source = bool(cited_ids.difference(known_ids))
+
+    eligible_ids = known_ids
+    needs_public_authority = bool(
+        _PUBLIC_AUTHORITY_QUESTION_RE.search(question or "")
+        and not _SUPPLIED_SOURCE_RE.search(question or "")
+    )
+    if needs_public_authority:
+        eligible_ids = {
+            str(row.get("source_id") or row.get("id") or "").strip().casefold()
+            for row in source_rows
+            if (
+                str(row.get("source_type") or "").casefold() == "public_authority"
+                or str(row.get("source") or "").casefold()
+                in {
+                    "courtlistener_mcp",
+                    "legal_authority_mcp",
+                    "public_courtlistener",
+                }
+                or str(row.get("source_id") or row.get("id") or "")
+                .strip()
+                .casefold()
+                .startswith(("authority:", "courtlistener:"))
+            )
+            and (row.get("source_id") or row.get("id"))
+        }
+
+    if (
+        eligible_ids.intersection(cited_ids)
+        and not has_unknown_source
+        and not _MODEL_ATTRIBUTION_RE.search(text or "")
+        and _all_substantive_units_are_cited(text or "", eligible_ids)
     ):
         return text, False
 
@@ -231,7 +335,9 @@ def enforce_legal_citation_integrity(
         "## Authority coverage gap\n\n"
         "I couldn't verify a legal answer to this question from a retrieved "
         "statute, rule, case, or supplied document. I won't present an uncited "
-        "jurisdiction-specific conclusion or label unrelated material as support.\n\n"
+        "jurisdiction-specific conclusion or label unrelated material as support. "
+        "Each substantive finding, list item, and schedule row must carry its own "
+        "retrieved source marker.\n\n"
         "Retry after the public-authority index is available, narrow the "
         "jurisdiction and issue, or attach the controlling sources. Any materials "
         "shown below were retrieved for review but were **not cited** as authority."

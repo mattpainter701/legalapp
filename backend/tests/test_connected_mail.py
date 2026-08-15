@@ -200,7 +200,38 @@ async def test_ambiguous_cloud_failure_never_falls_through_to_smtp(
 
     assert delivery.result == EmailDeliveryResult.FAILED
     assert delivery.provider == "microsoft"
+    assert delivery.delivery_certainty == "outcome_unknown"
     assert "did not confirm delivery" in delivery.detail
+    assert smtp.calls == []
+
+
+@pytest.mark.asyncio
+async def test_provider_5xx_remains_outcome_unknown_and_never_auto_falls_back(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    test_user.oauth_provider = "microsoft"
+    db_session.add(
+        _fresh_token(
+            tenant=test_tenant,
+            user=test_user,
+            provider="microsoft",
+            scopes="offline_access Mail.Send",
+        )
+    )
+    await db_session.commit()
+
+    async def graph_request(*args, **kwargs):
+        raise ProviderError("provider returned a terminal 503", status_code=503)
+
+    monkeypatch.setattr(connected_mail, "graph_request", graph_request)
+    smtp = _SMTPRecorder()
+
+    delivery = await connected_mail.send_client_email(
+        **_send_args(db_session, test_tenant, test_user, smtp)
+    )
+
+    assert delivery.result == EmailDeliveryResult.FAILED
+    assert delivery.delivery_certainty == "outcome_unknown"
     assert smtp.calls == []
 
 
@@ -253,3 +284,49 @@ async def test_smtp_remains_available_when_tenant_has_no_cloud_mail_grant(
     assert delivery.result == EmailDeliveryResult.SENT
     assert delivery.provider == "smtp"
     assert len(smtp.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_smtp_rejects_a_contact_value_containing_multiple_mailboxes(
+    db_session, test_tenant, test_user
+):
+    smtp = _SMTPRecorder()
+    args = _send_args(db_session, test_tenant, test_user, smtp)
+    args["to"] = ["client@example.com, hidden@example.com"]
+
+    delivery = await connected_mail.send_client_email(**args)
+
+    assert delivery.result == EmailDeliveryResult.INVALID_RECIPIENT
+    assert smtp.calls == []
+
+
+@pytest.mark.asyncio
+async def test_google_rejects_a_multi_mailbox_value_before_api_submission(
+    db_session, test_tenant, test_user, monkeypatch
+):
+    test_user.oauth_provider = "google"
+    db_session.add(
+        _fresh_token(
+            tenant=test_tenant,
+            user=test_user,
+            provider="google",
+            scopes="https://www.googleapis.com/auth/gmail.send",
+        )
+    )
+    await db_session.commit()
+    calls = []
+
+    async def gmail_request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return httpx.Response(200, json={"id": "must-not-send"})
+
+    monkeypatch.setattr(connected_mail, "gmail_request", gmail_request)
+    smtp = _SMTPRecorder()
+    args = _send_args(db_session, test_tenant, test_user, smtp)
+    args["to"] = ["client@example.com, hidden@example.com"]
+
+    delivery = await connected_mail.send_client_email(**args)
+
+    assert delivery.result == EmailDeliveryResult.INVALID_RECIPIENT
+    assert calls == []
+    assert smtp.calls == []

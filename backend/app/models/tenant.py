@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     String,
     Integer,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -65,6 +66,15 @@ class Tenant(Base):
     onboarding_step: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )  # 0=not started, 1=consent, 2=syncing, 3=review, 4=complete
+    # Authoritative cache generation for tenant-private retrieval. Corpus
+    # mutations increment this in the same database transaction as chunk/status
+    # changes, making old materialized RAG keys unreachable after commit.
+    rag_corpus_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
     cloud_root_folder: Mapped[dict | None] = mapped_column(
         JSON, nullable=True
     )  # {onedrive: {id, url}, google_drive: {id, url}}

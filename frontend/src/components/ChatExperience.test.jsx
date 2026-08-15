@@ -365,6 +365,39 @@ describe('Chat assistant experience', () => {
     expect(screen.getByRole('button', { name: 'Attach a document' })).toBeInTheDocument()
   })
 
+  it('keeps drafting available but blocks button and keyboard sends while another response drains', async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+
+    function Harness() {
+      const [value, setValue] = useState('Draft while waiting')
+      return (
+        <ChatInput
+          inputValue={value}
+          onInputChange={setValue}
+          onSend={onSend}
+          onUploadClick={vi.fn()}
+          onDropFiles={vi.fn()}
+          isSending={false}
+          disabled={false}
+          sendDisabled
+          sendDisabledLabel="Another conversation response is finishing"
+        />
+      )
+    }
+
+    render(<Harness />)
+    const composer = screen.getByRole('textbox', { name: 'Message the assistant' })
+    await user.click(composer)
+    await user.type(composer, ' safely')
+    expect(composer).toHaveValue('Draft while waiting safely')
+
+    const send = screen.getByRole('button', { name: 'Another conversation response is finishing' })
+    expect(send).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
   it('offers practical starter actions without relying on decorative emoji', async () => {
     const user = userEvent.setup()
     const onPromptSelect = vi.fn()

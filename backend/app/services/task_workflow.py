@@ -160,11 +160,21 @@ def transition_task(
         task.waiting_follow_up_date = None
 
     if to_status == "review":
-        metadata_changed = metadata_changed or task.reviewer_user_id != reviewer_user_id
-        task.reviewer_user_id = reviewer_user_id
+        # A missing reviewer argument means "leave the assignment alone" for an
+        # outbound action. Otherwise a same-state refresh silently unassigns the
+        # only person authorized to approve it.
+        effective_reviewer = (
+            task.reviewer_user_id
+            if task.pending_action and reviewer_user_id is None
+            else reviewer_user_id
+        )
     else:
-        metadata_changed = metadata_changed or task.reviewer_user_id is not None
-        task.reviewer_user_id = None
+        # Keep ownership attached while an unsent/failed action still exists.
+        # Clearing it here would let any tenant user reopen Review, assign
+        # themselves, and send correspondence they were never asked to review.
+        effective_reviewer = task.reviewer_user_id if task.pending_action else None
+    metadata_changed = metadata_changed or task.reviewer_user_id != effective_reviewer
+    task.reviewer_user_id = effective_reviewer
 
     status_changed = previous_status != to_status
     if not status_changed and not metadata_changed:

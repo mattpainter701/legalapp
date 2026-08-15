@@ -291,7 +291,14 @@ const streamErrorFromResponse = async (response) => {
   return normalizedError
 }
 
-export const streamMessage = async function* (conversationId, content, includePublic = true, usePremium = false, attachmentIds = []) {
+export const streamMessage = async function* (
+  conversationId,
+  content,
+  includePublic = true,
+  usePremium = false,
+  attachmentIds = [],
+  { signal, inactivityTimeoutMs = 120_000 } = {},
+) {
   const body = JSON.stringify({
     content,
     include_public: includePublic,
@@ -303,6 +310,7 @@ export const streamMessage = async function* (conversationId, content, includePu
     credentials: 'include',
     headers: buildLegacyAuthHeaders({ 'Content-Type': 'application/json' }),
     body,
+    signal,
   })
   let response = await request()
   if (response.status === 401) {
@@ -321,43 +329,122 @@ export const streamMessage = async function* (conversationId, content, includePu
     throw await streamErrorFromResponse(response)
   }
 
+  if (!response.body) {
+    throw new Error('The assistant stream did not include a response body. Please retry.')
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawTerminalEvent = false
+  let reachedEndOfBody = false
+
+  const readWithInactivityTimeout = async () => {
+    const timeoutMs = Number(inactivityTimeoutMs)
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return reader.read()
+
+    let timeoutId
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(
+              'The assistant stopped sending updates for too long. Please retry.',
+            ))
+          }, timeoutMs)
+        }),
+      ])
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  const decodeLine = (rawLine) => {
+    const line = String(rawLine || '').replace(/\r$/, '')
+    if (!line.startsWith('data:')) return null
+
+    const data = line.slice(5).replace(/^ /, '')
+    if (data.startsWith('[PROGRESS]')) {
+      try {
+        return { value: JSON.parse(data.slice('[PROGRESS]'.length)), terminal: false }
+      } catch {
+        // Ignore malformed progress metadata; token streaming should continue.
+        return null
+      }
+    }
+    if (data.startsWith('[TOKEN]')) {
+      try {
+        return { value: JSON.parse(data.slice('[TOKEN]'.length)), terminal: false }
+      } catch {
+        // Ignore malformed answer chunks without terminating the stream.
+        return null
+      }
+    }
+    if (data === '[STREAM_COMPLETE]') {
+      return { value: data, terminal: true }
+    }
+
+    // The original frontend contract used `[ERROR]message`, while the backend
+    // emits `[ERROR: message]`. Normalize both so an error cannot be mistaken
+    // for answer text or an ordinary end-of-file.
+    const bracketError = data.match(/^\[ERROR\]\s*(.*)$/s)
+    const colonError = data.match(/^\[ERROR:\s*(.*?)\]\s*$/s)
+    if (bracketError || colonError) {
+      const message = (bracketError?.[1] || colonError?.[1] || '').trim()
+      return {
+        value: `[ERROR]${message || 'The assistant could not complete the response. Please retry.'}`,
+        terminal: true,
+      }
+    }
+
+    return data ? { value: data, terminal: false } : null
+  }
 
   try {
     while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+      const { done, value } = await readWithInactivityTimeout()
+      if (done) {
+        reachedEndOfBody = true
+        buffer += decoder.decode()
+        if (buffer) {
+          const finalLines = buffer.split('\n')
+          buffer = ''
+          for (const line of finalLines) {
+            const finalEvent = decodeLine(line)
+            if (!finalEvent) continue
+            sawTerminalEvent = sawTerminalEvent || finalEvent.terminal
+            yield finalEvent.value
+            if (finalEvent.terminal) return
+          }
+        }
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6)
-          if (data.startsWith('[PROGRESS]')) {
-            try {
-              yield JSON.parse(data.slice('[PROGRESS]'.length))
-            } catch {
-              // Ignore malformed progress metadata; token streaming should continue.
-            }
-          } else if (data.startsWith('[TOKEN]')) {
-            try {
-              yield JSON.parse(data.slice('[TOKEN]'.length))
-            } catch {
-              // Ignore malformed answer chunks without terminating the stream.
-            }
-          } else if (data && data !== '[STREAM_COMPLETE]' && !data.startsWith('[ERROR]')) {
-            yield data
-          } else if (data === '[STREAM_COMPLETE]' || data.startsWith('[ERROR]')) {
-            yield data
-          }
-        }
+        const event = decodeLine(line)
+        if (!event) continue
+        sawTerminalEvent = sawTerminalEvent || event.terminal
+        yield event.value
+        if (event.terminal) return
       }
     }
+
+    if (!sawTerminalEvent) {
+      throw new Error('The assistant stream ended before completion. Please retry.')
+    }
   } finally {
+    if (!reachedEndOfBody) {
+      try {
+        await reader.cancel()
+      } catch {
+        // The fetch may already have been aborted by conversation navigation.
+      }
+    }
     reader.releaseLock()
   }
 }
@@ -1108,23 +1195,97 @@ export const transitionTask = (id, data) =>
 export const updateTaskPendingAction = (id, data) =>
   api.patch(`/tasks/${id}/pending-action`, data).then(r => r.data)
 
+const normalizeTaskActionApprovalError = (error) => {
+  const normalized = normalizeApiError(error)
+  const responseData = normalized?.response?.data
+  const rawDetail = responseData && typeof responseData === 'object'
+    ? (responseData.detail ?? responseData.message ?? responseData.error)
+    : null
+  const structuredDetail = rawDetail && typeof rawDetail === 'object' && !Array.isArray(rawDetail)
+    ? rawDetail
+    : null
+  const structuredMessage = structuredDetail
+    ? [structuredDetail.message, structuredDetail.detail, structuredDetail.error]
+        .find((value) => typeof value === 'string' && value.trim())
+    : null
+  const safeMessage = structuredMessage || normalized.message || 'The task could not be approved.'
+
+  normalized.message = String(safeMessage)
+  normalized.detail = normalized.message
+  if (responseData && typeof responseData === 'object' && !Array.isArray(responseData)) {
+    normalized.response = {
+      ...normalized.response,
+      data: {
+        ...responseData,
+        // ActionProposalCard renders this value directly. FastAPI conflict
+        // responses may put message/current_task inside `detail`, so flatten
+        // only the display field while retaining the current task separately.
+        detail: normalized.message,
+        ...(structuredDetail?.current_task
+          ? { current_task: structuredDetail.current_task }
+          : {}),
+      },
+    }
+  }
+  if (structuredDetail) normalized.conflict_detail = structuredDetail
+  if (structuredDetail?.current_task) normalized.current_task = structuredDetail.current_task
+  return normalized
+}
+
 /**
  * Approve assistant-proposed work: optionally save an edited draft, then move
  * the task out of Review, which is what triggers the deterministic automation.
  *
- * The edit is saved first and its returned version is used for the transition,
- * because editing bumps the task version and a stale expected_version would be
- * rejected as a conflict.
+ * The caller must supply the exact task version shown with the reviewed draft.
+ * Never re-read the current version here: doing so would silently bless edits
+ * made after the attorney reviewed the proposal. An optional edit is guarded by
+ * that reviewed version, then its returned version guards the transition.
  */
-export const approveProposedTask = async (id, { body, subject } = {}) => {
-  let version
-  if (body !== undefined || subject !== undefined) {
-    const edited = await updateTaskPendingAction(id, { body, subject })
-    version = edited.version
-  } else {
-    version = (await getTask(id)).version
+export const approveProposedTask = async (
+  id,
+  {
+    body,
+    subject,
+    expectedVersion,
+    expected_version: expectedVersionSnake,
+    acknowledgePriorDeliveryRisk,
+    acknowledge_prior_delivery_risk: acknowledgePriorDeliveryRiskSnake,
+  } = {},
+) => {
+  const reviewedVersion = expectedVersion ?? expectedVersionSnake
+  if (!Number.isInteger(reviewedVersion) || reviewedVersion < 1) {
+    throw new Error('The reviewed task version is required before approval. Refresh the proposal and review it again.')
   }
-  return transitionTask(id, { to_status: 'in_progress', expected_version: version })
+
+  let version = reviewedVersion
+  if (body !== undefined || subject !== undefined) {
+    let edited
+    try {
+      edited = await updateTaskPendingAction(id, {
+        body,
+        subject,
+        expected_version: reviewedVersion,
+      })
+    } catch (error) {
+      throw normalizeTaskActionApprovalError(error)
+    }
+    version = edited.version
+    if (!Number.isInteger(version) || version < 1) {
+      throw new Error('The edited task did not return a valid version, so it was not approved.')
+    }
+  }
+  try {
+    const acknowledgeRisk = acknowledgePriorDeliveryRisk
+      ?? acknowledgePriorDeliveryRiskSnake
+      ?? false
+    return await transitionTask(id, {
+      to_status: 'in_progress',
+      expected_version: version,
+      ...(acknowledgeRisk ? { acknowledge_prior_delivery_risk: true } : {}),
+    })
+  } catch (error) {
+    throw normalizeTaskActionApprovalError(error)
+  }
 }
 
 const TERMINAL_DELIVERY = new Set(['sent', 'failed'])

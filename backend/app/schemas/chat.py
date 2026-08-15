@@ -20,6 +20,7 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: Optional[int] = None
+    attachment_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -46,6 +47,7 @@ class SourceCitation(BaseModel):
     source_type: Optional[str] = None
     source_label: Optional[str] = None
     locator: Optional[str] = None
+    retrieval_jurisdiction: Optional[str] = None
     cited: bool = False
 
 

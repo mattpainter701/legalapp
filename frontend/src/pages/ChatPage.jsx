@@ -17,42 +17,133 @@ import {
 import { AlertBanner } from '../components/ui'
 import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
 
-function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbackAssistantMessage) {
-  const next = Array.isArray(serverMessages) ? [...serverMessages] : []
-  const submittedAt = Date.parse(optimisticUserMessage.created_at)
-  const hasSubmittedQuestion = next.some(
-    (msg) => msg.role === 'user' && msg.content === optimisticUserMessage.content
-  )
-  const hasFreshAssistant = next.some((msg) => {
-    if (msg.role !== 'assistant') return false
-    const createdAt = Date.parse(msg.created_at)
-    return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
-  })
+const MESSAGE_IDENTITY_KEYS = [
+  'id',
+  'client_message_id',
+  'clientMessageId',
+  'optimistic_id',
+  'optimisticId',
+]
+const TURN_IDENTITY_KEYS = [
+  'client_turn_id',
+  'clientTurnId',
+  'turn_id',
+  'turnId',
+  'client_request_id',
+  'clientRequestId',
+  'request_id',
+  'requestId',
+]
+const REPLY_IDENTITY_KEYS = [
+  'parent_message_id',
+  'parentMessageId',
+  'user_message_id',
+  'userMessageId',
+  'in_reply_to',
+  'inReplyTo',
+]
 
-  if (!hasSubmittedQuestion) {
-    const assistantIndex = hasFreshAssistant
-      ? next.findIndex((msg) => {
-          if (msg.role !== 'assistant') return false
-          const createdAt = Date.parse(msg.created_at)
-          return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
-        })
-      : -1
-    next.splice(assistantIndex >= 0 ? assistantIndex : next.length, 0, optimisticUserMessage)
+function identityValues(message, keys) {
+  return new Set(
+    keys
+      .map((key) => message?.[key])
+      .filter((value) => value !== undefined && value !== null && String(value).trim())
+      .map(String),
+  )
+}
+
+function sharesIdentity(left, right, keys) {
+  const leftValues = identityValues(left, keys)
+  if (leftValues.size === 0) return false
+  return [...identityValues(right, keys)].some((value) => leftValues.has(value))
+}
+
+function assistantRepliesTo(assistant, user) {
+  const userIds = identityValues(user, [...MESSAGE_IDENTITY_KEYS, ...TURN_IDENTITY_KEYS])
+  return [...identityValues(assistant, REPLY_IDENTITY_KEYS)].some((value) => userIds.has(value))
+}
+
+export function mergeRefreshedTranscript(serverMessages, optimisticUserMessage, fallbackAssistantMessage) {
+  const next = Array.isArray(serverMessages) ? [...serverMessages] : []
+  const knownServerIds = new Set(
+    (optimisticUserMessage?._known_server_message_ids || []).map(String),
+  )
+
+  let userIndex = next.findIndex((message) => (
+    message.role === 'user'
+    && (
+      sharesIdentity(message, optimisticUserMessage, MESSAGE_IDENTITY_KEYS)
+      || sharesIdentity(message, optimisticUserMessage, TURN_IDENTITY_KEYS)
+    )
+  ))
+
+  if (userIndex < 0) {
+    const contentMatches = next
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => (
+        message.role === 'user' && message.content === optimisticUserMessage.content
+      ))
+    const unseenMatch = [...contentMatches].reverse().find(({ message }) => (
+      message.id && !knownServerIds.has(String(message.id))
+    ))
+    const fallbackMatch = knownServerIds.size === 0 ? contentMatches.at(-1) : null
+    userIndex = unseenMatch?.index ?? fallbackMatch?.index ?? -1
   }
 
-  if (!hasFreshAssistant && fallbackAssistantMessage?.content) {
-    next.push(fallbackAssistantMessage)
-  } else if (hasFreshAssistant && fallbackAssistantMessage?.progress) {
-    const assistantIndex = next.findIndex((msg) => {
-      if (msg.role !== 'assistant') return false
-      const createdAt = Date.parse(msg.created_at)
-      return Number.isNaN(submittedAt) || Number.isNaN(createdAt) || createdAt >= submittedAt
-    })
-    if (assistantIndex >= 0 && !next[assistantIndex].progress) {
-      next[assistantIndex] = {
-        ...next[assistantIndex],
-        progress: fallbackAssistantMessage.progress,
+  if (userIndex < 0) {
+    const stableAssistantIndex = next.findIndex((message) => (
+      message.role === 'assistant'
+      && (
+        sharesIdentity(message, fallbackAssistantMessage, MESSAGE_IDENTITY_KEYS)
+        || sharesIdentity(message, optimisticUserMessage, TURN_IDENTITY_KEYS)
+        || sharesIdentity(message, fallbackAssistantMessage, TURN_IDENTITY_KEYS)
+      )
+    ))
+    userIndex = stableAssistantIndex >= 0 ? stableAssistantIndex : next.length
+    next.splice(userIndex, 0, optimisticUserMessage)
+  }
+
+  const matchedUser = next[userIndex]
+  let assistantIndex = next.findIndex((message) => (
+    message.role === 'assistant'
+    && (
+      sharesIdentity(message, fallbackAssistantMessage, MESSAGE_IDENTITY_KEYS)
+      || sharesIdentity(message, optimisticUserMessage, TURN_IDENTITY_KEYS)
+      || sharesIdentity(message, fallbackAssistantMessage, TURN_IDENTITY_KEYS)
+      || assistantRepliesTo(message, matchedUser)
+    )
+  ))
+
+  if (assistantIndex < 0) {
+    for (let index = userIndex + 1; index < next.length; index += 1) {
+      if (next[index].role === 'user') break
+      if (next[index].role === 'assistant') {
+        assistantIndex = index
+        break
       }
+    }
+  }
+
+  if (assistantIndex < 0 && fallbackAssistantMessage?.content) {
+    const nextUserIndex = next.findIndex((message, index) => (
+      index > userIndex && message.role === 'user'
+    ))
+    assistantIndex = nextUserIndex >= 0 ? nextUserIndex : next.length
+    next.splice(assistantIndex, 0, fallbackAssistantMessage)
+  } else if (assistantIndex >= 0 && fallbackAssistantMessage) {
+    const serverAssistant = next[assistantIndex]
+    next[assistantIndex] = {
+      ...serverAssistant,
+      ...(!serverAssistant.content && fallbackAssistantMessage.content
+        ? { content: fallbackAssistantMessage.content }
+        : {}),
+      ...(!serverAssistant.progress && fallbackAssistantMessage.progress
+        ? { progress: fallbackAssistantMessage.progress }
+        : {}),
+      ...((serverAssistant.proposed_actions || []).length === 0
+        && (fallbackAssistantMessage.proposed_actions || []).length > 0
+        ? { proposed_actions: fallbackAssistantMessage.proposed_actions }
+        : {}),
     }
   }
 
@@ -202,12 +293,14 @@ function attachTurnReferences(messages) {
 export default function ChatPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const routeConvId = searchParams.get('conv')
   const { conversations, setConversations, activeConvId, setActiveConvId, onConversationDeleted } = useAppShell()
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [generationCount, setGenerationCount] = useState(0)
   const [includePublic, setIncludePublic] = useState(true)
   const [usePremium, setUsePremium] = useState(false)
   const [activeConvTitle, setActiveConvTitle] = useState('')
@@ -219,8 +312,33 @@ export default function ChatPage() {
   const [railOpen, setRailOpen] = useState(false)
   const [notice, setNotice] = useState(null)
   const [sourceHealth, setSourceHealth] = useState(null)
+  const [metadataRefreshRetrying, setMetadataRefreshRetrying] = useState(false)
   const fileInputRef = useRef(null)
   const matterPickerRef = useRef(null)
+  const messagesRef = useRef(messages)
+  const activeConvIdRef = useRef(activeConvId)
+  const loadedConversationIdRef = useRef(null)
+  const loadingConversationIdRef = useRef(null)
+  const conversationLoadRequestRef = useRef(0)
+  const streamRequestRef = useRef(0)
+  const activeStreamAbortRef = useRef(null)
+  const streamControllersRef = useRef(new Map())
+  const metadataRefreshContextRef = useRef(null)
+  const metadataRefreshRequestRef = useRef(0)
+  const metadataRefreshRetryingRef = useRef(false)
+
+  useEffect(() => {
+    activeConvIdRef.current = activeConvId
+  }, [activeConvId])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => {
+    if (generationCount !== 0) return
+    setNotice((current) => current?.kind === 'background-generation' ? null : current)
+  }, [generationCount])
 
   const showErrorNotice = useCallback((title, fallback, err) => {
     setNotice({
@@ -228,6 +346,26 @@ export default function ChatPage() {
       title,
       message: err?.response?.data?.detail || err?.message || fallback,
     })
+  }, [])
+
+  const cancelActiveStream = useCallback(({ abort = false, conversationId = null } = {}) => {
+    streamRequestRef.current += 1
+    if (abort) {
+      for (const [controller, controllerConversationId] of streamControllersRef.current) {
+        if (!conversationId || controllerConversationId === conversationId) controller.abort()
+      }
+    }
+    activeStreamAbortRef.current = null
+    setIsSending(false)
+  }, [])
+
+  useEffect(() => () => {
+    for (const controller of streamControllersRef.current.keys()) controller.abort()
+    streamControllersRef.current.clear()
+    activeStreamAbortRef.current = null
+    conversationLoadRequestRef.current += 1
+    streamRequestRef.current += 1
+    metadataRefreshRequestRef.current += 1
   }, [])
 
   const handleUploadClick = () => {
@@ -247,14 +385,17 @@ export default function ChatPage() {
   }
 
   const uploadFiles = async (files) => {
-    let convId = activeConvId
+    let convId = activeConvIdRef.current
 
     if (!convId) {
       try {
         const conv = await createConversation()
         setConversations((prev) => [conv, ...prev])
+        activeConvIdRef.current = conv.id
+        loadedConversationIdRef.current = conv.id
         setActiveConvId(conv.id)
         setActiveConvTitle(conv.title || 'New Conversation')
+        navigate(`/chat?conv=${conv.id}`)
         convId = conv.id
       } catch (err) {
         console.error('Failed to create conversation', err)
@@ -275,10 +416,36 @@ export default function ChatPage() {
   }
 
   const loadConversation = useCallback(async (id) => {
+    if (!id) return
+    const conversationChanged = Boolean(
+      activeConvIdRef.current && activeConvIdRef.current !== id
+    )
+    if (activeStreamAbortRef.current) {
+      cancelActiveStream()
+    }
+    if (conversationChanged) {
+      setPendingAttachments([])
+    }
+
+    const loadRequestId = conversationLoadRequestRef.current + 1
+    conversationLoadRequestRef.current = loadRequestId
+    activeConvIdRef.current = id
+    loadingConversationIdRef.current = id
+    metadataRefreshContextRef.current = null
+    metadataRefreshRequestRef.current += 1
+    metadataRefreshRetryingRef.current = false
+    setMetadataRefreshRetrying(false)
+    setNotice((current) => current?.kind === 'metadata' ? null : current)
     setIsLoadingMessages(true)
     setActiveConvId(id)
     try {
       const data = await getConversation(id)
+      if (
+        conversationLoadRequestRef.current !== loadRequestId
+        || activeConvIdRef.current !== id
+      ) return
+
+      loadedConversationIdRef.current = id
       setMessages(attachTurnReferences(data.messages || []))
       setActiveConvTitle(data.conversation?.title || 'Untitled')
       if (data.conversation) {
@@ -289,20 +456,34 @@ export default function ChatPage() {
         )
       }
     } catch (err) {
+      if (
+        conversationLoadRequestRef.current !== loadRequestId
+        || activeConvIdRef.current !== id
+      ) return
+
       console.error('Failed to load conversation', err)
       const status = err?.response?.status
+      // Never leave a previous conversation visible beneath a newly selected
+      // conversation ID. A stale legal transcript is worse than an empty error
+      // state because its action cards still remain operable.
+      loadedConversationIdRef.current = id
+      setMessages([])
+      setActiveConvTitle('')
       if (status === 403 || status === 404) {
         setConversations((prev) => prev.filter((conv) => conv.id !== id))
+        activeConvIdRef.current = null
+        loadedConversationIdRef.current = null
         setActiveConvId(null)
-        setMessages([])
-        setActiveConvTitle('')
         navigate('/chat', { replace: true })
       }
       showErrorNotice('Conversation could not be loaded', 'Select another conversation or retry.', err)
     } finally {
-      setIsLoadingMessages(false)
+      if (conversationLoadRequestRef.current === loadRequestId) {
+        loadingConversationIdRef.current = null
+        setIsLoadingMessages(false)
+      }
     }
-  }, [navigate, setActiveConvId, setConversations, showErrorNotice])
+  }, [cancelActiveStream, navigate, setActiveConvId, setConversations, showErrorNotice])
 
   useEffect(() => {
     getMattersV2({ page_size: 200, sort_by: 'updated_at', sort_dir: 'desc' })
@@ -334,15 +515,9 @@ export default function ChatPage() {
     }
   }, [matterPickerOpen])
 
-  // Load first conversation on mount, or from URL param
+  // A prompt handed off from another page is a one-time draft, independent of
+  // which conversation ultimately loads.
   useEffect(() => {
-    const convId = searchParams.get('conv')
-    if (convId) {
-      loadConversation(convId)
-    } else if (conversations.length > 0 && !activeConvId) {
-      loadConversation(conversations[0].id)
-    }
-
     const pending = sessionStorage.getItem('pending_chat_message')
     if (pending) {
       setInputValue(pending)
@@ -350,39 +525,72 @@ export default function ChatPage() {
     }
   }, [])
 
-  // If conversations loaded after mount and no active conv, pick first
+  // Treat the URL as the durable conversation selection and react to browser
+  // back/forward and AppShell Ctrl+N changes. Refs prevent the state updates
+  // inside loadConversation from starting the same request twice.
   useEffect(() => {
-    if (conversations.length > 0 && !activeConvId && !searchParams.get('conv')) {
-      loadConversation(conversations[0].id)
-    }
-  }, [conversations, activeConvId, searchParams, loadConversation])
+    const targetId = routeConvId || activeConvId || conversations[0]?.id
+    if (!targetId) return
+    if (
+      loadedConversationIdRef.current === targetId
+      || loadingConversationIdRef.current === targetId
+    ) return
+    loadConversation(targetId)
+  }, [conversations, activeConvId, routeConvId, loadConversation])
 
   const handleNewConversation = useCallback(async () => {
     try {
+      cancelActiveStream()
+      conversationLoadRequestRef.current += 1
       const conv = await createConversation()
       setConversations((prev) => [conv, ...prev])
+      activeConvIdRef.current = conv.id
+      loadedConversationIdRef.current = conv.id
+      loadingConversationIdRef.current = null
+      metadataRefreshContextRef.current = null
+      metadataRefreshRequestRef.current += 1
+      metadataRefreshRetryingRef.current = false
       setActiveConvId(conv.id)
       setMessages([])
       setActiveConvTitle(conv.title || 'New Conversation')
+      setPendingAttachments([])
       setNotice(null)
+      navigate(`/chat?conv=${conv.id}`)
     } catch (err) {
       console.error('Failed to create conversation', err)
       showErrorNotice('Conversation could not be created', 'Please try again.', err)
     }
-  }, [setConversations, setActiveConvId, showErrorNotice])
+  }, [cancelActiveStream, navigate, setConversations, setActiveConvId, showErrorNotice])
 
   const handleConversationDeleted = useCallback(
     (id) => {
       // AppShell context performs the API delete + list mutation;
       // here we additionally clear local thread state if it was active.
-      if (activeConvId === id) {
+      // A detached response for a conversation that no longer exists must not
+      // keep consuming model time or attempt a late persistence write.
+      if (activeConvIdRef.current !== id) {
+        for (const [controller, controllerConversationId] of streamControllersRef.current) {
+          if (controllerConversationId === id) controller.abort()
+        }
+      }
+      if (activeConvIdRef.current === id) {
+        cancelActiveStream({ abort: true, conversationId: id })
+        conversationLoadRequestRef.current += 1
+        activeConvIdRef.current = null
+        loadedConversationIdRef.current = null
+        loadingConversationIdRef.current = null
+        metadataRefreshContextRef.current = null
+        metadataRefreshRequestRef.current += 1
+        metadataRefreshRetryingRef.current = false
+        setMetadataRefreshRetrying(false)
         setActiveConvId(null)
         setMessages([])
         setActiveConvTitle('')
+        setPendingAttachments([])
         navigate('/chat', { replace: true })
       }
     },
-    [activeConvId, navigate, setActiveConvId]
+    [cancelActiveStream, navigate, setActiveConvId]
   )
 
   const handleRailDeleteConversation = useCallback(
@@ -405,27 +613,120 @@ export default function ChatPage() {
 
   const handleRailSelectConversation = useCallback(
     (id) => {
+      navigate(`/chat?conv=${id}`)
       loadConversation(id)
       setRailOpen(false)
     },
-    [loadConversation]
+    [loadConversation, navigate]
   )
+
+  const applyRefreshedConversation = useCallback((conversationId, refreshed, nextMessages) => {
+    if (activeConvIdRef.current !== conversationId) return false
+    loadedConversationIdRef.current = conversationId
+    setMessages(nextMessages)
+    setActiveConvTitle((current) => refreshed.conversation?.title || current)
+    if (refreshed.conversation) {
+      setConversations((prev) =>
+        prev.some((conv) => conv.id === refreshed.conversation.id)
+          ? prev.map((conv) => (conv.id === refreshed.conversation.id ? { ...conv, ...refreshed.conversation } : conv))
+          : [refreshed.conversation, ...prev]
+      )
+    }
+    return true
+  }, [setConversations])
+
+  const handleRetryMetadataRefresh = useCallback(async () => {
+    const retryContext = metadataRefreshContextRef.current
+    if (!retryContext || activeConvIdRef.current !== retryContext.conversationId) {
+      setNotice({
+        type: 'info',
+        title: 'Select the affected conversation',
+        message: 'Source metadata can only be retried while that conversation is open.',
+      })
+      return
+    }
+    if (metadataRefreshRetryingRef.current) return
+
+    const retryRequestId = metadataRefreshRequestRef.current + 1
+    metadataRefreshRequestRef.current = retryRequestId
+    metadataRefreshRetryingRef.current = true
+    setMetadataRefreshRetrying(true)
+    setNotice({
+      type: 'info',
+      kind: 'metadata',
+      title: 'Refreshing source metadata',
+      message: 'Retrieving the persisted citations and proposed actions for this answer.',
+    })
+    try {
+      const refreshed = await getConversation(retryContext.conversationId)
+      if (
+        metadataRefreshRequestRef.current !== retryRequestId
+        || activeConvIdRef.current !== retryContext.conversationId
+      ) return
+      const nextMessages = mergeRefreshedTranscript(
+        refreshed.messages,
+        retryContext.userMessage,
+        retryContext.fallbackAssistantMessage,
+      )
+      applyRefreshedConversation(retryContext.conversationId, refreshed, nextMessages)
+      metadataRefreshContextRef.current = null
+      setNotice({
+        type: 'success',
+        title: 'Sources refreshed',
+        message: 'Citation links and proposed actions now reflect the persisted response.',
+      })
+    } catch (err) {
+      if (
+        metadataRefreshRequestRef.current !== retryRequestId
+        || activeConvIdRef.current !== retryContext.conversationId
+      ) return
+      console.error('Failed to retry streamed message metadata', err)
+      setNotice({
+        type: 'warning',
+        kind: 'metadata',
+        title: 'Source metadata is still unavailable',
+        message: err?.response?.data?.detail || err?.message || 'Retry before relying on this answer or approving any proposed work.',
+      })
+    } finally {
+      if (metadataRefreshRequestRef.current === retryRequestId) {
+        metadataRefreshRetryingRef.current = false
+        setMetadataRefreshRetrying(false)
+      }
+    }
+  }, [applyRefreshedConversation])
 
   const handleSend = useCallback(async () => {
     const content = inputValue.trim()
     if (!content || isSending) return
+    if (streamControllersRef.current.size > 0) {
+      setNotice({
+        type: 'info',
+        kind: 'background-generation',
+        title: 'Another response is still finishing',
+        message: 'You can browse and draft in this conversation. Sending is enabled when the earlier response finishes.',
+      })
+      return
+    }
 
-    let convId = activeConvId
+    let convId = activeConvIdRef.current
 
     if (!convId) {
       try {
         const conv = await createConversation(content.slice(0, 60))
         setConversations((prev) => [conv, ...prev])
+        activeConvIdRef.current = conv.id
+        loadedConversationIdRef.current = conv.id
         setActiveConvId(conv.id)
         setActiveConvTitle(conv.title || 'New Conversation')
+        navigate(`/chat?conv=${conv.id}`)
         convId = conv.id
         // Brief pause to let DB commit settle before the streaming read
         await new Promise(r => setTimeout(r, 150))
+        // Creating a conversation is the only send path with an await before
+        // the optimistic turn is mounted. If the user selected another thread
+        // during that window, do not append this turn to (or send it from) the
+        // newly selected conversation.
+        if (activeConvIdRef.current !== convId) return
       } catch (err) {
         console.error('Failed to create conversation', err)
         showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
@@ -436,38 +737,75 @@ export default function ChatPage() {
     const attachmentIds = pendingAttachments.map((a) => a.id)
     let streamProgress = initialStreamProgress(content, attachmentIds.length)
     const initialReferenceContext = buildReferenceContext({ progress: streamProgress })
-
+    const clientTurnId = globalThis.crypto?.randomUUID?.()
+      || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const knownServerMessageIds = messagesRef.current
+      .map((message) => String(message?.id || ''))
+      .filter((id) => id && !/^(temp|stream|err)-/.test(id))
     const userMessage = {
-      id: `temp-${Date.now()}`,
+      id: `temp-${clientTurnId}`,
       role: 'user',
       content,
       sources: [],
       referenceContext: initialReferenceContext,
+      client_turn_id: clientTurnId,
+      _known_server_message_ids: knownServerMessageIds,
       created_at: new Date().toISOString(),
     }
+    const assistantMsgId = `stream-${clientTurnId}`
+    const assistantMsg = {
+      id: assistantMsgId,
+      role: 'assistant',
+      content: '',
+      sources: [],
+      progress: streamProgress,
+      referenceContext: initialReferenceContext,
+      client_turn_id: clientTurnId,
+      created_at: new Date().toISOString(),
+    }
+    const streamAbortController = new AbortController()
+    const streamRequestId = streamRequestRef.current + 1
+    streamRequestRef.current = streamRequestId
+    activeStreamAbortRef.current?.abort()
+    activeStreamAbortRef.current = streamAbortController
+    streamControllersRef.current.set(streamAbortController, convId)
+    setGenerationCount(streamControllersRef.current.size)
+    const isCurrentStream = () => (
+      streamRequestRef.current === streamRequestId
+      && activeConvIdRef.current === convId
+    )
 
+    metadataRefreshContextRef.current = null
+    metadataRefreshRequestRef.current += 1
+    metadataRefreshRetryingRef.current = false
+    setMetadataRefreshRetrying(false)
+    setNotice((current) => current?.kind === 'metadata' ? null : current)
     setMessages((prev) => [...prev, userMessage])
     setInputValue('')
     setPendingAttachments([])
     setIsSending(true)
 
     try {
-      const assistantMsgId = `stream-${Date.now()}`
-      const assistantMsg = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        sources: [],
-        progress: streamProgress,
-        referenceContext: initialReferenceContext,
-        created_at: new Date().toISOString(),
-      }
       setMessages((prev) => [...prev, assistantMsg])
 
       let accumulatedText = ''
       let streamError = null
+      let sawStreamComplete = false
 
-      for await (const token of streamMessage(convId, content, includePublic, usePremium, attachmentIds)) {
+      for await (const token of streamMessage(
+        convId,
+        content,
+        includePublic,
+        usePremium,
+        attachmentIds,
+        { signal: streamAbortController.signal },
+      )) {
+        // Conversation navigation invalidates this UI request but deliberately
+        // keeps draining the response. The server persisted the user message
+        // before generation began; cancelling here can strand a user-only turn.
+        // Draining is detached from UI state, so switching remains immediate
+        // and no token from this conversation can leak into another one.
+        if (!isCurrentStream()) continue
         if (token?.type === 'progress' && token.event === 'action_proposal') {
           // Reviewable work the assistant proposed. Attached to the message
           // rather than merged into progress, since it outlives the stream.
@@ -496,6 +834,7 @@ export default function ChatPage() {
           continue
         }
         if (token === '[STREAM_COMPLETE]') {
+          sawStreamComplete = true
           streamProgress = { ...streamProgress, complete: true, status: 'Response complete' }
           const referenceContext = buildReferenceContext({ progress: streamProgress })
           setMessages((prev) =>
@@ -523,18 +862,36 @@ export default function ChatPage() {
         }
       }
 
+      if (!isCurrentStream()) {
+        // If the user returned to this conversation while its detached stream
+        // finished, reload the now-persisted assistant turn. Never refresh over
+        // a newer active stream in the same conversation.
+        if (activeConvIdRef.current === convId && !activeStreamAbortRef.current) {
+          await loadConversation(convId)
+        }
+        return
+      }
+      if (!streamError && !sawStreamComplete) {
+        streamError = 'The assistant stream ended before completion. Please retry.'
+      }
+      if (!streamError && !accumulatedText.trim()) {
+        streamError = 'The assistant completed without a visible answer. Please retry.'
+      }
+
       if (streamError) {
+        const failedProgress = { ...streamProgress, complete: true, status: 'Response failed' }
+        const failedReferenceContext = buildReferenceContext({ progress: failedProgress })
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMsgId
               ? {
                   ...msg,
                   content: `An error occurred: ${streamError}`,
-                  progress: { ...streamProgress, complete: true },
-                  referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
+                  progress: failedProgress,
+                  referenceContext: failedReferenceContext,
                 }
               : msg.id === userMessage.id
-                ? { ...msg, referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }) }
+                ? { ...msg, referenceContext: failedReferenceContext }
               : msg
           )
         )
@@ -544,51 +901,89 @@ export default function ChatPage() {
           message: streamError || 'The assistant stopped before finishing the response.',
         })
       } else {
+        const fallbackAssistantMessage = {
+          ...assistantMsg,
+          content: accumulatedText,
+          progress: { ...streamProgress, complete: true },
+          referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
+        }
         try {
           const refreshed = await getConversation(convId)
-          setMessages(
-            mergeRefreshedTranscript(refreshed.messages, userMessage, {
-              ...assistantMsg,
-              content: accumulatedText,
-              progress: { ...streamProgress, complete: true },
-              referenceContext: buildReferenceContext({ progress: { ...streamProgress, complete: true } }),
-            })
+          if (!isCurrentStream()) return
+          const nextMessages = mergeRefreshedTranscript(
+            refreshed.messages,
+            userMessage,
+            fallbackAssistantMessage,
           )
-          setActiveConvTitle(refreshed.conversation?.title || activeConvTitle)
-          if (refreshed.conversation) {
-            setConversations((prev) =>
-              prev.some((conv) => conv.id === refreshed.conversation.id)
-                ? prev.map((conv) => (conv.id === refreshed.conversation.id ? { ...conv, ...refreshed.conversation } : conv))
-                : [refreshed.conversation, ...prev]
-            )
-          }
+          applyRefreshedConversation(convId, refreshed, nextMessages)
+          metadataRefreshContextRef.current = null
         } catch (refreshErr) {
+          if (!isCurrentStream()) return
           console.error('Failed to refresh streamed message metadata', refreshErr)
+          metadataRefreshContextRef.current = {
+            conversationId: convId,
+            userMessage,
+            fallbackAssistantMessage,
+          }
+          setNotice({
+            type: 'warning',
+            kind: 'metadata',
+            title: 'Source metadata could not be verified',
+            message: 'The answer text is shown, but its persisted citation links and proposed actions could not be refreshed. Retry before relying on it.',
+          })
         }
       }
 
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c
+      if (isCurrentStream()) {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId ? { ...c, updated_at: new Date().toISOString() } : c
+          )
+        )
+      }
+    } catch (err) {
+      if (!isCurrentStream()) {
+        // Navigation detaches the network read from UI state. If the user came
+        // back before that read failed, refresh the persisted interruption
+        // marker just as the detached-success path refreshes the final answer.
+        if (
+          err?.name !== 'AbortError'
+          && activeConvIdRef.current === convId
+          && !activeStreamAbortRef.current
+        ) {
+          await loadConversation(convId)
+        }
+        return
+      }
+      if (err?.name === 'AbortError') return
+      console.error('Failed to send message', err)
+      const errorMessage = err?.response?.data?.detail || err?.message || 'Please try again.'
+      const failedProgress = { ...streamProgress, complete: true, status: 'Response failed' }
+      const failedReferenceContext = buildReferenceContext({ progress: failedProgress })
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMsgId
+            ? {
+                ...msg,
+                content: `An error occurred: ${errorMessage}`,
+                progress: failedProgress,
+                referenceContext: failedReferenceContext,
+              }
+            : msg.id === userMessage.id
+              ? { ...msg, referenceContext: failedReferenceContext }
+              : msg
         )
       )
-    } catch (err) {
-      console.error('Failed to send message', err)
       showErrorNotice('Message could not be sent', 'Please try again.', err)
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          content: 'An error occurred while processing your request. Please try again.',
-          sources: [],
-          created_at: new Date().toISOString(),
-        },
-      ])
     } finally {
-      setIsSending(false)
+      streamControllersRef.current.delete(streamAbortController)
+      setGenerationCount(streamControllersRef.current.size)
+      if (streamRequestRef.current === streamRequestId) {
+        activeStreamAbortRef.current = null
+        setIsSending(false)
+      }
     }
-  }, [inputValue, isSending, activeConvId, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, activeConvTitle, showErrorNotice])
+  }, [inputValue, isSending, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, showErrorNotice, navigate, applyRefreshedConversation, loadConversation])
 
   const handleExportConversation = () => {
     if (messages.length === 0) {
@@ -626,6 +1021,15 @@ export default function ChatPage() {
   }, [activeConvId, setConversations])
 
   const activeConversation = conversations.find((conv) => conv.id === activeConvId) || null
+  const hasBackgroundGeneration = generationCount > 0 && !isSending
+  const conversationContextLocked = messages.length > 0
+    || Number(activeConversation?.message_count || 0) > 0
+    || Number(activeConversation?.attachment_count || 0) > 0
+    || pendingAttachments.length > 0
+  const matterLinkBlocked = isLoadingMessages
+    || isSending
+    || generationCount > 0
+    || conversationContextLocked
   const linkedMatterId = activeConversation?.matter_id || null
   const linkedMatter = matters.find((matter) => matter.id === linkedMatterId) || null
   const linkedMatterName = linkedMatter?.matter_name || linkedMatter?.name || (linkedMatterId ? 'Linked matter' : '')
@@ -642,6 +1046,17 @@ export default function ChatPage() {
   const applyMatterLink = useCallback(async (matterId) => {
     if (!activeConvId) {
       setNotice({ type: 'info', title: 'No conversation selected', message: 'Start or select a conversation before linking it to a matter.' })
+      return
+    }
+    if (matterLinkBlocked) {
+      setMatterPickerOpen(false)
+      setNotice({
+        type: 'info',
+        title: 'Matter context is in use',
+        message: conversationContextLocked
+          ? 'Matter context is locked after a conversation has messages or attachments. Start a new conversation for a different matter.'
+          : 'Wait for the conversation to load and the active response to finish before changing its matter context.',
+      })
       return
     }
     setMatterLinking(true)
@@ -662,7 +1077,7 @@ export default function ChatPage() {
     } finally {
       setMatterLinking(false)
     }
-  }, [activeConvId, setConversations, showErrorNotice])
+  }, [activeConvId, conversationContextLocked, matterLinkBlocked, setConversations, showErrorNotice])
 
   const activeRef = (() => {
     const idx = conversations.findIndex((c) => c.id === activeConvId)
@@ -757,7 +1172,12 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setMatterPickerOpen((open) => !open)}
-                disabled={!activeConvId || matterLinking}
+                disabled={!activeConvId || matterLinking || matterLinkBlocked}
+                title={conversationContextLocked
+                  ? 'Matter context is locked after messages or attachments are added'
+                  : matterLinkBlocked
+                    ? 'Wait for the conversation to load or finish responding'
+                    : linkedMatterId ? 'Change matter context' : 'Link this conversation to a matter'}
                 aria-expanded={matterPickerOpen}
                 aria-haspopup="dialog"
                 className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-brand-line bg-brand-surface px-2 text-xs font-semibold text-brand-ink hover:bg-brand-bg-soft disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-3"
@@ -768,7 +1188,7 @@ export default function ChatPage() {
               </button>
             </div>
 
-            {matterPickerOpen && (
+            {matterPickerOpen && !matterLinkBlocked && (
               <div
                 role="dialog"
                 aria-label="Choose matter context"
@@ -827,6 +1247,10 @@ export default function ChatPage() {
               <AlertBanner
                 type={notice.type}
                 title={notice.title}
+                actionLabel={notice.kind === 'metadata'
+                  ? (metadataRefreshRetrying ? 'Retrying…' : 'Retry source metadata')
+                  : notice.actionLabel}
+                onAction={notice.kind === 'metadata' ? handleRetryMetadataRefresh : notice.onAction}
                 onDismiss={() => setNotice(null)}
               >
                 {notice.message}
@@ -841,6 +1265,12 @@ export default function ChatPage() {
             onPromptSelect={(prompt) => setInputValue(prompt)}
           />
 
+          {hasBackgroundGeneration && (
+            <div role="status" className="border-t border-brand-line bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-900">
+              A response is finishing in the background. You can browse and draft here; sending unlocks when it finishes.
+            </div>
+          )}
+
           <ChatInput
             inputValue={inputValue}
             onInputChange={setInputValue}
@@ -849,6 +1279,8 @@ export default function ChatPage() {
             onDropFiles={handleDropFiles}
             isSending={isSending}
             disabled={false}
+            sendDisabled={hasBackgroundGeneration}
+            sendDisabledLabel="Another conversation response is finishing"
             pendingAttachments={pendingAttachments}
             onRemoveAttachment={(id) =>
               setPendingAttachments((prev) => prev.filter((a) => a.id !== id))

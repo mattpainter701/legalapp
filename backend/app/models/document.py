@@ -20,6 +20,9 @@ from app.database import Base
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_tenant_sync_source", "tenant_id", "sync_source_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -51,6 +54,10 @@ class Document(Base):
     source_modified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Stable digest of provider/drive/item identity for versioned cloud sync.
+    # Prior versions retain their row and bytes for audit but use superseded
+    # status so RAG only searches the current version.
+    sync_source_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     embedding_version: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -18,7 +18,7 @@ from typing import Optional
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -38,7 +38,7 @@ from app.services.task_notifications import (
     task_calendar_user_id,
 )
 from app.services.task_automation import (
-    dispatch_task_automation_if_approved,
+    ActionApprovalConflict,
     enqueue_durable_automation,
 )
 from app.services.task_workflow import (
@@ -159,19 +159,47 @@ async def _require_task_references_for_tenant(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-async def _latest_delivery(db: AsyncSession, task: Task) -> TaskDeliveryState | None:
-    """Most recent automation attempt for a task, if any.
+def _require_action_reviewer_or_admin(task: Task, user) -> None:
+    """Restrict an outbound draft to its assigned reviewer or a tenant admin."""
+    if not task.pending_action:
+        return
+    if user.role == "admin" or task.reviewer_user_id == user.id:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Only the assigned reviewer or an admin can change or approve "
+            "this outbound action"
+        ),
+    )
+
+
+async def _delivery_history(db: AsyncSession, task: Task) -> list[TaskDeliveryState]:
+    """Immutable automation attempts, newest first.
 
     Read separately rather than joined onto the list query: only a handful of
-    tasks ever carry an action, and the board renders hundreds of cards.
+    tasks ever carry an action. Bound the response while retaining far more
+    history than a normal task should ever accumulate.
     """
-    run = await db.scalar(
-        select(TaskAutomationRun)
-        .where(TaskAutomationRun.task_id == task.id)
-        .order_by(TaskAutomationRun.created_at.desc())
-        .limit(1)
+    runs = (
+        (
+            await db.execute(
+                select(TaskAutomationRun)
+                .where(
+                    TaskAutomationRun.task_id == task.id,
+                    TaskAutomationRun.tenant_id == task.tenant_id,
+                )
+                .order_by(
+                    TaskAutomationRun.created_at.desc(),
+                    TaskAutomationRun.id.desc(),
+                )
+                .limit(25)
+            )
+        )
+        .scalars()
+        .all()
     )
-    return TaskDeliveryState.model_validate(run) if run else None
+    return [TaskDeliveryState.model_validate(run) for run in runs]
 
 
 async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResponse:
@@ -179,7 +207,10 @@ async def _task_response_with_delivery(db: AsyncSession, task: Task) -> TaskResp
     # Only assistant-drafted work can carry an action, so skip the extra read
     # for the overwhelming majority of tasks.
     if task.source == "assistant":
-        response.delivery = await _latest_delivery(db, task)
+        response.delivery_history = await _delivery_history(db, task)
+        response.delivery = (
+            response.delivery_history[0] if response.delivery_history else None
+        )
     return response
 
 
@@ -192,6 +223,7 @@ def _task_card_from_row(row) -> TaskBoardCard:
         assignee_email,
         reviewer_name,
         reviewer_email,
+        delivery_run,
     ) = row
     return TaskBoardCard(
         id=task.id,
@@ -240,6 +272,9 @@ def _task_card_from_row(row) -> TaskBoardCard:
         external_ref=task.external_ref,
         version=task.version,
         pending_action=task.pending_action,
+        delivery=(
+            TaskDeliveryState.model_validate(delivery_run) if delivery_run else None
+        ),
         status_changed_at=task.status_changed_at,
         updated_at=task.updated_at,
     )
@@ -440,7 +475,12 @@ async def get_task_board(
     today = date.today()
     base_conditions = [Task.tenant_id == tenant_uuid]
     if scope == "mine":
-        base_conditions.append(Task.assigned_to_user_id == current_user.id)
+        base_conditions.append(
+            or_(
+                Task.assigned_to_user_id == current_user.id,
+                Task.reviewer_user_id == current_user.id,
+            )
+        )
     elif assigned_to_user_id:
         await _require_task_references_for_tenant(
             db, tenant_uuid, {"assigned_to_user_id": assigned_to_user_id}
@@ -517,6 +557,21 @@ async def get_task_board(
 
     assignee = aliased(User)
     reviewer = aliased(User)
+    delivery_run = aliased(TaskAutomationRun)
+    latest_delivery_id = (
+        select(TaskAutomationRun.id)
+        .where(
+            TaskAutomationRun.task_id == Task.id,
+            TaskAutomationRun.tenant_id == tenant_uuid,
+        )
+        .order_by(
+            TaskAutomationRun.created_at.desc(),
+            TaskAutomationRun.id.desc(),
+        )
+        .limit(1)
+        .correlate(Task)
+        .scalar_subquery()
+    )
     risk_bucket = case(
         (Task.due_date < today, 0),
         (Task.due_date == today, 1),
@@ -554,6 +609,7 @@ async def get_task_board(
                 assignee.email,
                 reviewer.full_name,
                 reviewer.email,
+                delivery_run,
             )
             .outerjoin(
                 Matter,
@@ -573,6 +629,7 @@ async def get_task_board(
                     reviewer.tenant_id == tenant_uuid,
                 ),
             )
+            .outerjoin(delivery_run, delivery_run.id == latest_delivery_id)
             .where(*base_conditions, *status_conditions)
             .order_by(
                 risk_bucket,
@@ -682,6 +739,7 @@ async def create_task(
             db, task, event="assigned", actor=current_user, note=assignment_note
         )
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(task)
 
     # The task is the durable source of truth. Email is a best-effort alert and
@@ -1000,6 +1058,14 @@ async def transition_task_status(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if task.pending_action:
+        reviewer_change = (
+            payload.reviewer_user_id is not None
+            and payload.reviewer_user_id != task.reviewer_user_id
+        )
+        if payload.to_status != task.status or reviewer_change:
+            _require_action_reviewer_or_admin(task, current_user)
+
     if payload.reviewer_user_id:
         await _require_task_references_for_tenant(
             db, tenant_uuid, {"reviewer_user_id": payload.reviewer_user_id}
@@ -1029,13 +1095,12 @@ async def transition_task_status(
             payload.expected_version,
             task.version,
         )
+        current_response = await _task_response_with_delivery(db, task)
         raise HTTPException(
             status_code=409,
             detail={
                 "message": exc.detail,
-                "current_task": TaskResponse.model_validate(task).model_dump(
-                    mode="json"
-                ),
+                "current_task": current_response.model_dump(mode="json"),
             },
         ) from exc
     except TaskWorkflowError as exc:
@@ -1066,14 +1131,31 @@ async def transition_task_status(
         # Before the commit on purpose: the queued delivery row and its durable
         # job land in the same transaction as the approval, so there is no window
         # where a task is approved but the send is unrecorded.
-        await enqueue_durable_automation(
-            db,
-            task,
-            from_status=previous_status,
-            to_status=task.status,
-            actor_user_id=current_user.id,
-        )
+        try:
+            await enqueue_durable_automation(
+                db,
+                task,
+                from_status=previous_status,
+                to_status=task.status,
+                actor_user_id=current_user.id,
+                acknowledge_prior_delivery_risk=(
+                    payload.acknowledge_prior_delivery_risk
+                ),
+            )
+        except ActionApprovalConflict as exc:
+            await db.rollback()
+            await set_tenant_context(db, tenant_id)
+            current_task = await _load_task_or_404(db, task_id, tenant_uuid)
+            current_response = await _task_response_with_delivery(db, current_task)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": exc.detail,
+                    "current_task": current_response.model_dump(mode="json"),
+                },
+            ) from exc
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(task)
     if changed:
         await notify_task_updated(
@@ -1083,15 +1165,6 @@ async def transition_task_status(
             calendar_changed=True,
             assignment_changed=False,
             previous_calendar_user_id=previous_calendar_user_id,
-        )
-    if changed:
-        # What counts as approval lives in task_automation, not here, so this
-        # endpoint and the generic PATCH cannot disagree about it.
-        dispatch_task_automation_if_approved(
-            task,
-            from_status=previous_status,
-            to_status=task.status,
-            actor_user_id=current_user.id,
         )
     logger.info(
         "task_board_transition_success tenant_id=%s user_id=%s task_id=%s "
@@ -1203,6 +1276,7 @@ async def mark_customer_contacted(
     if not transitioned:
         increment_task_version(task)
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(task)
     return TaskResponse.model_validate(task)
 
@@ -1218,10 +1292,9 @@ async def update_pending_action(
 
     Narrow on purpose. Only the subject and body are editable: recipients were
     resolved from the matter's own parties, and accepting them here would undo
-    that guarantee. Editing also bumps the task version, which rotates the
-    automation idempotency key — so a draft that was edited after a failed send
-    is allowed to run again, while re-approving an unchanged draft still
-    collides and cannot send twice.
+    that guarantee. The automation key is derived from the canonical action
+    payload, so a meaningful draft edit creates a reviewable new attempt while
+    unrelated task/version changes and unchanged re-approvals still collide.
     """
     tenant_id = str(current_user.tenant_id)
     await set_tenant_context(db, tenant_id)
@@ -1241,6 +1314,7 @@ async def update_pending_action(
         raise HTTPException(
             status_code=409, detail="This task has no drafted action to edit"
         )
+    _require_action_reviewer_or_admin(task, current_user)
     if task.status != "review":
         # Once approved, the draft is history. Editing it would misrepresent
         # what was actually sent.
@@ -1248,10 +1322,7 @@ async def update_pending_action(
             status_code=409,
             detail="Only a task still in Review can have its draft edited",
         )
-    if (
-        payload.expected_version is not None
-        and payload.expected_version != task.version
-    ):
+    if payload.expected_version != task.version:
         conflict = TaskVersionConflict()
         raise HTTPException(
             status_code=conflict.status_code, detail=conflict.detail
@@ -1259,7 +1330,7 @@ async def update_pending_action(
 
     updates = payload.model_dump(exclude_none=True, exclude={"expected_version"})
     if not updates:
-        return TaskResponse.model_validate(task)
+        return await _task_response_with_delivery(db, task)
 
     # Replace the whole mapping: SQLAlchemy does not track in-place JSON edits.
     action = dict(task.pending_action)
@@ -1274,8 +1345,9 @@ async def update_pending_action(
         metadata={"fields": sorted(updates)},
     )
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(task)
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -1316,8 +1388,49 @@ async def update_task(
         # endpoint's existing exclude-none behavior.
         updates[field] = getattr(payload, field)
     expected_version = updates.pop("expected_version", None)
+    acknowledge_prior_delivery_risk = updates.pop(
+        "acknowledge_prior_delivery_risk", False
+    )
+    if (
+        task.status == "review"
+        and task.pending_action
+        and updates.get("status") == "in_progress"
+        and expected_version is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This approval must include the proposal version. "
+                "Refresh the task and approve the current draft."
+            ),
+        )
     assignment_note = (updates.pop("assignment_note", None) or "").strip() or None
     closed_reason = (updates.pop("closed_reason", None) or "").strip() or None
+    context_changes = {
+        field
+        for field in {"matter_id", "contact_id"} & payload.model_fields_set
+        if updates.get(field) != getattr(task, field)
+    }
+    if context_changes:
+        has_delivery_audit = (
+            await db.scalar(
+                select(func.count())
+                .select_from(TaskAutomationRun)
+                .where(
+                    TaskAutomationRun.task_id == task.id,
+                    TaskAutomationRun.tenant_id == task.tenant_id,
+                )
+            )
+            or 0
+        ) > 0
+        if task.pending_action or has_delivery_audit:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A task with an outbound draft or delivery audit cannot be "
+                    "relinked to a different matter/contact. Create a new task."
+                ),
+            )
     changed_references = {
         field: updates[field] for field in reference_fields & payload.model_fields_set
     }
@@ -1328,13 +1441,12 @@ async def update_task(
         db, uuid.UUID(tenant_id), changed_references
     )
     if expected_version is not None and expected_version != task.version:
+        current_response = await _task_response_with_delivery(db, task)
         raise HTTPException(
             status_code=409,
             detail={
                 "message": "This task changed after it was loaded. Review the latest task and try again.",
-                "current_task": TaskResponse.model_validate(task).model_dump(
-                    mode="json"
-                ),
+                "current_task": current_response.model_dump(mode="json"),
             },
         )
     calendar_changed = bool(_CALENDAR_RELEVANT_FIELDS & set(updates))
@@ -1344,6 +1456,14 @@ async def update_task(
     waiting_reason = updates.pop("waiting_reason", None)
     waiting_follow_up_date = updates.pop("waiting_follow_up_date", None)
     reviewer_user_id = updates.pop("reviewer_user_id", None)
+    if task.pending_action:
+        reviewer_change = (
+            "reviewer_user_id" in payload.model_fields_set
+            and reviewer_user_id != task.reviewer_user_id
+        )
+        status_change = new_status is not None and new_status != task.status
+        if status_change or reviewer_change:
+            _require_action_reviewer_or_admin(task, current_user)
     transition_changed = False
     workflow_metadata_requested = bool(
         {"waiting_reason", "waiting_follow_up_date", "reviewer_user_id"}
@@ -1446,15 +1566,30 @@ async def update_task(
 
     # Same transactional enqueue as the transition endpoint, for the same reason:
     # this endpoint can also approve drafted work out of Review.
-    await enqueue_durable_automation(
-        db,
-        task,
-        from_status=previous_status,
-        to_status=task.status,
-        actor_user_id=current_user.id,
-    )
+    try:
+        await enqueue_durable_automation(
+            db,
+            task,
+            from_status=previous_status,
+            to_status=task.status,
+            actor_user_id=current_user.id,
+            acknowledge_prior_delivery_risk=acknowledge_prior_delivery_risk,
+        )
+    except ActionApprovalConflict as exc:
+        await db.rollback()
+        await set_tenant_context(db, tenant_id)
+        current_task = await _load_task_or_404(db, task_id, uuid.UUID(tenant_id))
+        current_response = await _task_response_with_delivery(db, current_task)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": exc.detail,
+                "current_task": current_response.model_dump(mode="json"),
+            },
+        ) from exc
 
     await db.commit()
+    await set_tenant_context(db, tenant_id)
     await db.refresh(task)
 
     await notify_task_updated(
@@ -1466,18 +1601,11 @@ async def update_task(
         previous_calendar_user_id=previous_calendar_user_id,
         assignment_note=assignment_note,
     )
+    # Connected-mail token refresh can commit during assignment notification,
+    # which clears SET LOCAL before the delivery-state query below.
+    await set_tenant_context(db, tenant_id)
 
-    # This endpoint can also move a task out of Review, which the board presents
-    # as approval. Without this it would approve drafted work and never execute
-    # it, leaving an attorney believing a client had been emailed.
-    dispatch_task_automation_if_approved(
-        task,
-        from_status=previous_status,
-        to_status=task.status,
-        actor_user_id=current_user.id,
-    )
-
-    return TaskResponse.model_validate(task)
+    return await _task_response_with_delivery(db, task)
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -1490,14 +1618,33 @@ async def delete_task(
     await set_tenant_context(db, tenant_id)
 
     result = await db.execute(
-        select(Task).where(
+        select(Task)
+        .where(
             Task.id == task_id,
             Task.tenant_id == uuid.UUID(tenant_id),
         )
+        .with_for_update()
     )
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    delivery_audit_id = await db.scalar(
+        select(TaskAutomationRun.id)
+        .where(
+            TaskAutomationRun.task_id == task.id,
+            TaskAutomationRun.tenant_id == task.tenant_id,
+        )
+        .limit(1)
+    )
+    if delivery_audit_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This task has an outbound delivery audit and cannot be deleted. "
+                "Keep it as the record of what was approved and delivered."
+            ),
+        )
 
     task_id_str = str(task.id)
     await db.delete(task)

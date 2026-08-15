@@ -13,13 +13,70 @@ from datetime import date
 from typing import Annotated, Literal, Union
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from email_validator import EmailNotValidError, validate_email
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def normalize_single_mailbox(value: str) -> str:
+    """Return one normalized mailbox or reject the value entirely.
+
+    Contact email fields pre-date the action layer and are plain strings.  A
+    value such as ``a@example.com, b@example.com`` therefore cannot be copied
+    into an outbound ``To`` header: mail clients interpret it as two recipients
+    even though the attorney approved one matter-party id.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Each recipient must be one email address")
+    candidate = value.strip()
+    if not candidate or "\r" in candidate or "\n" in candidate:
+        raise ValueError("Each recipient must be one email address")
+    try:
+        validated = validate_email(
+            candidate,
+            check_deliverability=False,
+            # Synthetic demo/test contacts use RFC-reserved ``.test`` domains.
+            # This relaxes only reserved-domain policy, not mailbox syntax.
+            test_environment=True,
+        )
+    except EmailNotValidError as exc:
+        raise ValueError("Each recipient must be one email address") from exc
+    if validated.display_name:
+        raise ValueError("Each recipient must be one email address")
+    return validated.normalized
+
+
+def normalize_recipient_mailboxes(values: list[str]) -> list[str]:
+    """Validate and stably de-duplicate a list of individual mailboxes."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        address = normalize_single_mailbox(value)
+        identity = address.casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(address)
+    if not normalized:
+        raise ValueError("At least one valid recipient is required")
+    return normalized
+
+
+def validate_email_subject(value: str) -> str:
+    """Reject values that could create additional outbound mail headers."""
+    if "\r" in value or "\n" in value:
+        raise ValueError("Email subject cannot contain line breaks")
+    return value
 
 
 class ChatActionModel(BaseModel):
     # extra="forbid" matters here: a model that invents an argument should fail
     # validation loudly rather than have it silently dropped.
     model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    @field_validator("subject", check_fields=False)
+    @classmethod
+    def validate_subject_header(cls, value: str) -> str:
+        return validate_email_subject(value)
 
 
 # ── Tool argument contracts ─────────────────────────────────────────────────
@@ -96,18 +153,74 @@ AgentStepResult = Annotated[
 # ── Pending action payloads (persisted on tasks.pending_action) ─────────────
 
 
+class ResolvedRecipientBinding(ChatActionModel):
+    """Matter-party identity and exact mailbox approved for delivery."""
+
+    party_id: UUID
+    contact_id: UUID
+    address: str
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, value: str) -> str:
+        return normalize_single_mailbox(value)
+
+
+class SourceDocumentBinding(ChatActionModel):
+    """Exact local evidence version an attorney reviewed."""
+
+    document_id: UUID
+    sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
 class EmailClientAction(ChatActionModel):
     type: Literal["email_client"]
     # Server-resolved. Present so the board can show the attorney exactly who
     # will be emailed, and so execution never re-resolves (and never re-trusts).
     to: list[str] = Field(min_length=1, max_length=10)
+    recipient_bindings: list[ResolvedRecipientBinding] = Field(
+        min_length=1, max_length=10
+    )
     subject: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=20_000)
     matter_id: UUID
     source_ids: list[str] = Field(default_factory=list, max_length=10)
+    # Server-resolved local evidence rows. Public authorities remain URLs only.
+    source_document_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    source_document_bindings: list[SourceDocumentBinding] = Field(
+        default_factory=list,
+        max_length=10,
+    )
     # Server-resolved {source_id, label, url} for the documents this draft cites.
     # Resolved rather than echoed so a chip cannot link somewhere unverified.
     sources: list[dict] = Field(default_factory=list, max_length=10)
+
+    @field_validator("to")
+    @classmethod
+    def validate_recipients(cls, value: list[str]) -> list[str]:
+        return normalize_recipient_mailboxes(value)
+
+    @model_validator(mode="after")
+    def recipients_match_bindings(self):
+        bound = normalize_recipient_mailboxes(
+            [binding.address for binding in self.recipient_bindings]
+        )
+        if bound != self.to:
+            raise ValueError("Recipient bindings must match the outbound addresses")
+        document_ids = [
+            binding.document_id for binding in self.source_document_bindings
+        ]
+        if len(document_ids) != len(set(document_ids)):
+            raise ValueError("Source document bindings must be unique")
+        if document_ids != self.source_document_ids:
+            raise ValueError(
+                "Every local source document must have an exact content binding"
+            )
+        return self
 
 
 PendingAction = Annotated[
@@ -123,6 +236,7 @@ class ProposedActionResponse(ChatActionModel):
     """What chat streams to the client after the assistant proposes work."""
 
     task_id: UUID
+    version: int = Field(ge=1)
     title: str
     status: str
     matter_id: UUID | None = None
