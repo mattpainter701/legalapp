@@ -99,6 +99,12 @@ async def test_document_status_endpoint(client: AsyncClient, mock_embeddings):
 
     status_resp = await client.get(f"/api/documents/{upload['id']}/status")
     assert status_resp.status_code == 200
+    assert upload["processing_job_id"]
+    job_response = await client.get(
+        f"/api/documents/jobs/{upload['processing_job_id']}"
+    )
+    assert job_response.status_code == 200
+    assert job_response.json()["kind"] == "document_ingest"
     assert "status" in status_resp.json()
 
 
@@ -186,6 +192,40 @@ async def test_chat_attachment_download_is_hidden_from_other_tenant_user(
 
 
 @pytest.mark.asyncio
+async def test_document_delete_advances_corpus_revision_after_commit(
+    client,
+    db_session,
+    test_tenant,
+    test_user,
+    tmp_path,
+):
+    file_path = tmp_path / "obsolete-contract.txt"
+    file_path.write_text("Obsolete contract version.", encoding="utf-8")
+    document = Document(
+        id=uuid.uuid4(),
+        tenant_id=test_tenant.id,
+        user_id=test_user.id,
+        filename=file_path.name,
+        content_type="text/plain",
+        file_size=file_path.stat().st_size,
+        storage_path=str(file_path),
+        status="ready",
+    )
+    db_session.add(document)
+    await db_session.commit()
+    await db_session.refresh(test_tenant)
+    starting_revision = test_tenant.rag_corpus_revision
+
+    response = await client.delete(f"/api/documents/{document.id}")
+
+    assert response.status_code == 204
+    await db_session.refresh(test_tenant)
+    assert test_tenant.rag_corpus_revision == starting_revision + 1
+    assert await db_session.get(Document, document.id) is None
+    assert file_path.exists() is False
+
+
+@pytest.mark.asyncio
 async def test_indexing_without_an_embedding_provider_stays_keyword_searchable(
     monkeypatch, test_tenant, db_session, tmp_path
 ):
@@ -216,6 +256,8 @@ async def test_indexing_without_an_embedding_provider_stays_keyword_searchable(
     )
     db_session.add(document)
     await db_session.commit()
+    await db_session.refresh(test_tenant)
+    starting_revision = test_tenant.rag_corpus_revision
 
     async def no_embeddings(_texts):
         return []
@@ -227,7 +269,9 @@ async def test_indexing_without_an_embedding_provider_stays_keyword_searchable(
     await documents_router._process_document(str(document.id), str(test_tenant.id))
 
     await db_session.refresh(document)
+    await db_session.refresh(test_tenant)
     assert document.status == "ready"
+    assert test_tenant.rag_corpus_revision == starting_revision + 1
     assert document.chunk_count > 0
     # A null embedding_model on a ready document is the keyword-only signal.
     assert document.embedding_model is None
@@ -257,6 +301,8 @@ async def test_platform_operator_can_queue_degraded_document_reindex(
 ):
     from app.models.durable_job import DurableJob
     from tests.platform_auth_helpers import platform_headers
+
+    starting_revision = test_tenant.rag_corpus_revision
 
     file_path = tmp_path / "existing-demo-contract.txt"
     file_path.write_text("Synthetic merger consent language.", encoding="utf-8")
@@ -292,6 +338,8 @@ async def test_platform_operator_can_queue_degraded_document_reindex(
     )
 
     assert response.status_code == 200
+    await db_session.refresh(test_tenant)
+    assert test_tenant.rag_corpus_revision == starting_revision + 1
     payload = response.json()
     assert payload["selected_count"] == 1
     assert payload["queued_count"] == 1

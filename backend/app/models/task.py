@@ -144,7 +144,7 @@ class Task(Base):
     # of Review, e.g. ``{"type": "email_client", "to": [...], "body": ...}``.
     # The assistant may draft the payload but never executes it: approval is a
     # human transition, and execution is a plain hook with no model in the path.
-    # ``TaskAutomationRun`` makes that execution exactly-once.
+    # ``TaskAutomationRun`` permits one automatic attempt per approval key.
     pending_action: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -216,10 +216,10 @@ class TaskAutomationRun(Base):
     """One attempt to execute a task's ``pending_action``.
 
     Existence of a row is the claim on the work. The unique constraint on
-    ``(task_id, idempotency_key)`` is what makes an outbound client email
-    exactly-once: a replayed webhook, a double-clicked Approve, or two
-    concurrent transitions all collide on the insert, and the loser no-ops
-    instead of sending a second copy.
+    ``(task_id, idempotency_key)`` prevents a replayed webhook, double-clicked
+    Approve, or concurrent transition from starting a second automatic attempt.
+    It cannot prove exactly-once external delivery after an ambiguous provider
+    timeout, so those outcomes remain terminal for attorney review.
     """
 
     __tablename__ = "task_automation_runs"
@@ -255,6 +255,10 @@ class TaskAutomationRun(Base):
     # audit what ran without rehydrating a possibly-cleared task payload.
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Immutable copy of exactly what the attorney approved. The task payload is
+    # cleared after a confirmed send, but legal audit evidence must remain.
+    action_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    action_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # "queued" -> "sending" -> "sent" | "failed"
     #
     # Distinguishing queued from sending matters to the attorney: "we have not
@@ -264,6 +268,16 @@ class TaskAutomationRun(Base):
         String(20), default="queued", server_default="queued", nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    delivery_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Distinguishes a confirmed no-send (safe to retry) from a transport
+    # interruption where the provider may have accepted the message.
+    delivery_certainty: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
     triggered_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

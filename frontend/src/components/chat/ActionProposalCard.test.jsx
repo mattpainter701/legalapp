@@ -35,6 +35,443 @@ const taskProposal = {
 afterEach(cleanup)
 
 describe('assistant action proposals in chat', () => {
+  it('links verified authorities and never creates an empty source link', async () => {
+    render(
+      <ActionProposalCard
+        proposal={{
+          ...taskProposal,
+          sources: [
+            {
+              source_id: 'courtlistener:4242',
+              label: 'Redwood v. North Dakota',
+              citation: '2026 ND 42',
+              locator: 'Paragraph 12',
+              url: 'https://www.courtlistener.com/opinion/4242/',
+            },
+            {
+              source_id: 'authority:no-link',
+              label: 'Internal authority note',
+              url: 'javascript:alert(1)',
+            },
+          ],
+        }}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: taskProposal.task_id,
+          title: taskProposal.title,
+          status: 'review',
+          version: 3,
+          pending_action: null,
+          delivery: null,
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('link', { name: /Redwood v\. North Dakota/ })).toHaveAttribute(
+      'href',
+      'https://www.courtlistener.com/opinion/4242/',
+    )
+    expect(screen.getByText('Internal authority note').closest('a')).toBeNull()
+  })
+
+  it('rehydrates a stale snapshot and never offers approval for a completed task', async () => {
+    const onApprove = vi.fn()
+    const onLoadTask = vi.fn().mockResolvedValue({
+      id: emailProposal.task_id,
+      title: emailProposal.title,
+      status: 'completed',
+      version: 12,
+      due_date: emailProposal.due_date,
+      pending_action: emailProposal.pending_action,
+      delivery: null,
+    })
+
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onLoadTask={onLoadTask}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+    expect(await screen.findByText(/Current status: Completed/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+    expect(onApprove).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a stale email snapshot has no immutable delivery evidence', async () => {
+    render(
+      <ActionProposalCard
+        proposal={{ ...emailProposal, version: 2, sources: [{ source_id: 'old', label: 'Old source' }] }}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 9,
+          pending_action: null,
+          delivery: { status: 'sent', action_type: 'email_client' },
+        })}
+      />,
+    )
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/historical email draft.*no longer attached/i)
+    expect(alert).toHaveTextContent(/Nothing can be approved or sent/i)
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /edit draft/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Old source')).not.toBeInTheDocument()
+  })
+
+  it('restores confirmed sent truth from the immutable payload after the live draft is cleared', async () => {
+    const onApprove = vi.fn()
+    const onAwaitDelivery = vi.fn()
+    const recordedAction = {
+      ...emailProposal.pending_action,
+      body: 'Exact body accepted for delivery.',
+      sources: [{
+        source_id: 'document:insurance',
+        label: 'Insurance request.pdf',
+        url: '/api/documents/insurance/download',
+      }],
+    }
+
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onAwaitDelivery={onAwaitDelivery}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'in_progress',
+          version: 13,
+          pending_action: null,
+          delivery: {
+            status: 'sent',
+            action_type: 'email_client',
+            action_snapshot: recordedAction,
+            provider: 'microsoft',
+            provider_message_id: 'message-123',
+          },
+        })}
+      />,
+    )
+
+    expect(await screen.findByText('Recorded delivery payload')).toBeInTheDocument()
+    expect(screen.getByText('Exact body accepted for delivery.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Insurance request.pdf' })).toHaveAttribute(
+      'href',
+      '/api/documents/insurance/download',
+    )
+    expect(screen.getByText(/Sent to the client/i)).toBeInTheDocument()
+    expect(screen.queryByText(/historical email draft/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /edit draft/i })).not.toBeInTheDocument()
+    expect(onApprove).not.toHaveBeenCalled()
+    expect(onAwaitDelivery).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      status: 'failed',
+      task_status: 'in_progress',
+      error_message: 'Microsoft Graph timed out after accepting the request',
+      expected: /Delivery was not confirmed.*Microsoft Graph timed out/i,
+      role: 'alert',
+    },
+    {
+      status: 'queued',
+      task_status: 'review',
+      error_message: null,
+      expected: /Approved.*Not yet confirmed sent/i,
+      role: 'status',
+    },
+  ])('treats immutable $status delivery evidence as consumed without claiming success', async ({
+    status,
+    task_status,
+    error_message,
+    expected,
+    role,
+  }) => {
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: task_status,
+          version: 14,
+          pending_action: null,
+          delivery: {
+            status,
+            action_type: 'email_client',
+            error_message,
+            action_snapshot: {
+              ...emailProposal.pending_action,
+              body: `Immutable ${status} payload.`,
+            },
+          },
+        })}
+      />,
+    )
+
+    expect(await screen.findByText(`Immutable ${status} payload.`)).toBeInTheDocument()
+    expect(screen.getByText('Recorded action outcome')).toBeInTheDocument()
+    expect(screen.getByRole(role)).toHaveTextContent(expected)
+    expect(screen.queryByText(/Sent to the client/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/historical email draft/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /edit draft/i })).not.toBeInTheDocument()
+  })
+
+  it('restores confirmed delivery truth from the live task after a reload', async () => {
+    const onAwaitDelivery = vi.fn()
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'in_progress',
+          version: 13,
+          pending_action: emailProposal.pending_action,
+          delivery: { status: 'sent', action_type: 'email_client' },
+        })}
+        onAwaitDelivery={onAwaitDelivery}
+      />,
+    )
+
+    expect(await screen.findByText(/Sent to the client/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+    expect(onAwaitDelivery).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit Sent Items acknowledgment before an outcome-unknown retry', async () => {
+    const onApprove = vi.fn().mockResolvedValue({})
+    const failedAttempt = {
+      id: 'attempt-failed',
+      status: 'failed',
+      action_type: 'email_client',
+      delivery_certainty: 'outcome_unknown',
+      error_message: 'Provider response was interrupted',
+      action_snapshot: emailProposal.pending_action,
+    }
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 17,
+          pending_action: emailProposal.pending_action,
+          delivery: failedAttempt,
+          delivery_history: [failedAttempt],
+        })}
+      />,
+    )
+
+    const approve = await screen.findByRole('button', { name: /approve and send/i })
+    expect(approve).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/Delivery was not confirmed/i)
+    const acknowledgment = screen.getByRole('checkbox', { name: /checked.*Sent Items/i })
+    await userEvent.click(acknowledgment)
+    expect(approve).toBeEnabled()
+    await userEvent.click(approve)
+
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 17 }),
+      { acknowledge_prior_delivery_risk: true },
+    ))
+  })
+
+  it('blocks a duplicate approval if a confirmed send is returned with a review task', async () => {
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 18,
+          pending_action: emailProposal.pending_action,
+          delivery: {
+            id: 'attempt-confirmed',
+            status: 'sent',
+            action_type: 'email_client',
+            delivery_certainty: 'confirmed_sent',
+          },
+        })}
+      />,
+    )
+
+    expect(await screen.findByText(/already confirmed sent/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+  })
+
+  it('allows an exact confirmed-no-send retry without a duplicate-risk acknowledgment', async () => {
+    const onApprove = vi.fn().mockResolvedValue({})
+    const failedAttempt = {
+      id: 'attempt-not-sent',
+      status: 'failed',
+      action_type: 'email_client',
+      delivery_certainty: 'not_attempted',
+      error_message: 'Reconnect Microsoft 365',
+      action_snapshot: emailProposal.pending_action,
+    }
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 18,
+          pending_action: emailProposal.pending_action,
+          delivery: failedAttempt,
+          delivery_history: [failedAttempt],
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Email was not sent/i)
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 18 }),
+      undefined,
+    ))
+  })
+
+  it('blocks another approval while a delivery is queued and retains prior immutable evidence', async () => {
+    const prior = {
+      id: 'attempt-prior',
+      status: 'failed',
+      action_type: 'email_client',
+      delivery_certainty: 'outcome_unknown',
+      error_message: 'Outcome unknown',
+      action_snapshot: {
+        ...emailProposal.pending_action,
+        body: 'Immutable prior attempt body.',
+      },
+    }
+    const queued = {
+      id: 'attempt-current',
+      status: 'queued',
+      action_type: 'email_client',
+      delivery_certainty: 'not_attempted',
+      action_snapshot: emailProposal.pending_action,
+    }
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn()}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 19,
+          pending_action: emailProposal.pending_action,
+          delivery: queued,
+          delivery_history: [queued, prior],
+        })}
+      />,
+    )
+
+    expect(await screen.findByText(/Another delivery attempt is still queued/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByText(/Attempt 1: failed/i))
+    expect(screen.getByText('Immutable prior attempt body.')).toBeInTheDocument()
+  })
+
+  it('approves the live review version rather than the stale message snapshot', async () => {
+    const onApprove = vi.fn().mockResolvedValue({
+      id: emailProposal.task_id,
+      status: 'in_progress',
+      version: 8,
+      pending_action: { ...emailProposal.pending_action, body: 'Live revised draft.' },
+      delivery: { status: 'queued', action_type: 'email_client' },
+    })
+    render(
+      <ActionProposalCard
+        proposal={{ ...emailProposal, version: 2 }}
+        onApprove={onApprove}
+        onLoadTask={vi.fn().mockResolvedValue({
+          id: emailProposal.task_id,
+          title: emailProposal.title,
+          status: 'review',
+          version: 7,
+          pending_action: { ...emailProposal.pending_action, body: 'Live revised draft.' },
+          delivery: null,
+        })}
+      />,
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 7, status: 'review' }),
+      undefined,
+    ))
+  })
+
+  it('fails closed when the live task cannot be verified', async () => {
+    const onApprove = vi.fn()
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onLoadTask={vi.fn().mockRejectedValue(new Error('Task service unavailable'))}
+      />,
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Task service unavailable')
+    expect(screen.getByRole('button', { name: /retry task status/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+    expect(onApprove).not.toHaveBeenCalled()
+  })
+
+  it('rehydrates a conflict snapshot and removes approval when another actor already transitioned it', async () => {
+    const message = 'This task changed after it was loaded. Review the latest task and try again.'
+    const currentTask = {
+      id: emailProposal.task_id,
+      title: emailProposal.title,
+      status: 'in_progress',
+      version: 8,
+      pending_action: emailProposal.pending_action,
+      delivery: { status: 'sent', action_type: 'email_client' },
+    }
+    const conflict = Object.assign(new Error(message), {
+      current_task: currentTask,
+      response: { status: 409, data: { detail: message, current_task: currentTask } },
+    })
+    const onApprove = vi.fn().mockRejectedValue(conflict)
+    render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={onApprove}
+        onLoadTask={vi.fn().mockResolvedValue({
+          ...currentTask,
+          status: 'review',
+          version: 7,
+          delivery: null,
+        })}
+      />,
+    )
+
+    await userEvent.click(await screen.findByRole('button', { name: /approve and send/i }))
+
+    expect(await screen.findByText(/Sent to the client/i)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(message)
+    expect(screen.queryByRole('button', { name: /approve and send/i })).not.toBeInTheDocument()
+  })
+
   it('states who will be emailed before the attorney can approve', () => {
     render(<ActionProposalCard proposal={emailProposal} onApprove={vi.fn()} />)
 
@@ -121,7 +558,7 @@ describe('assistant action proposals in chat', () => {
     const onApprove = vi.fn()
     render(<ActionProposalCard proposal={emailProposal} onApprove={onApprove} />)
 
-    await userEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    await userEvent.click(screen.getByRole('button', { name: /hide for now/i }))
 
     expect(screen.queryByTestId('action-proposal')).not.toBeInTheDocument()
     expect(onApprove).not.toHaveBeenCalled()
@@ -142,10 +579,13 @@ describe('confirmed delivery reporting', () => {
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
 
     expect(await screen.findByText(/Sent to the client/i)).toBeInTheDocument()
-    expect(onAwaitDelivery).toHaveBeenCalledWith(emailProposal)
+    expect(onAwaitDelivery).toHaveBeenCalledWith(
+      expect.objectContaining(emailProposal),
+      { signal: expect.objectContaining({ aborted: false }) },
+    )
   })
 
-  it('reports a failed send as not sent, with the reason and a retry path', async () => {
+  it('reports an unconfirmed send with duplicate-safe retry guidance', async () => {
     render(
       <ActionProposalCard
         proposal={emailProposal}
@@ -160,9 +600,10 @@ describe('confirmed delivery reporting', () => {
     await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/Not sent/i)
+    expect(alert).toHaveTextContent(/Delivery was not confirmed/i)
     expect(alert).toHaveTextContent(/unconfigured/i)
-    expect(alert).toHaveTextContent(/approve it again to retry/i)
+    expect(alert).toHaveTextContent(/check.*Sent Items.*before retrying/i)
+    expect(alert).toHaveTextContent(/duplicate/i)
     // A failure must never read as success.
     expect(alert).not.toHaveTextContent(/Sent to the client/i)
   })
@@ -183,6 +624,27 @@ describe('confirmed delivery reporting', () => {
     const status = await screen.findByRole('status')
     expect(status).toHaveTextContent(/Not yet confirmed sent/i)
     expect(status).not.toHaveTextContent(/Sent to the client/i)
+  })
+
+  it('stops delivery polling when the proposal card unmounts', async () => {
+    let observedSignal
+    const onAwaitDelivery = vi.fn((_proposal, { signal }) => {
+      observedSignal = signal
+      return new Promise(() => {})
+    })
+    const view = render(
+      <ActionProposalCard
+        proposal={emailProposal}
+        onApprove={vi.fn().mockResolvedValue({})}
+        onAwaitDelivery={onAwaitDelivery}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /approve and send/i }))
+    await waitFor(() => expect(onAwaitDelivery).toHaveBeenCalledOnce())
+    view.unmount()
+
+    expect(observedSignal.aborted).toBe(true)
   })
 
   it('still confirms a plain task without waiting on delivery', async () => {

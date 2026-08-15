@@ -45,6 +45,7 @@ from app.services.llm_routing import (
 from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
 from app.services.operator_audit import record_operator_audit
 from app.services.durable_jobs import enqueue_job
+from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.platform_auth import (
     issue_platform_token,
     require_platform_token,
@@ -474,6 +475,7 @@ async def reindex_platform_documents(
         remaining = body.limit - len(selected)
         if remaining <= 0:
             break
+        tenant_corpus_changed = False
         async with _platform_tenant_scope(db, scoped_tenant_id):
             filters = [Document.tenant_id == scoped_tenant_id]
             if body.only_degraded:
@@ -532,6 +534,7 @@ async def reindex_platform_documents(
                 document.indexed_at = None
                 document.embedding_model = None
                 document.embedding_version = None
+                tenant_corpus_changed = True
                 job = await enqueue_job(
                     db,
                     tenant_id=scoped_tenant_id,
@@ -541,6 +544,8 @@ async def reindex_platform_documents(
                 )
                 job_ids.append(str(job.id))
             if not body.dry_run:
+                if tenant_corpus_changed:
+                    await advance_rag_corpus_revision(db, scoped_tenant_id)
                 # Flush tenant-owned rows before clearing the RLS scope.
                 await db.flush()
 

@@ -44,6 +44,11 @@ SKILL_CACHE_MULTIPLIER = {
     "ai-governance-legal": 0.6,  # Very novel, low cache value
 }
 
+# Increment whenever retrieval-health semantics change. Older payloads may have
+# cached an outage or empty result as if it were healthy, so they must not be
+# replayed after the fail-open/fail-closed behavior changes.
+RAG_CACHE_VERSION = 2
+
 
 class ExpertiseCacheManager:
     """Manages expertise-aware caching of RAG and LLM results."""
@@ -101,6 +106,13 @@ class ExpertiseCacheManager:
         query_hash = hashlib.md5(query.lower().strip().encode()).hexdigest()
         return self._make_key("query", tenant_id, user_id, query_hash)
 
+    async def get_rag_corpus_revision(self, tenant_id: str) -> str:
+        """Return the revision token shared by one retrieval/cache operation."""
+        if not self.redis_client:
+            return "0"
+        value = await self.redis_client.get(f"rag_revision:{tenant_id}")
+        return str(value or "0")
+
     async def get_cached_rag_results(
         self,
         question: str,
@@ -109,6 +121,7 @@ class ExpertiseCacheManager:
         skill: Optional[str] = None,
         include_public: bool = True,
         scope_key: Optional[str] = None,
+        corpus_revision: Optional[str] = None,
     ) -> Optional[Tuple[str, list, list]]:
         """
         Retrieve cached RAG results.
@@ -122,10 +135,16 @@ class ExpertiseCacheManager:
             retrieval_scope = scope_key or "global"
             skill_scope = skill or "default"
             query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+            corpus_revision = (
+                corpus_revision
+                if corpus_revision is not None
+                else await self.get_rag_corpus_revision(tenant_id)
+            )
             key = self._make_key(
                 "rag",
                 tenant_id,
                 user_id,
+                corpus_revision,
                 public_scope,
                 skill_scope,
                 retrieval_scope,
@@ -134,9 +153,16 @@ class ExpertiseCacheManager:
             cached = await self.redis_client.get(key)
             if cached:
                 data = json.loads(cached)
+                if data.get("cache_version") != RAG_CACHE_VERSION:
+                    return None
                 # cloud_hits was added after the original cache format. Treat
                 # older entries as having no cloud results until they expire.
-                return data["context"], data["chunks"], data.get("cloud_hits", [])
+                context = data["context"]
+                chunks = data["chunks"]
+                cloud_hits = data.get("cloud_hits", [])
+                if not str(context or "").strip() and not chunks and not cloud_hits:
+                    return None
+                return context, chunks, cloud_hits
             return None
         except Exception as e:
             print(f"Cache get error: {e}")
@@ -154,6 +180,7 @@ class ExpertiseCacheManager:
         skill: Optional[str] = None,
         include_public: bool = True,
         scope_key: Optional[str] = None,
+        expected_corpus_revision: Optional[str] = None,
     ) -> bool:
         """Cache RAG results with expertise-aware TTL."""
         if not self.cache_enabled or not self.redis_client:
@@ -164,10 +191,16 @@ class ExpertiseCacheManager:
             retrieval_scope = scope_key or "global"
             skill_scope = skill or "default"
             query_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+            corpus_revision = (
+                expected_corpus_revision
+                if expected_corpus_revision is not None
+                else await self.get_rag_corpus_revision(tenant_id)
+            )
             key = self._make_key(
                 "rag",
                 tenant_id,
                 user_id,
+                corpus_revision,
                 public_scope,
                 skill_scope,
                 retrieval_scope,
@@ -175,6 +208,7 @@ class ExpertiseCacheManager:
             )
             ttl = self._get_ttl(expertise_level, "rag", skill)
             data = {
+                "cache_version": RAG_CACHE_VERSION,
                 "context": context_str,
                 "chunks": chunks,
                 "cloud_hits": cloud_hits or [],
@@ -313,6 +347,17 @@ class ExpertiseCacheManager:
             return True
         except Exception as e:
             print(f"Cache invalidate error: {e}")
+            return False
+
+    async def invalidate_tenant_rag_cache(self, tenant_id: str) -> bool:
+        """Advance a tenant corpus revision so every old RAG key becomes stale."""
+        if not self.cache_enabled or not self.redis_client:
+            return False
+        try:
+            await self.redis_client.incr(f"rag_revision:{tenant_id}")
+            return True
+        except Exception as exc:
+            print(f"RAG cache invalidate error: {exc}")
             return False
 
     # ── Prompt Cache ────────────────────────────────────────────────────────────

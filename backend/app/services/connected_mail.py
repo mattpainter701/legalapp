@@ -21,9 +21,11 @@ from email.message import EmailMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import set_tenant_context
 from app.models.tenant_credential import TenantCredential
 from app.models.user import User
 from app.models.user_oauth_token import UserOAuthToken
+from app.schemas.chat_action import normalize_recipient_mailboxes
 from app.services.email import EmailDeliveryResult, EmailService
 from app.services.google_client import gmail_request
 from app.services.graph_client import graph_request
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 MICROSOFT_MAIL_SEND_SCOPE = "Mail.Send"
 GOOGLE_MAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+
+DELIVERY_CONFIRMED_SENT = "confirmed_sent"
+DELIVERY_NOT_ATTEMPTED = "not_attempted"
+DELIVERY_OUTCOME_UNKNOWN = "outcome_unknown"
 
 _PROVIDERS = ("microsoft", "google")
 _SEND_SCOPE = {
@@ -48,6 +54,7 @@ class ConnectedMailDelivery:
     detail: str
     provider: str | None = None
     provider_message_id: str | None = None
+    delivery_certainty: str | None = None
 
 
 def _has_send_scope(provider: str, scopes: str | None) -> bool:
@@ -100,6 +107,7 @@ async def _send_microsoft(
         EmailDeliveryResult.SENT,
         "Email sent through the connected Microsoft 365 mailbox",
         provider="microsoft",
+        delivery_certainty=DELIVERY_CONFIRMED_SENT,
     )
 
 
@@ -142,6 +150,7 @@ async def _send_google(
         "Email sent through the connected Google mailbox",
         provider="google",
         provider_message_id=str(payload.get("id") or "") or None,
+        delivery_certainty=DELIVERY_CONFIRMED_SENT,
     )
 
 
@@ -207,6 +216,7 @@ async def _attempt_provider(
             EmailDeliveryResult.REAUTHORIZATION_REQUIRED,
             _reconnect_detail([provider]),
             provider=provider,
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
     except ProviderError as exc:
         logger.warning(
@@ -222,6 +232,12 @@ async def _attempt_provider(
             EmailDeliveryResult.FAILED,
             f"The connected {provider.title()} {mailbox} did not confirm delivery",
             provider=provider,
+            delivery_certainty=(
+                DELIVERY_NOT_ATTEMPTED
+                if exc.status_code is not None
+                and 400 <= exc.status_code < 500
+                else DELIVERY_OUTCOME_UNKNOWN
+            ),
         )
 
 
@@ -237,10 +253,13 @@ async def send_client_email(
     smtp_service: EmailService,
 ) -> ConnectedMailDelivery:
     """Send from the approver's mailbox, a firm mailbox, or legacy SMTP."""
-    if not to:
+    try:
+        to = normalize_recipient_mailboxes(to)
+    except ValueError:
         return ConnectedMailDelivery(
             EmailDeliveryResult.INVALID_RECIPIENT,
-            "Email delivery requires at least one recipient",
+            "Email delivery requires valid, individual recipient addresses",
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
 
     tenant_uuid = uuid.UUID(str(tenant_id))
@@ -278,6 +297,9 @@ async def send_client_email(
         token = await get_fresh_user_token(
             db, str(tenant_uuid), str(actor_uuid), provider
         )
+        # Token refresh may commit. SET LOCAL tenant context must be restored
+        # before this shared session performs any further tenant-scoped work.
+        await set_tenant_context(db, str(tenant_uuid))
         if not token:
             reconnect.append(provider)
             continue
@@ -315,6 +337,7 @@ async def send_client_email(
             reconnect.append(provider)
             continue
         token = await get_fresh_token(db, str(tenant_uuid), provider)
+        await set_tenant_context(db, str(tenant_uuid))
         if not token:
             reconnect.append(provider)
             continue
@@ -334,6 +357,7 @@ async def send_client_email(
         return ConnectedMailDelivery(
             EmailDeliveryResult.REAUTHORIZATION_REQUIRED,
             _reconnect_detail(reconnect),
+            delivery_certainty=DELIVERY_NOT_ATTEMPTED,
         )
 
     # Backward compatibility for firms that intentionally configured SMTP and
@@ -352,4 +376,11 @@ async def send_client_email(
             else f"Email delivery did not complete ({result.value})"
         ),
         provider="smtp" if result else None,
+        delivery_certainty=(
+            DELIVERY_CONFIRMED_SENT
+            if result == EmailDeliveryResult.SENT
+            else DELIVERY_OUTCOME_UNKNOWN
+            if result == EmailDeliveryResult.FAILED
+            else DELIVERY_NOT_ATTEMPTED
+        ),
     )
