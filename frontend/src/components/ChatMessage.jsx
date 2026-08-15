@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { format } from 'date-fns'
 import {
   Book,
@@ -19,6 +20,8 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'
+import { API_BASE_URL, approveProposedTask, getTask, waitForTaskDelivery } from '../api'
+import ActionProposalCard from './chat/ActionProposalCard'
 
 function cleanSourceText(value) {
   if (!value) return ''
@@ -29,10 +32,24 @@ function cleanSourceText(value) {
   return textarea.value
 }
 
+function readableSourceMeta(value) {
+  return cleanSourceText(value).replace(/[_-]+/g, ' ')
+}
+
 function sourceHref(src) {
   const url = cleanSourceText(src?.url)
   if (url?.startsWith('http://') || url?.startsWith('https://')) return url
-  if (url?.startsWith('/')) return `https://www.courtlistener.com${url}`
+  // The backend emits tenant document links as origin-relative `/api/...`.
+  // Re-base them on the configured API origin so a deployment that serves the
+  // API from another host (VITE_API_URL) still resolves citation links.
+  if (url?.startsWith('/api/')) {
+    return API_BASE_URL === '/api' ? url : `${API_BASE_URL}${url.slice('/api'.length)}`
+  }
+  if (url?.startsWith('/')) {
+    const isPublicAuthority = src?.source_type === 'public_authority'
+      || src?.source_label === 'Cited authority'
+    return isPublicAuthority ? `https://www.courtlistener.com${url}` : url
+  }
   const citation = cleanSourceText(src?.citation)
   if (citation.startsWith('http://') || citation.startsWith('https://')) return citation
   return ''
@@ -43,21 +60,104 @@ export function sourceAnchor(messageId, index) {
   return `source-${safeMessageId}-${index + 1}`
 }
 
-export function linkSourceReferences(text, sources, messageId) {
+export function linkSourceReferences(text, sources, messageId, annotations = []) {
   if (!text) return ''
-  const sourceList = Array.isArray(sources) ? sources : []
+  const sourceText = String(text)
+  const sourceList = citedSources(text, sources, annotations)
   const sourceIndexes = new Map()
   sourceList.forEach((source, index) => {
     const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
     if (id && !sourceIndexes.has(id)) sourceIndexes.set(id, { source, index })
   })
 
-  return String(text).replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
+  if (Array.isArray(annotations) && annotations.length > 0) {
+    const replacements = []
+    for (const annotation of annotations) {
+      for (const marker of annotation?.source_markers || []) {
+        const entry = sourceIndexes.get(String(marker?.source_id || '').trim().toLowerCase())
+        const start = Number(marker?.start)
+        const end = Number(marker?.end)
+        if (
+          !entry
+          || !Number.isInteger(start)
+          || !Number.isInteger(end)
+          || start < 0
+          || end <= start
+          || end > sourceText.length
+        ) continue
+        const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
+        replacements.push({ start, end, value: `[[${entry.index + 1}]](${href})` })
+      }
+
+      const primaryId = annotation?.source_ids?.[0]
+      const primaryEntry = sourceIndexes.get(String(primaryId || '').trim().toLowerCase())
+      const tagStart = Number(annotation?.support_tag?.start)
+      const tagEnd = Number(annotation?.support_tag?.end)
+      if (
+        primaryEntry
+        && ['cited', 'verify'].includes(annotation?.support)
+        && Number.isInteger(tagStart)
+        && Number.isInteger(tagEnd)
+        && tagStart >= 0
+        && tagEnd > tagStart
+        && tagEnd <= sourceText.length
+      ) {
+        replacements.push({
+          start: tagStart,
+          end: tagEnd,
+          value: `[${annotation.support}](#${sourceAnchor(messageId, primaryEntry.index)})`,
+        })
+      }
+    }
+    if (replacements.length > 0) {
+      let rendered = sourceText
+      for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+        rendered = `${rendered.slice(0, replacement.start)}${replacement.value}${rendered.slice(replacement.end)}`
+      }
+      return rendered
+    }
+  }
+
+  return sourceText.replace(/\[source:\s*([^\]]+)\]/gi, (match, rawId) => {
     const entry = sourceIndexes.get(String(rawId || '').trim().toLowerCase())
     if (!entry) return '**[source]**'
     const label = `[${entry.index + 1}]`
-    return `[${label}](#${sourceAnchor(messageId, entry.index)})`
+    const href = sourceHref(entry.source) || `#${sourceAnchor(messageId, entry.index)}`
+    return `[${label}](${href})`
   })
+}
+
+function sourceDisplayName(src) {
+  const value = cleanSourceText(src?.case_name)
+  if (value && !/^unknown case$/i.test(value)) return value
+  return src?.source_type === 'public_authority' ? 'Unidentified authority' : 'Retrieved context'
+}
+
+export function citedSources(text, sources, annotations = []) {
+  const sourceList = Array.isArray(sources) ? sources : []
+  const citedIds = new Set()
+  if (Array.isArray(annotations) && annotations.length > 0) {
+    for (const annotation of annotations) {
+      for (const sourceId of annotation?.source_ids || []) {
+        const id = String(sourceId || '').trim().toLowerCase()
+        if (id) citedIds.add(id)
+      }
+    }
+  } else {
+    for (const match of String(text || '').matchAll(/\[source:\s*([^\]]+)\]/gi)) {
+      const id = String(match[1] || '').trim().toLowerCase()
+      if (id) citedIds.add(id)
+    }
+  }
+  const hasStructuredAnnotations = Array.isArray(annotations) && annotations.length > 0
+  return sourceList.filter((source) => {
+    const id = String(source?.source_id || source?.id || '').trim().toLowerCase()
+    return Boolean(id && (citedIds.has(id) || (!hasStructuredAnnotations && source?.cited === true)))
+  })
+}
+
+export function citedSourceCount(text, sources, annotations = []) {
+  return citedSources(text, sources, annotations).length
 }
 
 function splitMarkdownSections(markdown) {
@@ -98,7 +198,7 @@ function CollapsibleMarkdown({ content }) {
 
   return (
     <>
-      {intro && <ReactMarkdown components={markdownComponents}>{intro}</ReactMarkdown>}
+      {intro && <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{intro}</ReactMarkdown>}
       {sections.length > 0 && (
         <div className="mb-3 flex justify-end">
           <button
@@ -127,7 +227,7 @@ function CollapsibleMarkdown({ content }) {
               <span>{title}</span>
             </button>
             <div className="pb-2" hidden={!isOpen}>
-              <ReactMarkdown components={markdownComponents}>{section.body.join('\n').trim()}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{section.body.join('\n').trim()}</ReactMarkdown>
             </div>
           </section>
         )
@@ -159,7 +259,7 @@ function SourcesLedger({ sources, messageId }) {
 
   const cols = 'sm:grid-cols-[30px_minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)]'
   const publicAuthorityCount = sources.filter((src) => src?.source_type === 'public_authority').length
-  const heading = publicAuthorityCount > 0 ? 'Authorities Referenced' : 'Sources & References'
+  const heading = publicAuthorityCount > 0 ? 'Cited Authorities and Sources' : 'Cited Sources'
 
   return (
     <div className="mt-5 border-t-[3px] border-brand-ink pt-4 sm:mt-10 sm:pt-6">
@@ -180,13 +280,20 @@ function SourcesLedger({ sources, messageId }) {
         <div className="divide-y divide-brand-line">
           {sources.map((src, idx) => {
             const citation = cleanSourceText(src.citation)
-            const caseName = cleanSourceText(src.case_name) || 'Unknown source'
+            const caseName = sourceDisplayName(src)
             const court = cleanSourceText(src.court)
             const excerpt = cleanSourceText(src.excerpt)
             const href = sourceHref(src)
             const badge = sourceBadge(src)
             const locator = cleanSourceText(src.locator)
             const anchor = sourceAnchor(messageId, idx)
+            const relevance = Number(src?.relevance_score)
+            const evidenceMeta = [
+              readableSourceMeta(src?.official_status),
+              readableSourceMeta(src?.authority_tier),
+              src?.effective_date ? `effective ${cleanSourceText(src.effective_date)}` : '',
+              Number.isFinite(relevance) && relevance > 0 ? `${Math.round(relevance * 100)}% match` : '',
+            ].filter(Boolean)
 
             return (
               <div
@@ -206,6 +313,14 @@ function SourcesLedger({ sources, messageId }) {
                     <span className={`mt-1 inline-flex w-fit items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest font-mono border ${badge.classes}`}>
                       {badge.label}
                     </span>
+                    <span className="ml-2 mt-1 inline-flex w-fit border border-brand-green/20 bg-brand-green/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-brand-green">
+                      Cited
+                    </span>
+                    {evidenceMeta.length > 0 && (
+                      <span className="ml-2 mt-1 inline-flex w-fit font-mono text-[9px] uppercase tracking-wide text-brand-muted">
+                        {evidenceMeta.join(' · ')}
+                      </span>
+                    )}
                     {locator && (
                       <a
                         href={`#${anchor}`}
@@ -302,7 +417,7 @@ function countSourcesByType(sources) {
   return counts
 }
 
-function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
+function ReferenceTrail({ referenceContext, sources, content, annotations, variant = 'assistant' }) {
   const sourceCounts = countSourcesByType(sources)
   const contextCounts = referenceContext?.counts || {}
   const counts = {
@@ -316,7 +431,8 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
     (counts.matter + counts.uploads + counts.firm + counts.courtlistener)
   )
   const sourceCount = formatCount(referenceContext?.source_count ?? (Array.isArray(sources) ? sources.length : 0))
-  const status = referenceContext?.status || (sourceCount ? 'Sources attached to answer' : '')
+  const actualCitedCount = formatCount(referenceContext?.cited_count ?? citedSourceCount(content, sources, annotations))
+  const status = referenceContext?.status || (sourceCount ? 'Materials retrieved for source audit' : '')
   const hasAny = counts.total > 0 || sourceCount > 0 || status
   if (!hasAny) return null
 
@@ -343,7 +459,7 @@ function ReferenceTrail({ referenceContext, sources, variant = 'assistant' }) {
         </span>
         {sourceCount > 0 && (
           <span className={`font-mono font-bold ${valueClasses}`}>
-            {sourceCount} cited
+            {actualCitedCount} cited · {sourceCount} retrieved
           </span>
         )}
         {chips.map(({ icon: Icon, label, value }) => (
@@ -507,7 +623,7 @@ function AssistantWorkingState({ progress, compact = false }) {
             <div key={source.source_id || source.case_name} className="animate-fade-in border border-brand-line bg-brand-surface px-3 py-2">
               <div className="flex items-center gap-2">
                 <BookOpen className="h-3.5 w-3.5 shrink-0 text-brand-gold" />
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-brand-ink">{source.case_name}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-brand-ink">{sourceDisplayName(source)}</span>
                 <span className="shrink-0 font-mono text-[9px] uppercase text-brand-muted">{source.source_label}</span>
               </div>
               {(source.citation || source.locator) && (
@@ -527,7 +643,9 @@ function AssistantWorkingState({ progress, compact = false }) {
 export default function ChatMessage({ message }) {
   const isUser = message.role === 'user'
   const content = message.content || ''
-  const renderedContent = linkSourceReferences(content, message.sources, message.id)
+  const annotations = message.citation_annotations || []
+  const displayedSources = citedSources(content, message.sources, annotations)
+  const renderedContent = linkSourceReferences(content, displayedSources, message.id, annotations)
   const hasAssistantContent = content.trim().length > 0
   const timestamp = message.created_at
     ? format(new Date(message.created_at), 'h:mm a')
@@ -593,6 +711,8 @@ export default function ChatMessage({ message }) {
             <ReferenceTrail
               referenceContext={message.referenceContext}
               sources={message.sources}
+              content={content}
+              annotations={annotations}
               variant="user"
             />
           </div>
@@ -635,12 +755,28 @@ export default function ChatMessage({ message }) {
             ) : (
               <AssistantWorkingState progress={message.progress} />
             )}
-            {hasAssistantContent && <SourcesLedger sources={message.sources} messageId={message.id} />}
+            {hasAssistantContent && <SourcesLedger sources={displayedSources} messageId={message.id} />}
           </div>
+          {/* Outside responseCopyRef: copying an analysis should yield the
+              analysis, not the approval controls. */}
+          {(message.proposed_actions || []).map((proposal) => (
+            <ActionProposalCard
+              key={proposal.task_id}
+              proposal={proposal}
+              onApprove={(item, edits) => approveProposedTask(item.task_id, {
+                ...(edits || {}),
+                expectedVersion: item.version,
+              })}
+              onLoadTask={getTask}
+              onAwaitDelivery={(item, options) => waitForTaskDelivery(item.task_id, options)}
+            />
+          ))}
           {hasAssistantContent && (
             <ReferenceTrail
               referenceContext={message.referenceContext}
               sources={message.sources}
+              content={content}
+              annotations={annotations}
             />
           )}
         </div>

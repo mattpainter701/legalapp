@@ -37,6 +37,13 @@ def _llm_error_msg(exc: Exception) -> str:
     return f"LiteLLM Gateway API error: {_clean_llm_error(exc)}"
 
 
+def _empty_llm_response_msg() -> str:
+    return (
+        "The selected model returned no visible answer. "
+        "Retry this message or select a different model."
+    )
+
+
 # Public OpenAI-compatible endpoints for tenant BYOK providers that don't
 # require a tenant-supplied endpoint. Copilot (Azure OpenAI) always requires
 # a tenant-supplied endpoint — Azure deployments are per-resource.
@@ -52,7 +59,7 @@ CORE INSTRUCTIONS (follow these exactly — do NOT describe them in your respons
 1. ANSWER THE QUESTION. Whatever the user asks — legal analysis, math, definitions, small talk — answer it directly and substantively. Do not deflect. Do not greet and wait. Do not explain what you would do if they asked something else. If the user types "2+2", reply "4." If they ask about a legal concept, explain it. Just answer.
 
 2. Except for a response with empty SOURCE MATERIALS (see instruction 3), FORMAT EVERY FACTUAL CLAIM with exactly one of these bracket tags immediately after the claim:
-   - [settled] — supported by an exact retrieved source as described below
+   - [cited] — directly supported by a retrieved passage cited on the same claim
    - [verify] — points an attorney should confirm
    - [model knowledge] — drawn from your general knowledge, not from the source materials
    The tags are LITERAL TEXT: type the brackets. Example: "The statute of limitations may be four years. [verify]"
@@ -65,19 +72,28 @@ CORE INSTRUCTIONS (follow these exactly — do NOT describe them in your respons
 
 5. If uncertain, say so. Never fabricate case names, citations, or statutes.
 
-6. SOURCE VERIFICATION: Use [settled] only when the same claim includes (a) the exact
-   [source: <source_id>] tag printed in SOURCE MATERIALS and (b) a verbatim quote of
-   at least 20 characters that appears in that source's excerpt. Cite legal authority
-   by case name and citation as well. If either the exact source tag or matching quote
-   is absent, use [verify]. Never invent or alter a source id.
+6. SOURCE VERIFICATION: Use [cited] only when the same claim includes the exact
+   [source: <source_id>] tag printed in SOURCE MATERIALS and the claim is directly
+   supported by that source's excerpt. A faithful paraphrase is allowed; a quotation
+   is not required. Cite legal authority by case name and citation as well. Use
+   [verify] for an inference, uncertain application, or proposition the cited passage
+   does not directly support. Never invent or alter a source id.
 
 7. SOURCE ATTRIBUTION: Prefer retrieved sources over general knowledge. Every claim
     drawn from SOURCE MATERIALS must include the exact [source: <source_id>] marker
     printed with that source. If the source has a URL, make its case name, citation,
     statute, rule, or source title a Markdown hyperlink to that URL. Use this format:
-    "[Case name, citation](URL) [source: exact-id] [verify]". Do not use
-    [model knowledge] merely because a sourced claim does not meet the stricter
-    [settled] standard; use [verify] and keep its source marker.
+    "[Case name, citation](URL) [source: exact-id] [cited]". Do not use
+    [model knowledge] merely because a sourced claim needs attorney confirmation;
+    use [verify] and keep its source marker.
+
+7A. LEGAL RESEARCH INTEGRITY: For jurisdiction, governing-law, case-law, statutory,
+    procedural, custody, divorce, or enforceability questions, do not supply a
+    substantive jurisdiction-specific conclusion from model knowledge. Every
+    material legal proposition must point to a supplied [source: <source_id>]. If
+    the retrieved materials do not support the answer, say there is an authority
+    coverage gap and identify what must be researched; do not fill the gap from
+    memory. Never cite a source merely because it was retrieved.
 
 8. Do not predict what a court will do. Outline the framework and let the attorney assess.
 
@@ -230,7 +246,7 @@ class LLMService:
             use_premium=use_premium,
             customer_api_key=customer_api_key,
         )
-        last_error: APIError | APIConnectionError | None = None
+        last_error: APIError | APIConnectionError | RuntimeError | None = None
         for candidate in candidates:
             request_id = str(uuid.uuid4())
             logger.debug("LLM complete request_id=%s model=%s", request_id, candidate)
@@ -264,6 +280,28 @@ class LLMService:
                             "tokens_out": tokens_out,
                         }
                     )
+                if not response_text.strip():
+                    finish_reason = (
+                        getattr(response.choices[0], "finish_reason", None)
+                        if response.choices
+                        else None
+                    )
+                    logger.error(
+                        "LLM completion returned no visible content "
+                        "model=%s finish_reason=%s completion_tokens=%s",
+                        candidate,
+                        finish_reason,
+                        tokens_out,
+                    )
+                    last_error = RuntimeError(_empty_llm_response_msg())
+                    if candidate != candidates[-1]:
+                        logger.warning(
+                            "LiteLLM model %s returned no visible content, "
+                            "trying fallback",
+                            candidate,
+                        )
+                        continue
+                    raise last_error
                 return response_text, tokens_in, tokens_out
             except (APIError, APIConnectionError) as e:
                 elapsed_ms = (time.monotonic() - t0) * 1000
@@ -323,6 +361,8 @@ class LLMService:
             )
             t0 = time.monotonic()
             first_token_recorded = False
+            finish_reason = None
+            reasoning_content_seen = False
             try:
                 create_kwargs: dict = dict(
                     model=candidate,
@@ -348,7 +388,19 @@ class LLMService:
                             usage_sink["tokens_out"] = (
                                 chunk_usage.completion_tokens or 0
                             )
-                    content = chunk.choices[0].delta.content if chunk.choices else None
+                    choice = chunk.choices[0] if chunk.choices else None
+                    if choice and getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason
+                    delta = choice.delta if choice else None
+                    content = getattr(delta, "content", None) if delta else None
+                    if delta:
+                        reasoning_content = getattr(delta, "reasoning_content", None)
+                        if reasoning_content is None:
+                            model_extra = getattr(delta, "model_extra", None) or {}
+                            reasoning_content = model_extra.get("reasoning_content")
+                        reasoning_content_seen = reasoning_content_seen or bool(
+                            reasoning_content
+                        )
                     if content:
                         if not first_token_recorded:
                             ttft_ms = (time.monotonic() - t0) * 1000
@@ -356,8 +408,21 @@ class LLMService:
                             first_token_recorded = True
                         yield content
                 if not first_token_recorded:
-                    # Empty response — still record latency
+                    # A reasoning model can consume the entire output budget in
+                    # hidden reasoning and still return HTTP 200. Treat that as
+                    # a failed completion instead of persisting a blank answer.
                     _record_latency(candidate, (time.monotonic() - t0) * 1000)
+                    completion_tokens = int((usage_sink or {}).get("tokens_out") or 0)
+                    logger.error(
+                        "LLM stream returned no visible content "
+                        "model=%s finish_reason=%s completion_tokens=%s "
+                        "reasoning_content_seen=%s",
+                        candidate,
+                        finish_reason,
+                        completion_tokens,
+                        reasoning_content_seen,
+                    )
+                    raise RuntimeError(_empty_llm_response_msg())
                 return
             except (APIError, APIConnectionError) as e:
                 elapsed_ms = (time.monotonic() - t0) * 1000

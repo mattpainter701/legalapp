@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     String,
     Integer,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -65,6 +66,15 @@ class Tenant(Base):
     onboarding_step: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
     )  # 0=not started, 1=consent, 2=syncing, 3=review, 4=complete
+    # Authoritative cache generation for tenant-private retrieval. Corpus
+    # mutations increment this in the same database transaction as chunk/status
+    # changes, making old materialized RAG keys unreachable after commit.
+    rag_corpus_revision: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
     cloud_root_folder: Mapped[dict | None] = mapped_column(
         JSON, nullable=True
     )  # {onedrive: {id, url}, google_drive: {id, url}}
@@ -138,6 +148,13 @@ class TenantSettings(Base):
     )
     enable_task_board: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
+    )
+    # Deliberately OFF by default, unlike every flag above it. Chat actions let
+    # the assistant put proposed work — including drafted client email — onto a
+    # firm's board, so it is enabled per tenant after review rather than
+    # inherited silently by every existing tenant on deploy.
+    enable_chat_actions: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
     )
 
     # Rate limiting

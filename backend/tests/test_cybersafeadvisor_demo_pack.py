@@ -1,0 +1,60 @@
+import json
+from pathlib import Path
+from zipfile import ZipFile
+
+from docx import Document
+from docx.oxml.ns import qn
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PACK = ROOT / "demo" / "cybersafeadvisor-corporate-pack"
+DISCLAIMER = "SYNTHETIC DEMO - NOT LEGAL ADVICE"
+
+
+def test_demo_manifest_maps_six_documents_to_three_synthetic_matters():
+    manifest = json.loads((PACK / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["tenant_domain"] == "cybersafeadvisor.com"
+    assert manifest["synthetic"] is True
+    assert len(manifest["matters"]) == 3
+    documents = [name for matter in manifest["matters"] for name in matter["documents"]]
+    assert len(documents) == 6
+    assert len(set(documents)) == 6
+    assert all((PACK / name).is_file() for name in documents)
+
+
+def test_demo_documents_are_labeled_structured_and_metadata_scrubbed():
+    for path in sorted(PACK.glob("*.docx")):
+        document = Document(path)
+        visible_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                paragraph.text
+                for section in document.sections
+                for paragraph in section.header.paragraphs
+            ]
+        )
+        assert DISCLAIMER in visible_text
+        assert "Research basis" in visible_text
+        assert document.core_properties.author in (None, "")
+        assert document.core_properties.last_modified_by in (None, "")
+
+        numbered_headings = [
+            paragraph
+            for paragraph in document.paragraphs
+            if paragraph.style.name == "Heading 1"
+            and paragraph.text
+            not in {"Research basis", "Acknowledged by the synthetic signatories"}
+        ]
+        assert numbered_headings
+        assert all(
+            paragraph._p.pPr is not None
+            and paragraph._p.pPr.find(qn("w:numPr")) is not None
+            for paragraph in numbered_headings
+        )
+
+        with ZipFile(path) as package:
+            assert "docProps/custom.xml" not in package.namelist()
+            for name in package.namelist():
+                if name.startswith("word/") and name.endswith(".xml"):
+                    assert b"w:rsid" not in package.read(name)

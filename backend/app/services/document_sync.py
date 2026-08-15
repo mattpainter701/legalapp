@@ -1,6 +1,11 @@
+import asyncio
+import hashlib
 import logging
+import os
+import tempfile
 from pathlib import Path
 
+import aiofiles
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +26,104 @@ LEGAL_MIME_TYPES = {
     "application/rtf",
     "text/plain",
 }
+
+
+def _sync_source_key(file_info: dict) -> str:
+    """Stable, non-secret identity for one provider-side file."""
+    provider = str(file_info.get("drive") or "").strip()
+    remote_id = str(file_info.get("id") or "").strip()
+    drive_id = str(file_info.get("drive_id") or "").strip()
+    if not provider or not remote_id:
+        raise ValueError("Cloud document is missing a stable provider/item identity")
+    if provider in {"onedrive", "sharepoint"} and not drive_id:
+        raise ValueError("Microsoft cloud document is missing its drive identity")
+    remote_identity = "|".join((provider, drive_id, remote_id))
+    return hashlib.sha256(remote_identity.encode("utf-8")).hexdigest()
+
+
+def _legacy_synced_storage_path(upload_dir: Path, file_info: dict) -> Path:
+    """Path used before content-addressed cloud versions were introduced."""
+    safe_name = "".join(
+        character
+        for character in str(file_info.get("name") or "")
+        if character.isalnum() or character in "._- "
+    )
+    return upload_dir / safe_name
+
+
+def _synced_storage_path(
+    upload_dir: Path,
+    file_info: dict,
+    content: bytes,
+) -> Path:
+    """Return a stable path for one exact remote-document version."""
+    return _synced_storage_path_for_digest(
+        upload_dir,
+        file_info,
+        hashlib.sha256(content).hexdigest(),
+    )
+
+
+def _synced_storage_path_for_digest(
+    upload_dir: Path,
+    file_info: dict,
+    content_digest: str,
+) -> Path:
+    remote_digest = _sync_source_key(file_info)[:20]
+    suffix = Path(str(file_info.get("name") or "")).suffix.lower()
+    if suffix not in LEGAL_EXTENSIONS:
+        suffix = ""
+    return upload_dir / f"{remote_digest}-{content_digest}{suffix}"
+
+
+def _path_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _install_downloaded_synced_file(
+    temporary_path: Path,
+    target_path: Path,
+    expected_hash: str,
+) -> None:
+    """Install a completed size-capped temp download without overwriting bytes."""
+    if target_path.exists():
+        if _path_sha256(target_path) != expected_hash:
+            raise RuntimeError("Content-addressed sync path has unexpected bytes")
+        return
+    with temporary_path.open("r+b") as handle:
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, target_path)
+
+
+def _write_immutable_synced_file(path: Path, content: bytes) -> None:
+    """Atomically create an immutable content-addressed file."""
+    expected_hash = hashlib.sha256(content).hexdigest()
+    if path.exists():
+        if _path_sha256(path) != expected_hash:
+            raise RuntimeError("Content-addressed sync path has unexpected bytes")
+        return
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=".sync-",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 class DocumentSyncService:
@@ -79,6 +182,9 @@ class DocumentSyncService:
                             "modified": item.get("lastModifiedDateTime"),
                             "url": item.get("webUrl"),
                             "drive": "onedrive",
+                            "drive_id": (
+                                item.get("parentReference", {}).get("driveId")
+                            ),
                             "mime_type": mime,
                         }
                     )
@@ -223,6 +329,16 @@ class DocumentSyncService:
         user_id: str | None = None,
     ) -> str | None:
         """Download a file from the remote drive, save locally, return the local path."""
+        max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        try:
+            declared_size = int(file_info.get("size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > max_bytes:
+            raise RuntimeError(
+                f"Cloud document exceeds the {settings.MAX_FILE_SIZE_MB} MB limit"
+            )
+
         if file_info["drive"] in ("onedrive", "sharepoint"):
             from app.services.token_vault import get_fresh_user_token
 
@@ -234,22 +350,12 @@ class DocumentSyncService:
             if not token:
                 return None
 
-            download_url = f"{GRAPH_BASE}/me/drive/items/{file_info['id']}/content"
-            if file_info["drive"] == "sharepoint":
-                download_url = f"{GRAPH_BASE}/drives/{file_info.get('drive_id', '')}/items/{file_info['id']}/content"
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    download_url, headers={"Authorization": f"Bearer {token}"}
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Download failed for %s: %s",
-                        file_info["name"],
-                        resp.status_code,
-                    )
-                    return None
-                content = resp.content
+            drive_id = str(file_info.get("drive_id") or "").strip()
+            if not drive_id:
+                raise RuntimeError("Microsoft cloud document is missing its drive id")
+            download_url = (
+                f"{GRAPH_BASE}/drives/{drive_id}/items/{file_info['id']}/content"
+            )
 
         elif file_info["drive"] == "google_drive":
             from app.services.token_vault import get_fresh_user_token
@@ -261,31 +367,70 @@ class DocumentSyncService:
             )
             if not token:
                 return None
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"{GOOGLE_DRIVE_BASE}/files/{file_info['id']}?alt=media",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Download failed for %s: %s",
-                        file_info["name"],
-                        resp.status_code,
-                    )
-                    return None
-                content = resp.content
+            download_url = f"{GOOGLE_DRIVE_BASE}/files/{file_info['id']}?alt=media"
         else:
             return None
 
         upload_dir = Path(settings.UPLOAD_DIR) / str(tenant_id) / "synced"
         upload_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".sync-download-",
+            dir=upload_dir,
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        digest = hashlib.sha256()
+        downloaded_size = 0
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=60.0,
+            ) as client:
+                async with client.stream(
+                    "GET",
+                    download_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as response:
+                    if response.status_code != 200:
+                        logger.warning(
+                            "Download failed for %s: %s",
+                            file_info["name"],
+                            response.status_code,
+                        )
+                        return None
+                    content_length = response.headers.get("Content-Length")
+                    if content_length:
+                        try:
+                            if int(content_length) > max_bytes:
+                                raise RuntimeError(
+                                    "Cloud document exceeds the configured size limit"
+                                )
+                        except ValueError:
+                            pass
+                    async with aiofiles.open(temporary_path, "wb") as handle:
+                        async for block in response.aiter_bytes():
+                            downloaded_size += len(block)
+                            if downloaded_size > max_bytes:
+                                raise RuntimeError(
+                                    "Cloud document exceeds the configured size limit"
+                                )
+                            digest.update(block)
+                            await handle.write(block)
 
-        safe_name = "".join(c for c in file_info["name"] if c.isalnum() or c in "._- ")
-        local_path = upload_dir / safe_name
-        local_path.write_bytes(content)
-
-        return str(local_path)
+            local_path = _synced_storage_path_for_digest(
+                upload_dir,
+                file_info,
+                digest.hexdigest(),
+            )
+            await asyncio.to_thread(
+                _install_downloaded_synced_file,
+                temporary_path,
+                local_path,
+                digest.hexdigest(),
+            )
+            return str(local_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     async def get_sync_stats(
         self,

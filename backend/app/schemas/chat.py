@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ConversationCreate(BaseModel):
@@ -20,6 +20,7 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: Optional[int] = None
+    attachment_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -46,6 +47,34 @@ class SourceCitation(BaseModel):
     source_type: Optional[str] = None
     source_label: Optional[str] = None
     locator: Optional[str] = None
+    retrieval_jurisdiction: Optional[str] = None
+    relevance_score: Optional[float] = None
+    authority_tier: Optional[str] = None
+    official_status: Optional[str] = None
+    effective_date: Optional[str] = None
+    cited: bool = False
+
+
+class CitationMarker(BaseModel):
+    source_id: str
+    start: int
+    end: int
+
+
+class CitationTagSpan(BaseModel):
+    start: int
+    end: int
+
+
+class CitationAnnotation(BaseModel):
+    claim_id: str
+    start: int
+    end: int
+    text: str
+    support: str
+    source_ids: List[str] = Field(default_factory=list)
+    source_markers: List[CitationMarker] = Field(default_factory=list)
+    support_tag: CitationTagSpan
 
 
 class MessageResponse(BaseModel):
@@ -54,6 +83,10 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     sources: List[SourceCitation] = []
+    citation_annotations: List[CitationAnnotation] = Field(default_factory=list)
+    # Reviewable work the assistant proposed on this turn. Empty for every
+    # tenant without chat actions enabled, which is the default.
+    proposed_actions: List[dict] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}

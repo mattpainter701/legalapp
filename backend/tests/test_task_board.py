@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import pytest
 from sqlalchemy import select
 
-from app.models.task import Task, TaskEvent
+from app.models.task import Task, TaskAutomationRun, TaskEvent
 from app.models.tenant import TenantSettings
 from app.models.user import User
 
@@ -126,6 +126,50 @@ async def test_firm_board_risk_counts_and_reviewer_labels(
     }
     review_column = next(c for c in body["columns"] if c["status"] == "review")
     assert review_column["items"][0]["reviewer"]["label"] == "Riley Reviewer"
+
+
+@pytest.mark.asyncio
+async def test_my_board_includes_reviewer_work_and_latest_delivery_state(
+    client, db_session, test_tenant, test_user
+):
+    task = Task(
+        tenant_id=test_tenant.id,
+        title="Review assistant email",
+        status="review",
+        reviewer_user_id=test_user.id,
+        assigned_to_user_id=None,
+        source="assistant",
+        pending_action={
+            "type": "email_client",
+            "to": ["client@example.com"],
+            "subject": "Status",
+            "body": "Update",
+        },
+    )
+    db_session.add(task)
+    await db_session.flush()
+    db_session.add(
+        TaskAutomationRun(
+            tenant_id=test_tenant.id,
+            task_id=task.id,
+            action_type="email_client",
+            idempotency_key="approve:review:v1",
+            status="failed",
+            error_message="Not sent: chat actions were disabled before delivery.",
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/tasks/board", params={"scope": "mine"})
+
+    assert response.status_code == 200, response.text
+    review_column = next(
+        column for column in response.json()["columns"] if column["status"] == "review"
+    )
+    card = next(item for item in review_column["items"] if item["id"] == str(task.id))
+    assert card["reviewer_user_id"] == str(test_user.id)
+    assert card["delivery"]["status"] == "failed"
+    assert "not sent" in card["delivery"]["error_message"].lower()
 
 
 @pytest.mark.asyncio

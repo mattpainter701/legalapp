@@ -30,6 +30,26 @@ profiles:
 Operators can still override global or per-tenant standard/premium routes in
 the operator console. Direct providers remain available as emergency fallbacks.
 
+### Customer Route Capacity Policy
+
+Standard and Premium are customer-facing, operator-managed products. The route
+activation API rejects an explicitly free model in any primary, alternate, or
+fallback position. The same policy runs on manual reload, so a previously saved
+free target cannot bypass validation. Rejected attempts return HTTP 409 and are
+written to the metadata-only operator audit log.
+
+Free models may still be discovered and exercised with the synthetic provider
+test for lab evaluation. If a lab route is added later, it must use a separate
+non-customer alias. Do not place it behind Standard or Premium. An emergency
+override is not implemented: a future override must be time-limited, enforce
+expiry in the serving path, and automatically roll back to a qualified revision.
+
+This API policy does not silently rewrite legacy file-backed aliases. Before a
+production release, migrate any free targets in `litellm_config.yaml` to qualified
+paid capacity, canary both customer aliases, and retain a tested rollback revision.
+Models with missing or ambiguous price metadata still require operator review;
+strict unknown-price qualification is tracked in BK24 `AIP-04`.
+
 ## Gateway Profiles
 
 `litellm_config.yaml` defines these operator-selectable aliases:
@@ -80,6 +100,8 @@ Operator LLM actions write metadata-only entries to `operator_audit_logs`.
 Current audited actions:
 
 - `llm.routes_saved`: global standard/premium route changes and LiteLLM reload result.
+- `llm.routes_activation_blocked`: rejected customer-route activation or reload,
+  with policy reason and provider/model placement only.
 - `llm.provider_disabled`: provider key removal/disablement.
 - `llm.model_tested`: synthetic provider/model test result, latency, and token counts.
 

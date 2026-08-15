@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ChatHeader from './ChatHeader'
 import ChatInput from './ChatInput'
-import ChatMessage, { linkSourceReferences } from './ChatMessage'
+import ChatMessage, { citedSourceCount, citedSources, linkSourceReferences } from './ChatMessage'
 import Messages from './Messages'
 import ChatRail from './chat/ChatRail'
 
@@ -56,7 +56,7 @@ describe('Chat assistant experience', () => {
     const content = 'Ohio applies its choice-of-law framework. [source: courtlistener:gries-1] [verify]'
 
     expect(linkSourceReferences(content, sources, 'answer-1')).toContain(
-      '[[1]](#source-answer-1-1)',
+      '[[1]](https://www.courtlistener.com/opinion/675482/)',
     )
 
     render(
@@ -73,17 +73,188 @@ describe('Chat assistant experience', () => {
 
     expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
       'href',
-      '#source-answer-1-1',
+      'https://www.courtlistener.com/opinion/675482/',
     )
     expect(screen.getByRole('link', { name: '15 Ohio St.3d 284 (1984)' })).toHaveAttribute(
       'href',
       'https://www.courtlistener.com/opinion/675482/',
     )
-    expect(screen.getByText('Authorities Referenced')).toBeInTheDocument()
+    expect(screen.getByText('Cited Authorities and Sources')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Link to Retrieved passage 3' })).toHaveAttribute(
       'href',
       '#source-answer-1-1',
     )
+  })
+
+  it('counts only exact source markers as citations, not every retrieved row', () => {
+    const sources = [
+      { source_id: 'authority:nd-1', case_name: 'ND authority' },
+      { source_id: 'tenant:retainer-1', case_name: 'Retainer agreement' },
+    ]
+
+    expect(citedSourceCount(
+      'The rule is supported. [source: authority:nd-1] [verify]',
+      sources,
+    )).toBe(1)
+    expect(citedSourceCount('No inline authority.', sources)).toBe(0)
+    expect(citedSources(
+      'The rule is supported. [source: authority:nd-1] [verify]',
+      sources,
+    )).toEqual([sources[0]])
+  })
+
+  it('renders directly supported claims with the source-backed cited tag', () => {
+    const content = 'The statute requires notice. [source: authority:nd-2] [cited]'
+    const markerStart = content.indexOf('[source:')
+    const tagStart = content.indexOf('[cited]')
+    const sources = [{
+      source_id: 'authority:nd-2',
+      case_name: 'North Dakota authority',
+      url: 'https://example.test/authority/nd-2',
+      source_type: 'public_authority',
+      official_status: 'official',
+      authority_tier: 'primary law',
+      relevance_score: 0.91,
+    }]
+    const citationAnnotations = [{
+      claim_id: 'claim-1',
+      start: 0,
+      end: content.length,
+      text: 'The statute requires notice.',
+      support: 'cited',
+      source_ids: ['authority:nd-2'],
+      source_markers: [{
+        source_id: 'authority:nd-2',
+        start: markerStart,
+        end: markerStart + '[source: authority:nd-2]'.length,
+      }],
+      support_tag: { start: tagStart, end: tagStart + '[cited]'.length },
+    }]
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-cited',
+          role: 'assistant',
+          content,
+          sources,
+          citation_annotations: citationAnnotations,
+          created_at: '2026-08-15T12:00:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: 'cited — jump to supporting source' })).toHaveAttribute(
+      'href',
+      '#source-answer-cited-1',
+    )
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
+      'href',
+      'https://example.test/authority/nd-2',
+    )
+    expect(screen.getByText(/official.*primary law.*91% match/i)).toBeInTheDocument()
+  })
+
+  it('keeps uncited retrieval out of the visible source ledger', () => {
+    const sources = [
+      {
+        source_id: 'tenant:retainer-1',
+        case_name: 'Monthly Retainer Agreement.docx',
+        source_type: 'tenant_document',
+        source_label: 'Firm context',
+      },
+    ]
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-gap',
+          role: 'assistant',
+          content: '## Authority coverage gap\n\nNo supported answer.',
+          sources,
+          created_at: '2026-08-14T22:33:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByText(/0 cited.*1 retrieved/)).toBeInTheDocument()
+    expect(screen.queryByText('Monthly Retainer Agreement.docx')).not.toBeInTheDocument()
+    expect(screen.queryByText('Retrieved only')).not.toBeInTheDocument()
+  })
+
+  it('does not present legacy generic context as an unknown legal case', () => {
+    render(
+      <ChatMessage
+        message={{
+          id: 'legacy-answer',
+          role: 'assistant',
+          content: 'Legacy answer. [source: legacy-1] [verify]',
+          sources: [{ source_id: 'legacy-1', case_name: 'Unknown Case', source_type: 'general' }],
+          created_at: '2026-08-14T22:33:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.queryByText('Unknown Case')).not.toBeInTheDocument()
+    expect(screen.getByText('Retrieved context')).toBeInTheDocument()
+  })
+
+  it('links attached-document source tags to the authenticated LawHand download', () => {
+    const sources = [
+      {
+        source_id: 'document:atlas-loi',
+        case_name: 'Project Atlas Letter of Intent.docx',
+        citation: 'Project Atlas Letter of Intent.docx',
+        url: '/api/documents/atlas-loi/download',
+        source_type: 'tenant_document',
+        source_label: 'Attached document',
+        locator: 'LOI §§5–9',
+      },
+    ]
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-attachment',
+          role: 'assistant',
+          content: 'The exclusivity covenant is binding. [source: document:atlas-loi] [verify]',
+          sources,
+          created_at: '2026-08-13T20:26:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute(
+      'href',
+      '/api/documents/atlas-loi/download',
+    )
+    expect(
+      screen.getByRole('link', { name: 'Project Atlas Letter of Intent.docx' }),
+    ).toHaveAttribute('href', '/api/documents/atlas-loi/download')
+    expect(screen.getByText('Cited Sources')).toBeInTheDocument()
+  })
+
+  it('renders consent trackers as semantic Markdown tables', () => {
+    const content = [
+      '| Contract / item | Trigger | Required action | Priority |',
+      '|---|---|---|---:|',
+      '| Orion Enterprise MSA | Merger deemed assignment | Obtain written consent | Critical |',
+    ].join('\n')
+
+    render(
+      <ChatMessage
+        message={{
+          id: 'answer-consent-table',
+          role: 'assistant',
+          content,
+          created_at: '2026-08-13T20:26:00Z',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Contract / item' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Orion Enterprise MSA' })).toBeInTheDocument()
   })
 
   it('uses the available chat width and lets readers collapse answer sections', async () => {
@@ -248,6 +419,39 @@ describe('Chat assistant experience', () => {
     await user.keyboard('{Enter}')
     expect(onSend).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: 'Attach a document' })).toBeInTheDocument()
+  })
+
+  it('keeps drafting available but blocks button and keyboard sends while another response drains', async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+
+    function Harness() {
+      const [value, setValue] = useState('Draft while waiting')
+      return (
+        <ChatInput
+          inputValue={value}
+          onInputChange={setValue}
+          onSend={onSend}
+          onUploadClick={vi.fn()}
+          onDropFiles={vi.fn()}
+          isSending={false}
+          disabled={false}
+          sendDisabled
+          sendDisabledLabel="Another conversation response is finishing"
+        />
+      )
+    }
+
+    render(<Harness />)
+    const composer = screen.getByRole('textbox', { name: 'Message the assistant' })
+    await user.click(composer)
+    await user.type(composer, ' safely')
+    expect(composer).toHaveValue('Draft while waiting safely')
+
+    const send = screen.getByRole('button', { name: 'Another conversation response is finishing' })
+    expect(send).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('offers practical starter actions without relying on decorative emoji', async () => {

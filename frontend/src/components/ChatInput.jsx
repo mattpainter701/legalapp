@@ -16,6 +16,8 @@ export default function ChatInput({
   onDropFiles,
   isSending,
   disabled,
+  sendDisabled = false,
+  sendDisabledLabel = 'Wait for the current response to finish',
   pendingAttachments = [],
   onRemoveAttachment,
   placeholder = 'Ask about a matter, draft, document, or legal issue…',
@@ -59,7 +61,7 @@ export default function ChatInput({
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      onSend()
+      if (!disabled && !isSending && !sendDisabled) onSend()
     }
   }
 
@@ -167,9 +169,9 @@ export default function ChatInput({
               <button
                 type="button"
                 onClick={onSend}
-                disabled={!inputValue.trim() || isSending}
+                disabled={!inputValue.trim() || isSending || sendDisabled}
                 className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-brand-ink px-3 text-sm font-semibold text-white hover:bg-brand-ink-2 disabled:cursor-not-allowed disabled:bg-brand-line-2 disabled:text-brand-muted sm:min-h-10 sm:rounded-xl sm:px-3.5"
-                aria-label={isSending ? 'Assistant is responding' : 'Send message'}
+                aria-label={isSending ? 'Assistant is responding' : sendDisabled ? sendDisabledLabel : 'Send message'}
               >
                 {isSending ? (
                   <>

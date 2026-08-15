@@ -49,6 +49,27 @@ from app.services.integration_observability import (
     record_integration_sync_run,
 )
 
+
+async def _lock_expired_chat_attachments(session, now: datetime) -> list[Document]:
+    """Claim expired attachments before any filesystem deletion.
+
+    Promotion uses a row lock while clearing ``expires_at``. ``SKIP LOCKED``
+    makes cleanup yield to that promotion; conversely, once cleanup owns the
+    row, promotion waits and then observes deletion instead of preserving a DB
+    row whose file was already removed.
+    """
+    result = await session.execute(
+        select(Document)
+        .where(
+            Document.conversation_id.isnot(None),
+            Document.expires_at.isnot(None),
+            Document.expires_at < now,
+        )
+        .with_for_update(skip_locked=True)
+    )
+    return list(result.scalars().all())
+
+
 settings = get_settings()
 
 logger = logging.getLogger(__name__)
@@ -1786,13 +1807,7 @@ class LegalScheduler:
                 await _apply_scheduler_tenant_context(session)
 
                 now = datetime.now(timezone.utc)
-                result = await session.execute(
-                    select(Document).where(
-                        Document.expires_at.isnot(None),
-                        Document.expires_at < now,
-                    )
-                )
-                expired_docs = list(result.scalars().all())
+                expired_docs = await _lock_expired_chat_attachments(session, now)
 
                 if not expired_docs:
                     await _log_complete(
@@ -1802,15 +1817,19 @@ class LegalScheduler:
                     return
 
                 deleted = 0
+                storage_directories: set[str] = set()
                 for doc in expired_docs:
                     if doc.storage_path:
-                        shutil.rmtree(
-                            os.path.dirname(doc.storage_path), ignore_errors=True
-                        )
+                        storage_directories.add(os.path.dirname(doc.storage_path))
                     await session.delete(doc)
                     deleted += 1
 
                 await _commit_and_restore_scheduler_context(session)
+                # Delete bytes only after the row deletion is durably committed.
+                # An orphan directory is recoverable; a live evidence row whose
+                # file was destroyed after an ambiguous commit is not.
+                for directory in storage_directories:
+                    shutil.rmtree(directory, ignore_errors=True)
 
                 summary = f"Deleted {deleted} expired chat attachment(s)."
                 await _log_complete(session, log, summary)

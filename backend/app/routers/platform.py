@@ -15,6 +15,7 @@ Endpoints:
   GET  /api/platform/health          — row counts and index info
 """
 
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,7 @@ from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -30,6 +31,7 @@ from app.database import clear_tenant_context, get_db, set_tenant_context
 from app.models.conversation import UsageRecord
 from app.models.error_log import ErrorLog
 from app.models.api_access_log import ApiAccessLog
+from app.models.document import Chunk, Document
 from app.models.mcp_product import MCPProductKey, MCPUsageEvent
 from app.models.tenant import Tenant, TenantSettings
 from app.models.user import User
@@ -42,6 +44,8 @@ from app.services.llm_routing import (
 )
 from app.services.module_visibility import KNOWN_MODULES, normalize_module_name
 from app.services.operator_audit import record_operator_audit
+from app.services.durable_jobs import enqueue_job
+from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.platform_auth import (
     issue_platform_token,
     require_platform_token,
@@ -286,6 +290,13 @@ class PlatformTokenRequest(BaseModel):
     ttl_minutes: int | None = None
 
 
+class PlatformDocumentReindexRequest(BaseModel):
+    tenant_id: uuid.UUID | None = None
+    only_degraded: bool = True
+    dry_run: bool = False
+    limit: int = 100
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
@@ -436,6 +447,137 @@ async def list_tenants(
         "total": total,
         "page": page,
         "limit": limit,
+    }
+
+
+@router.post("/documents/reindex")
+async def reindex_platform_documents(
+    body: PlatformDocumentReindexRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue a bounded, audited repair of tenant document indexes."""
+
+    _require_platform_key(request)
+    if body.limit < 1 or body.limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+
+    tenant_ids = await _platform_tenant_ids(db, body.tenant_id)
+    if body.tenant_id is not None and not tenant_ids:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    operation_id = uuid.uuid4().hex
+    selected: list[dict[str, str]] = []
+    skipped_missing_storage: list[dict[str, str]] = []
+    job_ids: list[str] = []
+
+    for scoped_tenant_id in tenant_ids:
+        remaining = body.limit - len(selected)
+        if remaining <= 0:
+            break
+        tenant_corpus_changed = False
+        async with _platform_tenant_scope(db, scoped_tenant_id):
+            filters = [Document.tenant_id == scoped_tenant_id]
+            if body.only_degraded:
+                filters.append(
+                    or_(
+                        Document.chunk_count == 0,
+                        Document.embedding_model.is_(None),
+                        Document.status == "error",
+                    )
+                )
+            documents = list(
+                (
+                    await db.scalars(
+                        select(Document)
+                        .where(*filters)
+                        .order_by(Document.created_at.asc())
+                        .limit(remaining)
+                    )
+                ).all()
+            )
+            for document in documents:
+                storage_path = document.storage_path or ""
+                if (
+                    not storage_path
+                    or storage_path.startswith(("http://", "https://"))
+                    or not os.path.exists(storage_path)
+                ):
+                    skipped_missing_storage.append(
+                        {
+                            "tenant_id": str(scoped_tenant_id),
+                            "document_id": str(document.id),
+                            "filename": document.filename,
+                        }
+                    )
+                    continue
+
+                selected.append(
+                    {
+                        "tenant_id": str(scoped_tenant_id),
+                        "document_id": str(document.id),
+                        "filename": document.filename,
+                    }
+                )
+                if body.dry_run:
+                    continue
+
+                await db.execute(
+                    delete(Chunk).where(
+                        Chunk.document_id == document.id,
+                        Chunk.tenant_id == scoped_tenant_id,
+                    )
+                )
+                document.status = "pending"
+                document.chunk_count = 0
+                document.error_message = None
+                document.indexed_at = None
+                document.embedding_model = None
+                document.embedding_version = None
+                tenant_corpus_changed = True
+                job = await enqueue_job(
+                    db,
+                    tenant_id=scoped_tenant_id,
+                    kind="document_ingest",
+                    idempotency_key=f"reindex:{document.id}:{operation_id}",
+                    payload={"document_id": str(document.id)},
+                )
+                job_ids.append(str(job.id))
+            if not body.dry_run:
+                if tenant_corpus_changed:
+                    await advance_rag_corpus_revision(db, scoped_tenant_id)
+                # Flush tenant-owned rows before clearing the RLS scope.
+                await db.flush()
+
+        if not body.dry_run:
+            await db.commit()
+
+    await record_operator_audit(
+        db,
+        request,
+        action=(
+            "documents.reindex.previewed"
+            if body.dry_run
+            else "documents.reindex.queued"
+        ),
+        resource_type="document_index",
+        metadata={
+            "tenant_id": str(body.tenant_id) if body.tenant_id else None,
+            "only_degraded": body.only_degraded,
+            "selected_count": len(selected),
+            "skipped_missing_storage_count": len(skipped_missing_storage),
+            "operation_id": operation_id,
+        },
+    )
+    await db.commit()
+    return {
+        "dry_run": body.dry_run,
+        "selected_count": len(selected),
+        "queued_count": 0 if body.dry_run else len(job_ids),
+        "documents": selected,
+        "job_ids": job_ids,
+        "skipped_missing_storage": skipped_missing_storage,
+        "operation_id": operation_id,
     }
 
 

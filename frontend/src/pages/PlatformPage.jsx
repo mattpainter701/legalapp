@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
+import { createPlatformSession, getPlatformTenants, getPlatformUsage, getPlatformHealth, getPlatformIntegrationReadiness, getPlatformMcpOverview, getPlatformTenant, updatePlatformTenant, getPlatformPlans, getPlatformLLMConfig, getPlatformLogs, getPlatformLogsSummary, getPlatformTenantLogs, getPlatformTenantLogsSummary, getPlatformAccessLogs, getPlatformAccessLogsSummary, getLLMProviderPresets, getLLMProviderKeys, addLLMProviderKey, deleteLLMProviderKey, syncEnvKeys, fetchProviderModels, getLLMModelCatalog, refreshLLMModelCatalog, getLLMRoutes, recommendLLMRoutes, saveLLMRoutes, getLLMGatewayStatus, reloadLLMRoutes, testLLMRoute } from '../api'
 import { Activity, AlertTriangle, Database, Server, Shield, Users, Zap, Search, ChevronDown, ChevronRight, BarChart3, FileText, Globe, Key, Plus, Trash2, RefreshCw, CheckCircle, XCircle, Cpu, ArrowDown, ArrowUp, Save, Settings2, PhoneCall, Video } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
+
+const apiErrorMessage = (error, fallback) => {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (typeof detail?.message === 'string') return detail.message
+  return error?.message || fallback
+}
 
 function StatCard({ label, value, sub, icon: Icon }) {
   return (
@@ -1038,6 +1045,15 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   const keysForPreset = value.provider_id ? allKeys.filter((k) => k.provider_id === value.provider_id) : allKeys
   const placeholder = selectedPreset?.model_placeholder || 'model-id'
   const suggestedModels = preferredModelOptions(models)
+  const selectedModelIsKnown = suggestedModels.some((model) => model.id === value.model)
+  const [manualModel, setManualModel] = useState(Boolean(value.model && !selectedModelIsKnown))
+
+  // Only a catalog match may close manual entry. Keying off an empty model
+  // snapped the field back to the dropdown the moment an operator cleared it to
+  // retype a custom ID, which silently discarded what they were typing.
+  useEffect(() => {
+    if (selectedModelIsKnown) setManualModel(false)
+  }, [selectedModelIsKnown])
 
   const setField = (field, next) => {
     if (field === 'provider_id') onChange({ ...value, provider_id: next, key_id: '', model: '' })
@@ -1048,8 +1064,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
   return (
     <div className={`grid grid-cols-1 ${compact ? 'md:grid-cols-[1fr_1fr_1.3fr_100px]' : 'lg:grid-cols-[1fr_1fr_1.3fr_110px]'} gap-3`}>
       <div>
-        <label htmlFor="platformpage-upstream-provider" className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
-        <select id="platformpage-upstream-provider"
+        <label htmlFor={`${modelListId}-provider`} className="block text-xs text-brand-muted font-sans mb-1">Upstream provider</label>
+        <select id={`${modelListId}-provider`}
           value={value.provider_id || ''}
           onChange={(e) => setField('provider_id', e.target.value)}
           className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
@@ -1060,8 +1076,8 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         {!compact && selectedPreset && <p className="text-[11px] text-brand-muted mt-1 font-sans">{selectedPreset.description}</p>}
       </div>
       <div>
-        <label htmlFor="platformpage-provider-key" className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
-        <select id="platformpage-provider-key"
+        <label htmlFor={`${modelListId}-key`} className="block text-xs text-brand-muted font-sans mb-1">Provider key</label>
+        <select id={`${modelListId}-key`}
           value={value.key_id || ''}
           onChange={(e) => setField('key_id', e.target.value)}
           disabled={!value.provider_id}
@@ -1072,26 +1088,56 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         </select>
       </div>
       <div>
-        <label htmlFor="platformpage-upstream-model-id" className="block text-xs text-brand-muted font-sans mb-1">Upstream model ID</label>
-        <input id="platformpage-upstream-model-id"
-          list={modelListId}
-          value={value.model || ''}
-          onChange={(e) => setField('model', e.target.value)}
-          placeholder={placeholder}
-          className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
-        />
-        <datalist id={modelListId}>
-          {suggestedModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </datalist>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label htmlFor={`${modelListId}-model`} className="block text-xs text-brand-muted font-sans">Model</label>
+          {value.provider_id && (
+            <button
+              type="button"
+              onClick={() => { setManualModel(!manualModel); if (manualModel && !selectedModelIsKnown) setField('model', '') }}
+              className="text-[10px] text-brand-accent hover:underline font-sans"
+            >
+              {manualModel ? 'Choose catalog model' : 'Enter custom ID'}
+            </button>
+          )}
+        </div>
+        {manualModel ? (
+          <input id={`${modelListId}-model`}
+            value={value.model || ''}
+            onChange={(e) => setField('model', e.target.value)}
+            placeholder={placeholder}
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
+          />
+        ) : (
+          <select id={`${modelListId}-model`}
+            value={selectedModelIsKnown ? value.model : ''}
+            onChange={(e) => setField('model', e.target.value)}
+            disabled={!value.key_id}
+            className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface disabled:opacity-50"
+          >
+            <option value="">{value.key_id ? (suggestedModels.length ? 'Choose model' : 'No catalog models; enter custom ID') : 'Pick key first'}</option>
+            {suggestedModels.map((model) => (
+              // Selecting an unsupported endpoint or a model barred from
+              // customer traffic only fails later, at activation. Disable it
+              // here so the reason is visible at the point of choice.
+              <option
+                key={model.id}
+                value={model.id}
+                disabled={model.route_compatible === false || model.confidential_data_allowed === false}
+              >
+                {model.name || model.id}{model.is_free ? ' — Free' : ' — Paid'}{model.route_compatible === false ? ' — Unsupported endpoint' : ''}{model.confidential_data_allowed === false ? ' — Not approved for client data' : ''}
+              </option>
+            ))}
+          </select>
+        )}
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
-            Suggestions prioritize legal-ready models under 3s latency when latency data is available. Manual IDs still work.
+            Provider/key-specific catalog models, ranked for legal work and latency. Custom IDs remain available.
           </p>
         )}
       </div>
       <div>
-        <label htmlFor="platformpage-capacity" className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
-        <input id="platformpage-capacity"
+        <label htmlFor={`${modelListId}-capacity`} className="block text-xs text-brand-muted font-sans mb-1">Capacity</label>
+        <input id={`${modelListId}-capacity`}
           type="number"
           min="1"
           max="1000"
@@ -1175,7 +1221,9 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
   const removeFallback = (i) => setFallbacks((route.fallbacks || []).filter((_, idx) => idx !== i))
   const modelsFor = (target) => {
     const catalog = (catalogModels || []).filter((m) => (
-      target.key_id ? m.key_id === target.key_id : !target.provider_id || m.provider_id === target.provider_id
+      target.key_id
+        ? (m.key_ids || [m.key_id]).includes(target.key_id)
+        : !target.provider_id || m.provider_id === target.provider_id
     ))
     if (target.key_id && target.key_id === route.key_id && models.length) return models
     return catalog.length ? catalog : models
@@ -1213,7 +1261,7 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
     } catch (e) {
       setTestResult({
         ok: false,
-        error: e?.response?.data?.detail || 'Test failed',
+        error: apiErrorMessage(e, 'Test failed'),
         client_roundtrip_ms: Math.round(performance.now() - startedAt),
       })
     } finally { setTesting(false) }
@@ -1258,14 +1306,18 @@ function RouteCard({ label, alias: activeAlias, route, allKeys, presets, platfor
           {issues.map((issue) => <p key={issue} className="text-brand-rose">{issue}</p>)}
           {modelsError && <p className="text-brand-muted">{modelsError}</p>}
           {testResult && (
-            <div className={testResult.ok ? 'text-brand-accent' : 'text-brand-rose'}>
+            <div className={testResult.ok ? 'text-brand-accent' : testResult.provider_reachable ? 'text-brand-amber' : 'text-brand-rose'}>
               <p>
                 {testResult.ok
                   ? `Provider test OK with ${testResult.model_used}: ${testResult.response_preview}`
-                  : `Test failed: ${testResult.error}`}
+                  : testResult.provider_reachable
+                    ? `Provider reached${testResult.model_used ? ` with ${testResult.model_used}` : ''}, but the canary response differed: ${testResult.response_preview || testResult.error}`
+                    : `Test failed: ${testResult.error}`}
               </p>
               <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-brand-muted">
                 {testResult.client_roundtrip_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Browser {testResult.client_roundtrip_ms}ms</span>}
+                {testResult.credential_state && <span className="rounded border border-brand-line px-2 py-0.5">Credential {testResult.credential_state.replaceAll('_', ' ')}</span>}
+                {testResult.error_category && <span className="rounded border border-brand-line px-2 py-0.5">{testResult.error_category.replaceAll('_', ' ')}</span>}
                 {testResult.server_elapsed_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Server {testResult.server_elapsed_ms}ms</span>}
                 {testResult.provider_latency_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Provider {testResult.provider_latency_ms}ms</span>}
                 {testResult.server_overhead_ms != null && <span className="rounded border border-brand-line px-2 py-0.5">Overhead {testResult.server_overhead_ms}ms</span>}
@@ -1577,7 +1629,13 @@ function KeyVaultPanel({ platformKey, keys, presets, onKeysChange }) {
 }
 
 const CAPABILITY_LABELS = {
+  text_input: { label: 'Text', color: 'bg-slate-100 text-slate-700 border-slate-200/60' },
+  file_input: { label: 'Files', color: 'bg-violet-100 text-violet-700 border-violet-200/60' },
   vision: { label: 'Vision', color: 'bg-purple-100 text-purple-700 border-purple-200/60' },
+  audio_input: { label: 'Audio In', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200/60' },
+  audio_output: { label: 'Audio Out', color: 'bg-rose-100 text-rose-700 border-rose-200/60' },
+  speech_to_text: { label: 'Speech-to-Text', color: 'bg-lime-100 text-lime-700 border-lime-200/60' },
+  embeddings: { label: 'Embeddings', color: 'bg-stone-100 text-stone-700 border-stone-200/60' },
   tool_use: { label: 'Tool Use', color: 'bg-blue-100 text-blue-700 border-blue-200/60' },
   reasoning: { label: 'Reasoning', color: 'bg-orange-100 text-orange-700 border-orange-200/60' },
   research: { label: 'Research', color: 'bg-indigo-100 text-indigo-700 border-indigo-200/60' },
@@ -1597,9 +1655,9 @@ const LEGAL_TIER_LABELS = {
 }
 
 const EXCLUSION_REASON_LABELS = {
-  not_free: 'Paid model',
   not_chat_model: 'Not chat/instruction',
   not_text_chat: 'Not text chat',
+  unsupported_api_mode: 'Endpoint not supported by current adapter',
   coding_specialized: 'Coding-only/specialized',
   low_context: 'Low context',
   low_output_limit: 'Low output limit',
@@ -1610,7 +1668,10 @@ const EXCLUSION_REASON_LABELS = {
 
 function ApplyRouteMenu({ model, onApply }) {
   const [open, setOpen] = useState(false)
-  const canApply = Boolean(model.key_id && model.provider_id && model.id)
+  const canApply = Boolean(
+    model.key_id && model.provider_id && model.id &&
+    model.route_compatible !== false && model.confidential_data_allowed !== false,
+  )
 
   const routeGroups = [
     {
@@ -1646,7 +1707,7 @@ function ApplyRouteMenu({ model, onApply }) {
         type="button"
         onClick={() => setOpen(!open)}
         disabled={!canApply}
-        title={canApply ? 'Apply this model to a LiteLLM route' : 'This catalog row is missing provider or key metadata'}
+        title={canApply ? 'Apply this model to a LiteLLM route' : 'This model is not approved for customer legal traffic or needs another API adapter'}
         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium border border-brand-line rounded-lg text-brand-ink hover:bg-brand-bg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
         Apply
@@ -1681,23 +1742,272 @@ function ApplyRouteMenu({ model, onApply }) {
   )
 }
 
+const ROUTE_CAPABILITY_OPTIONS = [
+  ['tool_use', 'Tools'],
+  ['structured_output', 'Structured output'],
+  ['vision', 'Vision'],
+  ['file_input', 'Files'],
+]
+
+function SmartRouteBuilder({ platformKey, presets, onApply }) {
+  const [route, setRoute] = useState('standard')
+  const [costPreference, setCostPreference] = useState('cost_optimized')
+  const [dataMode, setDataMode] = useState('customer')
+  const [maxLatency, setMaxLatency] = useState(3000)
+  const [providerScope, setProviderScope] = useState('all')
+  const [providerDiversity, setProviderDiversity] = useState(true)
+  const [capabilities, setCapabilities] = useState([])
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [testingCandidates, setTestingCandidates] = useState(false)
+  const [error, setError] = useState(null)
+
+  const changeRoute = (nextRoute) => {
+    setRoute(nextRoute)
+    setCostPreference(nextRoute === 'premium' ? 'quality' : 'cost_optimized')
+    setResult(null)
+  }
+
+  const toggleCapability = (capability) => {
+    setCapabilities((current) => (
+      current.includes(capability)
+        ? current.filter((item) => item !== capability)
+        : [...current, capability]
+    ))
+    setResult(null)
+  }
+
+  const buildRecommendation = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const data = await recommendLLMRoutes(platformKey, {
+        route,
+        cost_preference: costPreference,
+        data_mode: dataMode,
+        max_latency_ms: Number(maxLatency),
+        count: 3,
+        provider_diversity: providerDiversity,
+        provider_ids: providerScope === 'all' ? [] : [providerScope],
+        required_capabilities: ['text_input', 'instruction', ...capabilities],
+      })
+      setResult(data)
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Could not build a route recommendation.'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testRecommendation = async () => {
+    if (!result?.candidates?.length) return
+    setTestingCandidates(true)
+    setError(null)
+    const tested = []
+    for (const candidate of result.candidates) {
+      try {
+        const canary = await testLLMRoute(platformKey, {
+          key_id: candidate.key_id,
+          provider_id: candidate.provider_id,
+          model: candidate.model,
+          route: `${route}-recommendation`,
+        })
+        tested.push({
+          ...candidate,
+          canary_ok: Boolean(canary.ok),
+          canary_error: canary.error || null,
+          canary_category: canary.error_category || null,
+          latency_ms: canary.provider_latency_ms ?? candidate.latency_ms,
+        })
+      } catch (e) {
+        tested.push({
+          ...candidate,
+          canary_ok: false,
+          canary_error: apiErrorMessage(e, 'Canary request failed.'),
+          canary_category: 'platform_request_failed',
+        })
+      }
+    }
+    setResult((current) => ({ ...current, candidates: tested }))
+    setTestingCandidates(false)
+  }
+
+  const hasDemoOnlyCandidate = Boolean(
+    result?.candidates?.some((candidate) => candidate.confidential_data_allowed === false),
+  )
+  const allCandidatesPassed = Boolean(
+    result?.candidates?.length && result.candidates.every((candidate) => candidate.canary_ok),
+  )
+  const canApply = allCandidatesPassed && !hasDemoOnlyCandidate
+
+  return (
+    <div className="bg-brand-surface border border-brand-line rounded-xl shadow-sm overflow-hidden mb-6">
+      <div className="px-5 py-4 border-b border-brand-line flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Settings2 size={16} className="text-brand-accent" />
+            <h2 className="font-serif font-bold text-brand-ink">Smart top-three router</h2>
+          </div>
+          <p className="text-xs text-brand-muted font-sans mt-1">Ranks one primary and two ordered failovers using legal readiness, provider health, data policy, latency, cost, and provider diversity.</p>
+        </div>
+        <button
+          type="button"
+          onClick={buildRecommendation}
+          disabled={loading}
+          className="flex items-center justify-center gap-2 px-4 py-2 bg-brand-ink text-white text-sm font-medium font-sans rounded-lg hover:bg-brand-ink-2 disabled:opacity-40 transition-colors"
+        >
+          {loading ? <RefreshCw size={14} className="animate-spin" /> : <Zap size={14} />}
+          {loading ? 'Ranking models…' : 'Recommend top 3'}
+        </button>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div>
+            <label htmlFor="smart-route-tier" className="block text-xs text-brand-muted font-sans mb-1">Route</label>
+            <select id="smart-route-tier" value={route} onChange={(e) => changeRoute(e.target.value)} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="standard">Standard</option>
+              <option value="premium">Premium</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-cost" className="block text-xs text-brand-muted font-sans mb-1">Cost strategy</label>
+            <select id="smart-route-cost" value={costPreference} onChange={(e) => { setCostPreference(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="free_only">Free only</option>
+              <option value="cost_optimized">Cost optimized</option>
+              <option value="quality">Quality first</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-data" className="block text-xs text-brand-muted font-sans mb-1">Data handling</label>
+            <select id="smart-route-data" value={dataMode} onChange={(e) => { setDataMode(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="customer">Customer legal</option>
+              <option value="strict">Strict approved only</option>
+              <option value="demo">Synthetic demo</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-provider" className="block text-xs text-brand-muted font-sans mb-1">Provider scope</label>
+            <select id="smart-route-provider" value={providerScope} onChange={(e) => { setProviderScope(e.target.value); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value="all">All stored providers</option>
+              {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="smart-route-latency" className="block text-xs text-brand-muted font-sans mb-1">Maximum latency</label>
+            <select id="smart-route-latency" value={maxLatency} onChange={(e) => { setMaxLatency(Number(e.target.value)); setResult(null) }} className="w-full border border-brand-line rounded-lg px-3 py-2 text-sm bg-brand-surface">
+              <option value={1500}>1.5 seconds</option>
+              <option value={3000}>3 seconds</option>
+              <option value={5000}>5 seconds</option>
+              <option value={10000}>10 seconds</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wider text-brand-muted font-sans">Required:</span>
+          {ROUTE_CAPABILITY_OPTIONS.map(([capability, label]) => (
+            <button
+              type="button"
+              key={capability}
+              aria-pressed={capabilities.includes(capability)}
+              onClick={() => toggleCapability(capability)}
+              className={`rounded-full border px-2.5 py-1 text-xs font-sans ${capabilities.includes(capability) ? 'border-brand-accent bg-brand-accent/10 text-brand-accent' : 'border-brand-line text-brand-muted hover:text-brand-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+          <label className="ml-auto inline-flex items-center gap-2 text-xs text-brand-ink font-sans">
+            <input type="checkbox" checked={providerDiversity} onChange={(e) => { setProviderDiversity(e.target.checked); setResult(null) }} />
+            Prefer provider diversity
+          </label>
+        </div>
+
+        {error && <p role="alert" className="text-sm text-brand-rose font-sans">{error}</p>}
+        {result && (
+          <div className="border border-brand-line rounded-lg overflow-hidden">
+            <div className="px-4 py-3 bg-brand-bg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-brand-ink font-sans">{result.candidates?.length || 0} recommended target{result.candidates?.length === 1 ? '' : 's'} for {route}</p>
+                <p className="text-xs text-brand-muted font-sans">The first target is primary; the rest are automatic ordered failovers.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!result.candidates?.length || testingCandidates}
+                  onClick={testRecommendation}
+                  className="px-3 py-1.5 text-xs font-medium font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-surface disabled:opacity-40"
+                >
+                  {testingCandidates ? 'Testing…' : `Test all ${result.candidates?.length || 0}`}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canApply}
+                  title={hasDemoOnlyCandidate ? 'Demo-only models cannot be activated on customer Standard or Premium routes.' : !allCandidatesPassed ? 'Every target needs a passing canary before it can be applied.' : 'Apply the primary and ordered failovers'}
+                  onClick={() => onApply(route, result.candidates || [])}
+                  className="px-3 py-1.5 text-xs font-medium font-sans border border-brand-line rounded-lg text-brand-ink hover:bg-brand-surface disabled:opacity-40"
+                >
+                  Apply recommendation
+                </button>
+              </div>
+            </div>
+            <div className="divide-y divide-brand-line">
+              {(result.candidates || []).map((candidate, index) => (
+                <div key={`${candidate.provider_id}-${candidate.model}`} className="px-4 py-3 flex flex-col lg:flex-row lg:items-center gap-2 lg:gap-4">
+                  <span className="w-20 shrink-0 text-[10px] uppercase tracking-wider text-brand-muted font-sans">{index === 0 ? 'Primary' : `Fallback ${index}`}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-mono text-brand-ink truncate">{candidate.model}</p>
+                    <p className="text-xs text-brand-muted font-sans">{candidate.provider_name} · {candidate.key_name}{candidate.is_free ? ' · Free' : ' · Paid'}{candidate.latency_ms != null ? ` · ${candidate.latency_ms}ms` : ''}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-[10px] font-sans">
+                    {candidate.canary_ok ? <span className="rounded bg-brand-accent/10 text-brand-accent px-2 py-1">Canary passed</span> : <span className="rounded bg-brand-amber/10 text-brand-amber px-2 py-1">{candidate.canary_category ? candidate.canary_category.replaceAll('_', ' ') : 'Needs canary'}</span>}
+                    <span className="rounded bg-brand-bg text-brand-muted px-2 py-1">Score {candidate.score}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {hasDemoOnlyCandidate && (
+              <div className="px-4 py-3 border-t border-brand-line bg-brand-rose/5 text-xs text-brand-rose font-sans">
+                Demo-only models are visible for comparison but cannot be applied to customer Standard or Premium routes.
+              </div>
+            )}
+            {(result.warnings || []).length > 0 && (
+              <div className="px-4 py-3 border-t border-brand-line bg-brand-amber/5 space-y-1">
+                {result.warnings.map((warning) => <p key={warning} className="text-xs text-brand-amber font-sans">{warning}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('recommended')
+  const [filter, setFilter] = useState('all')
+  const [providerFilter, setProviderFilter] = useState('all')
   const [capFilter, setCapFilter] = useState(null)
   const [showAll, setShowAll] = useState(false)
   const models = catalog?.models || []
+  const providerCounts = models.reduce((counts, model) => {
+    counts[model.provider_id] = (counts[model.provider_id] || 0) + 1
+    return counts
+  }, {})
 
   const baseFiltered = models.filter((model) => {
     const q = query.trim().toLowerCase()
     const reasonText = (model.exclusion_reasons || []).map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(' ')
     const matchesQuery = !q || [model.id, model.name, model.provider_name, model.key_name, model.legal_tier, reasonText].filter(Boolean).some((value) => String(value).toLowerCase().includes(q))
     const matchesFilter =
+      filter === 'all' ||
       (filter === 'recommended' && model.legal_tier === 'recommended') ||
       (filter === 'free_legal' && model.is_free && model.legal_eligible) ||
       (filter === 'all_free' && model.is_free) ||
       (filter === 'excluded' && model.legal_tier === 'excluded')
-    return matchesQuery && matchesFilter
+    const matchesProvider = providerFilter === 'all' || model.provider_id === providerFilter
+    return matchesQuery && matchesFilter && matchesProvider
   })
 
   const capabilityCounts = baseFiltered.reduce((counts, model) => {
@@ -1745,15 +2055,27 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
         </div>
       </div>
 
-      <div className="px-5 py-3 border-b border-brand-line flex flex-col md:flex-row gap-3">
+      <div className="px-5 py-3 border-b border-brand-line flex flex-col lg:flex-row gap-3">
         <input
           value={query}
           onChange={(e) => { setQuery(e.target.value); setShowAll(false) }}
           placeholder="Search model, provider, or key"
           className="flex-1 border border-brand-line rounded-lg px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-brand-accent bg-brand-surface"
         />
-        <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0">
+        <select
+          aria-label="Catalog provider"
+          value={providerFilter}
+          onChange={(e) => { setProviderFilter(e.target.value); setShowAll(false) }}
+          className="border border-brand-line rounded-lg px-3 py-2 text-xs font-sans bg-brand-surface"
+        >
+          <option value="all">All providers ({models.length})</option>
+          {Object.entries(providerCounts).sort(([a], [b]) => a.localeCompare(b)).map(([providerId, count]) => (
+            <option key={providerId} value={providerId}>{models.find((model) => model.provider_id === providerId)?.provider_name || providerId} ({count})</option>
+          ))}
+        </select>
+        <div className="flex rounded-lg border border-brand-line overflow-hidden shrink-0 overflow-x-auto">
           {[
+            ['all', 'All'],
             ['recommended', 'Recommended'],
             ['free_legal', 'Free Legal'],
             ['all_free', 'All Free'],
@@ -1825,6 +2147,9 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <p className="text-sm font-mono text-brand-ink truncate" title={model.id}>{model.id}</p>
                   {model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-accent/10 text-brand-accent px-1.5 py-0.5 rounded font-sans">Free</span>}
+                  {!model.is_free && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-bg text-brand-muted px-1.5 py-0.5 rounded border border-brand-line font-sans">Paid</span>}
+                  {model.confidential_data_allowed === false && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-rose/10 text-brand-rose px-1.5 py-0.5 rounded font-sans" title="Synthetic or sanitized demo data only">Demo-only data policy</span>}
+                  {model.route_compatible === false && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">Unsupported endpoint</span>}
                   {model.is_new && <span className="text-[10px] uppercase tracking-wider font-medium bg-brand-amber/10 text-brand-amber px-1.5 py-0.5 rounded font-sans">New</span>}
                   {tier && (
                     <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border font-sans ${tier.color}`} title={reasons.length ? reasons.map((reason) => EXCLUSION_REASON_LABELS[reason] || reason).join(', ') : tier.label}>
@@ -1847,6 +2172,7 @@ function ModelCatalogPanel({ catalog, refreshing, onRefresh, onApply }) {
                 </div>
                 <p className="text-xs text-brand-muted font-sans mt-1">
                   {model.provider_name || model.provider_id} · {model.key_name || 'key'}
+                  {model.api_mode ? ` · ${model.api_mode.replaceAll('_', ' ')}` : ''}
                   {model.context_length ? ` · ${Number(model.context_length).toLocaleString()} ctx` : ''}
                   {hasPricing ? ` · $${pricing.prompt}/$${pricing.completion}` : ''}
                   {model.latency_ms != null ? ` · ${model.latency_ms}ms latency` : ''}
@@ -2097,7 +2423,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       })
     } catch (e) {
       if (e?.response?.status === 403) onAuthError?.()
-      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'LiteLLM reload failed' })
+      setSaveResult({ ok: false, error: apiErrorMessage(e, 'LiteLLM reload failed') })
     } finally { setReloadingRoutes(false) }
   }
 
@@ -2115,6 +2441,31 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       ok: true,
       pending: true,
       message: `Applied ${model.id} to ${routeLabel} ${placementLabel}. Validate and activate to publish it.`,
+    })
+  }
+
+  const applyRecommendation = (routeName, candidates) => {
+    if (!candidates.length) return
+    const [primary, ...fallbacks] = candidates
+    const nextRoute = {
+      key_id: primary.key_id,
+      provider_id: primary.provider_id,
+      model: primary.model,
+      capacity: primary.capacity || 100,
+      alternates: [],
+      fallbacks: fallbacks.map((candidate) => ({
+        key_id: candidate.key_id,
+        provider_id: candidate.provider_id,
+        model: candidate.model,
+        capacity: candidate.capacity || 100,
+      })),
+    }
+    if (routeName === 'standard') setStandard(nextRoute)
+    else setPremium(nextRoute)
+    setSaveResult({
+      ok: true,
+      pending: true,
+      message: `Applied the top ${candidates.length} ${routeName} targets. Test them, then Validate & Activate to publish the route.`,
     })
   }
 
@@ -2145,7 +2496,7 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
         message: reloadSummary(data, 'Saved and reloaded LiteLLM'),
       })
     } catch (e) {
-      setSaveResult({ ok: false, error: e?.response?.data?.detail || 'Save failed' })
+      setSaveResult({ ok: false, error: apiErrorMessage(e, 'Save failed') })
     } finally { setSaving(false) }
   }
 
@@ -2204,6 +2555,12 @@ export function AIRoutingTab({ platformKey, onAuthError }) {
       />
 
       <KeyVaultPanel platformKey={platformKey} keys={keys} presets={presets} onKeysChange={replaceKeys} />
+
+      <SmartRouteBuilder
+        platformKey={platformKey}
+        presets={presets}
+        onApply={applyRecommendation}
+      />
 
       <ModelCatalogPanel
         catalog={catalog}

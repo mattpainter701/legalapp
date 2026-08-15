@@ -35,6 +35,54 @@ def increment_task_version(task: Task) -> None:
     task.version = (task.version or 0) + 1
 
 
+async def require_task_references_for_tenant(
+    db: AsyncSession,
+    tenant_id,
+    values: dict,
+) -> None:
+    """Reject foreign or missing objects before a Task can reference them.
+
+    The referenced tables use ordinary foreign keys, which prove that an ID
+    exists but do not prove that it belongs to the task's tenant. Keep the
+    checks explicit even when PostgreSQL RLS is enabled so this invariant also
+    holds in maintenance/test contexts and cannot depend on connection state.
+    An assignee must also be active; inactive and foreign users receive the
+    same response as a missing user.
+
+    Lives here rather than in the router because the chat assistant can also
+    propose tasks, and a model-authored id must clear exactly the same gate as
+    one typed into the UI.
+    """
+    # Imported lazily: these models pull in wide relationship graphs, and this
+    # module is imported by the request path on every board render.
+    from app.models.contact import Contact
+    from app.models.plugin import Matter
+    from app.models.user import User
+    from sqlalchemy import select
+
+    checks = (
+        ("matter_id", Matter, "Matter not found", False),
+        ("contact_id", Contact, "Contact not found", False),
+        ("assigned_to_user_id", User, "Assigned user not found", True),
+        ("reviewer_user_id", User, "Reviewer not found", True),
+    )
+    for field, model, detail, require_active in checks:
+        reference_id = values.get(field)
+        if reference_id is None:
+            continue
+        filters = [
+            model.id == reference_id,
+            model.tenant_id == tenant_id,
+        ]
+        if require_active:
+            filters.append(User.is_active.is_(True))
+        found_id = await db.scalar(select(model.id).where(*filters))
+        if found_id is None:
+            # A single 404 covers both missing and foreign records so this never
+            # becomes a cross-tenant ID oracle.
+            raise TaskWorkflowError(detail, status_code=404)
+
+
 def append_task_event(
     db: AsyncSession,
     task: Task,
@@ -112,11 +160,21 @@ def transition_task(
         task.waiting_follow_up_date = None
 
     if to_status == "review":
-        metadata_changed = metadata_changed or task.reviewer_user_id != reviewer_user_id
-        task.reviewer_user_id = reviewer_user_id
+        # A missing reviewer argument means "leave the assignment alone" for an
+        # outbound action. Otherwise a same-state refresh silently unassigns the
+        # only person authorized to approve it.
+        effective_reviewer = (
+            task.reviewer_user_id
+            if task.pending_action and reviewer_user_id is None
+            else reviewer_user_id
+        )
     else:
-        metadata_changed = metadata_changed or task.reviewer_user_id is not None
-        task.reviewer_user_id = None
+        # Keep ownership attached while an unsent/failed action still exists.
+        # Clearing it here would let any tenant user reopen Review, assign
+        # themselves, and send correspondence they were never asked to review.
+        effective_reviewer = task.reviewer_user_id if task.pending_action else None
+    metadata_changed = metadata_changed or task.reviewer_user_id != effective_reviewer
+    task.reviewer_user_id = effective_reviewer
 
     status_changed = previous_status != to_status
     if not status_changed and not metadata_changed:

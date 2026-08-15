@@ -1,12 +1,13 @@
 """Handlers and scheduler poller for durable jobs."""
 
+import hashlib
 import hmac
 import re
 import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import case, or_
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.database import async_session_maker, set_tenant_context
 from app.models.communication_log import CommunicationLog
 from app.models.document import Document
@@ -24,7 +25,28 @@ from app.services.durable_jobs import (
 ZOOM_PHONE_CALL_JOB = "zoom_phone_call_import"
 ZOOM_PHONE_RECONCILE_JOB = "zoom_phone_reconcile"
 ZOOM_PHONE_JOB_KINDS = {ZOOM_PHONE_CALL_JOB, ZOOM_PHONE_RECONCILE_JOB}
+# Declared here rather than imported so the worker's kind table stays readable
+# in one place; task_automation owns the same literal.
+TASK_AUTOMATION_JOB = "task_automation"
 _ZOOM_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,255}$")
+
+
+def _path_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cloud_modified_at(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _zoom_account_binding(value) -> str | None:
@@ -54,8 +76,13 @@ async def _run_document_ingest(row: DurableJob) -> dict:
 
 
 async def _run_cloud_sync(row: DurableJob) -> dict:
-    from app.services.document_sync import document_sync
     from app.routers.documents import _process_document
+    from app.services.corpus_revision import advance_rag_corpus_revision
+    from app.services.document_sync import (
+        _legacy_synced_storage_path,
+        _sync_source_key,
+        document_sync,
+    )
 
     body, tenant_id = row.payload, str(row.tenant_id)
     imported = 0
@@ -85,46 +112,198 @@ async def _run_cloud_sync(row: DurableJob) -> dict:
             )
         else:
             raise ValueError(f"Unsupported provider: {provider}")
+        # OAuth refreshes commit the shared session and clear SET LOCAL.
+        await set_tenant_context(session, tenant_id)
         for index, cloud_doc in enumerate(docs):
             local_path = await document_sync.download_and_process(
                 session, tenant_id, cloud_doc, body.get("user_id")
             )
+            # Download can refresh OAuth too.
+            await set_tenant_context(session, tenant_id)
             if not local_path:
                 continue
-            record = await session.scalar(
-                select(Document).where(
-                    Document.tenant_id == row.tenant_id,
-                    Document.storage_path == local_path,
-                )
+
+            source_key = _sync_source_key(cloud_doc)
+            lock_key = f"cloud-sync:{tenant_id}:{source_key}"
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
             )
+            records = (
+                (
+                    await session.execute(
+                        select(Document)
+                        .where(
+                            Document.tenant_id == row.tenant_id,
+                            Document.storage_path == local_path,
+                        )
+                        .order_by(Document.created_at, Document.id)
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            record = records[0] if records else None
+
+            # Adopt an unchanged pre-versioning sync row so deployment does not
+            # duplicate its chunks or break its durable document id.
+            if record is None:
+                legacy_path = _legacy_synced_storage_path(
+                    Path(local_path).parent,
+                    cloud_doc,
+                )
+                legacy_records = (
+                    (
+                        await session.execute(
+                            select(Document)
+                            .where(
+                                Document.tenant_id == row.tenant_id,
+                                Document.storage_path == str(legacy_path),
+                                Document.sync_source_key.is_(None),
+                            )
+                            .order_by(Document.created_at, Document.id)
+                            .with_for_update()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                local_digest = _path_sha256(local_path)
+                record = next(
+                    (
+                        candidate
+                        for candidate in legacy_records
+                        if candidate.storage_path
+                        and Path(candidate.storage_path).is_file()
+                        and _path_sha256(candidate.storage_path) == local_digest
+                    ),
+                    None,
+                )
+                if record is not None:
+                    record.storage_path = local_path
+                    record.file_size = Path(local_path).stat().st_size
+                    record.sync_source_key = source_key
+                    record.source_modified_at = _cloud_modified_at(
+                        cloud_doc.get("modified")
+                    )
+                elif legacy_records:
+                    # The provider changed since the last legacy sync. Retain
+                    # the old row/path as the prior audit version, but attach
+                    # it to this remote identity so finalization removes its
+                    # obsolete chunks from current RAG results.
+                    legacy_records[0].sync_source_key = source_key
+
             if record is None:
                 record = Document(
                     id=uuid.uuid4(),
                     tenant_id=row.tenant_id,
                     filename=cloud_doc["name"],
-                    content_type=cloud_doc.get("mime_type", "application/octet-stream"),
+                    content_type=cloud_doc.get(
+                        "mime_type",
+                        "application/octet-stream",
+                    ),
                     file_size=Path(local_path).stat().st_size,
                     storage_path=local_path,
                     status="pending",
                     chunk_count=0,
+                    sync_source_key=source_key,
+                    source_modified_at=_cloud_modified_at(cloud_doc.get("modified")),
                 )
                 session.add(record)
-                await session.commit()
-            elif record.status == "ready":
-                imported += 1
-                continue
-            await _process_document(str(record.id), tenant_id)
-            await set_tenant_context(session, tenant_id)
-            await session.refresh(record)
-            if record.status != "ready":
-                raise RuntimeError(
-                    record.error_message or f"Ingestion failed for {record.filename}"
+            else:
+                if record.sync_source_key != source_key:
+                    record.sync_source_key = source_key
+                modified_at = _cloud_modified_at(cloud_doc.get("modified"))
+                if modified_at and record.source_modified_at != modified_at:
+                    record.source_modified_at = modified_at
+            claim_marker = f"cloud_sync_claim:{row.id}"
+            claimed_for_processing = False
+            processing_elsewhere = False
+            if record.status not in {"ready", "superseded", "staged"}:
+                if (
+                    record.status != "processing"
+                    or record.error_message == claim_marker
+                ):
+                    record.status = "processing"
+                    record.error_message = claim_marker
+                    claimed_for_processing = True
+                else:
+                    processing_elsewhere = True
+            await session.commit()
+
+            if claimed_for_processing:
+                await _process_document(
+                    str(record.id),
+                    tenant_id,
+                    expected_claim=claim_marker,
                 )
+            elif processing_elsewhere:
+                # The row claim is durable; the owning job will finalize this
+                # source version. Do not run a second extractor/embedder.
+                continue
+
+            # Pick the newest successfully indexed version under the source
+            # lock. Different content versions may ingest concurrently, so
+            # completion order must not decide which contract RAG considers
+            # current.
+            await set_tenant_context(session, tenant_id)
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(" "hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+            versions = (
+                (
+                    await session.execute(
+                        select(Document)
+                        .where(
+                            Document.tenant_id == row.tenant_id,
+                            Document.sync_source_key == source_key,
+                        )
+                        .order_by(Document.created_at, Document.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            record = next((item for item in versions if item.id == record.id), None)
+            if record is None or record.status not in {
+                "ready",
+                "superseded",
+                "staged",
+            }:
+                raise RuntimeError(
+                    (record.error_message if record else None)
+                    or f"Ingestion failed for {cloud_doc['name']}"
+                )
+            indexed_versions = [
+                item
+                for item in versions
+                if item.status in {"ready", "superseded", "staged"}
+            ]
+            current_version = max(
+                indexed_versions,
+                key=lambda item: (
+                    item.source_modified_at
+                    or item.created_at
+                    or datetime.min.replace(tzinfo=timezone.utc),
+                    str(item.id),
+                ),
+            )
+            for version in indexed_versions:
+                desired_status = (
+                    "ready" if version.id == current_version.id else "superseded"
+                )
+                if version.status != desired_status:
+                    version.status = desired_status
             imported += 1
             current = await session.get(DurableJob, row.id)
             if current:
                 current.progress = min(95, int((index + 1) / max(1, len(docs)) * 95))
-                await session.commit()
+            await advance_rag_corpus_revision(session, row.tenant_id)
+            await session.commit()
     return {"documents_found": len(docs), "documents_ingested": imported}
 
 
@@ -354,6 +533,10 @@ async def process_job(job_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 result = await deliver_mcp_meter_event(row.payload)
             elif row.kind == "user_sync":
                 result = await _run_user_sync(row)
+            elif row.kind == TASK_AUTOMATION_JOB:
+                from app.services.task_automation import run_task_automation_job
+
+                result = await run_task_automation_job(row)
             elif row.kind == ZOOM_PHONE_CALL_JOB:
                 result = await _run_zoom_phone_call_import(row)
             elif row.kind == ZOOM_PHONE_RECONCILE_JOB:

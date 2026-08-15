@@ -80,6 +80,9 @@ class Message(Base):
     context_used: Mapped[list | None] = mapped_column(JSON, nullable=True)
     context_relevance_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     pii_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Work the assistant proposed on this turn, as rendered. The tasks it points
+    # at are the source of truth; this keeps the cards after a reload.
+    proposed_actions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.models.llm_provider_key import LLMProviderKey
 from app.models.operator_audit import OperatorAuditLog
+from app.models.platform import PlatformSetting
 from app.routers import platform_llm as platform_llm_router
 from tests.platform_auth_helpers import platform_headers
 
@@ -29,21 +30,50 @@ async def _add_provider_key(db_session, *, provider_id: str = "openrouter"):
 
 async def _audit_actions(db_session):
     result = await db_session.execute(select(OperatorAuditLog))
-    return [
-        row for row in result.scalars().all() if row.action != "platform.request"
-    ]
+    return [row for row in result.scalars().all() if row.action != "platform.request"]
 
 
 @pytest.mark.asyncio
 async def test_route_save_records_operator_audit(
     client: AsyncClient, db_session, monkeypatch
 ):
-    key = await _add_provider_key(db_session)
+    key = await _add_provider_key(db_session, provider_id="opencode-go")
+    db_session.add(
+        PlatformSetting(
+            key=platform_llm_router.LLM_MODEL_CATALOG_KEY,
+            value={
+                "models": [
+                    {
+                        "id": "deepseek-v4-flash",
+                        "provider_id": "opencode-go",
+                        "key_ids": [str(key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                    },
+                    {
+                        "id": "deepseek-v4-pro",
+                        "provider_id": "opencode-go",
+                        "key_ids": [str(key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                    },
+                ]
+            },
+        )
+    )
+    await db_session.commit()
+    reload_call = {}
 
-    async def fake_reload(config, keys_by_id):
-        return {"litellm_updated": False, "litellm_error": "skipped in test"}
+    async def fake_reload(config, keys_by_id, *, aliases=None, validate=True):
+        reload_call.update(
+            config=config,
+            keys_by_id=keys_by_id,
+            aliases=aliases,
+            validate=validate,
+        )
+        return {"litellm_updated": True, "litellm_error": None}
 
-    async def fake_gateway_status():
+    async def fake_gateway_status(aliases=None):
         return {"status": "disabled"}
 
     monkeypatch.setattr(platform_llm_router, "_reload_litellm_routes", fake_reload)
@@ -58,7 +88,7 @@ async def test_route_save_records_operator_audit(
             "standard": {
                 "provider_id": key.provider_id,
                 "key_id": str(key.id),
-                "model": "google/gemma-4-31b-it:free",
+                "model": "deepseek-v4-flash",
                 "capacity": 100,
                 "alternates": [],
                 "fallbacks": [],
@@ -66,7 +96,7 @@ async def test_route_save_records_operator_audit(
             "premium": {
                 "provider_id": key.provider_id,
                 "key_id": str(key.id),
-                "model": "openai/gpt-4.1",
+                "model": "deepseek-v4-pro",
                 "capacity": 100,
                 "alternates": [],
                 "fallbacks": [],
@@ -75,10 +105,123 @@ async def test_route_save_records_operator_audit(
     )
 
     assert response.status_code == 200
+    assert reload_call["keys_by_id"] == {str(key.id): key}
+    assert reload_call["aliases"] == platform_llm_router._managed_route_aliases(
+        reload_call["config"]
+    )
+    assert reload_call["validate"] is True
     logs = await _audit_actions(db_session)
     assert [log.action for log in logs] == ["llm.routes_saved"]
-    assert logs[0].metadata_json["standard"]["model"] == "google/gemma-4-31b-it:free"
+    assert logs[0].metadata_json["standard"]["model"] == "deepseek-v4-flash"
     assert "api_key" not in str(logs[0].metadata_json)
+
+
+@pytest.mark.asyncio
+async def test_unsafe_data_policy_route_rejection_is_audited(
+    client: AsyncClient, db_session, monkeypatch
+):
+    standard_key = await _add_provider_key(db_session, provider_id="opencode-zen")
+    premium_key = await _add_provider_key(db_session, provider_id="opencode-go")
+    db_session.add(
+        PlatformSetting(
+            key=platform_llm_router.LLM_MODEL_CATALOG_KEY,
+            value={
+                "models": [
+                    {
+                        "id": "nemotron-3-ultra-free",
+                        "provider_id": "opencode-zen",
+                        "key_ids": [str(standard_key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                        "is_free": True,
+                    },
+                    {
+                        "id": "deepseek-v4-pro",
+                        "provider_id": "opencode-go",
+                        "key_ids": [str(premium_key.id)],
+                        "legal_eligible": True,
+                        "route_compatible": True,
+                    },
+                ]
+            },
+        )
+    )
+    await db_session.commit()
+
+    async def reload_must_not_run(*_args, **_kwargs):
+        raise AssertionError("unsafe upstream data policy must not reach LiteLLM")
+
+    monkeypatch.setattr(
+        platform_llm_router, "_reload_litellm_routes", reload_must_not_run
+    )
+
+    response = await client.put(
+        "/api/platform/llm/routes",
+        headers=platform_headers(),
+        json={
+            "standard": {
+                "provider_id": standard_key.provider_id,
+                "key_id": str(standard_key.id),
+                "model": "nemotron-3-ultra-free",
+            },
+            "premium": {
+                "provider_id": premium_key.provider_id,
+                "key_id": str(premium_key.id),
+                "model": "deepseek-v4-pro",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "confidential_data_not_allowed"
+    logs = await _audit_actions(db_session)
+    assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
+    assert logs[0].metadata_json["reason"] == "confidential_data_not_allowed"
+    assert logs[0].metadata_json["targets"] == [
+        {
+            "route": "standard",
+            "placement": "primary",
+            "provider_id": "opencode-zen",
+            "model": "nemotron-3-ultra-free",
+            "data_policy": "training_or_improvement_possible",
+            "reason": "disallowed",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reload_cannot_bypass_unsafe_data_policy(
+    client: AsyncClient, db_session, monkeypatch
+):
+    key = await _add_provider_key(db_session, provider_id="opencode-zen")
+    await platform_llm_router._save_route_config(
+        db_session,
+        {
+            "standard": {
+                "provider_id": key.provider_id,
+                "key_id": str(key.id),
+                "model": "nemotron-3-ultra-free",
+            },
+            "premium": {},
+        },
+    )
+    await db_session.commit()
+
+    async def reload_must_not_run(*_args, **_kwargs):
+        raise AssertionError("unsafe upstream data policy must not reach LiteLLM")
+
+    monkeypatch.setattr(
+        platform_llm_router, "_reload_litellm_routes", reload_must_not_run
+    )
+
+    response = await client.post(
+        "/api/platform/llm/routes/reload", headers=platform_headers()
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "confidential_data_not_allowed"
+    logs = await _audit_actions(db_session)
+    assert [log.action for log in logs] == ["llm.routes_activation_blocked"]
 
 
 @pytest.mark.asyncio
@@ -159,6 +302,8 @@ async def test_model_test_records_operator_audit(
     assert logs[0].metadata_json["provider_id"] == "openrouter"
     assert logs[0].metadata_json["model"] == "google/gemma-4-31b-it:free"
     assert logs[0].metadata_json["ok"] is True
+    assert logs[0].metadata_json["capability"] == "text"
+    assert logs[0].metadata_json["credential_state"] == "valid"
     assert "Reply with exactly" not in str(logs[0].metadata_json)
 
 

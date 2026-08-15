@@ -123,6 +123,104 @@ async def test_standard_stream_does_not_bypass_litellm_route_graph():
 
 
 @pytest.mark.asyncio
+async def test_stream_rejects_reasoning_only_token_exhaustion():
+    class FakeStream:
+        def __init__(self):
+            self._chunks = iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    content=None,
+                                    reasoning_content="hidden reasoning",
+                                ),
+                                finish_reason=None,
+                            )
+                        ],
+                        usage=None,
+                        model="deepseek-v4-flash",
+                    ),
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content=None),
+                                finish_reason="length",
+                            )
+                        ],
+                        usage=SimpleNamespace(
+                            prompt_tokens=4691,
+                            completion_tokens=4096,
+                        ),
+                        model="deepseek-v4-flash",
+                    ),
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return FakeStream()
+
+    service = LLMService()
+    service.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+    usage = {}
+
+    with pytest.raises(RuntimeError, match="no visible answer"):
+        _ = [
+            chunk
+            async for chunk in service.stream_complete(
+                [{"role": "user", "content": "Analyze jurisdiction"}],
+                tenant_name="Tenant",
+                context="Eight retrieved sources",
+                model="clarity-standard-rtest",
+                usage_sink=usage,
+            )
+        ]
+
+    assert usage["tokens_out"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_complete_rejects_empty_success_response():
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=""),
+                        finish_reason="length",
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=100, completion_tokens=4096),
+                model="deepseek-v4-flash",
+            )
+
+    service = LLMService()
+    service.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    with pytest.raises(RuntimeError, match="no visible answer"):
+        await service.complete(
+            [{"role": "user", "content": "Analyze jurisdiction"}],
+            tenant_name="Tenant",
+            context="Eight retrieved sources",
+            model="clarity-standard-rtest",
+        )
+
+
+@pytest.mark.asyncio
 async def test_complete_sends_metadata_without_prompt_content():
     class FakeCompletions:
         def __init__(self):

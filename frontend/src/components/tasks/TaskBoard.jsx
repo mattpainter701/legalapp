@@ -23,6 +23,7 @@ import {
   GripVertical,
   History,
   Loader2,
+  Mail,
   MessageSquareText,
   PhoneOutgoing,
   Scale,
@@ -31,9 +32,54 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import { getTask, getTaskEvents, searchUsers } from '../../api'
+import {
+  API_BASE_URL,
+  getTask,
+  getTaskEvents,
+  searchUsers,
+  updateTaskPendingAction,
+} from '../../api'
 
 export const BOARD_STATUSES = ['pending', 'in_progress', 'waiting', 'review', 'completed']
+
+const DELIVERY_POLL_ATTEMPTS = 8
+const DELIVERY_POLL_INTERVAL_MS = 1500
+const DELIVERY_PENDING_STATUSES = new Set(['queued', 'sending'])
+
+const hasPendingDelivery = (columns = []) => columns.some((column) => (
+  (column.items || []).some((task) => DELIVERY_PENDING_STATUSES.has(task.delivery?.status))
+))
+
+const sourceUrl = (url) => {
+  const value = String(url || '').trim()
+  if (value.startsWith('/api/')) {
+    return API_BASE_URL === '/api' ? value : `${API_BASE_URL}${value.slice('/api'.length)}`
+  }
+  return /^https?:\/\//i.test(value) ? value : ''
+}
+
+function TaskSourceChip({ source }) {
+  const className = 'inline-flex max-w-[12rem] items-center gap-1 rounded-full border border-brand-line bg-brand-bg-soft px-2 py-0.5 text-[10px] text-brand-muted'
+  const content = (
+    <>
+      <FileCheck2 size={10} className="shrink-0" />
+      <span className="truncate">{source.label}</span>
+    </>
+  )
+  const href = sourceUrl(source.url)
+  if (!href) return <span className={className}>{content}</span>
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={[source.citation, source.locator].filter(Boolean).join(' | ') || source.label}
+      className={`${className} hover:border-brand-accent hover:text-brand-ink`}
+    >
+      {content}
+    </a>
+  )
+}
 
 const STATUS = {
   pending: { label: 'To Do', icon: CircleDot, tone: 'text-slate-600', border: 'border-slate-200' },
@@ -222,6 +268,58 @@ function DraggableTaskCard({ task, pending, onOpen, onMoveRequest, draggable = t
       {task.status === 'review' && task.reviewer && (
         <p className="mt-2 flex items-center gap-1 text-[11px] text-violet-700"><Eye size={11} /> Review by {task.reviewer.label}</p>
       )}
+      {/* Approving this card will actually do something outward-facing, so say
+          so on the card itself rather than only in the confirm dialog. */}
+      {task.pending_action?.type === 'email_client' && (
+        <p
+          data-testid="pending-action-badge"
+          className="mt-2 flex items-start gap-1 rounded-lg bg-brand-accent/[0.07] px-2 py-1.5 text-[11px] text-brand-accent-2"
+        >
+          <Mail size={11} className="mt-0.5 shrink-0" />
+          <span>
+            {task.status === 'review' && <>Approving emails {(task.pending_action.to || []).join(', ')}</>}
+            {task.status !== 'review' && <>Draft email remains unsent for {(task.pending_action.to || []).join(', ')}</>}
+          </span>
+        </p>
+      )}
+      {(task.pending_action?.sources || []).length > 0 && (
+        <ul data-testid="task-source-chips" className="mt-2 flex flex-wrap gap-1">
+          {task.pending_action.sources.map((source) => (
+            <li key={source.source_id}>
+              <TaskSourceChip source={source} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {task.source === 'assistant' && (
+        <p className="mt-1.5 text-[10px] uppercase tracking-wider text-brand-muted">
+          Drafted by the assistant
+        </p>
+      )}
+      {task.delivery?.status === 'failed' && (
+        <p role="alert" className={`mt-2 rounded-lg px-2 py-1.5 text-[11px] ${task.delivery.delivery_certainty === 'not_attempted' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-800'}`}>
+          {task.delivery.delivery_certainty === 'not_attempted' ? (
+            <>Email was not sent: {task.delivery.error_message || 'delivery stopped before a provider attempt'}. Resolve the issue and approve again.</>
+          ) : (
+            <>Delivery not confirmed: {task.delivery.error_message || 'the provider did not confirm delivery'}. Check the connected mailbox&apos;s Sent Items before retrying; another attempt could send a duplicate.</>
+          )}
+        </p>
+      )}
+      {task.delivery?.status === 'queued' && (
+        <p role="status" className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+          Approved and queued for delivery. Not yet confirmed sent.
+        </p>
+      )}
+      {task.delivery?.status === 'sending' && (
+        <p role="status" className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+          Delivery attempt in progress. Not yet confirmed sent.
+        </p>
+      )}
+      {task.delivery?.status === 'sent' && (
+        <p className="mt-2 flex items-center gap-1 text-[11px] text-brand-accent">
+          <Check size={11} /> Sent to the client
+        </p>
+      )}
 
       <div className="mt-3 flex items-center justify-between border-t border-brand-line/70 pt-2">
         <div className="flex min-w-0 items-center gap-1 text-[11px] text-brand-muted">
@@ -320,14 +418,37 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
   const [followUp, setFollowUp] = useState('')
   const [reviewer, setReviewer] = useState(null)
   const [error, setError] = useState(null)
+  const [deliveryRiskAcknowledged, setDeliveryRiskAcknowledged] = useState(false)
   const dialogRef = useRef(null)
   useFocusTrap(dialogRef, () => { if (!saving) onClose() })
   const target = request.toStatus
   const config = STATUS[target]
+  const emailApproval = request.task.status === 'review'
+    && request.task.pending_action?.type === 'email_client'
+    && target === 'in_progress'
+  const activeDelivery = emailApproval
+    && ['queued', 'sending'].includes(request.task.delivery?.status)
+  const confirmedDelivery = emailApproval
+    && request.task.delivery?.status === 'sent'
+  const unknownOutcomeRetry = emailApproval
+    && request.task.delivery?.status === 'failed'
+    && request.task.delivery?.delivery_certainty !== 'not_attempted'
   const submit = async event => {
     event.preventDefault()
     if (target === 'waiting' && !reason.trim()) {
       setError('Explain what this task is waiting on.')
+      return
+    }
+    if (activeDelivery) {
+      setError('Wait for the active delivery attempt to finish before approving again.')
+      return
+    }
+    if (confirmedDelivery) {
+      setError('This delivery is already confirmed sent and cannot be approved again.')
+      return
+    }
+    if (unknownOutcomeRetry && !deliveryRiskAcknowledged) {
+      setError('Check Sent Items and acknowledge the duplicate-delivery risk before retrying.')
       return
     }
     setError(null)
@@ -335,6 +456,9 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
       reason: reason.trim() || undefined,
       waiting_follow_up_date: followUp || undefined,
       reviewer_user_id: reviewer?.id || undefined,
+      ...(unknownOutcomeRetry && deliveryRiskAcknowledged
+        ? { acknowledge_prior_delivery_risk: true }
+        : {}),
     })
   }
   return (
@@ -349,6 +473,64 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close move dialog" className="rounded p-1 text-brand-muted hover:bg-brand-bg-soft"><X size={17} /></button>
         </header>
         <div className="space-y-4 px-5 py-4">
+          {/* The board is an approval surface for assistant-drafted work, so a
+              move that will send outbound client correspondence has to name the
+              recipients before the operator confirms it. */}
+          {request.task.status === 'review'
+            && request.task.pending_action?.type === 'email_client'
+            && target === 'in_progress' && (
+            <div role="note" className="rounded-lg border border-brand-accent/40 bg-brand-accent/[0.06] px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-brand-accent-2">
+                <Mail size={12} /> This approval sends an email
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">
+                To {(request.task.pending_action.to || []).join(', ')} — subject
+                “{request.task.pending_action.subject}”. Open the task to read
+                or edit the draft before approving.
+              </p>
+            </div>
+          )}
+          {request.task.status === 'review'
+            && request.task.pending_action?.type === 'email_client'
+            && target !== 'review'
+            && target !== 'in_progress' && (
+            <div role="note" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                <Mail size={12} /> This move does not send the email
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-ink">
+                The draft remains unsent. Only moving this task from Review to In Progress is approval to deliver it.
+              </p>
+            </div>
+          )}
+          {emailApproval && request.task.delivery?.status === 'failed' && (
+            <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11px] leading-relaxed text-amber-950">
+              {request.task.delivery.delivery_certainty === 'not_attempted' ? (
+                <p><strong>Email was not sent.</strong> Resolve the recorded issue; this exact draft may then be approved again.</p>
+              ) : (
+                <label className="flex items-start gap-2 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={deliveryRiskAcknowledged}
+                    onChange={event => setDeliveryRiskAcknowledged(event.target.checked)}
+                    disabled={saving}
+                    className="mt-0.5"
+                  />
+                  I checked the connected mailbox Sent Items and understand that another attempt could send a duplicate.
+                </label>
+              )}
+            </div>
+          )}
+          {emailApproval && activeDelivery && (
+            <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11px] font-semibold text-amber-950">
+              The previous delivery is still {request.task.delivery.status}; another approval is disabled.
+            </p>
+          )}
+          {emailApproval && confirmedDelivery && (
+            <p role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-[11px] font-semibold text-emerald-950">
+              This delivery is already confirmed sent; another approval is disabled.
+            </p>
+          )}
           {target === 'waiting' && (
             <>
               <div>
@@ -374,7 +556,7 @@ function TaskTransitionDialog({ request, onClose, onConfirm, saving }) {
         </div>
         <footer className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-4 py-2 text-sm text-brand-muted hover:bg-brand-bg-soft">Cancel</button>
-          <button type="submit" disabled={saving || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} Move task</button>
+          <button type="submit" disabled={saving || activeDelivery || confirmedDelivery || (unknownOutcomeRetry && !deliveryRiskAcknowledged) || (target === 'cancelled' && !reason.trim())} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">{saving && <Loader2 size={14} className="animate-spin" />} Move task</button>
         </footer>
       </form>
     </div>
@@ -386,11 +568,202 @@ function eventLabel(event) {
   return event.event_type.replaceAll('_', ' ')
 }
 
-function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, canOpenMatters }) {
+function PendingEmailDraftPanel({
+  task,
+  pendingEmail,
+  editable,
+  auditSnapshot,
+  delivery,
+  editing,
+  saving,
+  subject,
+  body,
+  error,
+  notice,
+  onEdit,
+  onSubjectChange,
+  onBodyChange,
+  onSave,
+  onCancel,
+}) {
+  return (
+    <section
+      aria-labelledby={'outbound-draft-' + task.id}
+      className="rounded-xl border border-brand-accent/35 bg-brand-accent/[0.04] p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id={'outbound-draft-' + task.id} className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-brand-accent-2">
+            <Mail size={13} /> {auditSnapshot ? 'Immutable delivery audit snapshot' : 'Authoritative outbound email draft'}
+          </h3>
+          <p className="mt-1 text-[11px] leading-relaxed text-brand-muted">
+            {auditSnapshot
+              ? 'This is the exact payload recorded for the delivery attempt. It cannot be edited.'
+              : 'This exact subject and body will be delivered only if the task moves from Review to In Progress.'}
+          </p>
+        </div>
+        {editable && !editing && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-lg border border-brand-line bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:border-brand-accent"
+          >
+            Edit draft
+          </button>
+        )}
+      </div>
+
+      <dl className="mt-3 space-y-2 text-sm">
+        <div>
+          <dt className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">To</dt>
+          <dd className="mt-0.5 break-all text-brand-ink">{(pendingEmail.to || []).join(', ')}</dd>
+        </div>
+        {!editing && (
+          <div>
+            <dt className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">Subject</dt>
+            <dd className="mt-0.5 break-words text-brand-ink">{pendingEmail.subject}</dd>
+          </div>
+        )}
+      </dl>
+
+      {editing ? (
+        <form
+          className="mt-3 space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSave()
+          }}
+        >
+          <div>
+            <label htmlFor={'draft-subject-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">
+              Subject
+            </label>
+            <input
+              id={'draft-subject-' + task.id}
+              value={subject}
+              onChange={(event) => onSubjectChange(event.target.value)}
+              maxLength={300}
+              disabled={saving}
+              className="w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink disabled:opacity-60"
+            />
+          </div>
+          <div>
+            <label htmlFor={'draft-body-' + task.id} className="mb-1 block text-xs font-semibold text-brand-ink">
+              Email body
+            </label>
+            <textarea
+              id={'draft-body-' + task.id}
+              value={body}
+              onChange={(event) => onBodyChange(event.target.value)}
+              rows={9}
+              maxLength={20000}
+              disabled={saving}
+              className="w-full resize-y rounded-lg border border-brand-line bg-white px-3 py-2 text-sm leading-relaxed text-brand-ink disabled:opacity-60"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" disabled={saving} className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+              {saving && <Loader2 size={14} className="animate-spin" />}
+              Save outbound draft
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={saving}
+              className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-muted hover:bg-white disabled:opacity-50"
+            >
+              Cancel edit
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="mt-3">
+          <h4 className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">Email body</h4>
+          <p className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-sm leading-relaxed text-brand-ink">
+            {pendingEmail.body}
+          </p>
+        </div>
+      )}
+
+      {!editable && (
+        <p className="mt-3 text-xs font-semibold text-brand-muted">
+          {auditSnapshot
+            ? 'The recorded delivery payload is read-only.'
+            : 'This draft is read-only because the task is no longer in Review.'}
+        </p>
+      )}
+      {(pendingEmail.sources || []).length > 0 && (
+        <ul className="mt-3 flex flex-wrap gap-1" aria-label="Outbound draft sources">
+          {pendingEmail.sources.map((source) => (
+            <li key={source.source_id}><TaskSourceChip source={source} /></li>
+          ))}
+        </ul>
+      )}
+      {auditSnapshot && (
+        <dl className="mt-3 grid gap-2 border-t border-brand-line pt-3 text-[11px] sm:grid-cols-2" aria-label="Delivery audit details">
+          {delivery?.provider && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider</dt><dd className="mt-0.5 break-all text-brand-ink">{delivery.provider}</dd></div>}
+          {delivery?.provider_message_id && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider message ID</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{delivery.provider_message_id}</dd></div>}
+          {delivery?.action_sha256 && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Payload fingerprint</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{delivery.action_sha256}</dd></div>}
+          {delivery?.delivery_detail && <div className="sm:col-span-2"><dt className="font-bold uppercase tracking-wide text-brand-muted">Delivery detail</dt><dd className="mt-0.5 text-brand-ink">{delivery.delivery_detail}</dd></div>}
+        </dl>
+      )}
+      {notice && <p role="status" className="mt-3 text-xs font-semibold text-emerald-700">{notice}</p>}
+      {error && <p role="alert" className="mt-3 text-xs font-semibold text-red-700">{error}</p>}
+    </section>
+  )
+}
+
+function DeliveryAttemptHistory({ attempts }) {
+  if (!Array.isArray(attempts) || attempts.length < 1) return null
+  return (
+    <section aria-labelledby="delivery-attempt-history">
+      <h3 id="delivery-attempt-history" className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-brand-muted">
+        <History size={13} /> Delivery attempts
+      </h3>
+      <ol className="mt-3 space-y-2">
+        {attempts.map((attempt, index) => {
+          const snapshot = attempt.action_snapshot || {}
+          return (
+            <li key={attempt.id || `${attempt.created_at || 'attempt'}-${index}`}>
+              <details className="rounded-xl border border-brand-line bg-brand-bg-soft p-3" open={index < 2}>
+                <summary className="cursor-pointer text-xs font-semibold text-brand-ink">
+                  Attempt {attempts.length - index}: {String(attempt.status || 'unknown').replaceAll('_', ' ')}
+                  {attempt.delivery_certainty ? ` — ${attempt.delivery_certainty.replaceAll('_', ' ')}` : ''}
+                </summary>
+                <dl className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2">
+                  <div><dt className="font-bold uppercase tracking-wide text-brand-muted">To</dt><dd className="mt-0.5 break-all text-brand-ink">{(snapshot.to || []).join(', ') || 'Not recorded'}</dd></div>
+                  <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Subject</dt><dd className="mt-0.5 break-words text-brand-ink">{snapshot.subject || 'Not recorded'}</dd></div>
+                  {attempt.provider && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider</dt><dd className="mt-0.5 text-brand-ink">{attempt.provider}</dd></div>}
+                  {attempt.provider_message_id && <div><dt className="font-bold uppercase tracking-wide text-brand-muted">Provider message ID</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{attempt.provider_message_id}</dd></div>}
+                  {attempt.action_sha256 && <div className="sm:col-span-2"><dt className="font-bold uppercase tracking-wide text-brand-muted">Payload fingerprint</dt><dd className="mt-0.5 break-all font-mono text-brand-ink">{attempt.action_sha256}</dd></div>}
+                  {attempt.delivery_detail && <div className="sm:col-span-2"><dt className="font-bold uppercase tracking-wide text-brand-muted">Delivery detail</dt><dd className="mt-0.5 text-brand-ink">{attempt.delivery_detail}</dd></div>}
+                </dl>
+                {snapshot.body && <p className="mt-3 whitespace-pre-wrap rounded-lg bg-white p-3 text-xs leading-relaxed text-brand-ink">{snapshot.body}</p>}
+                {(snapshot.sources || []).length > 0 && (
+                  <ul className="mt-3 flex flex-wrap gap-1" aria-label={`Sources for delivery attempt ${attempts.length - index}`}>
+                    {snapshot.sources.map(source => <li key={source.source_id}><TaskSourceChip source={source} /></li>)}
+                  </ul>
+                )}
+              </details>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
+function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, onTaskUpdated, canOpenMatters }) {
   const [task, setTask] = useState(null)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [draftSubject, setDraftSubject] = useState('')
+  const [draftBody, setDraftBody] = useState('')
+  const [draftEditing, setDraftEditing] = useState(false)
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [draftError, setDraftError] = useState(null)
+  const [draftNotice, setDraftNotice] = useState(null)
   const drawerRef = useRef(null)
   useEffect(() => {
     let active = true
@@ -399,7 +772,13 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, canO
     Promise.all([getTask(taskId), getTaskEvents(taskId).catch(() => ({ items: [] }))])
       .then(([detail, history]) => {
         if (!active) return
-        setTask({ ...card, ...detail, matter: card?.matter, assignee: card?.assignee, reviewer: card?.reviewer })
+        const loadedTask = { ...card, ...detail, matter: card?.matter, assignee: card?.assignee, reviewer: card?.reviewer }
+        setTask(loadedTask)
+        setDraftSubject(loadedTask.pending_action?.subject || '')
+        setDraftBody(loadedTask.pending_action?.body || '')
+        setDraftEditing(false)
+        setDraftError(null)
+        setDraftNotice(null)
         setEvents(history.items || [])
       })
       .catch(err => { if (active) setError(apiError(err, 'Task details could not be loaded.')) })
@@ -410,6 +789,71 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, canO
   const intakeFollowUp = task?.external_ref?.startsWith('intake-dashboard:lead:') && task?.external_ref?.endsWith(':follow-up')
   const attorneyIntake = task?.external_ref?.startsWith('intake-dashboard:lead:') && task?.external_ref?.endsWith(':attorney-intake')
   const isClosed = task?.status === 'completed' || task?.status === 'cancelled'
+  const livePendingEmail = (
+    task?.pending_action?.type === 'email_client' && task.pending_action
+  ) || null
+  const deliveryEmailSnapshot = (
+    task?.delivery?.action_snapshot?.type === 'email_client'
+    && task.delivery.action_snapshot
+  ) || null
+  const pendingEmail = livePendingEmail || deliveryEmailSnapshot
+  const auditSnapshot = !livePendingEmail && Boolean(deliveryEmailSnapshot)
+  const draftEditable = Boolean(livePendingEmail) && task?.status === 'review'
+
+  const resetDraft = (sourceTask = task) => {
+    setDraftSubject(sourceTask?.pending_action?.subject || '')
+    setDraftBody(sourceTask?.pending_action?.body || '')
+    setDraftEditing(false)
+    setDraftError(null)
+  }
+
+  const applyUpdatedTask = (updated) => {
+    const merged = { ...task, ...updated }
+    setTask(merged)
+    setDraftSubject(merged.pending_action?.subject || '')
+    setDraftBody(merged.pending_action?.body || '')
+    onTaskUpdated?.(merged)
+  }
+
+  const savePendingEmailDraft = async () => {
+    const subject = draftSubject.trim()
+    if (!subject || !draftBody.trim()) {
+      setDraftError('A subject and email body are required before this draft can be saved.')
+      return
+    }
+    if (!Number.isInteger(task?.version) || task.version < 1) {
+      setDraftError('The live task version is unavailable. Close and reopen the task before editing.')
+      return
+    }
+    setDraftSaving(true)
+    setDraftError(null)
+    setDraftNotice(null)
+    try {
+      const updated = await updateTaskPendingAction(task.id, {
+        subject,
+        body: draftBody,
+        expected_version: task.version,
+      })
+      applyUpdatedTask(updated)
+      setDraftEditing(false)
+      setDraftNotice('The authoritative outbound draft was saved.')
+    } catch (err) {
+      let message = apiError(err, 'The outbound draft could not be saved.')
+      if (err?.response?.status === 409) {
+        try {
+          const current = await getTask(task.id)
+          applyUpdatedTask(current)
+          setDraftEditing(false)
+          message += ' The latest server draft has been reloaded.'
+        } catch {
+          // Preserve the conflict rather than replacing it with a refresh error.
+        }
+      }
+      setDraftError(message)
+    } finally {
+      setDraftSaving(false)
+    }
+  }
   return (
     <div className="fixed inset-0 z-[60] flex justify-end bg-black/30" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
       <aside ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="task-detail-title" className="flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
@@ -435,7 +879,32 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, canO
                 <div><dt className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">Type</dt><dd className="mt-1 capitalize text-brand-ink">{task.task_type?.replaceAll('_', ' ')}</dd></div>
                 <div><dt className="text-[11px] font-bold uppercase tracking-wide text-brand-muted">Column age</dt><dd className="mt-1 text-brand-ink">{taskAge(task.status_changed_at)}</dd></div>
               </dl>
-              {task.description && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
+              {pendingEmail && (
+                <PendingEmailDraftPanel
+                  task={task}
+                  pendingEmail={pendingEmail}
+                  editable={draftEditable}
+                  auditSnapshot={auditSnapshot}
+                  delivery={task.delivery}
+                  editing={draftEditing}
+                  saving={draftSaving}
+                  subject={draftSubject}
+                  body={draftBody}
+                  error={draftError}
+                  notice={draftNotice}
+                  onEdit={() => {
+                    setDraftEditing(true)
+                    setDraftError(null)
+                    setDraftNotice(null)
+                  }}
+                  onSubjectChange={setDraftSubject}
+                  onBodyChange={setDraftBody}
+                  onSave={savePendingEmailDraft}
+                  onCancel={resetDraft}
+                />
+              )}
+              <DeliveryAttemptHistory attempts={task.delivery_history} />
+              {task.description && !pendingEmail && <section><h3 className="text-xs font-bold uppercase tracking-wide text-brand-muted">Notes</h3><p className="mt-2 whitespace-pre-wrap rounded-xl bg-brand-bg-soft p-4 text-sm leading-relaxed text-brand-ink">{task.description}</p></section>}
               {task.waiting_reason && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4"><h3 className="text-xs font-bold uppercase tracking-wide text-amber-800">Waiting on</h3><p className="mt-1 text-sm text-amber-950">{task.waiting_reason}</p>{task.waiting_follow_up_date && <p className="mt-2 text-xs text-amber-800">Follow up {localDate(task.waiting_follow_up_date).toLocaleDateString()}</p>}</section>}
               <section>
                 <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-brand-muted"><History size={13} /> Activity</h3>
@@ -454,8 +923,20 @@ function TaskDetailDrawer({ taskId, card, onClose, onMoveRequest, onAction, canO
         </div>
         {task && (
           <footer className="border-t border-brand-line bg-white px-5 py-4">
+            {draftEditing && (
+              <p className="mb-2 text-xs font-semibold text-amber-800">
+                Save or cancel the draft edit before moving this task.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => onMoveRequest(task)} className="btn-primary inline-flex items-center gap-2"><ArrowRight size={14} /> Move to…</button>
+              <button
+                type="button"
+                onClick={() => onMoveRequest(task)}
+                disabled={draftEditing || draftSaving}
+                className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowRight size={14} /> Move to…
+              </button>
               {!isClosed && <button type="button" onClick={() => onAction('reassign', task)} className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-bg-soft">Reassign</button>}
               {!isClosed && task.contact_id && !task.customer_contacted_at && <button type="button" onClick={() => onAction('contact', task)} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">Log contact</button>}
               {!isClosed && intakeFollowUp && <button type="button" onClick={() => onAction('qualify', task)} className="rounded-lg border border-brand-accent/30 px-3 py-2 text-sm font-semibold text-brand-accent hover:bg-brand-accent hover:text-white">Qualify lead</button>}
@@ -479,18 +960,79 @@ export default function TaskBoard({ data, loading, error, scope, onRetry, onTran
   const [localError, setLocalError] = useState(null)
   const [announcement, setAnnouncement] = useState('')
   const destinationRef = useRef(null)
+  const onRetryRef = useRef(onRetry)
   useFocusTrap(
     destinationRef,
     () => setMoveRequest(null),
     Boolean(moveRequest && moveRequest.toStatus === null),
   )
   useEffect(() => { setColumns(data?.columns || []) }, [data])
+  useEffect(() => { onRetryRef.current = onRetry }, [onRetry])
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor),
   )
   const cards = useMemo(() => columns.flatMap(column => column.items), [columns])
   const selectedCard = taskId ? cards.find(card => card.id === taskId) : null
+  const deliveryWatchKey = useMemo(
+    () => cards
+      .filter((task) => DELIVERY_PENDING_STATUSES.has(task.delivery?.status))
+      .map((task) => task.id + ':' + (task.version || 'unknown'))
+      .sort()
+      .join('|'),
+    [cards],
+  )
+
+  useEffect(() => {
+    if (!deliveryWatchKey || typeof onRetryRef.current !== 'function') return undefined
+    let cancelled = false
+    let timerId = null
+
+    const waitForNextAttempt = () => new Promise((resolve) => {
+      timerId = window.setTimeout(resolve, DELIVERY_POLL_INTERVAL_MS)
+    })
+    const poll = async () => {
+      for (let attempt = 0; attempt < DELIVERY_POLL_ATTEMPTS; attempt += 1) {
+        await waitForNextAttempt()
+        if (cancelled) return
+        let refreshed
+        try {
+          refreshed = await onRetryRef.current()
+        } catch {
+          return
+        }
+        if (cancelled || !refreshed?.columns || !hasPendingDelivery(refreshed.columns)) return
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      if (timerId) window.clearTimeout(timerId)
+    }
+  }, [deliveryWatchKey])
+
+  useEffect(() => {
+    if (!deliveryWatchKey || typeof onRetryRef.current !== 'function') return undefined
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      Promise.resolve(onRetryRef.current()).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => document.removeEventListener('visibilitychange', refreshWhenVisible)
+  }, [deliveryWatchKey])
+
+  const applyTaskUpdate = (updatedTask) => {
+    setColumns((current) => current.map((column) => ({
+      ...column,
+      items: column.items.map((item) => (
+        item.id === updatedTask.id ? { ...item, ...updatedTask } : item
+      )),
+    })))
+    setMoveRequest((current) => {
+      if (current?.task?.id !== updatedTask.id) return current
+      return { ...current, task: { ...current.task, ...updatedTask } }
+    })
+  }
 
   const performTransition = async (task, toStatus, details = {}) => {
     if (task.status === toStatus && !details.reason && !details.reviewer_user_id && !details.waiting_follow_up_date) return
@@ -518,7 +1060,16 @@ export default function TaskBoard({ data, loading, error, scope, onRetry, onTran
   const requestDestination = task => setMoveRequest({ task, toStatus: null })
   const selectDestination = (task, toStatus) => {
     if (!toStatus || toStatus === task.status) { setMoveRequest(null); return }
-    const needsDialog = ['waiting', 'review', 'completed', 'cancelled'].includes(toStatus) || ['completed', 'cancelled'].includes(task.status)
+    // Approving drafted work out of Review executes it — for an email_client
+    // action that means real outbound client correspondence. Those moves always
+    // confirm, even for destinations that are otherwise a one-click drag: a
+    // mis-drop must not be able to email a client.
+    const movesPendingAction = task.status === 'review'
+      && Boolean(task.pending_action)
+      && toStatus !== 'review'
+    const needsDialog = movesPendingAction
+      || ['waiting', 'review', 'completed', 'cancelled'].includes(toStatus)
+      || ['completed', 'cancelled'].includes(task.status)
     if (needsDialog) setMoveRequest({ task, toStatus })
     else performTransition(task, toStatus).catch(() => {})
   }
@@ -582,7 +1133,7 @@ export default function TaskBoard({ data, loading, error, scope, onRetry, onTran
         </div>
       )}
       {moveRequest?.toStatus && <TaskTransitionDialog request={moveRequest} saving={moveSaving} onClose={() => !moveSaving && setMoveRequest(null)} onConfirm={async details => { setMoveSaving(true); try { await performTransition(moveRequest.task, moveRequest.toStatus, details) } catch { /* inline board error */ } finally { setMoveSaving(false) } }} />}
-      {taskId && <TaskDetailDrawer taskId={taskId} card={selectedCard} onClose={onCloseTask} onMoveRequest={requestDestination} onAction={onTaskAction} canOpenMatters={canOpenMatters} />}
+      {taskId && <TaskDetailDrawer taskId={taskId} card={selectedCard} onClose={onCloseTask} onMoveRequest={requestDestination} onAction={onTaskAction} onTaskUpdated={applyTaskUpdate} canOpenMatters={canOpenMatters} />}
     </div>
   )
 }

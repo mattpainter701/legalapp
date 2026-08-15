@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "pack_version": "bk24-corporate-demo-v1",
+  "tenant_domain": "cybersafeadvisor.com",
+  "synthetic": true,
+  "warning": "SYNTHETIC DEMO - NOT LEGAL ADVICE",
+  "matters": [
+    {
+      "external_key": "demo-northstar-saas-review",
+      "name": "Northstar Analytics - SaaS Vendor Review",
+      "practice_area": "Corporate / Commercial Contracts",
+      "status": "Open - Negotiation",
+      "client": "Northstar Analytics, Inc. (fictional)",
+      "documents": [
+        "01-northstar-cloud-master-services-agreement.docx",
+        "02-northstar-cloud-data-security-addendum.docx"
+      ],
+      "demo_prompt": "Review the MSA and data addendum for customer-side risks, cite the source clauses, and propose follow-up tasks for the renewal and data-use issues.",
+      "suggested_tasks": [
+        "Negotiate AI training and de-identification restriction",
+        "Propose a 12-month fee cap and calendar the renewal notice",
+        "Add security/privacy liability carve-out and balanced indemnity"
+      ],
+      "renewal": {
+        "date": "2027-07-31",
+        "notice_days": 60
+      }
+    },
+    {
+      "external_key": "demo-harborlight-seed-financing",
+      "name": "HarborLight Robotics - Series Seed Financing",
+      "practice_area": "Corporate / Financing",
+      "status": "Open - Pre-Closing",
+      "client": "HarborLight Robotics, Inc. (fictional)",
+      "documents": [
+        "03-harborlight-series-seed-term-sheet.docx",
+        "04-harborlight-board-written-consent.docx"
+      ],
+      "demo_prompt": "Compare the term sheet to the board consent, identify missing approvals and closing conditions, and prepare a prioritized closing checklist.",
+      "suggested_tasks": [
+        "Verify charter/bylaw approval thresholds and director conflicts",
+        "Prepare stockholder consent and charter filing package",
+        "Reconcile option pool and capitalization certificate",
+        "Collect invention assignments and key-person agreements"
+      ],
+      "target_close": "2026-09-15"
+    },
+    {
+      "external_key": "demo-redwood-ogc-retainer",
+      "name": "Redwood Outdoor Supply - Outside General Counsel Retainer",
+      "practice_area": "Outside General Counsel",
+      "status": "Open - Recurring",
+      "client": "Redwood Outdoor Supply, Inc. (fictional)",
+      "documents": [
+        "05-redwood-ogc-engagement-letter.docx",
+        "06-redwood-monthly-request-and-contract-calendar.docx"
+      ],
+      "demo_prompt": "Triage the August legal requests, show the next notice deadlines, and draft the monthly retainer portfolio summary with decisions needed.",
+      "suggested_tasks": [
+        "Review PinePeak exclusivity and forecast remedies",
+        "Calendar Evergreen Packaging non-renewal notice",
+        "Review warehouse pilot data and security terms",
+        "Prepare September board-materials legal section"
+      ],
+      "retainer": {
+        "monthly_usd": 12500,
+        "included_attorney_hours": 45
+      }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -7,6 +8,7 @@ import re
 import shutil
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List
@@ -23,15 +25,16 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import exists, select, func, text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.config import get_settings
-from app.database import async_session_maker, get_db, set_tenant_context
+from app.database import get_db, set_tenant_context
 from app.middleware.tenant import get_current_user
 from app.models.conversation import Conversation, Message, UsageRecord
 from app.models.document import Document
 from app.models.plugin import Matter as MatterModel
+from app.models.tenant import Tenant
 from app.schemas.chat import (
     ChatAttachmentResponse,
     ConversationCreate,
@@ -43,7 +46,11 @@ from app.schemas.chat import (
     SourceCitation,
 )
 from app.services.embeddings import EmbeddingService
-from app.services.rag import cloud_context_source_id, hybrid_rag_query
+from app.services.rag import (
+    cloud_context_source_id,
+    hybrid_rag_query,
+    rag_result_is_cacheable,
+)
 from app.services.llm import LLMService
 from app.services.llm_routing import (
     classify_query_complexity,
@@ -54,10 +61,13 @@ from app.services.memory_service import MemoryService
 from app.services.matter_context import MatterContextService
 from app.services.cache import ExpertiseCacheManager
 from app.services.gateway_privacy import gateway_metadata, retained_gateway_query_text
+from app.services.chat_agent import ChatActionAgent
 from app.utils.guardrails import (
     apply_guardrails,
+    build_citation_annotations,
     check_pii_in_input,
     consolidate_unverified_model_knowledge,
+    enforce_legal_citation_integrity,
     prepare_provider_messages,
     prepare_provider_text,
     reconcile_retrieved_source_attribution,
@@ -73,7 +83,21 @@ settings = get_settings()
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _ANCHOR_TEXT_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
 _HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(\s*([^\s)]+)\s*\)")
 _SOURCE_REFERENCE_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
+_UNKNOWN_SOURCE_TEXT = {
+    "unknown",
+    "unknown case",
+    "no citation",
+    "none",
+    "null",
+    "n/a",
+}
+
+_STREAM_INTERRUPTED_MESSAGE = (
+    "**Response interrupted.** A complete answer was not saved. "
+    "Retry this message before relying on the analysis."
+)
 
 
 def _clean_source_text(value, max_length: int | None = None) -> str:
@@ -92,29 +116,59 @@ def _clean_source_text(value, max_length: int | None = None) -> str:
     return text
 
 
+def _meaningful_source_text(value, max_length: int | None = None) -> str:
+    """Normalize source identity while suppressing legacy placeholder labels."""
+    text = _clean_source_text(value, max_length)
+    return "" if text.casefold() in _UNKNOWN_SOURCE_TEXT else text
+
+
+def _first_meaningful_source_text(*values, max_length: int | None = None) -> str:
+    for value in values:
+        text = _meaningful_source_text(value, max_length)
+        if text:
+            return text
+    return ""
+
+
 def _normalize_source_url(value: str | None) -> str | None:
     if not value:
         return None
     url = html.unescape(str(value).strip())
     if not url:
         return None
+    markdown_match = _MARKDOWN_LINK_RE.fullmatch(url)
+    if markdown_match:
+        url = markdown_match.group(1).strip()
+    url = url.strip("<>")
     if url.startswith("//"):
         return f"https:{url}"
+    # Authenticated LawHand document links are intentionally origin-relative so
+    # they work in local, staging, and production environments.  CourtListener
+    # paths use a different namespace (for example ``/opinion/...``).
+    if url.startswith("/api/"):
+        return url
     if url.startswith("/"):
         return f"https://www.courtlistener.com{url}"
+    if url.startswith("www.courtlistener.com/") or url.startswith("courtlistener.com/"):
+        return f"https://{url}"
     if url.startswith("http://") or url.startswith("https://"):
         return url
     return None
 
 
 def _source_url_from_chunk(chunk: dict) -> str | None:
+    # CourtListener opinion IDs are stable and first-party. Prefer that link
+    # over a legacy publisher URL retained in older bulk-sync metadata.
+    opinion_id = chunk.get("opinion_id")
+    if opinion_id:
+        return f"https://www.courtlistener.com/opinion/{opinion_id}/"
     for key in ("url", "source_url", "absolute_url"):
         url = _normalize_source_url(chunk.get(key))
         if url:
             return url
-    opinion_id = chunk.get("opinion_id")
-    if opinion_id:
-        return f"https://www.courtlistener.com/opinion/{opinion_id}/"
+    document_id = chunk.get("document_id")
+    if document_id:
+        return f"/api/documents/{document_id}/download"
     for key in ("citation", "content", "excerpt"):
         raw = chunk.get(key)
         if not raw:
@@ -124,13 +178,18 @@ def _source_url_from_chunk(chunk: dict) -> str | None:
             url = _normalize_source_url(href_match.group(1))
             if url:
                 return url
+        markdown_match = _MARKDOWN_LINK_RE.search(str(raw))
+        if markdown_match:
+            url = _normalize_source_url(markdown_match.group(1))
+            if url:
+                return url
     return None
 
 
 def _source_label(source_type: str | None) -> str:
     labels = {
-        "public_authority": "Cited authority",
-        "courtlistener_mcp": "Cited authority",
+        "public_authority": "Public authority",
+        "courtlistener_mcp": "Public authority",
         "cloud": "Cloud context",
         "matter_context": "Matter context",
         "tenant_document": "Firm context",
@@ -175,18 +234,45 @@ def _source_locator_from_chunk(chunk: dict) -> str | None:
 
 
 def _source_dict_from_chunk(chunk: dict) -> dict:
-    raw_source = chunk.get("source") or ""
-    source_type = chunk.get("clause_type") or raw_source or "public_authority"
+    raw_source = str(chunk.get("source") or "")
     if raw_source in {
         "courtlistener_mcp",
         "legal_authority_mcp",
         "public_courtlistener",
     }:
         source_type = "public_authority"
-    return {
+    elif raw_source.startswith("tenant_document"):
+        source_type = "tenant_document"
+    elif raw_source in {"matter_context", "cloud"}:
+        source_type = raw_source
+    else:
+        source_type = str(chunk.get("source_type") or raw_source or "context")
+
+    is_public = source_type == "public_authority"
+    if is_public:
+        title = _first_meaningful_source_text(
+            chunk.get("case_name"),
+            chunk.get("title"),
+            max_length=180,
+        )
+    else:
+        title = _first_meaningful_source_text(
+            chunk.get("document_title"),
+            chunk.get("filename"),
+            chunk.get("case_name"),
+            chunk.get("title"),
+            max_length=180,
+        )
+    title = title or ("Unidentified authority" if is_public else "Firm document")
+    citation = _first_meaningful_source_text(
+        chunk.get("citation"),
+        chunk.get("document_title") if not is_public else None,
+        max_length=120,
+    )
+    source_dict = {
         "source_id": str(chunk.get("id")) if chunk.get("id") is not None else None,
-        "case_name": _clean_source_text(chunk.get("case_name"), 180) or "Unknown Case",
-        "citation": _clean_source_text(chunk.get("citation"), 120),
+        "case_name": title,
+        "citation": citation,
         "court": _clean_source_text(chunk.get("court"), 120) or None,
         "excerpt": _clean_source_text(
             chunk.get("content") or chunk.get("excerpt"), 300
@@ -195,7 +281,40 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "source_type": source_type,
         "source_label": _source_label(source_type),
         "locator": _source_locator_from_chunk(chunk),
+        "relevance_score": (
+            chunk.get("evidence_relevance_score")
+            if is_public
+            else chunk.get("similarity")
+        ),
+        "authority_tier": _clean_source_text(chunk.get("authority_tier"), 80)
+        or None,
+        "official_status": _clean_source_text(chunk.get("official_status"), 40)
+        or None,
+        "effective_date": _clean_source_text(chunk.get("effective_date"), 40)
+        or None,
+        "cited": False,
     }
+    retrieval_jurisdiction = _clean_source_text(chunk.get("retrieval_jurisdiction"), 20)
+    if is_public and retrieval_jurisdiction:
+        source_dict["retrieval_jurisdiction"] = retrieval_jurisdiction
+    return source_dict
+
+
+def _mark_cited_sources(text: str, sources: list[dict]) -> list[dict]:
+    """Record which retrieved rows the final answer actually references."""
+    cited_ids = {
+        value.strip().casefold() for value in _SOURCE_REFERENCE_RE.findall(text or "")
+    }
+    return [
+        {
+            **source,
+            "cited": bool(
+                source.get("source_id")
+                and str(source["source_id"]).strip().casefold() in cited_ids
+            ),
+        }
+        for source in sources
+    ]
 
 
 def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
@@ -217,6 +336,7 @@ def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
             hit_dict.get("section_path") or hit_dict.get("modified_time"), 120
         )
         or None,
+        "relevance_score": hit_dict.get("relevance_score"),
     }
 
 
@@ -288,6 +408,7 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 
 embedding_service = EmbeddingService()
 llm_service = LLMService()
+chat_action_agent = ChatActionAgent(llm_service)
 memory_service = MemoryService(llm_service)
 matter_context_service = MatterContextService()
 cache_manager = ExpertiseCacheManager()
@@ -328,7 +449,7 @@ def _is_public_authority_chunk(chunk: dict) -> bool:
         in {"courtlistener_mcp", "legal_authority_mcp", "public_courtlistener"}
         or chunk.get("source_type") == "public_authority"
         or chunk.get("clause_type") == "public_authority"
-        or chunk.get("source_label") == "Cited authority"
+        or chunk.get("source_label") in {"Cited authority", "Public authority"}
     )
 
 
@@ -365,6 +486,14 @@ def _stream_progress_event(event: str, payload: dict | None = None) -> str:
 def _stream_token_event(content: str) -> str:
     """Encode answer text as JSON so SSE preserves Markdown newlines exactly."""
     return f"data: [TOKEN]{json.dumps(content)}\n\n"
+
+
+def _stream_error_event(message: str) -> str:
+    """Emit the single error sentinel understood by every chat stream client."""
+    safe_message = re.sub(r"\s+", " ", str(message or "")).strip()
+    if not safe_message:
+        safe_message = "Assistant service temporarily unavailable. Retry this message."
+    return f"data: [ERROR] {safe_message}\n\n"
 
 
 def _stream_activity_event(
@@ -412,7 +541,9 @@ def _stream_source_previews(chunks: list[dict], cloud_hits: list) -> list[dict]:
                 "case_name",
                 "citation",
                 "source_label",
+                "source_type",
                 "locator",
+                "retrieval_jurisdiction",
                 "url",
             )
             if source.get(key)
@@ -436,13 +567,30 @@ def _stream_source_previews(chunks: list[dict], cloud_hits: list) -> list[dict]:
                     "case_name",
                     "citation",
                     "source_label",
+                    "source_type",
                     "locator",
+                    "retrieval_jurisdiction",
                     "url",
                 )
                 if source.get(key)
             }
         )
     return firm_previews + authority_previews
+
+
+def _partition_stream_source_previews(
+    source_previews: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Split preview rows by stable provenance, not a user-facing label."""
+    authority = [
+        source
+        for source in source_previews
+        if source.get("source_type") == "public_authority"
+        or source.get("source_label") in {"Cited authority", "Public authority"}
+    ]
+    authority_ids = {id(source) for source in authority}
+    firm = [source for source in source_previews if id(source) not in authority_ids]
+    return firm, authority
 
 
 def _auto_tier(query: str, user_requested_premium: bool) -> bool:
@@ -495,6 +643,27 @@ async def _matter_for_tenant_or_400(
     return matter
 
 
+async def _conversation_has_history(
+    db: AsyncSession,
+    conversation_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> bool:
+    result = await db.execute(
+        select(
+            exists().where(
+                Message.conversation_id == conversation_id,
+                Message.tenant_id == tenant_id,
+            ),
+            exists().where(
+                Document.conversation_id == conversation_id,
+                Document.tenant_id == tenant_id,
+            ),
+        )
+    )
+    has_messages, has_attachments = result.one()
+    return bool(has_messages or has_attachments)
+
+
 async def _effective_message_matter(
     db: AsyncSession,
     user,
@@ -506,9 +675,16 @@ async def _effective_message_matter(
         matter = await _matter_for_tenant_or_400(db, user, requested)
         if conv.matter_id and matter.id != conv.matter_id:
             raise HTTPException(
-                status_code=400,
-                detail="Message matter does not match linked conversation matter",
+                status_code=409,
+                detail=_MATTER_RELINK_FORBIDDEN_DETAIL,
             )
+        if conv.matter_id is None:
+            if await _conversation_has_history(db, conv.id, user.tenant_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_MATTER_RELINK_FORBIDDEN_DETAIL,
+                )
+            conv.matter_id = matter.id
         return matter
 
     if conv.matter_id:
@@ -540,18 +716,19 @@ async def _build_attachment_context(
     user,
     conversation: Conversation,
     attachment_ids: list[str] | None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """Inject session-attachment text directly into context (Tier 1 — no embeddings).
 
     For documents that were chunked/embedded (chunk_count > 0), use the stored
     chunks. Otherwise extract text on-demand from the file on disk.
     """
     if not attachment_ids:
-        return ""
+        return "", []
     try:
         from app.utils.text_processing import extract_text as _extract_text
 
         attachment_parts = []
+        attachment_sources: list[dict] = []
         for aid in attachment_ids:
             doc_result = await db.execute(
                 select(Document).where(
@@ -588,22 +765,54 @@ async def _build_attachment_context(
                 )
 
             if text:
+                source_id = f"document:{doc.id}"
+                source_url = f"/api/documents/{doc.id}/download"
                 attachment_parts.append(
-                    f"[Attachment: {doc.filename or 'Untitled'}]\n{text[:4000]}"
+                    "\n".join(
+                        [
+                            f"[Attachment: {doc.filename or 'Untitled'}]",
+                            f"Source ID: {source_id}",
+                            f"URL: {source_url}",
+                            (
+                                "Citation instruction: cite every factual finding from "
+                                f"this file with [source: {source_id}] and state the "
+                                "section, page, paragraph, or schedule row in the finding."
+                            ),
+                            text[:4000],
+                        ]
+                    )
+                )
+                attachment_sources.append(
+                    {
+                        "source_id": source_id,
+                        "case_name": doc.filename or "Untitled attachment",
+                        "citation": doc.filename or "Attached document",
+                        "court": "Uploaded attachment",
+                        "excerpt": _clean_source_text(text, 300),
+                        "url": source_url,
+                        "source_type": "tenant_document",
+                        "source_label": "Attached document",
+                        "locator": "Full attached document",
+                    }
                 )
 
         if attachment_parts:
             return (
-                "--- Attached Files (session-only, not saved to project) ---\n\n"
-                + "\n\n---\n\n".join(attachment_parts)
+                (
+                    "--- Attached Files (session-only, not saved to project) ---\n\n"
+                    + "\n\n---\n\n".join(attachment_parts)
+                ),
+                attachment_sources,
             )
     except Exception:
         logger.warning("Failed to build attachment context", exc_info=True)
-    return ""
+    return "", []
 
 
 def _conversation_to_response(
-    conv: Conversation, message_count: int = None
+    conv: Conversation,
+    message_count: int = None,
+    attachment_count: int = 0,
 ) -> ConversationResponse:
     return ConversationResponse(
         id=str(conv.id),
@@ -612,26 +821,93 @@ def _conversation_to_response(
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         message_count=message_count,
+        attachment_count=max(0, int(attachment_count or 0)),
     )
+
+
+def _stored_source_type(source: dict) -> str:
+    """Recover honest provenance for legacy source rows with sparse metadata."""
+    explicit = str(source.get("source_type") or source.get("source") or "").strip()
+    if explicit in {
+        "public_authority",
+        "courtlistener_mcp",
+        "legal_authority_mcp",
+        "public_courtlistener",
+    }:
+        return "public_authority"
+    if explicit.startswith("tenant_document"):
+        return "tenant_document"
+    if explicit in {"cloud", "matter_context"}:
+        return explicit
+
+    source_id = str(source.get("source_id") or source.get("id") or "").casefold()
+    if source_id.startswith(("courtlistener:", "authority:")):
+        return "public_authority"
+    if source_id.startswith(("document:", "tenant:")):
+        return "tenant_document"
+    if source_id.startswith("cloud:"):
+        return "cloud"
+
+    source_url = _source_url_from_chunk(source) or ""
+    if "courtlistener.com/" in source_url.casefold():
+        return "public_authority"
+    if _meaningful_source_text(source.get("court"), 120):
+        return "public_authority"
+    return "context"
 
 
 def _message_to_response(msg: Message) -> MessageResponse:
     sources = []
     if msg.sources:
         for s in msg.sources:
-            source_type = s.get("source_type") or (
-                "public_authority" if s.get("case_name") or s.get("court") else None
+            source_type = _stored_source_type(s)
+            if source_type == "public_authority":
+                fallback_name = "Unidentified authority"
+            elif source_type == "tenant_document":
+                fallback_name = "Firm document"
+            elif source_type == "cloud":
+                fallback_name = "Cloud result"
+            elif source_type == "matter_context":
+                fallback_name = "Matter context"
+            else:
+                fallback_name = "Retrieved context"
+            source_name = (
+                _first_meaningful_source_text(
+                    s.get("document_title"),
+                    s.get("case_name"),
+                    s.get("title"),
+                    max_length=180,
+                )
+                or fallback_name
             )
             sources.append(
                 SourceCitation(
                     source_id=s.get("source_id") or s.get("id"),
-                    case_name=_clean_source_text(s.get("case_name"), 180) or "Unknown",
-                    citation=_clean_source_text(s.get("citation"), 120),
+                    case_name=source_name,
+                    citation=_meaningful_source_text(s.get("citation"), 120),
                     court=_clean_source_text(s.get("court"), 120) or None,
                     excerpt=_clean_source_text(s.get("excerpt"), 300),
                     url=_source_url_from_chunk(s),
                     source_type=source_type,
-                    source_label=s.get("source_label") or _source_label(source_type),
+                    source_label=(
+                        _meaningful_source_text(s.get("source_label"), 80)
+                        or _source_label(source_type)
+                    ),
+                    locator=_clean_source_text(s.get("locator"), 160) or None,
+                    retrieval_jurisdiction=(
+                        _clean_source_text(s.get("retrieval_jurisdiction"), 20) or None
+                    ),
+                    relevance_score=s.get("relevance_score"),
+                    authority_tier=(
+                        _clean_source_text(s.get("authority_tier"), 80) or None
+                    ),
+                    official_status=(
+                        _clean_source_text(s.get("official_status"), 40) or None
+                    ),
+                    effective_date=(
+                        _clean_source_text(s.get("effective_date"), 40) or None
+                    ),
+                    cited=bool(s.get("cited")),
                 )
             )
     return MessageResponse(
@@ -640,6 +916,11 @@ def _message_to_response(msg: Message) -> MessageResponse:
         role=msg.role,
         content=msg.content,
         sources=sources,
+        citation_annotations=build_citation_annotations(
+            msg.content,
+            [source.model_dump() for source in sources],
+        ),
+        proposed_actions=list(msg.proposed_actions or []),
         created_at=msg.created_at,
     )
 
@@ -647,6 +928,159 @@ def _message_to_response(msg: Message) -> MessageResponse:
 def _conversation_belongs_to_user(conv: Conversation, user) -> bool:
     """Chat conversations are private to their creator, including tenant admins."""
     return str(conv.user_id) == str(user.id)
+
+
+def _record_action_usage(
+    db, user, *, question, route, outcome, conversation_id=None
+) -> None:
+    """Bill the chat action pass like any other completion."""
+    if outcome.tokens_in or outcome.tokens_out:
+        action_model = str(route.model or "")
+        db.add(
+            UsageRecord(
+                id=uuid.uuid4(),
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                conversation_id=conversation_id,
+                requested_route=getattr(route, "requested_route", None),
+                resolved_route=route.resolved_route,
+                gateway_provider=getattr(route, "gateway_provider", None),
+                gateway_alias=getattr(route, "gateway_alias", None),
+                final_model=action_model[:200],
+                model_used=action_model[:100],
+                tokens_in=outcome.tokens_in,
+                tokens_out=outcome.tokens_out,
+                # BYOK routes bill the tenant's own provider account, so the
+                # platform charges nothing — same rule as the chat completion.
+                cost_usd=(
+                    Decimal("0")
+                    if route.resolved_route == "customer"
+                    else calculate_cost(
+                        tokens_in=outcome.tokens_in,
+                        tokens_out=outcome.tokens_out,
+                        model=action_model,
+                        billing_tier=(
+                            user.tenant.billing_tier if user.tenant else "payg"
+                        ),
+                    )
+                ),
+                # Distinct operation_type so action spend can be separated from
+                # answer spend when reviewing margin.
+                operation_type="chat_action",
+                query_text=retained_gateway_query_text(question),
+            )
+        )
+
+
+async def _propose_followthrough_actions(
+    db,
+    user,
+    *,
+    question: str,
+    answer: str,
+    rag_context: str,
+    route,
+    conversation_id,
+    use_premium: bool,
+    sources: list[dict] | None = None,
+) -> tuple[list[dict], str]:
+    """Let the assistant propose reviewable follow-through for this turn.
+
+    Deliberately runs *after* the cited answer rather than replacing it, so the
+    attorney keeps the sourced analysis whether or not any action is warranted,
+    and so chat behaves exactly as before for every tenant without the
+    entitlement (the default). Returns the proposal cards plus any text to
+    append to the answer.
+
+    Never raises: a proposal is an enhancement, and losing the analysis because
+    the action pass failed would be a worse outcome than losing the proposal.
+    """
+    # The main chat path scrubs provider-bound history and context in privacy
+    # mode. The action loop builds a second transcript containing tool results;
+    # until that entire transcript has an equivalent, tested scrub boundary,
+    # do not send it to another model call or create work from it.
+    if getattr(user, "privacy_mode", False):
+        logger.info(
+            "chat_action_pass_skipped_privacy_mode tenant_id=%s",
+            getattr(user, "tenant_id", None),
+        )
+        return [], ""
+
+    try:
+        outcome = await chat_action_agent.run(
+            db=db,
+            user=user,
+            question=question,
+            # The answer is the assistant's own reasoning and is what follow-up
+            # should be based on; the retrieved context is included so a
+            # proposal can cite the same sources.
+            rag_context=f"{rag_context}\n\nDRAFT ANALYSIS:\n{answer}".strip(),
+            route=route,
+            conversation_id=conversation_id,
+            use_premium=use_premium,
+            # Only sources actually cited in this answer may appear on an
+            # action card.  This prevents a model from attaching unrelated
+            # tenant material or an invented public-authority id.
+            allowed_sources=[
+                source
+                for source in (sources or [])
+                if source.get("cited") and source.get("source_id")
+            ],
+        )
+    except Exception:
+        logger.warning("chat_action_pass_failed", exc_info=True)
+        return [], ""
+
+    if outcome.halted_reason == "actions_disabled":
+        # Never ran, so there is nothing to bill.
+        return [], ""
+    if outcome.halted_reason:
+        # Worth seeing in logs: a budget exhaustion or rejected tool means the
+        # assistant wanted to act and could not.
+        logger.info(
+            "chat_action_pass_halted reason=%s steps=%s",
+            outcome.halted_reason,
+            outcome.steps_used,
+        )
+
+    # Meter the action pass even when it proposed nothing. It is a real second
+    # round trip against the same route, and leaving it unrecorded understates
+    # cost per conversation and corrupts margin analysis.
+    #
+    # Guarded because this helper promises never to break the answer: a billing
+    # write must not be able to cost the attorney their analysis. A failure here
+    # is logged loudly since it means spend went unrecorded.
+    try:
+        _record_action_usage(
+            db,
+            user,
+            question=question,
+            route=route,
+            outcome=outcome,
+            conversation_id=conversation_id,
+        )
+    except Exception:
+        logger.warning(
+            "chat_action_usage_unrecorded tenant_id=%s tokens_in=%s tokens_out=%s",
+            user.tenant_id,
+            outcome.tokens_in,
+            outcome.tokens_out,
+            exc_info=True,
+        )
+
+    if outcome.needs_input:
+        # Asking beats guessing at an owner, a deadline, or a recipient.
+        return [], f"\n\n**Before I prepare that:** {outcome.needs_input}"
+    if not outcome.proposals:
+        return [], ""
+
+    titles = ", ".join(str(p.get("title") or "work") for p in outcome.proposals)
+    note = (
+        f"\n\n**Proposed for your approval:** {titles}. "
+        "It is on the work board in Review — nothing is sent or completed "
+        "until you approve it."
+    )
+    return outcome.proposals, note
 
 
 async def _trigger_auto_memory_generation_bg(
@@ -689,6 +1123,313 @@ async def _trigger_auto_memory_generation_bg(
                 logger.warning("Auto-memory generation failed", exc_info=True)
 
 
+_GENERATION_BUSY_DETAIL = (
+    "A response is already being generated for this conversation. "
+    "Wait for it to finish before sending or deleting."
+)
+_MATTER_RELINK_FORBIDDEN_DETAIL = (
+    "A conversation with messages or attachments cannot be moved to a different "
+    "matter. Start a new conversation for the target matter."
+)
+
+
+async def _await_critical_cleanup(awaitable):
+    """Finish DB cleanup even if the surrounding request is cancelled again."""
+    task = (
+        awaitable
+        if isinstance(awaitable, asyncio.Task)
+        else asyncio.create_task(awaitable)
+    )
+    interrupted: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            interrupted = exc
+    result = task.result()
+    if interrupted is not None:
+        raise interrupted
+    return result
+
+
+def _conversation_generation_lock_key(conversation_id) -> int:
+    """Return a deterministic namespaced signed-64 Postgres advisory-lock key."""
+    conversation_uuid = uuid.UUID(str(conversation_id))
+    digest = hashlib.blake2b(
+        b"lawhand:chat-generation:v1:" + conversation_uuid.bytes,
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+@dataclass(slots=True)
+class _ConversationGenerationState:
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID
+    conversation_id: uuid.UUID
+    user_message_id: uuid.UUID | None = None
+    assistant_turn_committed: bool = False
+
+
+@dataclass(slots=True)
+class _ConversationGenerationLease:
+    """One pinned connection/session holding a session-level advisory lock."""
+
+    connection: AsyncConnection
+    session: AsyncSession
+    lock_key: int
+    unlock_required: bool = True
+    _release_task: asyncio.Task | None = None
+
+    async def _release_impl(self) -> None:
+        invalidate = False
+        try:
+            if self.session.in_transaction():
+                await self.session.rollback()
+        except BaseException:
+            invalidate = True
+            logger.exception(
+                "Failed to roll back conversation generation session key=%s",
+                self.lock_key,
+            )
+
+        if not invalidate and self.unlock_required:
+            try:
+                unlocked = await self.connection.scalar(
+                    text("SELECT pg_advisory_unlock(:lock_key)"),
+                    {"lock_key": self.lock_key},
+                )
+                await self.connection.commit()
+                if unlocked is not True:
+                    logger.error(
+                        "Conversation advisory lock was not held at release key=%s",
+                        self.lock_key,
+                    )
+            except BaseException:
+                invalidate = True
+                logger.exception(
+                    "Failed to release conversation advisory lock key=%s",
+                    self.lock_key,
+                )
+
+        if invalidate:
+            # Terminating the physical Postgres session is the fail-safe unlock.
+            try:
+                await self.connection.invalidate()
+            except BaseException:
+                logger.exception(
+                    "Failed to invalidate conversation lock connection key=%s",
+                    self.lock_key,
+                )
+
+        try:
+            await self.session.close()
+        except BaseException:
+            logger.exception(
+                "Failed to close conversation generation session key=%s",
+                self.lock_key,
+            )
+
+        try:
+            await self.connection.close()
+        except BaseException:
+            logger.exception(
+                "Failed to close conversation lock connection key=%s",
+                self.lock_key,
+            )
+            try:
+                await self.connection.invalidate()
+            except BaseException:
+                logger.exception(
+                    "Failed final invalidation of conversation lock connection key=%s",
+                    self.lock_key,
+                )
+
+    async def release(self) -> None:
+        if self._release_task is None:
+            self._release_task = asyncio.create_task(self._release_impl())
+        await _await_critical_cleanup(self._release_task)
+
+
+async def _try_conversation_generation_lease(
+    db: AsyncSession, conversation_id
+) -> _ConversationGenerationLease | None:
+    """Hand off a request transaction to one session-locked connection."""
+    bind = db.bind
+    if bind is None:
+        raise RuntimeError("Chat database session is not bound to an engine")
+    lock_engine = bind.engine if isinstance(bind, AsyncConnection) else bind
+
+    # The initial ownership lookup used the request session. End that read
+    # transaction before pinning the turn connection so an active response
+    # consumes exactly one pool slot rather than retaining both.
+    await db.rollback()
+
+    connection = await lock_engine.connect()
+    lease_session = AsyncSession(
+        bind=connection,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+    lock_key = _conversation_generation_lock_key(conversation_id)
+    lease = _ConversationGenerationLease(
+        connection=connection,
+        session=lease_session,
+        lock_key=lock_key,
+    )
+    try:
+        acquired = await lease_session.scalar(
+            text("SELECT pg_try_advisory_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
+        # Session-level advisory locks survive this commit, allowing user and
+        # assistant rows to become visible while exclusivity remains held.
+        await lease_session.commit()
+    except BaseException:
+        await lease.release()
+        raise
+    if acquired is not True:
+        lease.unlock_required = False
+        await lease.release()
+        return None
+    return lease
+
+
+async def _owned_conversation_for_generation(
+    db: AsyncSession,
+    user,
+    conversation_id: str,
+    *,
+    retry_on_miss: bool = False,
+) -> Conversation | None:
+    attempts = 2 if retry_on_miss else 1
+    for attempt in range(attempts):
+        conversation = await db.scalar(
+            select(Conversation)
+            .where(
+                Conversation.id == conversation_id,
+                Conversation.tenant_id == user.tenant_id,
+                Conversation.user_id == user.id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        if conversation is not None:
+            return conversation
+        if retry_on_miss and attempt == 0:
+            await asyncio.sleep(0.2)
+    return None
+
+
+async def _persist_interrupted_assistant_turn(
+    *,
+    db: AsyncSession,
+    tenant_id,
+    user_id,
+    conversation_id,
+    user_message_id,
+) -> bool:
+    """Persist a terminal assistant record for a stream that never committed.
+
+    The user turn is committed before SSE begins. A provider failure, browser
+    navigation, or network disconnect must leave a matching assistant state
+    rather than a permanently hanging user-only turn. The lease-bound session
+    survives request-session handoff and retains the generation lock.
+    """
+    try:
+        await set_tenant_context(db, str(tenant_id))
+        conversation = await db.scalar(
+            select(Conversation).where(
+                Conversation.id == conversation_id,
+                Conversation.tenant_id == tenant_id,
+                Conversation.user_id == user_id,
+            )
+        )
+        if conversation is None:
+            return False
+
+        latest = await db.scalar(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.tenant_id == tenant_id,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+        if latest is None:
+            return False
+        if latest.id != user_message_id:
+            # The normal assistant commit won the race, or a later turn is
+            # already in progress. Never append a misleading stale marker.
+            return latest.role == "assistant"
+
+        db.add(
+            Message(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content=_STREAM_INTERRUPTED_MESSAGE,
+                sources=None,
+            )
+        )
+        conversation.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to persist interrupted chat turn tenant_id=%s "
+            "conversation_id=%s user_message_id=%s",
+            tenant_id,
+            conversation_id,
+            user_message_id,
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception(
+                "Failed to roll back interrupted-turn persistence "
+                "conversation_id=%s",
+                conversation_id,
+            )
+        return False
+
+
+async def _persist_generation_interruption(
+    db: AsyncSession,
+    state: _ConversationGenerationState,
+) -> bool:
+    """Roll back partial work and durably close a committed user turn."""
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception(
+            "Failed to roll back interrupted generation conversation_id=%s",
+            state.conversation_id,
+        )
+    return await _persist_interrupted_assistant_turn(
+        db=db,
+        tenant_id=state.tenant_id,
+        user_id=state.user_id,
+        conversation_id=state.conversation_id,
+        user_message_id=state.user_message_id,
+    )
+
+
+async def _close_interrupted_generation_if_needed(
+    db: AsyncSession,
+    state: _ConversationGenerationState,
+) -> bool:
+    if state.user_message_id is None or state.assistant_turn_committed:
+        return False
+    persisted = await _await_critical_cleanup(
+        _persist_generation_interruption(db, state)
+    )
+    if persisted:
+        state.assistant_turn_committed = True
+    return persisted
+
+
 @router.get("", response_model=List[ConversationResponse])
 async def list_conversations(
     request: Request,
@@ -714,16 +1455,43 @@ async def list_conversations(
     )
     conversations = result.scalars().all()
 
-    # Get message counts efficiently
-    count_result = await db.execute(
-        select(Message.conversation_id, func.count(Message.id).label("cnt"))
-        .where(Message.conversation_id.in_([c.id for c in conversations]))
-        .group_by(Message.conversation_id)
-    )
-    count_map = {str(row.conversation_id): row.cnt for row in count_result.fetchall()}
+    # Expose both persisted turn and attachment counts so the client can mirror
+    # the backend's immutable matter-context rule after a page reload.
+    message_count_map: dict[str, int] = {}
+    attachment_count_map: dict[str, int] = {}
+    if conversations:
+        conversation_ids = [conversation.id for conversation in conversations]
+        message_count_result = await db.execute(
+            select(Message.conversation_id, func.count(Message.id).label("cnt"))
+            .where(
+                Message.tenant_id == user.tenant_id,
+                Message.conversation_id.in_(conversation_ids),
+            )
+            .group_by(Message.conversation_id)
+        )
+        message_count_map = {
+            str(row.conversation_id): row.cnt for row in message_count_result.fetchall()
+        }
+        attachment_count_result = await db.execute(
+            select(Document.conversation_id, func.count(Document.id).label("cnt"))
+            .where(
+                Document.tenant_id == user.tenant_id,
+                Document.conversation_id.in_(conversation_ids),
+            )
+            .group_by(Document.conversation_id)
+        )
+        attachment_count_map = {
+            str(row.conversation_id): row.cnt
+            for row in attachment_count_result.fetchall()
+        }
 
     return [
-        _conversation_to_response(c, count_map.get(str(c.id), 0)) for c in conversations
+        _conversation_to_response(
+            conversation,
+            message_count_map.get(str(conversation.id), 0),
+            attachment_count_map.get(str(conversation.id), 0),
+        )
+        for conversation in conversations
     ]
 
 
@@ -789,12 +1557,22 @@ async def get_conversation(
     msg_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conv.id)
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
     )
     messages = msg_result.scalars().all()
+    attachment_count = await db.scalar(
+        select(func.count(Document.id)).where(
+            Document.conversation_id == conv.id,
+            Document.tenant_id == user.tenant_id,
+        )
+    )
 
     return ConversationDetail(
-        conversation=_conversation_to_response(conv, len(messages)),
+        conversation=_conversation_to_response(
+            conv,
+            len(messages),
+            attachment_count or 0,
+        ),
         messages=[_message_to_response(m) for m in messages],
     )
 
@@ -825,6 +1603,8 @@ async def update_conversation(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    tenant_id = user.tenant_id
+    title = None
     if body.title is not None:
         title = body.title.strip()
         if not title:
@@ -836,25 +1616,89 @@ async def update_conversation(
                 status_code=400,
                 detail="Conversation title must be 500 characters or less",
             )
-        conv.title = title
 
+    target_matter_id = conv.matter_id
     if body.matter_id is not None:
         matter_id = body.matter_id.strip()
         if not matter_id:
-            conv.matter_id = None
+            target_matter_id = None
         else:
             matter = await _matter_for_tenant_or_400(db, user, matter_id)
-            conv.matter_id = matter.id
+            target_matter_id = matter.id
 
     if body.title is None and body.matter_id is None:
         raise HTTPException(status_code=400, detail="No conversation updates provided")
 
-    count_result = await db.execute(
-        select(func.count(Message.id)).where(Message.conversation_id == conv.id)
+    semantic_matter_change = (
+        body.matter_id is not None and target_matter_id != conv.matter_id
     )
-    message_count = count_result.scalar() or 0
-    await db.commit()
-    return _conversation_to_response(conv, message_count)
+    lease = None
+    if semantic_matter_change:
+        lease = await _try_conversation_generation_lease(db, conv.id)
+        if lease is None:
+            raise HTTPException(status_code=409, detail=_GENERATION_BUSY_DETAIL)
+
+    mutation_db = db
+    try:
+        if lease is not None:
+            mutation_db = lease.session
+            await set_tenant_context(mutation_db, str(tenant_id))
+            locked_user = await get_current_user(request, mutation_db)
+            conv = await _owned_conversation_for_generation(
+                mutation_db,
+                locked_user,
+                conversation_id,
+            )
+            if conv is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Conversation not found",
+                )
+            # Re-resolve the target after acquiring the lease so the applied
+            # semantic state is based on a fresh ownership snapshot.
+            if body.matter_id is not None:
+                matter_id = body.matter_id.strip()
+                if matter_id:
+                    matter = await _matter_for_tenant_or_400(
+                        mutation_db,
+                        locked_user,
+                        matter_id,
+                    )
+                    target_matter_id = matter.id
+                else:
+                    target_matter_id = None
+
+            if target_matter_id != conv.matter_id:
+                if await _conversation_has_history(
+                    mutation_db,
+                    conv.id,
+                    tenant_id,
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_MATTER_RELINK_FORBIDDEN_DETAIL,
+                    )
+
+        if title is not None:
+            conv.title = title
+        if body.matter_id is not None:
+            conv.matter_id = target_matter_id
+
+        count_result = await mutation_db.execute(
+            select(func.count(Message.id)).where(Message.conversation_id == conv.id)
+        )
+        message_count = count_result.scalar() or 0
+        attachment_count = await mutation_db.scalar(
+            select(func.count(Document.id)).where(
+                Document.conversation_id == conv.id,
+                Document.tenant_id == tenant_id,
+            )
+        )
+        await mutation_db.commit()
+        return _conversation_to_response(conv, message_count, attachment_count or 0)
+    finally:
+        if lease is not None:
+            await lease.release()
 
 
 @router.post(
@@ -894,75 +1738,106 @@ async def upload_chat_attachment(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Filename is required")
+    tenant_id = user.tenant_id
+    conversation_uuid = conv.id
+    lease = await _try_conversation_generation_lease(db, conversation_uuid)
+    if lease is None:
+        raise HTTPException(status_code=409, detail=_GENERATION_BUSY_DETAIL)
 
-    max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
-    file_bytes = await file.read()
-    if len(file_bytes) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
+    locked_db = lease.session
+    storage_path = None
+    commit_started = False
+    try:
+        await set_tenant_context(locked_db, str(tenant_id))
+        locked_user = await get_current_user(request, locked_db)
+        conv = await _owned_conversation_for_generation(
+            locked_db,
+            locked_user,
+            conversation_id,
         )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
-    document_id = uuid.uuid4()
-    safe_filename = os.path.basename(file.filename)
-    expires_at = None
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
 
-    if conv.matter_id:
-        matter_result = await db.execute(
-            select(MatterModel.slug).where(
-                MatterModel.id == conv.matter_id,
-                MatterModel.tenant_id == user.tenant_id,
+        max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        file_bytes = await file.read()
+        if len(file_bytes) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {settings.MAX_FILE_SIZE_MB}MB",
             )
-        )
-        matter_row = matter_result.one_or_none()
-        matter_slug = matter_row[0] if matter_row else str(conv.matter_id)
-        storage_dir = os.path.join(
-            settings.UPLOAD_DIR,
-            str(user.tenant_id),
-            "matters",
-            matter_slug,
-            "chatattachments",
-            str(document_id),
-        )
-    else:
-        storage_dir = os.path.join(
-            settings.UPLOAD_DIR,
-            str(user.tenant_id),
-            "chat-temp",
-            str(conversation_id),
-            str(document_id),
-        )
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=settings.CHAT_ATTACHMENT_TTL_DAYS
-        )
 
-    os.makedirs(storage_dir, exist_ok=True)
-    storage_path = os.path.join(storage_dir, safe_filename)
+        document_id = uuid.uuid4()
+        safe_filename = os.path.basename(file.filename)
+        expires_at = None
 
-    async with aiofiles.open(storage_path, "wb") as out_file:
-        await out_file.write(file_bytes)
+        if conv.matter_id:
+            matter_result = await locked_db.execute(
+                select(MatterModel.slug).where(
+                    MatterModel.id == conv.matter_id,
+                    MatterModel.tenant_id == locked_user.tenant_id,
+                )
+            )
+            matter_row = matter_result.one_or_none()
+            matter_slug = matter_row[0] if matter_row else str(conv.matter_id)
+            storage_dir = os.path.join(
+                settings.UPLOAD_DIR,
+                str(locked_user.tenant_id),
+                "matters",
+                matter_slug,
+                "chatattachments",
+                str(document_id),
+            )
+        else:
+            storage_dir = os.path.join(
+                settings.UPLOAD_DIR,
+                str(locked_user.tenant_id),
+                "chat-temp",
+                str(conversation_id),
+                str(document_id),
+            )
+            expires_at = datetime.now(timezone.utc) + timedelta(
+                days=settings.CHAT_ATTACHMENT_TTL_DAYS
+            )
 
-    doc = Document(
-        id=document_id,
-        tenant_id=user.tenant_id,
-        user_id=user.id,
-        conversation_id=conv.id,
-        matter_id=conv.matter_id,
-        filename=safe_filename,
-        content_type=file.content_type,
-        file_size=len(file_bytes),
-        storage_path=storage_path,
-        status="ready",
-        chunk_count=0,
-        expires_at=expires_at,
-    )
-    db.add(doc)
-    await db.flush()
-    await db.commit()
+        os.makedirs(storage_dir, exist_ok=True)
+        storage_path = os.path.join(storage_dir, safe_filename)
+        async with aiofiles.open(storage_path, "wb") as out_file:
+            await out_file.write(file_bytes)
 
-    return ChatAttachmentResponse.model_validate(doc)
+        doc = Document(
+            id=document_id,
+            tenant_id=locked_user.tenant_id,
+            user_id=locked_user.id,
+            conversation_id=conv.id,
+            matter_id=conv.matter_id,
+            filename=safe_filename,
+            content_type=file.content_type,
+            file_size=len(file_bytes),
+            storage_path=storage_path,
+            status="ready",
+            chunk_count=0,
+            expires_at=expires_at,
+        )
+        locked_db.add(doc)
+        await locked_db.flush()
+        commit_started = True
+        await locked_db.commit()
+        return ChatAttachmentResponse.model_validate(doc)
+    except BaseException:
+        if not commit_started and storage_path and os.path.exists(storage_path):
+            try:
+                shutil.rmtree(os.path.dirname(storage_path))
+            except OSError:
+                logger.warning(
+                    "Failed to clean up chat attachment after upload failure",
+                    exc_info=True,
+                )
+        raise
+    finally:
+        await lease.release()
 
 
 @router.delete("/{conversation_id}", status_code=204)
@@ -990,16 +1865,44 @@ async def delete_conversation(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Remove attachment files from disk before the FK cascade deletes their rows.
-    attachment_result = await db.execute(
-        select(Document.storage_path).where(Document.conversation_id == conv.id)
-    )
-    for (storage_path,) in attachment_result.all():
-        if storage_path:
-            shutil.rmtree(os.path.dirname(storage_path), ignore_errors=True)
+    tenant_id = user.tenant_id
+    conversation_uuid = conv.id
+    lease = await _try_conversation_generation_lease(db, conversation_uuid)
+    if lease is None:
+        raise HTTPException(status_code=409, detail=_GENERATION_BUSY_DETAIL)
 
-    await db.delete(conv)
-    await db.commit()
+    locked_db = lease.session
+    try:
+        await set_tenant_context(locked_db, str(tenant_id))
+        locked_user = await get_current_user(request, locked_db)
+        # Recheck after acquisition so a delete that won the lock race cannot
+        # leave this request operating on stale ownership state.
+        conv = await _owned_conversation_for_generation(
+            locked_db,
+            locked_user,
+            conversation_id,
+        )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        # Snapshot paths while their rows still exist, but commit the cascade
+        # first. A failed/ambiguous commit must never leave live rows pointing
+        # at files this request already erased.
+        attachment_result = await locked_db.execute(
+            select(Document.storage_path).where(Document.conversation_id == conv.id)
+        )
+        attachment_dirs = {
+            os.path.dirname(storage_path)
+            for (storage_path,) in attachment_result.all()
+            if storage_path
+        }
+
+        await locked_db.delete(conv)
+        await locked_db.commit()
+        for attachment_dir in attachment_dirs:
+            shutil.rmtree(attachment_dir, ignore_errors=True)
+    finally:
+        await lease.release()
 
 
 @router.post(
@@ -1011,6 +1914,72 @@ async def send_message(
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+):
+    """Serialize one complete non-stream generation per conversation."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    conv = await _owned_conversation_for_generation(db, user, conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    state = _ConversationGenerationState(
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        conversation_id=conv.id,
+    )
+    lease = await _try_conversation_generation_lease(db, state.conversation_id)
+    if lease is None:
+        raise HTTPException(status_code=409, detail=_GENERATION_BUSY_DETAIL)
+
+    locked_db = lease.session
+    try:
+        await set_tenant_context(locked_db, str(state.tenant_id))
+        locked_user = await get_current_user(request, locked_db)
+        conv = await _owned_conversation_for_generation(
+            locked_db,
+            locked_user,
+            conversation_id,
+        )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return await _send_message_under_generation_lock(
+            conversation_id,
+            body,
+            request,
+            background_tasks,
+            locked_db,
+            generation_state=state,
+        )
+    except asyncio.CancelledError:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        raise
+    except HTTPException:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        raise
+    except Exception as exc:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        logger.exception(
+            "Non-stream chat failed tenant_id=%s user_id=%s conversation_id=%s",
+            state.tenant_id,
+            state.user_id,
+            state.conversation_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Assistant service temporarily unavailable. Retry this message.",
+        ) from exc
+    finally:
+        await lease.release()
+
+
+async def _send_message_under_generation_lock(
+    conversation_id: str,
+    body: MessageCreate,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession,
+    *,
+    generation_state: _ConversationGenerationState,
 ):
     """
     Main RAG endpoint — processes a user message and returns an AI response.
@@ -1067,12 +2036,13 @@ async def send_message(
     )
     db.add(user_msg)
     await db.flush()
+    generation_state.user_message_id = user_msg.id
 
     # 3. Load recent conversation history (last 10 messages)
     history_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conv.id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(11)  # 10 + the one we just added
     )
     recent_messages = list(reversed(history_result.scalars().all()))
@@ -1095,8 +2065,9 @@ async def send_message(
     await db.commit()
     await set_tenant_context(db, str(user.tenant_id))
 
-    # 3a. Fire all pre-work in parallel: matter context, memory context, LLM route,
-    #     attachment context, and RAG cache check. These are independent reads.
+    # 3a. Load DB-backed pre-work serially on the lease-bound session. AsyncSession
+    #     cannot safely run concurrent statements, and opening helper sessions
+    #     would defeat the one-connection-per-active-turn availability invariant.
     async def _load_matter_context_nonstream():
         if not effective_matter_id:
             return "", [], None, False
@@ -1121,40 +2092,50 @@ async def send_message(
         )
         return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
 
-    (
-        (
-            matter_context_str,
-            matter_pii_findings,
-            matter_cloud_folder,
-            cache_hit_matter,
-        ),
-        attachment_context,
-        memory_context,
-        route,
-        cached_rag,
-    ) = await asyncio.gather(
-        _load_matter_context_nonstream(),
-        _build_attachment_context(
+    async def _load_attachment_context_nonstream():
+        return await _build_attachment_context(
             db,
             user,
             conv,
             body.attachment_ids if hasattr(body, "attachment_ids") else None,
-        ),
-        memory_service.get_memory_context_for_injection(db=db, user_id=user.id),
-        resolve_llm_route(
+        )
+
+    async def _load_memory_context_nonstream():
+        return await memory_service.get_memory_context_for_injection(
+            db=db, user_id=user.id
+        )
+
+    async def _resolve_nonstream_route():
+        return await resolve_llm_route(
             db,
             user.tenant_id,
             use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
             requested_provider=body.provider,
-        ),
-        cache_manager.get_cached_rag_results(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-            include_public=body.include_public,
-            scope_key=rag_scope_key,
-        ),
+        )
+
+    (
+        matter_context_str,
+        matter_pii_findings,
+        matter_cloud_folder,
+        cache_hit_matter,
+    ) = await _load_matter_context_nonstream()
+    attachment_context, attachment_sources = await _load_attachment_context_nonstream()
+    memory_context = await _load_memory_context_nonstream()
+    route = await _resolve_nonstream_route()
+    rag_cache_revision = str(
+        await db.scalar(
+            select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
+        )
+        or 0
+    )
+    cached_rag = await cache_manager.get_cached_rag_results(
+        question=body.content,
+        tenant_id=str(user.tenant_id),
+        user_id=str(user.id),
+        skill=body.skill if hasattr(body, "skill") else user.default_skill,
+        include_public=body.include_public,
+        scope_key=rag_scope_key,
+        corpus_revision=rag_cache_revision,
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
@@ -1183,19 +2164,23 @@ async def send_message(
                 matter_id=effective_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
             )
-            # Cache RAG results
-            await cache_manager.set_cached_rag_results(
-                question=body.content,
-                tenant_id=str(user.tenant_id),
-                user_id=str(user.id),
-                context_str=context_str,
-                chunks=chunks,
-                cloud_hits=cloud_hits,
-                expertise_level=user.expertise_level,
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                include_public=body.include_public,
-                scope_key=rag_scope_key,
-            )
+            await set_tenant_context(db, str(user.tenant_id))
+            if rag_result_is_cacheable(context_str, chunks, cloud_hits):
+                await cache_manager.set_cached_rag_results(
+                    question=body.content,
+                    tenant_id=str(user.tenant_id),
+                    user_id=str(user.id),
+                    context_str=context_str,
+                    chunks=chunks,
+                    cloud_hits=cloud_hits,
+                    expertise_level=user.expertise_level,
+                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                    include_public=body.include_public,
+                    scope_key=rag_scope_key,
+                    expected_corpus_revision=rag_cache_revision,
+                )
+            else:
+                logger.info("Skipping RAG cache write for empty or degraded retrieval")
         except Exception as rag_exc:
             logger.exception("RAG query failed")
             await capture_chat_error(
@@ -1209,6 +2194,7 @@ async def send_message(
                 conversation_id=conv.id,
                 severity="error",
             )
+            await set_tenant_context(db, str(user.tenant_id))
             context_str, chunks = "", []
 
     # 4a. Combine attachment, matter, and RAG context
@@ -1319,11 +2305,18 @@ async def send_message(
         tokens_out += tokens_out2
 
     # Build source citations from retrieved chunks with relevance scores
-    source_dicts = []
-    context_used = []
-    context_scores = {}
+    source_dicts = list(attachment_sources)
+    context_used = [
+        source["source_id"] for source in attachment_sources if source.get("source_id")
+    ]
+    context_scores = {source_id: 1.0 for source_id in context_used}
     seen_citations: dict[str, str] = {}
     source_aliases: dict[str, str] = {}
+    for source in attachment_sources:
+        source_id = source.get("source_id")
+        for citation_key in (source.get("citation"), source.get("case_name")):
+            if source_id and citation_key:
+                seen_citations[str(citation_key)] = str(source_id)
     for chunk in chunks:
         chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
         citation_key = chunk.get("citation") or chunk.get("case_name") or ""
@@ -1357,6 +2350,17 @@ async def send_message(
         cleaned_response,
         _citation_validation_sources(source_dicts, chunks, cloud_hits),
     )
+    cleaned_response, citation_gap = enforce_legal_citation_integrity(
+        body.content,
+        cleaned_response,
+        source_dicts,
+    )
+    if citation_gap:
+        logger.warning(
+            "Blocked unsupported legal-research answer conversation_id=%s",
+            conv.id,
+        )
+    source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
 
     # Track matter context usage if provided
     if effective_matter_id:
@@ -1380,6 +2384,21 @@ async def send_message(
         body.skill if hasattr(body, "skill") and body.skill else user.default_skill
     )
     await set_tenant_context(db, str(user.tenant_id))
+
+    proposed_actions, action_note = await _propose_followthrough_actions(
+        db,
+        user,
+        question=body.content,
+        answer=cleaned_response,
+        rag_context=context_str,
+        route=route,
+        conversation_id=conv.id,
+        use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+        sources=source_dicts,
+    )
+    if action_note:
+        cleaned_response = f"{cleaned_response}{action_note}"
+
     assistant_msg = Message(
         id=uuid.uuid4(),
         tenant_id=user.tenant_id,
@@ -1391,6 +2410,7 @@ async def send_message(
         context_used=context_used if context_used else None,
         context_relevance_scores=context_scores if context_scores else None,
         pii_flags=all_pii_flags if all_pii_flags else None,
+        proposed_actions=proposed_actions or None,
     )
     db.add(assistant_msg)
 
@@ -1441,6 +2461,7 @@ async def send_message(
 
     await db.flush()
     await db.commit()
+    generation_state.assistant_turn_committed = True
 
     # Trigger auto-memory generation in background (non-blocking)
     background_tasks.add_task(
@@ -1463,10 +2484,104 @@ async def stream_message(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
+    """Serialize a streamed response until its terminal DB state is durable."""
+    user = await get_current_user(request, db)
+    await set_tenant_context(db, str(user.tenant_id))
+    conv = await _owned_conversation_for_generation(
+        db,
+        user,
+        conversation_id,
+        retry_on_miss=True,
+    )
+    if conv is None:
+        return StreamingResponse(
+            _error_stream(
+                "Conversation not found — please try sending your message again."
+            ),
+            media_type="text/event-stream",
+        )
+
+    state = _ConversationGenerationState(
+        tenant_id=user.tenant_id,
+        user_id=user.id,
+        conversation_id=conv.id,
+    )
+    lease = await _try_conversation_generation_lease(db, state.conversation_id)
+    if lease is None:
+        raise HTTPException(status_code=409, detail=_GENERATION_BUSY_DETAIL)
+
+    locked_db = lease.session
+    response_owns_lease = False
+    try:
+        await set_tenant_context(locked_db, str(state.tenant_id))
+        locked_user = await get_current_user(request, locked_db)
+        conv = await _owned_conversation_for_generation(
+            locked_db,
+            locked_user,
+            conversation_id,
+        )
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        response = await _stream_message_under_generation_lock(
+            conversation_id,
+            body,
+            request,
+            background_tasks,
+            locked_db,
+            generation_state=state,
+        )
+
+        original_iterator = response.body_iterator
+
+        async def locked_body_iterator():
+            try:
+                async for chunk in original_iterator:
+                    yield chunk
+            finally:
+                try:
+                    await _close_interrupted_generation_if_needed(locked_db, state)
+                finally:
+                    await lease.release()
+
+        response.body_iterator = locked_body_iterator()
+        response_owns_lease = True
+        return response
+    except asyncio.CancelledError:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        raise
+    except HTTPException:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        raise
+    except Exception as exc:
+        await _close_interrupted_generation_if_needed(locked_db, state)
+        logger.exception(
+            "Streaming chat setup failed tenant_id=%s user_id=%s conversation_id=%s",
+            state.tenant_id,
+            state.user_id,
+            state.conversation_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Assistant service temporarily unavailable. Retry this message.",
+        ) from exc
+    finally:
+        if not response_owns_lease:
+            await lease.release()
+
+
+async def _stream_message_under_generation_lock(
+    conversation_id: str,
+    body: MessageCreate,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession,
+    *,
+    generation_state: _ConversationGenerationState,
+):
     """
     Streaming RAG endpoint — same as send_message but returns SSE progress while
     generation is validated, followed by safe answer chunks prefixed with 'data: '.
-    Sends [STREAM_COMPLETE] when done, or [ERROR: message] on failure.
+    Sends [STREAM_COMPLETE] when done, or [ERROR] message on failure.
     """
     user = await get_current_user(request, db)
     await set_tenant_context(db, str(user.tenant_id))
@@ -1540,12 +2655,13 @@ async def stream_message(
     )
     db.add(user_msg)
     await db.flush()
+    generation_state.user_message_id = user_msg.id
 
     # 3. Load recent conversation history (last 10 messages)
     history_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conv.id)
-        .order_by(Message.created_at.desc())
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(11)
     )
     recent_messages = list(reversed(history_result.scalars().all()))
@@ -1579,14 +2695,12 @@ async def stream_message(
         )
         if cached:
             return cached, [], effective_matter_cloud_folder, True
-        async with async_session_maker() as context_db:
-            await set_tenant_context(context_db, str(user.tenant_id))
-            mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
-                db=context_db,
-                matter_id=effective_matter_id,
-                tenant_id=user.tenant_id,
-                privacy_mode=user.privacy_mode,
-            )
+        mcs, has_pii, mpf = await matter_context_service.get_safe_matter_context(
+            db=db,
+            matter_id=effective_matter_id,
+            tenant_id=user.tenant_id,
+            privacy_mode=user.privacy_mode,
+        )
         await cache_manager.set_cached_matter_context(
             matter_id=effective_matter_id,
             tenant_id=str(user.tenant_id),
@@ -1596,46 +2710,53 @@ async def stream_message(
         return mcs, mpf if mpf else [], effective_matter_cloud_folder, False
 
     async def _load_attachment_context_for_stream():
-        async with async_session_maker() as context_db:
-            await set_tenant_context(context_db, str(user.tenant_id))
-            return await _build_attachment_context(
-                context_db,
-                user,
-                conv,
-                body.attachment_ids if hasattr(body, "attachment_ids") else None,
-            )
+        return await _build_attachment_context(
+            db,
+            user,
+            conv,
+            body.attachment_ids if hasattr(body, "attachment_ids") else None,
+        )
 
     async def _load_memory_context_for_stream():
-        async with async_session_maker() as context_db:
-            await set_tenant_context(context_db, str(user.tenant_id))
-            return await memory_service.get_memory_context_for_injection(
-                db=context_db, user_id=user.id
-            )
+        return await memory_service.get_memory_context_for_injection(
+            db=db, user_id=user.id
+        )
 
     async def _resolve_stream_route():
-        async with async_session_maker() as context_db:
-            await set_tenant_context(context_db, str(user.tenant_id))
-            return await resolve_llm_route(
-                context_db,
-                user.tenant_id,
-                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-                requested_provider=body.provider,
-            )
+        return await resolve_llm_route(
+            db,
+            user.tenant_id,
+            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            requested_provider=body.provider,
+        )
 
     async def _load_stream_prework():
-        return await asyncio.gather(
-            _load_matter_context(),
-            _load_attachment_context_for_stream(),
-            _load_memory_context_for_stream(),
-            _resolve_stream_route(),
-            cache_manager.get_cached_rag_results(
-                question=body.content,
-                tenant_id=str(user.tenant_id),
-                user_id=str(user.id),
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                include_public=body.include_public,
-                scope_key=rag_scope_key,
-            ),
+        matter_context = await _load_matter_context()
+        attachment_context = await _load_attachment_context_for_stream()
+        memory_context = await _load_memory_context_for_stream()
+        route = await _resolve_stream_route()
+        rag_cache_revision = str(
+            await db.scalar(
+                select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
+            )
+            or 0
+        )
+        cached_rag = await cache_manager.get_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
+            scope_key=rag_scope_key,
+            corpus_revision=rag_cache_revision,
+        )
+        return (
+            matter_context,
+            attachment_context,
+            memory_context,
+            route,
+            cached_rag,
+            rag_cache_revision,
         )
 
     attachment_count = len(body.attachment_ids or [])
@@ -1645,8 +2766,17 @@ async def stream_message(
         (user.full_name or "").split()[0] if user.full_name else "",
         user.privacy_mode,
     )
+    # Keep primitive identifiers for the exception path. A rollback expires ORM
+    # instances; reading user/tenant attributes afterward can trigger async IO
+    # outside SQLAlchemy's greenlet and hide the original stream failure.
+    stream_tenant_id = user.tenant_id
+    stream_user_id = user.id
+    stream_conversation_id = conv.id
+    stream_user_message_id = user_msg.id
 
     async def stream_generator():
+        assistant_turn_committed = False
+        terminal_failure_persisted = False
         try:
             stream_started_at = time.monotonic()
             latency_breakdown: dict[str, int] = {}
@@ -1677,10 +2807,11 @@ async def stream_message(
                     matter_cloud_folder,
                     cache_hit_matter,
                 ),
-                attachment_context,
+                (attachment_context, attachment_sources),
                 memory_context,
                 route,
                 cached_rag,
+                rag_cache_revision,
             ) = await _load_stream_prework()
             latency_breakdown["context_ms"] = int(
                 (time.monotonic() - prework_started_at) * 1000
@@ -1753,24 +2884,31 @@ async def stream_message(
                         "RAG query failed in streaming path, continuing without context"
                     )
                     context_str, chunks = "", []
-                # Cache writes should never hold up model time-to-first-token.
-                # Rejoin the task before stream completion so failures are observed.
-                rag_cache_task = asyncio.create_task(
-                    cache_manager.set_cached_rag_results(
-                        question=body.content,
-                        tenant_id=str(user.tenant_id),
-                        user_id=str(user.id),
-                        context_str=context_str,
-                        chunks=chunks,
-                        cloud_hits=cloud_hits,
-                        expertise_level=user.expertise_level,
-                        skill=body.skill
-                        if hasattr(body, "skill")
-                        else user.default_skill,
-                        include_public=body.include_public,
-                        scope_key=rag_scope_key,
+                await set_tenant_context(db, str(user.tenant_id))
+                if rag_result_is_cacheable(context_str, chunks, cloud_hits):
+                    # Cache writes should never hold up model time-to-first-token.
+                    # Rejoin before stream completion so failures are observed.
+                    rag_cache_task = asyncio.create_task(
+                        cache_manager.set_cached_rag_results(
+                            question=body.content,
+                            tenant_id=str(user.tenant_id),
+                            user_id=str(user.id),
+                            context_str=context_str,
+                            chunks=chunks,
+                            cloud_hits=cloud_hits,
+                            expertise_level=user.expertise_level,
+                            skill=body.skill
+                            if hasattr(body, "skill")
+                            else user.default_skill,
+                            include_public=body.include_public,
+                            scope_key=rag_scope_key,
+                            expected_corpus_revision=rag_cache_revision,
+                        )
                     )
-                )
+                else:
+                    logger.info(
+                        "Skipping RAG cache write for empty or degraded retrieval"
+                    )
 
             latency_breakdown["retrieval_ms"] = int(
                 (time.monotonic() - retrieval_started_at) * 1000
@@ -1784,16 +2922,9 @@ async def stream_message(
                 attachment_count=attachment_count,
             )
             source_previews = _stream_source_previews(chunks, cloud_hits)
-            firm_previews = [
-                source
-                for source in source_previews
-                if source.get("source_label") != "Cited authority"
-            ]
-            authority_previews = [
-                source
-                for source in source_previews
-                if source.get("source_label") == "Cited authority"
-            ]
+            firm_previews, authority_previews = _partition_stream_source_previews(
+                source_previews
+            )
             yield _stream_activity_event(
                 "firm_search",
                 "completed",
@@ -1965,11 +3096,20 @@ async def stream_message(
                 )
 
             # Build source citations from chunks
-            source_dicts = []
-            context_used = []
-            context_scores = {}
+            source_dicts = list(attachment_sources)
+            context_used = [
+                source["source_id"]
+                for source in attachment_sources
+                if source.get("source_id")
+            ]
+            context_scores = {source_id: 1.0 for source_id in context_used}
             seen_citations: dict[str, str] = {}
             source_aliases: dict[str, str] = {}
+            for source in attachment_sources:
+                source_id = source.get("source_id")
+                for citation_key in (source.get("citation"), source.get("case_name")):
+                    if source_id and citation_key:
+                        seen_citations[str(citation_key)] = str(source_id)
             for chunk in chunks:
                 chunk_id = str(chunk.get("id", f"chunk_{len(context_used)}"))
                 citation_key = chunk.get("citation") or chunk.get("case_name") or ""
@@ -2005,6 +3145,17 @@ async def stream_message(
                 cleaned_response,
                 _citation_validation_sources(source_dicts, chunks, cloud_hits),
             )
+            cleaned_response, citation_gap = enforce_legal_citation_integrity(
+                body.content,
+                cleaned_response,
+                source_dicts,
+            )
+            if citation_gap:
+                logger.warning(
+                    "Blocked unsupported streamed legal-research answer conversation_id=%s",
+                    conv.id,
+                )
+            source_dicts = _mark_cited_sources(cleaned_response, source_dicts)
             latency_breakdown["validation_ms"] = int(
                 (time.monotonic() - validation_started_at) * 1000
             )
@@ -2018,6 +3169,17 @@ async def stream_message(
                 elapsed_ms=latency_breakdown["validation_ms"],
                 counts=progress_counts,
                 sources=source_previews,
+            )
+            yield _stream_progress_event(
+                "citation_metadata",
+                {
+                    "sources": [
+                        source for source in source_dicts if source.get("cited")
+                    ],
+                    "citation_annotations": build_citation_annotations(
+                        cleaned_response, source_dicts
+                    ),
+                },
             )
             # Do not expose unvalidated provider output.  Buffering preserves
             # the SSE contract while ensuring the client only receives the
@@ -2052,6 +3214,25 @@ async def stream_message(
                 else user.default_skill
             )
             await set_tenant_context(db, str(user.tenant_id))
+
+            # Mirrors send_message. The action pass runs after the answer has
+            # already streamed, so a proposal never delays the first token.
+            proposed_actions, action_note = await _propose_followthrough_actions(
+                db,
+                user,
+                question=body.content,
+                answer=cleaned_response,
+                rag_context=context_str,
+                route=route,
+                conversation_id=conv.id,
+                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                sources=source_dicts,
+            )
+            if action_note:
+                # Persist the same text that will be streamed after commit so a
+                # reload can never disagree with the live turn.
+                cleaned_response = f"{cleaned_response}{action_note}"
+
             assistant_msg = Message(
                 id=uuid.uuid4(),
                 tenant_id=user.tenant_id,
@@ -2063,6 +3244,7 @@ async def stream_message(
                 context_used=context_used if context_used else None,
                 context_relevance_scores=context_scores if context_scores else None,
                 pii_flags=all_pii_flags if all_pii_flags else None,
+                proposed_actions=proposed_actions or None,
             )
             db.add(assistant_msg)
 
@@ -2131,6 +3313,20 @@ async def stream_message(
             db.add(usage)
 
             await db.commit()
+            assistant_turn_committed = True
+            generation_state.assistant_turn_committed = True
+
+            # A proposal is clickable and refers to a real task. Do not expose
+            # either the note or card until the task, assistant message, and
+            # usage record have committed together; otherwise a fast approval
+            # can race an uncommitted task or a disconnect can leave a phantom
+            # card that rolls back on the server.
+            if action_note:
+                yield _stream_token_event(action_note)
+            if proposed_actions:
+                yield _stream_progress_event(
+                    "action_proposal", {"proposed_actions": proposed_actions}
+                )
             if rag_cache_task is not None:
                 cache_result = await asyncio.gather(
                     rag_cache_task, return_exceptions=True
@@ -2138,24 +3334,67 @@ async def stream_message(
                 if cache_result and isinstance(cache_result[0], BaseException):
                     logger.warning("RAG cache write failed: %s", cache_result[0])
 
-            # Fire memory generation without blocking the stream completion
-            asyncio.create_task(
-                _trigger_auto_memory_generation_bg(
-                    user_id=str(user.id),
-                    tenant_id=str(user.tenant_id),
-                    conversation_id=str(conv.id),
-                    tenant_name=user.tenant.name if user.tenant else "Legal",
-                    privacy_mode=user.privacy_mode,
-                )
+            # Run memory generation after the response body releases the pinned
+            # turn connection; it must not consume a second pool slot in-flight.
+            background_tasks.add_task(
+                _trigger_auto_memory_generation_bg,
+                user_id=str(user.id),
+                tenant_id=str(user.tenant_id),
+                conversation_id=str(conv.id),
+                tenant_name=user.tenant.name if user.tenant else "Legal",
+                privacy_mode=user.privacy_mode,
             )
 
             # Send completion marker
             yield "data: [STREAM_COMPLETE]\n\n"
 
-        except Exception:
-            logger.exception("Streaming chat failed")
+        except Exception as stream_exc:
+            logger.exception(
+                "Streaming chat failed tenant_id=%s user_id=%s conversation_id=%s",
+                stream_tenant_id,
+                stream_user_id,
+                stream_conversation_id,
+            )
             await db.rollback()
-            yield "data: [ERROR: Assistant service temporarily unavailable. Retry this message.]\n\n"
+            await set_tenant_context(db, str(stream_tenant_id))
+            await capture_chat_error(
+                db=db,
+                error_type="stream_chat_error",
+                message=f"Streaming chat failed: {stream_exc}",
+                user_id=stream_user_id,
+                tenant_id=stream_tenant_id,
+                request=request,
+                query_text=body.content,
+                conversation_id=stream_conversation_id,
+                severity="error",
+            )
+            terminal_failure_persisted = await _await_critical_cleanup(
+                _persist_interrupted_assistant_turn(
+                    db=db,
+                    tenant_id=stream_tenant_id,
+                    user_id=stream_user_id,
+                    conversation_id=stream_conversation_id,
+                    user_message_id=stream_user_message_id,
+                )
+            )
+            if terminal_failure_persisted:
+                generation_state.assistant_turn_committed = True
+            yield _stream_error_event(
+                "Assistant service temporarily unavailable. Retry this message."
+            )
+        finally:
+            if not assistant_turn_committed and not terminal_failure_persisted:
+                # Client cancellation/navigation raises outside ``Exception``
+                # on modern Python. Roll back any tool-created task/source
+                # promotion before the independent recovery write; otherwise
+                # committing the interruption marker would also commit an
+                # unseen proposal from the abandoned turn.
+                terminal_failure_persisted = (
+                    await _close_interrupted_generation_if_needed(
+                        db,
+                        generation_state,
+                    )
+                )
 
     return StreamingResponse(
         stream_generator(),
@@ -2169,4 +3408,4 @@ async def stream_message(
 
 async def _error_stream(message: str):
     """Generate SSE error response."""
-    yield f"data: [ERROR: {message}]\n\n"
+    yield _stream_error_event(message)

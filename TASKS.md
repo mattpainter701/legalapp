@@ -1,5 +1,79 @@
 # TASKS.md
 
+## BK24 — AI Platform, Margin, Retrieval, and Corporate-Law Demo — 2026-08-13 (IN PROGRESS)
+
+**Goal:** Turn the existing AI routing, legal retrieval, and assistant surfaces into
+a margin-positive customer product, then prove it with a polished corporate-law
+and recurring-retainer demonstration in the `cybersafeadvisor.com` tenant.
+
+Epic and acceptance criteria:
+`docs/ai-platform-margin-routing-retrieval-epic-2026-08-13.md`.
+
+### Sprint 0 — protect the demo and the product boundary
+
+- [x] `AIP-01a` Block explicitly free capacity from operator activation and manual
+      reload of customer-facing Standard/Premium routes; audit rejected attempts
+- [ ] `AIP-01b` Inventory the exact production route graph, provider keys, aliases,
+      fallbacks, prices, health, and rollback target without exposing secrets
+- [x] `AIP-01b.1` Verify the exact production commit/readiness and document the
+      file-backed aliases, capacity class, and unresolved database-managed state
+- [ ] `AIP-02` Replace legacy free production paths with qualified paid Standard
+      and Premium routes; canary, verify, and retain a tested rollback revision
+- [x] `AIP-02a` Add a repeatable public-catalog gate and qualify four paid
+      Standard/Premium comparison candidates without approving activation
+- [x] `AIP-02b` Add a secret-safe multimodal canary runner and local TXT/DOCX/PDF
+      extraction gates; inventory found no usable local OpenRouter/OpenAI key,
+      while the retained OpenCode key passed text with `gpt-5.6-luna`
+- [x] `AIP-02b.1` Redact provider failure bodies from operator model tests and
+      report credential state, stable failure category, exact synthetic-response
+      success, and timing without leaking provider workspace or response IDs
+- [ ] `AIP-02c` Provision/rotate production-owned OpenRouter capacity and pass live
+      text, vision, native PDF, embeddings, and speech-to-text canaries
+- [ ] `AIP-03` Pin the demo tenant to the qualified route and pass chat, citation,
+      document, mobile, latency, and failure-degradation preflight checks
+- [ ] `AIP-22a` Seed three synthetic corporate/contract matters for
+      `cybersafeadvisor.com`, with generated documents clearly labeled as demo data
+- [x] `AIP-22a.1` Generate the three-matter, six-DOCX synthetic pack plus manifest,
+      research basis, metadata scrub, structural tests, and accessibility audits
+- [ ] `AIP-23a` Persist contract findings into reviewed tasks and renewal follow-up
+- [ ] `AIP-25` Rehearse a concise prospect script covering contract review,
+      retainer work, citations, human approval, and mobile follow-through
+- [x] `AIP-25a` Write the 10-minute prospect runbook, exact prompts, trust
+      language, preflight, and graceful failure fallbacks
+
+### Product platform follow-through
+
+- [ ] `AIP-04–07` Separate model discovery from approval; add provider adapters,
+      legal benchmarks, and revisioned route policy
+- [ ] `AIP-08–11` Build the canonical usage/cost ledger, dynamic pricing registry,
+      margin rules, Premium entitlement, and user-facing tier UX; no BYOK
+- [ ] `AIP-12–16` Ship tenant-private embedding v2 with a versioned schema,
+      idempotent jobs, side-by-side reindex, and no padded-vector shortcut
+- [x] `AIP-12a` Stop treating OpenCode/DeepSeek chat keys as direct embedding
+      providers; use explicit OpenAI or OpenRouter embedding endpoints only
+- [ ] `AIP-17–21` Harden CourtListener/official-source lifecycle, Jetson worker
+      scheduling, query-embedding redundancy, source coverage, and freshness UX
+- [ ] `AIP-23–24` Complete persisted contract work products and retainer-aware
+      recurring workflows
+- [ ] `AIP-26–29` Add AI operations telemetry, privacy gates, canary/rollback,
+      disaster recovery, SLOs, and release evidence
+
+### Existing cowork/demo carryover
+
+- [ ] Finish the thin automation glue between cited chat findings, matter work
+      products, Work Board tasks, renewals, and explicit attorney approval
+- [ ] Complete `VA-11` page-faithful DOCX preview and immutable release artifacts
+- [ ] Add authority freshness and redundant query embeddings
+- [ ] Defer external e-sign (`VA-12`), a generic workflow engine, Teams bot/SSO,
+      and Office pilot until the customer route and demo gates pass
+- [ ] Activate the existing bounded chat-dictation plan behind feature flags only
+      after STT key/privacy/quality/budget canaries pass; keep transcripts editable
+      and never auto-send
+
+Execution branch: `agent/bk24-ai-platform-sprint0`, based on current `origin/main`.
+The older dirty working tree is intentionally untouched; selectively salvage only
+verified current-host/config fixes after this branch passes its focused gates.
+
 ## Matter Assistant — Conversational DOCX Revisions — 2026-08-04 (SLICE 1 DONE)
 
 **Goal:** Let an attorney request bounded changes to an existing matter DOCX

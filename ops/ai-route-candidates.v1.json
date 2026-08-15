@@ -1,0 +1,37 @@
+{
+  "revision": "bk24-candidates-v1",
+  "catalog_url": "https://openrouter.ai/api/v1/models",
+  "policy": {
+    "minimum_context_tokens": 200000,
+    "required_parameters": ["tools"],
+    "required_any_parameters": ["structured_outputs", "response_format"],
+    "scenario_input_tokens": 80000,
+    "scenario_output_tokens": 4000
+  },
+  "tiers": {
+    "standard": [
+      {
+        "provider_id": "openrouter",
+        "model": "openai/gpt-5.6-luna",
+        "role": "primary-candidate"
+      },
+      {
+        "provider_id": "openrouter",
+        "model": "anthropic/claude-haiku-4.5",
+        "role": "quality-comparison"
+      }
+    ],
+    "premium": [
+      {
+        "provider_id": "openrouter",
+        "model": "openai/gpt-5.6-terra",
+        "role": "primary-candidate"
+      },
+      {
+        "provider_id": "openrouter",
+        "model": "anthropic/claude-sonnet-4.5",
+        "role": "quality-comparison"
+      }
+    ]
+  }
+}

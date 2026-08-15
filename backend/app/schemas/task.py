@@ -8,6 +8,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.chat_action import validate_email_subject
+
 
 TASK_STATUSES = {
     "pending",
@@ -69,6 +71,48 @@ class TaskCreate(BaseModel):
         return v
 
 
+class TaskDeliveryState(BaseModel):
+    """Outcome of the automation for an approved task.
+
+    ``status`` is the honest answer to "was the client actually contacted":
+    queued and sending both mean not yet, and only ``sent`` means yes.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[uuid.UUID] = None
+    status: str
+    action_type: Optional[str] = None
+    error_message: Optional[str] = None
+    action_snapshot: Optional[dict] = None
+    action_sha256: Optional[str] = None
+    provider: Optional[str] = None
+    provider_message_id: Optional[str] = None
+    delivery_detail: Optional[str] = None
+    delivery_certainty: Optional[str] = None
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class PendingActionEdit(BaseModel):
+    """The only parts of a drafted action an attorney may rewrite.
+
+    Recipients are absent on purpose. They were resolved server-side from the
+    matter's own parties, and letting them be re-supplied here would reopen the
+    hole that resolution closes — an edit endpoint is just as reachable by a
+    confused or malicious caller as a tool argument is.
+    """
+
+    subject: Optional[str] = Field(None, min_length=1, max_length=300)
+    body: Optional[str] = Field(None, min_length=1, max_length=20_000)
+    expected_version: int = Field(ge=1)
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject_header(cls, value: Optional[str]) -> Optional[str]:
+        return validate_email_subject(value) if value is not None else None
+
+
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -88,6 +132,9 @@ class TaskUpdate(BaseModel):
     waiting_follow_up_date: Optional[date] = None
     reviewer_user_id: Optional[uuid.UUID] = None
     expected_version: Optional[int] = Field(None, ge=1)
+    # Required only when retrying a changed draft after an unconfirmed attempt.
+    # It is request metadata, not a Task column.
+    acknowledge_prior_delivery_risk: bool = False
 
     @field_validator("status")
     @classmethod
@@ -105,6 +152,7 @@ class TaskTransitionRequest(BaseModel):
     reason: Optional[str] = Field(None, max_length=5000)
     waiting_follow_up_date: Optional[date] = None
     reviewer_user_id: Optional[uuid.UUID] = None
+    acknowledge_prior_delivery_risk: bool = False
 
     @field_validator("to_status")
     @classmethod
@@ -189,6 +237,14 @@ class TaskResponse(BaseModel):
     version: int = 1
     source: str
     external_ref: Optional[str]
+    # Drafted follow-through awaiting approval, e.g. an email_client payload.
+    # Present so the board can state what approving will actually do.
+    pending_action: Optional[dict] = None
+    # Set once an approval has been recorded. Absent means nothing was dispatched.
+    delivery: Optional[TaskDeliveryState] = None
+    # Ordered newest-first. Each immutable attempt remains visible after a
+    # retry queues so an uncertain outcome never disappears from the UI.
+    delivery_history: list[TaskDeliveryState] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -237,6 +293,10 @@ class TaskBoardCard(BaseModel):
     source: str
     external_ref: Optional[str] = None
     version: int
+    # Drafted follow-through this card will execute when approved out of Review.
+    # The board must be able to say what approving does before it is clicked.
+    pending_action: Optional[dict] = None
+    delivery: Optional[TaskDeliveryState] = None
     status_changed_at: datetime
     updated_at: datetime
 
