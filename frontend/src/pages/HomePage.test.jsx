@@ -2,7 +2,7 @@ import React from 'react'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import HomePage from './HomePage'
 
 describe('HomePage launch routing and claims', () => {
@@ -80,6 +80,23 @@ describe('HomePage launch routing and claims', () => {
     expect(screen.getByRole('link', { name: /Explore LawHand Chat/i })).toHaveAttribute('href', '/product/chat')
     expect(screen.getByRole('link', { name: /Explore the MCP preview/i })).toHaveAttribute('href', '/product/mcp')
     expect(screen.getByRole('link', { name: 'View full pricing' })).toHaveAttribute('href', '/pricing')
+    expect(screen.getByRole('link', { name: /See the full platform/i })).toHaveAttribute('href', '/product')
+  })
+
+  it('scrolls to the section named by the hash when arriving from another page', () => {
+    const scrollIntoView = vi.fn()
+    // jsdom does not implement scrollIntoView; the marketing nav depends on it
+    // to reach /#security from a page that is not the home page.
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView
+
+    render(
+      <MemoryRouter initialEntries={['/#security']}>
+        <HomePage />
+      </MemoryRouter>,
+    )
+
+    expect(scrollIntoView).toHaveBeenCalled()
+    expect(document.getElementById('security')).toBeInTheDocument()
   })
 })
 

@@ -1,4 +1,4 @@
-import { getRouteMeta } from './config.js'
+import { buildStructuredData, getRouteMeta } from './config.js'
 
 const LEGAL_SHELLS = Object.freeze({
   '/privacy': {
@@ -38,6 +38,16 @@ const LEGAL_SHELLS = Object.freeze({
 })
 
 const MARKETING_SHELLS = Object.freeze({
+  '/product': {
+    heading: 'One workspace for the whole matter.',
+    lead: 'LawHand holds intake, matters, documents, deadlines, billing, and source-aware research in a single tenant-isolated workspace for law firms and legal teams.',
+    sections: [
+      { heading: 'The core workspace', body: 'Intake and tasks, matters and contacts, calendar and deadlines, documents and automation, time, billing, trust accounting, reporting, client portal, and signature routing.' },
+      { heading: 'Practice-area library', body: 'Skill libraries add the document patterns, checks, and terminology of a practice area to the shared matter record. Trust and estate, family and domestic relations, and mediation add dedicated workspaces with their own records and roles.' },
+      { heading: 'Connected sources', body: 'Supported Microsoft 365, Google Workspace, Microsoft Teams, Zoom Phone, QuickBooks Online, and enterprise file-share connections are enabled by a firm administrator and can be disconnected at any time.' },
+      { heading: 'Controls', body: 'Firm workspaces are tenant-isolated, module roles decide what each participant can see or approve, and AI-assisted work carries source links for attorney review before reliance.' },
+    ],
+  },
   '/product/chat': {
     heading: 'Ask with the whole matter in hand.',
     lead: 'LawHand gives legal teams a matter-aware AI workspace for research, review, summaries, and drafting with authorized sources close at hand.',
@@ -70,6 +80,15 @@ const MARKETING_SHELLS = Object.freeze({
 const PUBLIC_SHELLS = Object.freeze({ ...LEGAL_SHELLS, ...MARKETING_SHELLS })
 
 const LAST_UPDATED = 'July 27, 2026'
+
+const FALLBACK_CONTACT_URL = 'mailto:matt@cybersafeadvisor.com'
+
+/** Render the address a mailto: contact URL points at, for link text. */
+function contactLabel(contactUrl) {
+  return contactUrl.startsWith('mailto:')
+    ? contactUrl.slice('mailto:'.length).split('?')[0]
+    : 'our team'
+}
 
 function escapeHtml(value) {
   return String(value)
@@ -105,7 +124,7 @@ function replaceRootContents(html, contents) {
   return `${html.slice(0, rootStart + marker.length)}\n${contents}\n    ${html.slice(rootEnd)}`
 }
 
-function legalShellMarkup(pathname) {
+function legalShellMarkup(pathname, contactUrl) {
   const route = LEGAL_SHELLS[pathname]
   const contents = route.sections
     .map((section) => `            <li><a href="#${escapeHtml(section.id)}">${escapeHtml(section.heading)}</a></li>`)
@@ -133,13 +152,13 @@ ${contents}
 ${sections}
           <footer class="server-legal__footer">
             <p>The controlling subscription agreement and, where applicable, data-processing agreement are available from your organization. Contact your firm administrator for workspace-specific terms.</p>
-            <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or email <a href="mailto:matt@cybersafeadvisor.com">matt@cybersafeadvisor.com</a>.</p>
+            <p>Read the <a href="${route.otherPath}">${escapeHtml(route.otherLabel)}</a> or contact <a href="${escapeHtml(contactUrl)}">${escapeHtml(contactLabel(contactUrl))}</a>.</p>
           </footer>
         </article>
       </main>`
 }
 
-function marketingShellMarkup(pathname) {
+function marketingShellMarkup(pathname, contactUrl) {
   const route = MARKETING_SHELLS[pathname]
   const sections = route.sections
     .map((section) => `          <section>
@@ -157,6 +176,7 @@ function marketingShellMarkup(pathname) {
           <nav class="server-legal__contents" aria-label="LawHand product pages">
             <h2>Explore LawHand</h2>
             <ol>
+              <li><a href="/product">Platform</a></li>
               <li><a href="/product/chat">AI Chat</a></li>
               <li><a href="/product/mcp">MCP</a></li>
               <li><a href="/pricing">Pricing</a></li>
@@ -164,14 +184,34 @@ function marketingShellMarkup(pathname) {
           </nav>
 ${sections}
           <footer class="server-legal__footer">
-            <p><a href="mailto:matt@cybersafeadvisor.com">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
+            <p><a href="${escapeHtml(contactUrl)}">Book a LawHand demo</a> or <a href="/login">sign in</a>.</p>
           </footer>
         </article>
       </main>`
 }
 
+/**
+ * Replace the home-page JSON-LD baked into index.html with this route's own.
+ * Leaving the home graph in place would tell a crawler that /pricing is the
+ * home page; removing it outright would leave the crawler-visible copy of the
+ * page with no structured data at all.
+ */
+function replaceStructuredData(html, siteOrigin, pathname) {
+  const pattern = /<script[^>]*data-seo-structured-data[^>]*>[\s\S]*?<\/script>\s*/gi
+  const data = buildStructuredData(siteOrigin, pathname)
+  if (!data) return html.replace(pattern, '')
+
+  const payload = JSON.stringify(data).replace(/</g, '\\u003c')
+  const script = `<script type="application/ld+json" data-seo-structured-data>${payload}</script>`
+  if (pattern.test(html)) {
+    pattern.lastIndex = 0
+    return html.replace(pattern, `${script}\n    `)
+  }
+  return html.replace('</head>', `  ${script}\n  </head>`)
+}
+
 /** Derive a crawl-correct, no-JavaScript shell from Vite's final SPA index. */
-export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '') {
+export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '', contactUrl = FALLBACK_CONTACT_URL) {
   if (!Object.hasOwn(PUBLIC_SHELLS, pathname)) {
     throw new Error(`No public server shell is defined for ${pathname}`)
   }
@@ -183,10 +223,8 @@ export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '') {
       /<link\s+rel=["']canonical["'][^>]*>/i,
       `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
     )
-    .replace(
-      /<script[^>]*data-seo-structured-data[^>]*>[\s\S]*?<\/script>\s*/gi,
-      '',
-    )
+
+  html = replaceStructuredData(html, siteOrigin, pathname)
 
   html = replaceMeta(html, 'name', 'description', meta.description)
   html = replaceMeta(html, 'name', 'robots', 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1')
@@ -200,8 +238,8 @@ export function buildPublicRouteHtml(baseHtml, pathname, siteOrigin = '') {
   return replaceRootContents(
     html,
     Object.hasOwn(LEGAL_SHELLS, pathname)
-      ? legalShellMarkup(pathname)
-      : marketingShellMarkup(pathname),
+      ? legalShellMarkup(pathname, contactUrl)
+      : marketingShellMarkup(pathname, contactUrl),
   )
 }
 

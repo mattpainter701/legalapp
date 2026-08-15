@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -249,8 +250,50 @@ def test_nginx_operator_routes_and_pdf_csp_are_consistent() -> None:
     assert "frame-src 'self' blob:" in csp_lines[0]
     assert "script-src 'self';" in csp_lines[0]
     assert "'unsafe-eval'" not in csp_lines[0]
-    assert nginx.count("location ~ ^/(privacy|terms)/?$ {") == 2
-    assert nginx.count("rewrite ^/(privacy|terms)/?$ /$1/index.html break;") == 2
+    public_routes = "privacy|terms|pricing|product(?:/(?:chat|mcp))?"
+    assert nginx.count(f"location ~ ^/({public_routes})/?$ {{") == 2
+    assert nginx.count(f"rewrite ^/({public_routes})/?$ /$1/index.html break;") == 2
+
+
+def _indexable_public_paths() -> list[str]:
+    """Canonical paths that frontend/src/seo/config.js publishes as indexable."""
+    config = (ROOT / "frontend" / "src" / "seo" / "config.js").read_text(
+        encoding="utf-8"
+    )
+    start = config.index("export const PUBLIC_ROUTE_META")
+    end = config.index("const WORKSPACE_ROUTE_TITLES", start)
+    block = config[start:end]
+    paths = [
+        match.group(1)
+        for match in re.finditer(r"canonicalPath: '([^']+)'", block)
+    ]
+    assert paths, "no canonical paths parsed from the SEO config"
+    return paths
+
+
+def test_nginx_never_noindexes_a_route_the_sitemap_publishes() -> None:
+    """An X-Robots-Tag header silently overrides a page's own robots meta tag.
+
+    Every route the SEO config marks indexable (and therefore lists in
+    sitemap.xml) must match one of the allowlist patterns in the
+    ``$x_robots_tag`` map, or search engines are told to ignore a page the site
+    is actively asking them to crawl.
+    """
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+    start = nginx.index("map $request_uri $x_robots_tag {")
+    allowlist = nginx[start : nginx.index("}", start)]
+
+    patterns = [
+        re.compile(match.group(1))
+        for match in re.finditer(r'~(\S+)\s+"";', allowlist)
+    ]
+    assert patterns, "no allowlist entries parsed from the x_robots_tag map"
+
+    for path in _indexable_public_paths():
+        assert any(pattern.search(path) for pattern in patterns), (
+            f"{path} is indexable in the SEO config but nginx serves it with "
+            "a noindex X-Robots-Tag header"
+        )
 
 
 def test_production_nginx_keeps_platform_routes_active_in_http_and_tls() -> None:

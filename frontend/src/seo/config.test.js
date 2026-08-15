@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  MCP_TOOL_CALL_PRICE_USD,
+  PLATFORM_PRICE_USD,
+  PRICING_FAQ,
   buildMarketingStructuredData,
   buildRobotsTxt,
   buildSitemapXml,
+  buildStructuredData,
   getRouteMeta,
   normalizeSiteOrigin,
 } from './config'
@@ -25,11 +29,30 @@ describe('SEO configuration', () => {
     expect(getRouteMeta('/product/chat').indexable).toBe(true)
     expect(getRouteMeta('/product/mcp/').canonicalPath).toBe('/product/mcp')
     expect(getRouteMeta('/pricing').indexable).toBe(true)
+    expect(getRouteMeta('/product').indexable).toBe(true)
 
     expect(getRouteMeta('/login').indexable).toBe(false)
     expect(getRouteMeta('/matters/customer-id').indexable).toBe(false)
     expect(getRouteMeta('/portal/client/matter?token=secret').indexable).toBe(false)
     expect(getRouteMeta('/unknown').indexable).toBe(false)
+  })
+
+  it('describes an unrecognized path as missing rather than as a private page', () => {
+    // A stale inbound link should not be told it landed on a sign-in wall.
+    expect(getRouteMeta('/no-such-page').title).toMatch(/Page not found/)
+    expect(getRouteMeta('/no-such-page').canonicalPath).toBeNull()
+    expect(getRouteMeta('/matters/abc').title).toMatch(/Matters/)
+  })
+
+  it('keeps sign-in-walled routes out of the crawl budget', () => {
+    const robots = buildRobotsTxt('https://clarity.example')
+
+    for (const route of ['/login', '/signup', '/chat', '/matters', '/admin', '/platform', '/portal']) {
+      expect(robots).toContain(`Disallow: ${route}/`)
+    }
+    // Public marketing routes must stay crawlable.
+    expect(robots).not.toContain('Disallow: /pricing')
+    expect(robots).not.toContain('Disallow: /product')
   })
 
   it('accepts only host-safe public origins', () => {
@@ -57,6 +80,8 @@ describe('SEO configuration', () => {
     expect(sitemap).toContain(`<loc>${origin}/product/chat</loc>`)
     expect(sitemap).toContain(`<loc>${origin}/product/mcp</loc>`)
     expect(sitemap).toContain(`<loc>${origin}/pricing</loc>`)
+    expect(sitemap).toContain(`<loc>${origin}/product</loc>`)
+    expect(sitemap).toContain('<lastmod>')
     expect(sitemap).not.toContain('/login')
     expect(sitemap).not.toContain('/matters')
   })
@@ -68,15 +93,50 @@ describe('SEO configuration', () => {
       'WebSite',
       'SoftwareApplication',
     ])
-    expect(graph.find((node) => node['@type'] === 'SoftwareApplication')).toMatchObject({
+    const software = graph.find((node) => node['@type'] === 'SoftwareApplication')
+    expect(software).toMatchObject({
       applicationCategory: 'BusinessApplication',
       operatingSystem: 'Modern web browser',
     })
+    // The offer may state only the price the pricing page itself publishes,
+    // and must not imply a self-serve purchase the product does not offer.
+    expect(software.offers.price).toBe(PLATFORM_PRICE_USD)
+    expect(software.offers.priceCurrency).toBe('USD')
+    expect(software.offers).not.toHaveProperty('availability')
+
+    // Ratings and reviews would be fabricated social proof; never emit them.
     for (const node of graph) {
       expect(node).not.toHaveProperty('aggregateRating')
       expect(node).not.toHaveProperty('review')
-      expect(node).not.toHaveProperty('offers')
     }
+  })
+
+  it('gives every indexable route its own structured data', () => {
+    const origin = 'https://clarity.example'
+
+    for (const route of ['/', '/product', '/product/chat', '/product/mcp', '/pricing', '/privacy', '/terms']) {
+      const types = buildStructuredData(origin, route)['@graph'].map((node) => node['@type'])
+      expect(types).toContain('Organization')
+      expect(types).toContain('WebSite')
+    }
+
+    expect(buildStructuredData(origin, '/pricing')['@graph'].map((node) => node['@type']))
+      .toContain('BreadcrumbList')
+    expect(buildStructuredData(origin, '/login')).toBeNull()
+    expect(buildStructuredData(origin, '/no-such-page')).toBeNull()
+    expect(buildStructuredData('', '/')).toBeNull()
+  })
+
+  it('publishes the pricing FAQ verbatim as FAQPage structured data', () => {
+    const graph = buildStructuredData('https://clarity.example', '/pricing')['@graph']
+    const faq = graph.find((node) => node['@type'] === 'FAQPage')
+
+    expect(faq.mainEntity).toHaveLength(PRICING_FAQ.length)
+    expect(faq.mainEntity[0].name).toBe(PRICING_FAQ[0][0])
+    expect(faq.mainEntity[0].acceptedAnswer.text).toBe(PRICING_FAQ[0][1])
+    // The published answers must carry the same prices as the rest of the site.
+    expect(JSON.stringify(faq)).toContain(`$${PLATFORM_PRICE_USD}`)
+    expect(JSON.stringify(faq)).toContain(`$${MCP_TOOL_CALL_PRICE_USD}`)
   })
 
   it.each([
@@ -118,6 +178,7 @@ describe('SEO configuration', () => {
     ['/product/chat', 'Ask with the whole matter in hand.', 'matter-aware AI workspace'],
     ['/product/mcp', 'Bring LawHand context into the tools you already use.', '$0.45 per tool call'],
     ['/pricing', 'One clear platform price. Controlled expansion.', '$89 per user per month'],
+    ['/product', 'One workspace for the whole matter.', 'Practice-area library'],
   ])('builds a substantive public product shell for %s', (route, heading, claim) => {
     const base = readFileSync('index.html', 'utf8')
     const html = buildPublicRouteHtml(base, route, 'https://lawhand.example')

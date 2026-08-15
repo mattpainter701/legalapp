@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import {
   PRIVATE_DESCRIPTION,
   SITE_NAME,
-  buildMarketingStructuredData,
+  buildStructuredData,
   getRouteMeta,
   normalizeSiteOrigin,
 } from '../seo/config'
@@ -93,7 +93,7 @@ export default function SeoHead() {
     setMeta('name', 'twitter:image', `${siteOrigin}${SOCIAL_IMAGE_PATH}`)
     setMeta('name', 'twitter:image:alt', 'LawHand law firm operations and legal AI workspace')
 
-    setStructuredData(pathname === '/' ? buildMarketingStructuredData(siteOrigin) : null)
+    setStructuredData(buildStructuredData(siteOrigin, pathname))
   }, [pathname])
 
   return null

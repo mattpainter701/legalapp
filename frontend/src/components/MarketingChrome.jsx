@@ -4,11 +4,13 @@ import { ArrowRight } from 'lucide-react'
 import LawHandLogo from './LawHandLogo'
 
 const NAV_ITEMS = [
-  { label: 'Platform', href: '/#features', section: 'features' },
+  { label: 'Platform', to: '/product' },
   { label: 'AI Chat', to: '/product/chat' },
   { label: 'MCP', to: '/product/mcp' },
   { label: 'Pricing', to: '/pricing' },
-  { label: 'Security', href: '/#security', section: 'security' },
+  // Rendered as a router link so a visitor arriving from another marketing
+  // page still lands on the home section; HomePage honours the hash on mount.
+  { label: 'Security', to: '/#security', section: 'security' },
 ]
 
 export function MarketingHeader({ onSectionClick }) {
@@ -22,19 +24,21 @@ export function MarketingHeader({ onSectionClick }) {
         </Link>
         <nav aria-label="Marketing" className="hidden items-center gap-5 text-[13.5px] font-medium text-brand-ink-2 lg:flex">
           {NAV_ITEMS.map((item) => (
-            item.to ? (
-              <Link key={item.label} to={item.to} className="inline-flex min-h-11 items-center transition-colors hover:text-brand-ink">
-                {item.label}
-              </Link>
-            ) : (
+            // On the home page itself an in-page anchor scrolls without a
+            // route change; everywhere else the same item routes home first.
+            onSectionClick && item.section ? (
               <a
                 key={item.label}
-                href={onSectionClick ? `#${item.section}` : item.href}
-                onClick={onSectionClick ? onSectionClick(item.section) : undefined}
+                href={`#${item.section}`}
+                onClick={onSectionClick(item.section)}
                 className="inline-flex min-h-11 items-center transition-colors hover:text-brand-ink"
               >
                 {item.label}
               </a>
+            ) : (
+              <Link key={item.label} to={item.to} className="inline-flex min-h-11 items-center transition-colors hover:text-brand-ink">
+                {item.label}
+              </Link>
             )
           ))}
         </nav>
@@ -59,14 +63,15 @@ export function MarketingFooter() {
           <LawHandLogo compact />
           <p className="mt-3 font-sans text-[13px] text-brand-muted">The whole matter, in hand.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-sans text-[12.5px] text-brand-muted sm:justify-end">
+        <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-2 font-sans text-[12.5px] text-brand-muted sm:justify-end">
+          <Link to="/product" className="inline-flex min-h-11 items-center hover:text-brand-ink">Platform</Link>
           <Link to="/product/chat" className="inline-flex min-h-11 items-center hover:text-brand-ink">AI Chat</Link>
           <Link to="/product/mcp" className="inline-flex min-h-11 items-center hover:text-brand-ink">MCP</Link>
           <Link to="/pricing" className="inline-flex min-h-11 items-center hover:text-brand-ink">Pricing</Link>
           <Link to="/privacy" className="inline-flex min-h-11 items-center hover:text-brand-ink">Privacy</Link>
           <Link to="/terms" className="inline-flex min-h-11 items-center hover:text-brand-ink">Terms</Link>
           <span>© {new Date().getFullYear()} LawHand</span>
-        </div>
+        </nav>
       </div>
     </footer>
   )

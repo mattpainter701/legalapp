@@ -5,6 +5,9 @@ import {
   ShieldCheck, Sparkles,
 } from 'lucide-react'
 import MarketingPageLayout from '../components/MarketingChrome'
+// Shared with the FAQPage structured data so a published answer and the answer
+// search engines are shown can never diverge.
+import { MCP_TOOL_CALL_PRICE_USD, PLATFORM_PRICE_USD, PRICING_FAQ } from '../seo/config'
 
 const PLATFORM_FEATURES = [
   'Matter-aware AI chat for research, review, summaries, and drafting',
@@ -13,13 +16,6 @@ const PLATFORM_FEATURES = [
   'Microsoft 365, Google Drive, upload, and supported file-share sources',
   'Practice-area skills and optional specialized workflow modules',
   'Role-aware client and party access with tenant-isolated workspaces',
-]
-
-const FAQ = [
-  ['What is included in the $89 seat?', 'The LawHand platform seat covers the firm workspace and its licensed modules. Enabled integrations, onboarding scope, premium model usage, and specialized service commitments are confirmed in your order.'],
-  ['Is MCP generally available?', 'Not yet. LawHand MCP is in private preview while its public product, billing, monitoring, and recovery gates are completed. The intended public price is $0.45 per tool call.'],
-  ['Do administrators count as licensed users?', 'Seat scope and directory treatment are documented during onboarding so the licensed population matches the firm’s approved rollout.'],
-  ['Can a firm begin with only intake?', 'Yes. Call Intake can be deployed as a focused first workflow, with the broader platform added when the firm is ready.'],
 ]
 
 export default function PricingPage() {
@@ -46,7 +42,7 @@ export default function PricingPage() {
               </div>
               <div className="text-right">
                 <div className="flex items-baseline justify-end gap-1.5">
-                  <span className="font-serif text-[56px] font-bold leading-none">$89</span>
+                  <span className="font-serif text-[56px] font-bold leading-none">${PLATFORM_PRICE_USD}</span>
                   <span className="text-[14px] text-brand-muted">/ user / month</span>
                 </div>
                 <p className="mt-2 text-[12.5px] text-brand-muted">Billed annually</p>
@@ -75,7 +71,7 @@ export default function PricingPage() {
             </div>
             <h2 className="mt-5 font-serif text-[24px] font-bold text-white">LawHand MCP</h2>
             <div className="mt-4 flex items-baseline gap-1.5">
-              <span className="font-serif text-[44px] font-bold leading-none">$0.45</span>
+              <span className="font-serif text-[44px] font-bold leading-none">${MCP_TOOL_CALL_PRICE_USD}</span>
               <span className="text-[13px] text-white/55">/ tool call</span>
             </div>
             <p className="mt-4 text-[13.5px] leading-relaxed text-white/65">Intended public price. Scoped keys, allowlisted tools, bounded usage, and administrative visibility.</p>
@@ -115,7 +111,7 @@ export default function PricingPage() {
           <h2 className="mt-3 font-serif text-[34px] font-bold">Pricing, without the fine-print maze.</h2>
         </div>
         <div className="mt-10 divide-y divide-brand-line rounded-2xl border border-brand-line bg-brand-surface px-6 md:px-8">
-          {FAQ.map(([question, answer]) => (
+          {PRICING_FAQ.map(([question, answer]) => (
             <article key={question} className="py-6">
               <h3 className="font-serif text-[17px] font-bold">{question}</h3>
               <p className="mt-2 text-[14px] leading-relaxed text-brand-ink-2">{answer}</p>
