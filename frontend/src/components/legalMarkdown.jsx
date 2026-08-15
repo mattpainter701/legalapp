@@ -2,8 +2,8 @@ import React from 'react'
 
 export const REVIEW_TAGS = [
   {
-    label: 'settled',
-    text: 'Well-established',
+    label: 'cited',
+    text: 'Source-backed',
     classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
     swatch: 'bg-brand-green',
   },
@@ -24,8 +24,13 @@ export const REVIEW_TAGS = [
 // Citation tag definitions: pattern → { label, classes }
 const CITATION_PATTERNS = [
   {
+    regex: /\[cited\]/gi,
+    label: 'cited',
+    classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
+  },
+  {
     regex: /\[settled\]/gi,
-    label: 'settled',
+    label: 'cited',
     classes: 'bg-brand-green/10 text-brand-green border-brand-green/20',
   },
   {
@@ -206,6 +211,22 @@ export const markdownComponents = {
   em: ({ children }) => <em className="italic">{children}</em>,
   a: ({ children, href }) => {
     const isInternalSource = String(href || '').startsWith('#source-')
+    const childText = React.Children.toArray(children).join('').trim().toLowerCase()
+    const linkedReviewTag = ['cited', 'verify'].includes(childText) ? childText : null
+    if (linkedReviewTag) {
+      const classes = linkedReviewTag === 'cited'
+        ? 'bg-brand-green/10 text-brand-green border-brand-green/20'
+        : 'bg-brand-amber/10 text-brand-amber border-brand-amber/20'
+      return (
+        <a
+          href={href}
+          className={`mx-0.5 inline-flex items-center border px-1.5 py-0.5 align-middle font-mono text-[9px] font-bold uppercase tracking-widest no-underline ${classes}`}
+          aria-label={`${linkedReviewTag} — jump to supporting source`}
+        >
+          {linkedReviewTag}
+        </a>
+      )
+    }
     return (
       <a
         href={href}

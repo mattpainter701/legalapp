@@ -111,6 +111,8 @@ describe('streamed transcript reconciliation', () => {
       content: 'Newest answer',
       client_turn_id: 'new-turn',
       progress: { complete: true, status: 'Response complete' },
+      sources: [{ source_id: 'authority:nd-1', case_name: 'ND authority' }],
+      citation_annotations: [{ claim_id: 'claim-1', source_ids: ['authority:nd-1'] }],
       created_at: '2099-01-01T12:10:01Z',
     }
     const merged = mergeRefreshedTranscript([
@@ -129,6 +131,8 @@ describe('streamed transcript reconciliation', () => {
       'new-assistant',
     ])
     expect(merged[3].progress).toEqual(fallbackAssistant.progress)
+    expect(merged[3].sources).toEqual(fallbackAssistant.sources)
+    expect(merged[3].citation_annotations).toEqual(fallbackAssistant.citation_annotations)
   })
 
   it('prefers explicit client-message and reply identities over timestamps or text', () => {
@@ -251,6 +255,12 @@ describe('ChatPage guarded stream lifecycle', () => {
         assistantMessage('server-answer', 'Streamed answer [source: document:one]', [source]),
       ]))
     apiMocks.streamMessage.mockImplementation(async function* () {
+      yield {
+        type: 'progress',
+        event: 'citation_metadata',
+        sources: [source],
+        citation_annotations: [],
+      }
       yield 'Streamed answer [source: document:one]'
       yield '[STREAM_COMPLETE]'
     })
@@ -264,6 +274,7 @@ describe('ChatPage guarded stream lifecycle', () => {
 
     expect(await screen.findByText('Source metadata could not be verified')).toBeInTheDocument()
     expect(screen.getByText(/Streamed answer/)).toBeInTheDocument()
+    expect(screen.getByText('Document One.pdf')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry source metadata' }))
 
     expect(await screen.findByText('Sources refreshed')).toBeInTheDocument()

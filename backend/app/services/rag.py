@@ -127,6 +127,81 @@ def filter_private_retrieval_results(question: str, chunks: list[dict]) -> list[
     return retained
 
 
+def filter_public_retrieval_results(question: str, chunks: list[dict]) -> list[dict]:
+    """Drop public-authority hits that only match generic legal/location terms.
+
+    The MCP FTS query intentionally uses broad OR recall.  Without a second-stage
+    gate, a top-ranked passage can share only a word such as ``court`` or the
+    jurisdiction name and still be exposed as an apparent source.  Keep strong
+    semantic matches, or require meaningful issue-term overlap for lexical hits.
+    """
+
+    query_terms = _retrieval_terms(question)
+    topic_terms = query_terms.difference(_GENERIC_PRIVATE_RETRIEVAL_TERMS)
+    required_overlap = 1 if len(topic_terms) <= 2 else 2
+    retained: list[dict] = []
+    query_sequence = [
+        token.casefold()
+        for token in _RETRIEVAL_TOKEN_RE.findall(question or "")
+        if token.casefold() not in _RETRIEVAL_STOP_WORDS
+    ]
+    query_bigrams = set(zip(query_sequence, query_sequence[1:]))
+    for chunk in chunks:
+        searchable = " ".join(
+            str(chunk.get(key) or "")
+            for key in (
+                "case_name",
+                "title",
+                "citation",
+                "section_path",
+                "clause_type",
+                "content",
+            )
+        )
+        searchable_terms = _retrieval_terms(searchable)
+        searchable_sequence = [
+            token.casefold()
+            for token in _RETRIEVAL_TOKEN_RE.findall(searchable)
+            if token.casefold() not in _RETRIEVAL_STOP_WORDS
+        ]
+        searchable_bigrams = set(zip(searchable_sequence, searchable_sequence[1:]))
+        overlap = len(query_terms.intersection(searchable_terms))
+        topic_overlap = len(topic_terms.intersection(searchable_terms))
+        try:
+            similarity = float(chunk.get("similarity") or 0.0)
+        except (TypeError, ValueError):
+            similarity = 0.0
+        strong_semantic_match = similarity >= 0.78
+        corroborated_semantic_match = similarity >= 0.65 and topic_overlap > 0
+        meaningful_lexical_match = (
+            topic_overlap >= required_overlap and overlap >= required_overlap
+        )
+        lexical_coverage = topic_overlap / max(1, len(topic_terms))
+        phrase_coverage = len(query_bigrams.intersection(searchable_bigrams)) / max(
+            1, len(query_bigrams)
+        )
+        evidence_score = min(
+            1.0,
+            (0.65 * similarity) + (0.25 * lexical_coverage) + (0.10 * phrase_coverage),
+        )
+        if (
+            strong_semantic_match
+            or corroborated_semantic_match
+            or meaningful_lexical_match
+        ):
+            chunk["lexical_overlap"] = overlap
+            chunk["topic_overlap"] = topic_overlap
+            chunk["retrieval_score"] = chunk.get("relevance_score")
+            chunk["evidence_relevance_score"] = round(evidence_score, 4)
+            chunk["relevance_score"] = round(evidence_score, 4)
+            retained.append(chunk)
+    retained.sort(
+        key=lambda item: float(item.get("evidence_relevance_score") or 0.0),
+        reverse=True,
+    )
+    return retained
+
+
 def _explicit_public_jurisdictions(query: str) -> list[tuple[str, str]]:
     """Return CourtListener/authority jurisdiction ids in mention order."""
     matches: list[tuple[int, str, str]] = []
@@ -479,16 +554,27 @@ def _mcp_json_items(response_data: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def _score_value(value: Any) -> float:
+    """Return a finite non-negative retrieval score without trusting wire types."""
+
+    try:
+        score = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return score if 0.0 <= score <= 1.0 else 0.0
+
+
 def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     """Map a CourtListener MCP search hit to the chat/RAG chunk contract."""
     chunk_id = str(item.get("chunk_id") or item.get("id") or f"mcp_{rank_index}")
-    rank_score = item.get("similarity", item.get("rank"))
-    try:
-        similarity = float(rank_score)
-    except (TypeError, ValueError):
-        similarity = 0.0
-    if similarity <= 0.0 or similarity > 1.0:
-        similarity = max(0.1, 1.0 - (rank_index * 0.05))
+    search_source = str(item.get("search_source") or "").casefold()
+    rank_score = item.get("similarity")
+    # Older MCP deployments returned only ``rank``. Preserve that contract, but
+    # do not turn a current FTS rank into a fabricated 100%, 95%, ... semantic
+    # score merely because the row appeared near the top of an OR query.
+    if rank_score is None and not search_source:
+        rank_score = item.get("rank")
+    similarity = _score_value(rank_score)
 
     return {
         "id": f"courtlistener:{chunk_id}",
@@ -503,7 +589,7 @@ def _mcp_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "section_path": "CourtListener",
         "clause_type": "public_authority",
         "similarity": similarity,
-        "relevance_score": similarity,
+        "relevance_score": similarity or _score_value(item.get("keyword_rank")),
         "source": "courtlistener_mcp",
         "retrieval_mode": item.get("search_source") or "unknown",
         "opinion_id": item.get("opinion_id"),
@@ -534,13 +620,11 @@ def _public_source_url(chunk: dict[str, Any]) -> str:
 def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
     """Map a statute/rule/manual MCP hit to the shared chat/RAG contract."""
     chunk_id = str(item.get("chunk_id") or item.get("id") or f"authority_{rank_index}")
-    rank_score = item.get("similarity", item.get("rank"))
-    try:
-        similarity = float(rank_score)
-    except (TypeError, ValueError):
-        similarity = 0.0
-    if similarity <= 0.0 or similarity > 1.0:
-        similarity = max(0.1, 1.0 - (rank_index * 0.05))
+    search_source = str(item.get("search_source") or "").casefold()
+    rank_score = item.get("similarity")
+    if rank_score is None and not search_source:
+        rank_score = item.get("rank")
+    similarity = _score_value(rank_score)
     source_url = item.get("source_url") or item.get("canonical_url")
     authority_tier = item.get("authority_tier") or "public_authority"
     effective_date = item.get("effective_date") or item.get("publication_date")
@@ -555,7 +639,7 @@ def _mcp_authority_item_to_chunk(item: dict[str, Any], rank_index: int) -> dict:
         "section_path": item.get("document_type") or authority_tier,
         "clause_type": authority_tier,
         "similarity": similarity,
-        "relevance_score": similarity,
+        "relevance_score": similarity or _score_value(item.get("keyword_rank")),
         "source": "legal_authority_mcp",
         "retrieval_mode": item.get("search_source") or "unknown",
         "document_id": item.get("document_id"),
@@ -812,6 +896,7 @@ async def search_courtlistener_mcp(
             for index, item in enumerate(_mcp_json_items(response or {}))
             if item.get("content")
         ]
+        mapped_chunks = filter_public_retrieval_results(query, mapped_chunks)
         if canonical_jurisdiction:
             for chunk in mapped_chunks:
                 chunk["retrieval_jurisdiction"] = canonical_jurisdiction
@@ -1089,6 +1174,8 @@ async def full_rag_query(
         default=[],
         degradation_reasons=degradation_reasons,
     )
+    if not use_mcp_public:
+        public_chunks = filter_public_retrieval_results(question, public_chunks)
     mcp_outcomes = list(getattr(public_chunks, "mcp_outcomes", []))
     requested_public_jurisdictions: tuple[str, ...] = ()
     missing_public_jurisdictions: tuple[str, ...] = ()
@@ -1142,6 +1229,7 @@ async def full_rag_query(
                     query_embedding=public_embedding,
                     top_k=settings.PUBLIC_RAG_TOP_K,
                 )
+                public_chunks = filter_public_retrieval_results(question, public_chunks)
         except asyncio.CancelledError:
             raise
         except Exception:

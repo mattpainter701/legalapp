@@ -64,6 +64,7 @@ from app.services.gateway_privacy import gateway_metadata, retained_gateway_quer
 from app.services.chat_agent import ChatActionAgent
 from app.utils.guardrails import (
     apply_guardrails,
+    build_citation_annotations,
     check_pii_in_input,
     consolidate_unverified_model_knowledge,
     enforce_legal_citation_integrity,
@@ -280,6 +281,17 @@ def _source_dict_from_chunk(chunk: dict) -> dict:
         "source_type": source_type,
         "source_label": _source_label(source_type),
         "locator": _source_locator_from_chunk(chunk),
+        "relevance_score": (
+            chunk.get("evidence_relevance_score")
+            if is_public
+            else chunk.get("similarity")
+        ),
+        "authority_tier": _clean_source_text(chunk.get("authority_tier"), 80)
+        or None,
+        "official_status": _clean_source_text(chunk.get("official_status"), 40)
+        or None,
+        "effective_date": _clean_source_text(chunk.get("effective_date"), 40)
+        or None,
         "cited": False,
     }
     retrieval_jurisdiction = _clean_source_text(chunk.get("retrieval_jurisdiction"), 20)
@@ -324,6 +336,7 @@ def _source_dict_from_cloud_hit(hit_dict: dict) -> dict:
             hit_dict.get("section_path") or hit_dict.get("modified_time"), 120
         )
         or None,
+        "relevance_score": hit_dict.get("relevance_score"),
     }
 
 
@@ -884,6 +897,16 @@ def _message_to_response(msg: Message) -> MessageResponse:
                     retrieval_jurisdiction=(
                         _clean_source_text(s.get("retrieval_jurisdiction"), 20) or None
                     ),
+                    relevance_score=s.get("relevance_score"),
+                    authority_tier=(
+                        _clean_source_text(s.get("authority_tier"), 80) or None
+                    ),
+                    official_status=(
+                        _clean_source_text(s.get("official_status"), 40) or None
+                    ),
+                    effective_date=(
+                        _clean_source_text(s.get("effective_date"), 40) or None
+                    ),
                     cited=bool(s.get("cited")),
                 )
             )
@@ -893,6 +916,10 @@ def _message_to_response(msg: Message) -> MessageResponse:
         role=msg.role,
         content=msg.content,
         sources=sources,
+        citation_annotations=build_citation_annotations(
+            msg.content,
+            [source.model_dump() for source in sources],
+        ),
         proposed_actions=list(msg.proposed_actions or []),
         created_at=msg.created_at,
     )
@@ -3142,6 +3169,17 @@ async def _stream_message_under_generation_lock(
                 elapsed_ms=latency_breakdown["validation_ms"],
                 counts=progress_counts,
                 sources=source_previews,
+            )
+            yield _stream_progress_event(
+                "citation_metadata",
+                {
+                    "sources": [
+                        source for source in source_dicts if source.get("cited")
+                    ],
+                    "citation_annotations": build_citation_annotations(
+                        cleaned_response, source_dicts
+                    ),
+                },
             )
             # Do not expose unvalidated provider output.  Buffering preserves
             # the SSE contract while ensuring the client only receives the

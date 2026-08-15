@@ -84,7 +84,7 @@ def prepare_provider_messages(
     return prepared
 
 
-_SETTLED_TAG_RE = re.compile(r"\[settled\]", re.IGNORECASE)
+_SUPPORTED_TAG_RE = re.compile(r"\[(?:cited|settled)\]", re.IGNORECASE)
 _SOURCE_REF_RE = re.compile(r"\[source:\s*([^\]]+)\]", re.IGNORECASE)
 _LEGAL_RESEARCH_RE = re.compile(
     r"\b(?:case\s+law|citation|court|custod(?:y|ial)|divorce|enforceab(?:le|ility)|"
@@ -108,10 +108,55 @@ _SUPPLIED_SOURCE_RE = re.compile(
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$")
 _LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 _QUOTED_SPAN_RE = re.compile(r'["“]([^"”]{20,})["”]')
+_SUPPORT_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'-]+")
+_SUPPORT_STOP_WORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "been",
+    "before",
+    "being",
+    "but",
+    "can",
+    "court",
+    "does",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "into",
+    "its",
+    "law",
+    "may",
+    "must",
+    "not",
+    "that",
+    "the",
+    "their",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "under",
+    "was",
+    "were",
+    "when",
+    "where",
+    "which",
+    "with",
+}
 
 
 _MODEL_ATTRIBUTION_RE = re.compile(
     r"\[(?:model\s+knowledge|model\s+reasoning)\]", re.IGNORECASE
+)
+_REVIEW_TAG_RE = re.compile(
+    r"\[(cited|settled|verify|model\s+knowledge|model\s+reasoning)\]",
+    re.IGNORECASE,
 )
 
 
@@ -150,6 +195,7 @@ def reconcile_retrieved_source_attribution(
             claim.casefold().rfind("[verify]"),
             claim.casefold().rfind("[model knowledge]"),
             claim.casefold().rfind("[model reasoning]"),
+            claim.casefold().rfind("[cited]"),
             claim.casefold().rfind("[settled]"),
         )
         if previous_tag >= 0:
@@ -345,15 +391,137 @@ def enforce_legal_citation_integrity(
     return coverage_gap, True
 
 
+def _support_terms(value: str) -> set[str]:
+    """Return terms useful for checking whether a cited passage supports a claim."""
+
+    without_tags = _SOURCE_REF_RE.sub(" ", value or "")
+    without_tags = _SUPPORTED_TAG_RE.sub(" ", without_tags)
+    return {
+        token.casefold()
+        for token in _SUPPORT_TOKEN_RE.findall(without_tags)
+        if token.casefold() not in _SUPPORT_STOP_WORDS
+    }
+
+
+def _claim_has_passage_support(claim: str, row: dict[str, Any]) -> bool:
+    """Accept an exact quote or a materially overlapping cited paraphrase.
+
+    The green tag means source-backed, not that the proposition is universally
+    settled law.  Requiring an exact 20-character quotation made the tag nearly
+    unreachable for normal legal writing, while an exact source id plus strong
+    passage overlap remains deterministic and auditable.
+    """
+
+    source_text = re.sub(
+        r"\s+",
+        " ",
+        str(row.get("excerpt") or row.get("content") or ""),
+    ).casefold()
+    if not source_text:
+        return False
+
+    quoted_spans = [
+        re.sub(r"\s+", " ", value).strip().casefold()
+        for value in _QUOTED_SPAN_RE.findall(claim)
+    ]
+    if any(span in source_text for span in quoted_spans):
+        return True
+
+    claim_terms = _support_terms(claim)
+    source_terms = _support_terms(source_text)
+    if not claim_terms or not source_terms:
+        return False
+    overlap = len(claim_terms.intersection(source_terms))
+    required = 2 if len(claim_terms) <= 4 else 3
+    return overlap >= required and overlap / len(claim_terms) >= 0.5
+
+
+def build_citation_annotations(
+    text: str, sources: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    """Build a stable claim-to-source API contract from a reviewed answer.
+
+    Answers remain Markdown for provider compatibility and durable storage. The
+    API emits these offsets so clients do not need to infer which source marker
+    belongs to which review tag. Stored legacy answers receive the same contract
+    when read, without a data migration.
+    """
+
+    if not text:
+        return []
+    known_ids = {
+        str(row.get("source_id") or row.get("id") or "").strip().casefold(): str(
+            row.get("source_id") or row.get("id") or ""
+        ).strip()
+        for row in sources or []
+        if row.get("source_id") or row.get("id")
+    }
+    annotations: list[dict[str, Any]] = []
+    previous_tag_end = 0
+    for index, tag_match in enumerate(_REVIEW_TAG_RE.finditer(text), start=1):
+        paragraph_start = text.rfind("\n\n", previous_tag_end, tag_match.start())
+        line_start = text.rfind("\n", previous_tag_end, tag_match.start())
+        claim_start = max(previous_tag_end, paragraph_start + 2, line_start + 1)
+        while claim_start < tag_match.start() and text[claim_start].isspace():
+            claim_start += 1
+        claim_end = tag_match.end()
+        claim_window = text[claim_start : tag_match.start()]
+        markers: list[dict[str, Any]] = []
+        source_ids: list[str] = []
+        for marker in _SOURCE_REF_RE.finditer(claim_window):
+            normalized_id = marker.group(1).strip().casefold()
+            canonical_id = known_ids.get(normalized_id)
+            if not canonical_id:
+                continue
+            absolute_start = claim_start + marker.start()
+            absolute_end = claim_start + marker.end()
+            markers.append(
+                {
+                    "source_id": canonical_id,
+                    "start": absolute_start,
+                    "end": absolute_end,
+                }
+            )
+            if canonical_id not in source_ids:
+                source_ids.append(canonical_id)
+
+        raw_support = re.sub(r"\s+", " ", tag_match.group(1)).strip().casefold()
+        support = {
+            "settled": "cited",
+            "model reasoning": "model",
+            "model knowledge": "model",
+        }.get(raw_support, raw_support)
+        visible_claim = _SOURCE_REF_RE.sub("", claim_window)
+        visible_claim = re.sub(r"\s+", " ", visible_claim).strip(" -*#|\t\n")
+        annotations.append(
+            {
+                "claim_id": f"claim-{index}",
+                "start": claim_start,
+                "end": claim_end,
+                "text": visible_claim,
+                "support": support,
+                "source_ids": source_ids,
+                "source_markers": markers,
+                "support_tag": {
+                    "start": tag_match.start(),
+                    "end": tag_match.end(),
+                },
+            }
+        )
+        previous_tag_end = tag_match.end()
+    return annotations
+
+
 def validate_citation_confidence(
     text: str, sources: list[dict[str, Any]] | None
 ) -> tuple[str, int]:
-    """Downgrade unsupported ``[settled]`` labels to ``[verify]``.
+    """Normalize supported tags and downgrade claims without passage support.
 
-    Retrieval alone is not treated as proof.  A settled label survives only
-    when it explicitly references a retrieved source id with ``[source: <id>]``
-    and includes a material quoted span found in that source's excerpt. Merely
-    retrieving a source or repeating its citation is never treated as proof.
+    Retrieval alone is not treated as support. A green ``[cited]`` tag survives
+    only when the same claim references an exact retrieved source id and either
+    quotes or materially overlaps that source's passage. Legacy ``[settled]``
+    output is normalized to ``[cited]`` because the UI describes evidence
+    coverage, not a universal statement about whether the law is settled.
     """
     source_rows = sources or []
     sources_by_id = {
@@ -372,6 +540,7 @@ def validate_citation_confidence(
         previous_tag = max(
             claim.lower().rfind("[verify]"),
             claim.lower().rfind("[model knowledge]"),
+            claim.lower().rfind("[cited]"),
             claim.lower().rfind("[settled]"),
         )
         if previous_tag >= 0:
@@ -379,29 +548,20 @@ def validate_citation_confidence(
         explicit_ids = {
             value.strip().casefold() for value in _SOURCE_REF_RE.findall(claim)
         }
-        quoted_spans = [
-            re.sub(r"\s+", " ", value).strip().casefold()
-            for value in _QUOTED_SPAN_RE.findall(claim)
-        ]
-        span_supported = False
+        passage_supported = False
         for source_id in explicit_ids:
             row = sources_by_id.get(source_id)
             if not row:
                 continue
-            source_text = re.sub(
-                r"\s+",
-                " ",
-                str(row.get("excerpt") or row.get("content") or ""),
-            ).casefold()
-            if any(span in source_text for span in quoted_spans):
-                span_supported = True
+            if _claim_has_passage_support(claim, row):
+                passage_supported = True
                 break
-        if span_supported:
-            return match.group(0)
+        if passage_supported:
+            return "[cited]"
         downgraded += 1
         return "[verify]"
 
-    return _SETTLED_TAG_RE.sub(replace, text), downgraded
+    return _SUPPORTED_TAG_RE.sub(replace, text), downgraded
 
 
 def apply_guardrails(
