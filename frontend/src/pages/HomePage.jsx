@@ -1,9 +1,9 @@
-import React, { useState } from 'react'
-import { Link } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import {
   ShieldCheck, BadgeCheck, Files, Lock, Landmark, Building2, UserCircle,
-  Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, ArrowRight,
-  Search, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
+  Rocket, Lightbulb, Bot, ClipboardList, Vault, Handshake, Users, Home, Scale,
+  ArrowRight, Search, FileText, Plug, FolderInput, MonitorSmartphone, Sparkles,
   PhoneIncoming, ListChecks, CheckCircle2, Clock3, ChevronDown,
   MessageSquareText, KeyRound, Braces, AlertTriangle, Layers3,
 } from 'lucide-react'
@@ -13,99 +13,15 @@ import secureArchiveImg from '../assets/home/secure-source-archive-cta-v1-1280.w
 import secureArchiveSmallImg from '../assets/home/secure-source-archive-cta-v1-720.webp'
 import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 import MarketingChatWorkspace from '../components/MarketingChatWorkspace'
+import { PRACTICE_SKILLS, WORKSPACE_MODULES } from '../marketing/catalog'
 
-const SKILLS = [
-  {
-    id: 'commercial', icon: Files, name: 'Commercial Legal', description: 'Contract review, NDA triage, SaaS analysis, renewal tracking',
-    example: 'Apex Cloud · SaaS agreement', status: '2 items need review', signal: '14 clauses checked',
-    artifacts: [['Limitation of liability', 'Attorney review'], ['Data processing addendum', 'Playbook match'], ['Renewal terms', '45-day notice']],
-    features: ['Compare clauses to the firm playbook', 'Flag missing terms and material deviations', 'Capture obligations, owners, and renewal dates'],
-    language: 'Clause library · fallback language · approval thresholds',
-  },
-  {
-    id: 'privacy', icon: Lock, name: 'Privacy Legal', description: 'DPA review, DSAR responses, Privacy Impact Assessments',
-    example: 'Atlas Analytics · privacy review', status: 'Response due in 9 days', signal: '6 systems mapped',
-    artifacts: [['DPA transfer terms', 'Gap found'], ['DSAR identity check', 'Complete'], ['Processing inventory', '6 systems']],
-    features: ['Run DPA checks by jurisdiction and data type', 'Coordinate DSAR identity, search, and response steps', 'Keep PIA evidence and mitigation owners together'],
-    language: 'Data subjects · subprocessors · retention · transfer basis',
-  },
-  {
-    id: 'litigation', icon: Landmark, name: 'Litigation Legal', description: 'Matter intake, portfolio management, demand letters, claim charts',
-    example: 'Rivera v. Northwind · portfolio', status: 'Deadline in 4 days', signal: '8 claims mapped',
-    artifacts: [['Demand response', 'Draft ready'], ['Claim chart', '8 of 11 mapped'], ['Discovery cutoff', 'Oct 14']],
-    features: ['Move intake facts into a structured matter', 'Link allegations, evidence, and authority', 'Track portfolio posture, dates, and next actions'],
-    language: 'Claims · defenses · elements · evidence · deadlines',
-  },
-  {
-    id: 'corporate', icon: Building2, name: 'Corporate Legal', description: 'M&A diligence, closing checklists, entity compliance',
-    example: 'Project Juniper · acquisition', status: '78% closing ready', signal: '42 documents reviewed',
-    artifacts: [['Material contracts', '3 exceptions'], ['Closing checklist', '31 of 40'], ['Entity records', 'Current']],
-    features: ['Organize diligence findings by workstream', 'Turn issues into owners and closing conditions', 'Maintain entity records and recurring compliance'],
-    language: 'Diligence · disclosures · conditions · consents · filings',
-  },
-  {
-    id: 'employment', icon: UserCircle, name: 'Employment Legal', description: 'Hire/termination review, worker classification, leave tracking',
-    example: 'Workforce request · California', status: 'Classification review', signal: '3 decision checks',
-    artifacts: [['Role classification', 'Needs facts'], ['Termination packet', 'Review ready'], ['Leave timeline', '12 weeks']],
-    features: ['Route hire and separation facts through consistent checks', 'Document classification factors and decisions', 'Track leave events, notices, and return dates'],
-    language: 'Worker status · protected leave · notice · final pay',
-  },
-  {
-    id: 'product', icon: Rocket, name: 'Product Legal', description: 'Launch reviews, marketing claims check, regulatory triage',
-    example: 'Pulse AI · launch review', status: '2 launch blockers', signal: '5 teams aligned',
-    artifacts: [['Marketing claims', '2 need support'], ['Terms update', 'Approved'], ['Launch gate', 'Conditional']],
-    features: ['Collect one launch brief across product teams', 'Connect claims to substantiation and approvals', 'Route regulatory questions before release'],
-    language: 'Claims · audience · data use · disclosures · launch gate',
-  },
-  {
-    id: 'ip', icon: Lightbulb, name: 'IP Legal', description: 'Trademark clearance, freedom-to-operate, C&D letters',
-    example: 'Northstar · clearance search', status: 'Moderate conflict risk', signal: '27 records screened',
-    artifacts: [['Exact mark search', 'No match'], ['Similar marks', '4 for review'], ['Class coverage', '3 classes']],
-    features: ['Keep search strategy and results reviewable', 'Compare marks, classes, owners, and status', 'Move findings into advice or enforcement drafts'],
-    language: 'Similarity · classes · use evidence · claim scope',
-  },
-  {
-    id: 'ai-governance', icon: Bot, name: 'AI Governance', description: 'AI use-case triage, impact assessments, vendor AI review',
-    example: 'Support copilot · use-case review', status: 'Human oversight required', signal: 'Risk tier · medium',
-    artifacts: [['Data inputs', 'Restricted data'], ['Vendor controls', '1 gap'], ['Impact review', 'In progress']],
-    features: ['Triage use cases by people, data, and decision impact', 'Standardize impact assessments and control owners', 'Review vendor AI terms alongside technical claims'],
-    language: 'Use case · model role · oversight · testing · monitoring',
-  },
-  {
-    id: 'regulatory', icon: ClipboardList, name: 'Regulatory Legal', description: 'Regulatory monitoring, policy gap analysis, NPRM comments',
-    example: 'Consumer rules · monitoring file', status: 'Comment window open', signal: '12 obligations tagged',
-    artifacts: [['Rule change', 'Material'], ['Policy mapping', '3 gaps'], ['Comment draft', 'Due Sep 8']],
-    features: ['Turn regulatory developments into scoped impact reviews', 'Map requirements to policies, controls, and owners', 'Build comment records from evidence and stakeholder input'],
-    language: 'Authority · obligation · applicability · policy · comment',
-  },
-]
+const CATALOG_ICONS = {
+  Files, Lock, Landmark, Building2, UserCircle, Rocket, Lightbulb, Bot,
+  ClipboardList, Home, Scale, Vault, Users, Handshake,
+}
 
-const ADDONS = [
-  {
-    id: 'estate',
-    icon: Vault,
-    name: 'Trust & Estate management',
-    description: 'Estate portfolios with role-aware access for trustees, grantors, and beneficiaries \u2014 asset tracking, tax analysis, and probate records organized for review.',
-    example: 'Hamilton Family Estate',
-    status: 'Attorney review',
-    roles: ['Attorney \u00b7 full review', 'Trustee \u00b7 update assets', 'Beneficiary \u00b7 view approved'],
-    metrics: [['24', 'Assets'], ['$4.8m', 'Gross estate'], ['3', 'Review items']],
-    activity: [['Residence valuation', 'Reviewed'], ['Family trust allocation', 'Open'], ['Probate inventory', 'Draft']],
-    features: ['Asset and liability inventory', 'Tax and probate checkpoints', 'Beneficiary-ready reporting'],
-  },
-  {
-    id: 'mediation',
-    icon: Handshake,
-    name: 'Mediation management',
-    description: 'A neutral two-party workspace \u2014 intake, briefs, settlement drafting, and case tracking with balanced access for each side.',
-    example: 'Rivera v. Northwind',
-    status: 'Proposal pending',
-    roles: ['Mediator \u00b7 neutral view', 'Party A \u00b7 private workspace', 'Party B \u00b7 private workspace'],
-    metrics: [['6', 'Open issues'], ['2', 'Proposals'], ['Sep 18', 'Next session']],
-    activity: [['Party A brief', 'Private'], ['Damages range', 'Shared'], ['Draft settlement terms', 'Waiting']],
-    features: ['Separate private submissions', 'Shared issue and proposal tracking', 'Settlement drafting and approvals'],
-  },
-]
+const SKILLS = PRACTICE_SKILLS.map((skill) => ({ ...skill, icon: CATALOG_ICONS[skill.icon] }))
+const ADDONS = WORKSPACE_MODULES.map((module) => ({ ...module, icon: CATALOG_ICONS[module.icon] }))
 
 const HOW = [
   {
@@ -353,10 +269,20 @@ export default function HomePage() {
   const [expandedSkill, setExpandedSkill] = useState('commercial')
   const [expandedAddon, setExpandedAddon] = useState(null)
   const contactUrl = import.meta.env.VITE_CONTACT_URL || 'mailto:matt@cybersafeadvisor.com'
+  const { hash } = useLocation()
   const scrollTo = (id) => (e) => {
     e.preventDefault()
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
   }
+
+  // Arriving at /#security from another marketing page (or from a shared link)
+  // mounts this component after the browser has already given up on the hash,
+  // so the section has to be scrolled into view once it exists.
+  useEffect(() => {
+    if (!hash) return
+    const target = document.getElementById(hash.slice(1))
+    if (target) target.scrollIntoView({ behavior: 'smooth' })
+  }, [hash])
 
   return (
     <div className="min-h-screen bg-brand-bg text-brand-ink">
@@ -617,6 +543,9 @@ export default function HomePage() {
                 Add relevant document patterns, checks, and terminology without forcing
                 every team into the same generic workflow.
               </p>
+              <Link to="/product" className="inline-flex items-center gap-2 mt-5 text-[13.5px] font-sans font-bold text-brand-accent-2 hover:underline">
+                See the full platform <ArrowRight size={15} aria-hidden="true" />
+              </Link>
             </div>
             <p className="mt-5 shrink-0 font-sans text-[11px] font-bold uppercase tracking-[0.13em] text-brand-muted md:mt-0">
               Select a skill to see it at work
@@ -645,8 +574,8 @@ export default function HomePage() {
             Extend the workspace when the work demands it.
           </h2>
           <p className="text-brand-ink-2 font-sans text-[17px] leading-relaxed mt-4">
-            LawHand has a broader module library than any one page should catalog. These two
-            examples show how specialized records, roles, and controls can fit into the same core matter experience.
+            Some practice areas need more than a skill library. These modules add their own
+            records, roles, and controls inside the same core matter experience.
           </p>
         </div>
         <div className="grid md:grid-cols-2 gap-6 items-start">

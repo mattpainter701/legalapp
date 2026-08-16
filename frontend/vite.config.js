@@ -3,9 +3,9 @@ import react from '@vitejs/plugin-react'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
-  buildMarketingStructuredData,
   buildRobotsTxt,
   buildSitemapXml,
+  buildStructuredData,
   normalizeSiteOrigin,
 } from './src/seo/config.js'
 import {
@@ -13,13 +13,29 @@ import {
   buildPublicRouteHtml,
 } from './src/seo/serverShell.js'
 
-function seoAssets(siteOrigin) {
+const DEFAULT_CONTACT_URL = 'mailto:matt@cybersafeadvisor.com'
+
+/**
+ * The no-JavaScript shell inside index.html is what a crawler and a visitor on
+ * a failed bundle actually see, so its demo link has to honour the deployment's
+ * configured contact URL rather than the source default.
+ */
+function demoContactHref(contactUrl) {
+  if (!contactUrl.startsWith('mailto:')) return contactUrl
+  return contactUrl.includes('?') ? contactUrl : `${contactUrl}?subject=LawHand%20Demo`
+}
+
+function seoAssets(siteOrigin, contactUrl) {
   return {
-    name: 'clarity-seo-assets',
+    name: 'lawhand-seo-assets',
     apply: 'build',
     transformIndexHtml(html) {
-      if (!siteOrigin) return html
-      const transformed = html
+      const withContact = html.replace(
+        `href="${DEFAULT_CONTACT_URL}?subject=LawHand%20Demo"`,
+        `href="${demoContactHref(contactUrl)}"`,
+      )
+      if (!siteOrigin) return withContact
+      const transformed = withContact
         .replace('<link rel="canonical" href="/" />', `<link rel="canonical" href="${siteOrigin}/" />`)
         .replace('<meta property="og:url" content="/" />', `<meta property="og:url" content="${siteOrigin}/" />`)
         .replace('<meta property="og:image" content="/social-card-v2.png" />', `<meta property="og:image" content="${siteOrigin}/social-card-v2.png" />`)
@@ -30,7 +46,7 @@ function seoAssets(siteOrigin) {
         tags: [{
           tag: 'script',
           attrs: { type: 'application/ld+json', 'data-seo-structured-data': '' },
-          children: JSON.stringify(buildMarketingStructuredData(siteOrigin)),
+          children: JSON.stringify(buildStructuredData(siteOrigin, '/')),
           injectTo: 'head',
         }],
       }
@@ -43,7 +59,7 @@ function seoAssets(siteOrigin) {
         mkdirSync(routeDirectory, { recursive: true })
         writeFileSync(
           path.join(routeDirectory, 'index.html'),
-          buildPublicRouteHtml(indexHtml, pathname, siteOrigin),
+          buildPublicRouteHtml(indexHtml, pathname, siteOrigin, contactUrl),
           'utf8',
         )
       }
@@ -68,9 +84,10 @@ function seoAssets(siteOrigin) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const siteOrigin = normalizeSiteOrigin(env.VITE_PUBLIC_SITE_URL)
+  const contactUrl = env.VITE_CONTACT_URL?.trim() || DEFAULT_CONTACT_URL
 
   return {
-    plugins: [react(), seoAssets(siteOrigin)],
+    plugins: [react(), seoAssets(siteOrigin, contactUrl)],
     test: {
       environment: 'jsdom',
       setupFiles: './src/test/setup.js',

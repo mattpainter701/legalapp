@@ -34,11 +34,35 @@ describe('SeoHead', () => {
       'WebSite',
       'SoftwareApplication',
     ])
+    // Ratings and reviews would be fabricated social proof; the published
+    // seat price is a claim the pricing page already makes.
     for (const node of structured['@graph']) {
       expect(node).not.toHaveProperty('aggregateRating')
       expect(node).not.toHaveProperty('review')
-      expect(node).not.toHaveProperty('offers')
     }
+  })
+
+  it('publishes structured data on marketing routes other than the home page', async () => {
+    vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
+    renderAt('/pricing')
+
+    await waitFor(() => expect(document.title).toBe('Pricing | LawHand'))
+    expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute('href', 'https://clarity.example/pricing')
+
+    const structured = JSON.parse(document.querySelector('script[data-seo-structured-data]').textContent)
+    const types = structured['@graph'].map((node) => node['@type'])
+    expect(types).toContain('FAQPage')
+    expect(types).toContain('BreadcrumbList')
+  })
+
+  it('marks an unknown path noindex and describes it as missing', async () => {
+    vi.stubEnv('VITE_PUBLIC_SITE_URL', 'https://clarity.example')
+    renderAt('/campaign-link-that-expired')
+
+    await waitFor(() => expect(document.title).toBe('Page not found | LawHand'))
+    expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', expect.stringContaining('noindex'))
+    expect(document.querySelector('link[rel="canonical"]')).not.toBeInTheDocument()
+    expect(document.querySelector('script[data-seo-structured-data]')).not.toBeInTheDocument()
   })
 
   it('marks authenticated and token-bearing routes noindex without a canonical URL', async () => {

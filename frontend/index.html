@@ -7,6 +7,10 @@
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <link rel="canonical" href="/" />
+    <!-- The webfont is requested from inside the CSS bundle, so the browser
+         cannot discover these hosts until late; warming them protects LCP. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="icon" type="image/svg+xml" sizes="any" href="/favicon-lh.svg" />
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
     <meta name="theme-color" content="#161817" />
@@ -50,6 +54,8 @@
             <p>Every fact, deadline, document, and decision—connected in one living record.</p>
             <div class="server-marketing__actions">
               <a class="server-marketing__primary" href="mailto:matt@cybersafeadvisor.com?subject=LawHand%20Demo">Book a demo</a>
+              <a class="server-marketing__secondary" href="/product">Platform</a>
+              <a class="server-marketing__secondary" href="/pricing">Pricing</a>
               <a class="server-marketing__secondary" href="/privacy">Privacy Policy</a>
               <a class="server-marketing__secondary" href="/terms">Terms of Use</a>
             </div>

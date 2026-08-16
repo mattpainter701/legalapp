@@ -466,7 +466,7 @@ function RoutingOverviewPanel({ config, onOpenRouting }) {
       <div className="px-5 py-4 border-b border-brand-line flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="font-serif font-bold text-brand-ink">AI Gateway Routing</h2>
-          <p className="text-xs text-brand-muted font-sans mt-1">LegalApp sends standard and premium work to LiteLLM aliases; the AI Routing tab controls the upstream provider, model, key, and fallback chain.</p>
+          <p className="text-xs text-brand-muted font-sans mt-1">LawHand sends standard and premium work to LiteLLM aliases; the AI Routing tab controls the upstream provider, model, key, and fallback chain.</p>
         </div>
         <button
           onClick={onOpenRouting}

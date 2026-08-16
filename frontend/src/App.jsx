@@ -18,6 +18,8 @@ const LegalNoticePage = lazy(() => import('./pages/LegalNoticePage'))
 const ProductChatPage = lazy(() => import('./pages/ProductChatPage'))
 const McpProductPage = lazy(() => import('./pages/McpProductPage'))
 const PricingPage = lazy(() => import('./pages/PricingPage'))
+const ProductPage = lazy(() => import('./pages/ProductPage'))
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 const AuthCallback = lazy(() => import('./pages/AuthCallback'))
@@ -202,6 +204,7 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/terms" element={<LegalNoticePage type="terms" />} />
         <Route path="/privacy" element={<LegalNoticePage type="privacy" />} />
+        <Route path="/product" element={<ProductPage />} />
         <Route path="/product/chat" element={<ProductChatPage />} />
         <Route path="/product/mcp" element={<McpProductPage />} />
         <Route path="/pricing" element={<PricingPage />} />
@@ -374,7 +377,7 @@ export default function App() {
 
         {/* Platform admin — standalone auth */}
         <Route path="/platform" element={<PlatformPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
         </Routes>
         </Suspense>
         </ConfirmProvider>
