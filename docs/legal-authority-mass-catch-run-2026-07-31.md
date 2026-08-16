@@ -21,7 +21,7 @@ counts and errors belong in `legal_sources` and `source_sync_states`.
 | CMS Coverage API | `live_verified` | Parsed public fields for NCD 108 and NCD 127. Licensed medical-code descriptions remain excluded. |
 | CMS manuals/transmittals | `live_verified_discovery` | Found direct official manual chapters and current transmittal PDFs. The production adapter fetches and stores allowlisted artifacts. |
 | IRS estate-support products | `partial` | Parsed Form 4506-T and Form 2848 because they are linked from the official estate/gift product page. Add explicit relationship metadata; do not imply each product is estate-specific. |
-| eCFR Titles 26 and 42 | `live_verified`, `sync_pending` | The production adapter now resolves current issue/version metadata and parses official full-title XML. Keep title jobs isolated and cache/checkpoint each artifact. |
+| eCFR all 49 active titles | `collection_verified`, `sync_pending` | The production adapter resolves all title issue/current-through metadata with one status request, parses GovInfo bulk XML, and retains versioned raw artifacts. The 2026-08-15 preview yielded 225,588 sections and 405,875 projected chunks. |
 | OLRC U.S. Code | `live_verified`, `sync_pending` | Release `119-102` passed download/ZIP/XML safety gates. Duplicate official section nodes are reduced deterministically to the fullest canonical section; a regression test covers the original collision and live Title 42 now passes. |
 | Local PostgreSQL | `unavailable` | Docker Desktop daemon was not running, so no local DB persistence or embedding drain was attempted. |
 

@@ -267,7 +267,7 @@
     {
       "source_key": "govinfo:ecfr",
       "display_name": "Electronic Code of Federal Regulations",
-      "description": "Current federal regulations as structured XML, including Titles 26, 31, 42, and 45.",
+      "description": "All active titles of the current federal regulations as structured XML.",
       "publisher": "Office of the Federal Register / U.S. Government Publishing Office",
       "source_type": "regulations",
       "jurisdiction": "US",
@@ -285,10 +285,10 @@
       "enabled": true,
       "priority": 10,
       "coverage_kind": "complete",
-      "parser_version": "ecfr-xml-v1",
+      "parser_version": "ecfr-section-xml-v2",
       "practice_areas": ["tax", "medicare", "medicaid", "contracts", "corporate"],
       "implementation_status": "implemented",
-      "notes": "The eCFR is authoritative but unofficial. Preserve the current-through date and cross-reference the annual official CFR when legal status matters."
+      "notes": "All 49 active titles are collected from GovInfo bulk XML and versioned from the single eCFR title-status feed. The eCFR is authoritative but unofficial; preserve the current-through date and cross-reference the annual official CFR when legal status matters."
     },
     {
       "source_key": "govinfo:federal-register",
@@ -313,8 +313,8 @@
       "coverage_kind": "bounded",
       "parser_version": "federal-register-xml-v1",
       "practice_areas": ["tax", "medicare", "medicaid", "contracts", "corporate"],
-      "implementation_status": "ready",
-      "notes": "Use the free FederalRegister.gov API for discovery and GovInfo XML/authenticated packages for retained source copies."
+      "implementation_status": "collection_verified",
+      "notes": "A resumable collector retains the complete GovInfo monthly XML ZIP history from 2000 onward with per-archive hashes and validation. Keep ingestion disabled until the document parser separates final rules, proposed rules, corrections, notices, and executive material; do not embed notices wholesale."
     },
     {
       "source_key": "govinfo:public-laws-statutes",

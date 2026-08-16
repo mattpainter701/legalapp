@@ -61,8 +61,9 @@ def test_default_jobs_are_allowlisted_modules_with_expected_title_scope(monkeypa
         "--title", "11", "--title", "15", "--title", "26", "--title", "28",
         "--title", "29", "--title", "31", "--title", "42",
     )
-    assert jobs[1].arguments[-2:] == (
-        "--checkpoint-dir", "/data/legal-authority/checkpoints"
+    assert jobs[1].arguments == (
+        "--checkpoint-dir", "/data/legal-authority/checkpoints",
+        "--raw-dir", "/data/legal-authority/raw/ecfr",
     )
     assert "ncd" in jobs[2].arguments
     assert "manual" in jobs[2].arguments
@@ -114,3 +115,11 @@ def test_run_once_skips_when_another_scheduler_holds_the_lock():
 
     assert result == {"status": "skipped", "reason": "lock-held", "jobs": []}
     assert called is False
+
+
+def test_ecfr_all_scope_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("LEGAL_AUTHORITY_ECFR_TITLES", "ALL")
+
+    ecfr = next(job for job in default_jobs() if job.name == "ecfr")
+
+    assert "--title" not in ecfr.arguments

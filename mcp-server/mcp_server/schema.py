@@ -228,4 +228,6 @@ CREATE INDEX IF NOT EXISTS ix_opinion_chunks_fts ON opinion_chunks USING gin(fts
 CREATE INDEX IF NOT EXISTS ix_opinion_chunks_embedding_hnsw ON opinion_chunks USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_citing ON opinion_citations(citing_opinion_id);
 CREATE INDEX IF NOT EXISTS ix_opinion_citations_cited ON opinion_citations(cited_opinion_id);
+CREATE INDEX IF NOT EXISTS ix_opinion_citations_edge ON opinion_citations(citing_opinion_id, cited_opinion_id);
+CREATE INDEX IF NOT EXISTS ix_opinion_citations_reporter ON opinion_citations(cited_cluster_id, cited_reporter, cited_volume, cited_page);
 """

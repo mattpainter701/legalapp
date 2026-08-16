@@ -14,7 +14,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .database import connect
-from .bulk_manifest import choose_latest_snapshot
+from .bulk_manifest import (
+    choose_latest_snapshot,
+    federal_appellate_court_ids,
+    priority_court_ids,
+)
 from .schema import SCHEMA_SQL
 
 S3_BUCKET_XML = "https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/?list-type=2&prefix=bulk-data/&max-keys=1000"
@@ -49,6 +53,7 @@ _STATE_NAME_TO_CODE = {
     "dakota south": "SD",
 }
 _PRECEDENTIAL_STATUSES = {"published", "precedential"}
+COVERAGE_PROFILES = ("regional", "federal-appellate", "national-priority")
 
 
 def init_schema(db_url: str | None = None) -> None:
@@ -156,6 +161,26 @@ def parse_mvp_states(value: str | None) -> tuple[str, ...]:
     return tuple(states) or DEFAULT_MVP_STATES
 
 
+def parse_court_ids(value: str | None) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            part.strip().lower()
+            for part in (value or "").split(",")
+            if part.strip()
+        )
+    )
+
+
+def coverage_court_ids(profile: str) -> tuple[str, ...]:
+    if profile == "regional":
+        return ()
+    if profile == "federal-appellate":
+        return federal_appellate_court_ids()
+    if profile == "national-priority":
+        return priority_court_ids()
+    raise ValueError(f"Unsupported CourtListener coverage profile: {profile}")
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -221,18 +246,13 @@ def resolved_table_limit(default_limit: int | None, table_limit: int | None) -> 
     return table_limit if table_limit is not None else default_limit
 
 
-def _id_set(conn, table_name: str, id_column: str) -> set[str]:
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT {id_column} FROM {table_name}")
-        return {str(row[0]) for row in cur.fetchall()}
-
-
 def _target_court_ids(
     conn,
     *,
     states: tuple[str, ...],
     include_specialty: bool,
     include_scotus: bool,
+    additional_court_ids: tuple[str, ...] = (),
 ) -> set[str]:
     with conn.cursor() as cur:
         cur.execute("SELECT court_id, short_name, full_name, jurisdiction, metadata FROM courts")
@@ -248,7 +268,7 @@ def _target_court_ids(
                 "jurisdiction": jurisdiction,
             }
         )
-        if court_matches_mvp(
+        if str(court_id).lower() in additional_court_ids or court_matches_mvp(
             row,
             states=states,
             include_specialty=include_specialty,
@@ -258,6 +278,68 @@ def _target_court_ids(
     return ids
 
 
+def _docket_ids_for_courts(conn, court_ids: set[str]) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT docket_id FROM dockets WHERE court_id = ANY(%s)",
+            [sorted(court_ids)],
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _cluster_ids_for_courts(
+    conn,
+    court_ids: set[str],
+    *,
+    precedential_only: bool,
+) -> set[str]:
+    status_clause = (
+        "AND lower(COALESCE(cl.precedential_status, '')) = ANY(%s)"
+        if precedential_only
+        else ""
+    )
+    params: list = [sorted(court_ids)]
+    if precedential_only:
+        params.append(sorted(_PRECEDENTIAL_STATUSES))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT cl.cluster_id
+               FROM opinion_clusters cl
+               JOIN dockets d ON d.docket_id = cl.docket_id
+               WHERE d.court_id = ANY(%s)
+               {status_clause}""",
+            params,
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _opinion_ids_for_courts(
+    conn,
+    court_ids: set[str],
+    *,
+    precedential_only: bool,
+) -> set[str]:
+    status_clause = (
+        "AND lower(COALESCE(cl.precedential_status, '')) = ANY(%s)"
+        if precedential_only
+        else ""
+    )
+    params: list = [sorted(court_ids)]
+    if precedential_only:
+        params.append(sorted(_PRECEDENTIAL_STATUSES))
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT o.opinion_id
+               FROM opinions o
+               JOIN opinion_clusters cl ON cl.cluster_id = o.cluster_id
+               JOIN dockets d ON d.docket_id = cl.docket_id
+               WHERE d.court_id = ANY(%s)
+               {status_clause}""",
+            params,
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+
 def _load_csv(
     conn,
     path: Path,
@@ -265,6 +347,8 @@ def _load_csv(
     limit: int | None = None,
     row_filter: Callable[[dict], bool] | None = None,
 ) -> int:
+    if limit is not None and limit <= 0:
+        return 0
     count = 0
     with conn.cursor() as cur:
         for row in iter_bulk_csv_rows(path):
@@ -332,6 +416,8 @@ def _load_csv(
                     ON CONFLICT (opinion_id) DO UPDATE
                     SET plain_text = EXCLUDED.plain_text,
                         html_with_citations = EXCLUDED.html_with_citations
+                    WHERE opinions.plain_text IS DISTINCT FROM EXCLUDED.plain_text
+                       OR opinions.html_with_citations IS DISTINCT FROM EXCLUDED.html_with_citations
                     """,
                     [
                         _value(row, "id"),
@@ -348,29 +434,46 @@ def _load_csv(
                 cur.execute(
                     """
                     INSERT INTO opinion_citations (citing_opinion_id, cited_opinion_id, depth)
-                    VALUES (%s, %s, COALESCE(%s, 0))
+                    SELECT %s, %s, COALESCE(%s, 0)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM opinion_citations
+                        WHERE citing_opinion_id = %s AND cited_opinion_id = %s
+                    )
                     """,
                     [
                         _value(row, "citing_opinion_id"),
                         _value(row, "cited_opinion_id"),
                         _value(row, "depth"),
+                        _value(row, "citing_opinion_id"),
+                        _value(row, "cited_opinion_id"),
                     ],
                 )
             elif table_name == "citations":
                 cur.execute(
                     """
                     INSERT INTO opinion_citations (cited_cluster_id, cited_reporter, cited_volume, cited_page)
-                    VALUES (%s, %s, %s, %s)
+                    SELECT %s, %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM opinion_citations
+                        WHERE cited_cluster_id = %s
+                          AND cited_reporter IS NOT DISTINCT FROM %s
+                          AND cited_volume IS NOT DISTINCT FROM %s
+                          AND cited_page IS NOT DISTINCT FROM %s
+                    )
                     """,
                     [
                         _value(row, "cluster_id"),
                         _value(row, "reporter"),
                         _value(row, "volume"),
                         _value(row, "page"),
+                        _value(row, "cluster_id"),
+                        _value(row, "reporter"),
+                        _value(row, "volume"),
+                        _value(row, "page"),
                     ],
                 )
-            count += 1
-            if limit and count >= limit:
+            count += max(cur.rowcount, 0)
+            if limit is not None and count >= limit:
                 break
     conn.commit()
     return count
@@ -407,6 +510,7 @@ def load_mvp_corpus(
     include_specialty: bool = True,
     include_scotus: bool = True,
     precedential_only: bool = True,
+    additional_court_ids: tuple[str, ...] = (),
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
     with connect(db_url) as conn:
@@ -419,6 +523,7 @@ def load_mvp_corpus(
             states=states,
             include_specialty=include_specialty,
             include_scotus=include_scotus,
+            additional_court_ids=additional_court_ids,
         )
         if not target_courts:
             raise RuntimeError(f"No MVP CourtListener courts matched states={states!r}")
@@ -433,7 +538,7 @@ def load_mvp_corpus(
                 limit=resolved_table_limit(limit, docket_limit),
                 row_filter=lambda row: str(_value(row, "court_id", "court") or "") in target_courts,
             )
-        docket_ids = _id_set(conn, "dockets", "docket_id")
+        docket_ids = _docket_ids_for_courts(conn, target_courts)
 
         clusters = sorted(bulk_dir.glob("opinion-clusters-*.csv.bz2"))
         if clusters:
@@ -447,7 +552,11 @@ def load_mvp_corpus(
                     and should_keep_cluster(row, precedential_only=precedential_only)
                 ),
             )
-        cluster_ids = _id_set(conn, "opinion_clusters", "cluster_id")
+        cluster_ids = _cluster_ids_for_courts(
+            conn,
+            target_courts,
+            precedential_only=precedential_only,
+        )
 
         opinions = sorted(bulk_dir.glob("opinions-*.csv.bz2"))
         if opinions:
@@ -458,7 +567,11 @@ def load_mvp_corpus(
                 limit=resolved_table_limit(limit, opinion_limit),
                 row_filter=lambda row: str(_value(row, "cluster_id") or "") in cluster_ids,
             )
-        opinion_ids = _id_set(conn, "opinions", "opinion_id")
+        opinion_ids = _opinion_ids_for_courts(
+            conn,
+            target_courts,
+            precedential_only=precedential_only,
+        )
 
         citations = sorted(bulk_dir.glob("citations-*.csv.bz2"))
         if citations:
@@ -550,6 +663,18 @@ def main() -> None:
     parser.add_argument("--citation-limit", type=int)
     parser.add_argument("--db-url")
     parser.add_argument("--mvp-states", default=os.getenv("COURTLISTENER_MVP_STATES", ",".join(DEFAULT_MVP_STATES)))
+    parser.add_argument(
+        "--coverage-profile",
+        choices=COVERAGE_PROFILES,
+        default=os.getenv("COURTLISTENER_COVERAGE_PROFILE", "regional"),
+        help="add federal appellate or national-priority courts to the regional set",
+    )
+    parser.add_argument(
+        "--court-id",
+        action="append",
+        dest="court_ids",
+        help="repeatable CourtListener court ID to add to the selected profile",
+    )
     parser.add_argument("--no-specialty", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SPECIALTY", True))
     parser.add_argument("--no-scotus", action="store_true", default=not _env_bool("COURTLISTENER_MVP_SCOTUS", True))
     parser.add_argument("--include-unpublished", action="store_true")
@@ -575,6 +700,11 @@ def main() -> None:
                 include_specialty=not args.no_specialty,
                 include_scotus=not args.no_scotus,
                 precedential_only=not args.include_unpublished,
+                additional_court_ids=tuple(dict.fromkeys((
+                    *coverage_court_ids(args.coverage_profile),
+                    *parse_court_ids(os.getenv("COURTLISTENER_EXTRA_COURT_IDS")),
+                    *(court_id.lower() for court_id in (args.court_ids or [])),
+                ))),
             )
         )
     if args.chunk_opinions:

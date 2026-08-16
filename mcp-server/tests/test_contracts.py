@@ -19,10 +19,13 @@ from mcp_server.dispatcher import (
 from mcp_server.embedding_scheduler import SchedulerConfig, run_scheduler_once
 from mcp_server.loader import (
     DEFAULT_MVP_STATES,
+    _load_csv,
     best_opinion_text,
     bz2_decompress_command,
+    coverage_court_ids,
     court_matches_mvp,
     iter_bulk_csv_rows,
+    parse_court_ids,
     parse_mvp_states,
     resolved_table_limit,
     should_keep_cluster,
@@ -697,3 +700,18 @@ def test_mvp_cluster_filter_prefers_precedential_authority():
     assert should_keep_cluster(
         {"precedential_status": "Unpublished"}, precedential_only=False
     )
+
+
+def test_courtlistener_scale_profiles_are_explicit_and_deduplicated():
+    federal = coverage_court_ids("federal-appellate")
+    national = coverage_court_ids("national-priority")
+
+    assert federal[0] == "scotus"
+    assert {"ca1", "ca8", "cadc", "cafc"}.issubset(federal)
+    assert set(federal).issubset(national)
+    assert {"dcd", "tx", "cal", "ny"}.issubset(national)
+    assert parse_court_ids(" CA8, tax,ca8, bia ") == ("ca8", "tax", "bia")
+
+
+def test_zero_table_limit_skips_bulk_file_instead_of_meaning_unlimited(tmp_path):
+    assert _load_csv(None, tmp_path / "missing.csv.bz2", "citations", limit=0) == 0
