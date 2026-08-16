@@ -1,4 +1,5 @@
 import React from 'react'
+import { reportError } from '../utils/reportError'
 
 export default class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -11,7 +12,7 @@ export default class AppErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    console.error('Uncaught workspace render failure', error, info)
+    reportError('Uncaught workspace render failure', error, info)
   }
 
   render() {

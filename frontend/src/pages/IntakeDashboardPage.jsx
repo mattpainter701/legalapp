@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
@@ -493,7 +493,6 @@ export default function IntakeDashboardPage() {
     updateReceipt,
     retryReceipt,
     executeOnBlur,
-    flushBackendDraft,
   } = useCallDrafts({
     onToast: (type, title, toastMessage) => toast.show({ type, title, message: toastMessage }),
   })

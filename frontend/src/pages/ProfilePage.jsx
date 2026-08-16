@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
+import { reportError } from '../utils/reportError'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { User, Briefcase, Clock, DollarSign, Building } from 'lucide-react'
+import { Briefcase, Clock, DollarSign } from 'lucide-react'
 import { getMyMatters, getTimeEntries } from '../api'
 
 export default function ProfilePage() {
@@ -20,7 +21,7 @@ export default function ProfilePage() {
       setMyMatters(matters)
       setTimeEntries(entries.items || entries)
     } catch (err) {
-      console.error('Failed to load profile data', err)
+      reportError('Failed to load profile data', err)
     } finally {
       setLoading(false)
     }

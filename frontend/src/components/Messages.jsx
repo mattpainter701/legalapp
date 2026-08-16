@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { FileSearch, ListTree, PenLine, Scale, Sparkles } from 'lucide-react'
 import ChatMessage from './ChatMessage'
 import { MessageSkeleton } from './LoadingSkeleton'

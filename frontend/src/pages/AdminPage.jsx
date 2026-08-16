@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../App'
 import {
@@ -32,7 +32,7 @@ import QBOPanel from '../components/QBOPanel'
 import FirmBrandingPanel from '../components/FirmBrandingPanel'
 import BillingPage from './BillingPage'
 import { Spinner, Toggle } from '../components/ui'
-import { ArrowLeft, UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { UserPlus, ChevronDown, ChevronRight, X } from 'lucide-react'
 
 function ErrorMsg({ msg }) {
   return (

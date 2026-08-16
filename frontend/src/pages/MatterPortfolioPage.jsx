@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { reportError } from '../utils/reportError'
 import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { getMattersV2, getMyMatters, setAssignmentActive } from '../api'
@@ -357,7 +358,7 @@ export default function MatterPortfolioPage() {
     setLoading(true)
     getMattersV2({ page_size: 100 })
       .then(data => setMatters(data.items || []))
-      .catch(err => { setError('Failed to load matters.'); console.error(err) })
+      .catch(err => { setError('Failed to load matters.'); reportError(err) })
       .finally(() => setLoading(false))
   }
 

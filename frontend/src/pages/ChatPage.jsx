@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppShell } from '../components/AppShell'
 import ChatHeader from '../components/ChatHeader'
@@ -257,7 +258,7 @@ export default function ChatPage() {
         setActiveConvTitle(conv.title || 'New Conversation')
         convId = conv.id
       } catch (err) {
-        console.error('Failed to create conversation', err)
+        reportError('Failed to create conversation', err)
         showErrorNotice('Conversation could not be created', 'Start a new conversation and try again.', err)
         return
       }
@@ -268,7 +269,7 @@ export default function ChatPage() {
         const doc = await uploadChatAttachment(convId, file)
         setPendingAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }])
       } catch (err) {
-        console.error('Upload failed:', err)
+        reportError('Upload failed:', err)
         showErrorNotice('Attachment upload failed', `${file.name} could not be uploaded.`, err)
       }
     }
@@ -289,7 +290,7 @@ export default function ChatPage() {
         )
       }
     } catch (err) {
-      console.error('Failed to load conversation', err)
+      reportError('Failed to load conversation', err)
       const status = err?.response?.status
       if (status === 403 || status === 404) {
         setConversations((prev) => prev.filter((conv) => conv.id !== id))
@@ -366,7 +367,7 @@ export default function ChatPage() {
       setActiveConvTitle(conv.title || 'New Conversation')
       setNotice(null)
     } catch (err) {
-      console.error('Failed to create conversation', err)
+      reportError('Failed to create conversation', err)
       showErrorNotice('Conversation could not be created', 'Please try again.', err)
     }
   }, [setConversations, setActiveConvId, showErrorNotice])
@@ -427,7 +428,7 @@ export default function ChatPage() {
         // Brief pause to let DB commit settle before the streaming read
         await new Promise(r => setTimeout(r, 150))
       } catch (err) {
-        console.error('Failed to create conversation', err)
+        reportError('Failed to create conversation', err)
         showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
         return
       }
@@ -550,7 +551,7 @@ export default function ChatPage() {
             )
           }
         } catch (refreshErr) {
-          console.error('Failed to refresh streamed message metadata', refreshErr)
+          reportError('Failed to refresh streamed message metadata', refreshErr)
         }
       }
 
@@ -560,7 +561,7 @@ export default function ChatPage() {
         )
       )
     } catch (err) {
-      console.error('Failed to send message', err)
+      reportError('Failed to send message', err)
       showErrorNotice('Message could not be sent', 'Please try again.', err)
       setMessages((prev) => [
         ...prev,

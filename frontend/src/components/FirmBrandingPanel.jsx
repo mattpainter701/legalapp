@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { getFirmBranding, updateFirmBranding } from '../api'
 
 export default function FirmBrandingPanel() {

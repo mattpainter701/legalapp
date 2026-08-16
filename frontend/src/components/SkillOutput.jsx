@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { AlertCircle, ShieldAlert, Check, Copy } from 'lucide-react'
 import { markdownComponents } from './legalMarkdown'

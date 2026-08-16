@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   API_BASE_URL,
   getAdminPermissions,
@@ -325,14 +325,6 @@ export default function IntegrationsPanel() {
     healthy: 'bg-green-100 text-green-700 border-green-200',
     attention_needed: 'bg-amber-100 text-amber-700 border-amber-200',
     disconnected: 'bg-red-100 text-red-700 border-red-200',
-  }
-
-  const healthLabels = {
-    healthy: 'All good',
-    missing_scopes: 'Missing scopes',
-    refresh_failed: 'Refresh failed',
-    revoked: 'Reconnect required',
-    disconnected: 'Not connected',
   }
 
   return (

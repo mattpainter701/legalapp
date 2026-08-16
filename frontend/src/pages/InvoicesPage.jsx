@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { reportError } from '../utils/reportError'
 import { Link, useNavigate } from 'react-router-dom'
 import { Plus, Receipt, RefreshCw } from 'lucide-react'
 import { generateInvoice, getInvoices, getMattersV2 } from '../api'
@@ -90,7 +91,7 @@ export default function InvoicesPage() {
       setInvoices(invoiceData.items || invoiceData || [])
       setMatters(matterData.items || matterData || [])
     } catch (error) {
-      console.error('Failed to load invoices', error)
+      reportError('Failed to load invoices', error)
       setLoadError(error?.response?.data?.detail || 'Invoices could not be loaded.')
     } finally {
       setLoading(false)

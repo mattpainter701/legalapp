@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   getTasks,
@@ -15,8 +15,8 @@ import {
   getLead,
   convertLead,
 } from '../api'
-import { CheckSquare, Plus, Calendar, Flag, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing } from 'lucide-react'
-import { format, parseISO, isToday, isTomorrow } from 'date-fns'
+import { CheckSquare, Plus, Calendar, Trash2, Check, AlertCircle, Bell, X, Eye, PhoneOutgoing } from 'lucide-react'
+import { format, isToday, isTomorrow } from 'date-fns'
 import ContactPicker from '../components/ContactPicker'
 import CreatableCombobox from '../components/CreatableCombobox'
 import useMatterFieldOptions from '../hooks/useMatterFieldOptions'

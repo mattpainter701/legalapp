@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate } from 'react-router-dom'
 import { format, parseISO, differenceInDays, isPast } from 'date-fns'
 import { getRenewals, createRenewal, updateRenewal, deleteRenewal } from '../api'
-import { FileText, Plus, X, Check, Search, Filter } from 'lucide-react'
+import { FileText, Plus, X, Check } from 'lucide-react'
 import { useConfirm } from '../components/dialog/ConfirmProvider'
 
 const URGENCY_CONFIG = {
@@ -247,7 +248,7 @@ export default function RenewalTrackerPage() {
       .then((data) => setRenewals(Array.isArray(data) ? data : data.renewals || []))
       .catch((err) => {
         setError('Failed to load renewals.')
-        console.error(err)
+        reportError(err)
       })
       .finally(() => setLoading(false))
   }, [])
@@ -289,7 +290,7 @@ export default function RenewalTrackerPage() {
         prev.map((r) => (r.id === id ? { ...r, status: result.status || status } : r))
       )
     } catch (err) {
-      console.error(err)
+      reportError(err)
     }
   }
 

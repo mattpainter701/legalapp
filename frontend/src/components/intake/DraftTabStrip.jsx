@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import { useMemo } from 'react'
 import { AlertCircle, CheckCircle2, Clock3, Plus, X } from 'lucide-react'
 
 function formatLabel(draft) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { runColdStart, savePluginProfile } from '../api'
 import { X, Check, Bot } from 'lucide-react'

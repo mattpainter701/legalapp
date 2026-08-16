@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { createTask } from '../api'
 
 const TASK_TYPES = [

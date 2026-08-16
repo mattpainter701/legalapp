@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { X, Search, File, Download, AlertCircle, Loader2 } from 'lucide-react'
 
 export default function ConnectedFilesModal({
