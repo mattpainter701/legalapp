@@ -1637,7 +1637,7 @@ async def test_privacy_mode_scrubs_current_and_history_before_provider(
 
 
 @pytest.mark.asyncio
-async def test_general_chat_includes_verified_global_user_profile(
+async def test_standard_chat_excludes_verified_global_user_profile(
     client: AsyncClient, db_session, test_user, mock_llm, mock_embeddings
 ):
     test_user.professional_role = "Attorney"
@@ -1652,10 +1652,13 @@ async def test_general_chat_includes_verified_global_user_profile(
         json={"content": "Give me a contract checklist."},
     )
     assert response.status_code == 201, response.text
-    profile = mock_llm.call_args.kwargs["global_user_context"]
-    assert "Professional role: Attorney" in profile
-    assert "Job title: Commercial Counsel" in profile
-    assert "Primary jurisdictions: Illinois" in profile
+    call = mock_llm.call_args.kwargs
+    assert call["global_user_context"] == ""
+    assert call["tenant_name"] == "Legal"
+    assert (
+        call["system_prompt_override"]
+        == chat_router.llm_service.public_general_system_prompt()
+    )
 
 
 @pytest.mark.asyncio
@@ -1669,6 +1672,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
 ):
     test_user.professional_role = "Attorney"
     test_user.primary_jurisdictions = ["California"]
+    test_user.premium_ai_enabled = True
     matter = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1697,7 +1701,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
             json={
                 "content": "What should we do next?",
                 "include_public": False,
-                "use_premium_llm": False,
+                "use_premium_llm": True,
             },
         )
 
@@ -1720,6 +1724,7 @@ async def test_disabled_matter_context_keeps_link_but_skips_injection(
     mock_llm,
     mock_embeddings,
 ):
+    test_user.premium_ai_enabled = True
     db_session.add(
         TenantSettings(
             tenant_id=test_tenant.id,
@@ -1756,7 +1761,11 @@ async def test_disabled_matter_context_keeps_link_but_skips_injection(
         rag.return_value = ("", [], [])
         response = await client.post(
             f"/api/conversations/{conv['id']}/messages",
-            json={"content": "Give me a status.", "include_public": False},
+            json={
+                "content": "Give me a status.",
+                "include_public": False,
+                "use_premium_llm": True,
+            },
         )
 
     assert response.status_code == 201, response.text
@@ -1770,6 +1779,7 @@ async def test_disabled_matter_context_keeps_link_but_skips_injection(
 async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
     client: AsyncClient, db_session, test_tenant, test_user, mock_llm, mock_embeddings
 ):
+    test_user.premium_ai_enabled = True
     matter_a = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1801,6 +1811,7 @@ async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
                 "content": "Analyze Matter A",
                 "matter_id": matter_a_id,
                 "include_public": False,
+                "use_premium_llm": True,
             },
         )
         second = await client.post(
@@ -1809,6 +1820,7 @@ async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
                 "content": "Switch to Matter B",
                 "matter_id": matter_b_id,
                 "include_public": False,
+                "use_premium_llm": True,
             },
         )
 
@@ -1824,6 +1836,7 @@ async def test_first_json_matter_turn_pins_conversation_and_rejects_relink(
 async def test_first_sse_matter_turn_pins_conversation_and_rejects_relink(
     client: AsyncClient, db_session, test_tenant, test_user, mock_embeddings
 ):
+    test_user.premium_ai_enabled = True
     matter_a = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1860,6 +1873,7 @@ async def test_first_sse_matter_turn_pins_conversation_and_rejects_relink(
                     "content": "Analyze Matter A",
                     "matter_id": matter_a_id,
                     "include_public": False,
+                    "use_premium_llm": True,
                 },
             ) as first:
                 first_body = "".join([part async for part in first.aiter_text()])
@@ -1870,6 +1884,7 @@ async def test_first_sse_matter_turn_pins_conversation_and_rejects_relink(
                 "content": "Switch to Matter B",
                 "matter_id": matter_b_id,
                 "include_public": False,
+                "use_premium_llm": True,
             },
         ) as second:
             second_body = "".join([part async for part in second.aiter_text()])
@@ -1892,6 +1907,7 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
     mock_llm,
     mock_embeddings,
 ):
+    test_user.premium_ai_enabled = True
     active_conv = (await client.post("/api/conversations", json={})).json()
     other_conv = (await client.post("/api/conversations", json={})).json()
 
@@ -1952,7 +1968,7 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
             json={
                 "content": "Use the attached files.",
                 "include_public": False,
-                "use_premium_llm": False,
+                "use_premium_llm": True,
                 "attachment_ids": [str(active_doc_id), str(other_doc_id)],
             },
         )
@@ -1976,8 +1992,12 @@ async def test_send_message_scopes_attachment_context_to_active_conversation(
 @pytest.mark.asyncio
 async def test_stream_message_persists_cloud_sources(
     client: AsyncClient,
+    db_session,
+    test_user,
     mock_embeddings,
 ):
+    test_user.premium_ai_enabled = True
+    await db_session.commit()
     conv = (await client.post("/api/conversations", json={})).json()
     cloud_hit = CloudHit(
         provider="google",
@@ -2003,7 +2023,7 @@ async def test_stream_message_persists_cloud_sources(
                 json={
                     "content": "Summarize the checklist",
                     "include_public": False,
-                    "use_premium_llm": False,
+                    "use_premium_llm": True,
                 },
             ) as resp:
                 body = "".join([part async for part in resp.aiter_text()])

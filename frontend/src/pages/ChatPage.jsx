@@ -364,7 +364,7 @@ export default function ChatPage() {
     if (privacySaving || !usePremium) return
     setPrivacySaving(true)
     try {
-      await updateMe({ privacy_mode: !Boolean(user?.privacy_mode) })
+      await updateMe({ privacy_mode: !user?.privacy_mode })
       await refreshUser?.()
     } catch (err) {
       showErrorNotice('Privacy preference could not be saved', 'Please try again.', err)

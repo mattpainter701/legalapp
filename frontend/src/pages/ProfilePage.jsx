@@ -87,7 +87,7 @@ export default function ProfilePage() {
     setPrivacySaving(true)
     setPrivacyStatus('')
     try {
-      const nextValue = !Boolean(user?.privacy_mode)
+      const nextValue = !user?.privacy_mode
       await updateMe({ privacy_mode: nextValue })
       await refreshUser?.()
       setPrivacyStatus(nextValue
