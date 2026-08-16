@@ -38,6 +38,7 @@ export default function ChatHeader({
   activeConvTitle,
   usePremium,
   setUsePremium,
+  demoMode = false,
   includePublic,
   setIncludePublic,
   privacyMode,
@@ -204,18 +205,18 @@ export default function ChatHeader({
                 <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-brand-muted">
                   Response model
                 </p>
-                <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className={`mt-2 grid gap-2 ${demoMode ? 'grid-cols-1' : 'grid-cols-2'}`}>
                   {[
                     {
                       value: false,
                       label: 'Standard',
                       description: 'Everyday research and drafting',
                     },
-                    {
+                    ...(!demoMode ? [{
                       value: true,
                       label: 'Premium',
                       description: 'More complex analysis',
-                    },
+                    }] : []),
                   ].map((option) => {
                     const selected = usePremium === option.value
                     return (

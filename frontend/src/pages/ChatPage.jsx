@@ -1194,6 +1194,7 @@ export default function ChatPage() {
             activeConvTitle={activeConvTitle}
             usePremium={usePremium}
             setUsePremium={setUsePremium}
+            demoMode={Boolean(user?.demo)}
             includePublic={includePublic}
             setIncludePublic={setIncludePublic}
             privacyMode={Boolean(user?.privacy_mode)}
