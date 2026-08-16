@@ -2095,6 +2095,7 @@ async def test_cancelled_stream_persists_a_retryable_assistant_turn(
     test_user,
 ):
     """A real task cancellation cannot leave a user-only hanging turn."""
+    test_user.premium_ai_enabled = True
     conv = (await client.post("/api/conversations", json={})).json()
     prework_started = asyncio.Event()
     never_finish = asyncio.Event()
@@ -2136,7 +2137,11 @@ async def test_cancelled_stream_persists_a_retryable_assistant_turn(
         ):
             response = await chat_router.stream_message(
                 conv["id"],
-                MessageCreate(content="Analyze jurisdiction", include_public=False),
+                MessageCreate(
+                    content="Analyze jurisdiction",
+                    include_public=False,
+                    use_premium_llm=True,
+                ),
                 request,
                 BackgroundTasks(),
                 db_session,
@@ -2181,6 +2186,7 @@ async def test_cancelled_stream_rolls_back_flushed_action_and_source_promotion(
     client: AsyncClient, db_session, test_user, test_tenant
 ):
     """Cancellation cannot commit an unseen task or promoted attachment."""
+    test_user.premium_ai_enabled = True
     matter = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -2293,6 +2299,7 @@ async def test_cancelled_stream_rolls_back_flushed_action_and_source_promotion(
                     MessageCreate(
                         content="Draft a client email for attorney review.",
                         include_public=False,
+                        use_premium_llm=True,
                     ),
                     request,
                     BackgroundTasks(),
@@ -2346,6 +2353,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
     test_tenant,
     mock_embeddings,
 ):
+    test_user.premium_ai_enabled = True
     matter_a = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -2475,6 +2483,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                 MessageCreate(
                     content="Draft a short internal status update.",
                     include_public=False,
+                    use_premium_llm=True,
                 ),
                 make_request(stream_path),
                 BackgroundTasks(),
@@ -2492,6 +2501,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                             MessageCreate(
                                 content="Concurrent second stream.",
                                 include_public=False,
+                                use_premium_llm=True,
                             ),
                             make_request(stream_path),
                             BackgroundTasks(),
@@ -2504,6 +2514,7 @@ async def test_active_stream_blocks_concurrent_semantic_work_without_drift(
                             MessageCreate(
                                 content="Concurrent non-stream request.",
                                 include_public=False,
+                                use_premium_llm=True,
                             ),
                             make_request(f"/api/conversations/{conv['id']}/messages"),
                             BackgroundTasks(),
