@@ -502,6 +502,32 @@ def validate_mcp_security_settings(settings: Settings) -> None:
         raise ValueError("Invalid platform token TTL defaults")
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def validate_dev_mode_urls(settings: Settings) -> None:
+    """Fail closed when DEV_MODE is combined with a non-loopback deployment URL.
+
+    DEV_MODE mounts the /dev/* router (email-only login, 365-day tokens for
+    every user) and serves interactive API docs. Reachable on a public URL,
+    that is full unauthenticated tenant compromise. Refuse to boot rather than
+    rely on an operator noticing a warning in the logs.
+    """
+    if not settings.DEV_MODE:
+        return
+    from urllib.parse import urlparse
+
+    for field in ("BACKEND_URL", "FRONTEND_URL"):
+        host = (urlparse(getattr(settings, field)).hostname or "").lower()
+        if host not in _LOOPBACK_HOSTS:
+            raise ValueError(
+                f"DEV_MODE=true but {field} points at non-localhost host "
+                f"'{host}'. /dev/* endpoints (email-only login, tokens for "
+                "every user) would be publicly reachable. Set DEV_MODE=false "
+                "for non-local deployments."
+            )
+
+
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
@@ -511,4 +537,5 @@ def get_settings() -> Settings:
     validate_platform_secret_key(settings)
     validate_platform_bootstrap_settings(settings)
     validate_mcp_security_settings(settings)
+    validate_dev_mode_urls(settings)
     return settings
