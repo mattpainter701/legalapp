@@ -89,42 +89,51 @@ async def test_clone_remaps_relationships_json_and_files(
     source_path = tmp_path / str(fixture_id) / str(document_id) / "agreement.txt"
     source_path.parent.mkdir(parents=True)
     source_path.write_text("Synthetic thirty-day notice clause", encoding="utf-8")
-    db_session.add_all(
-        [
-            Contact(
-                id=contact_id,
-                tenant_id=fixture_id,
-                first_name="Avery",
-                last_name="Synthetic",
-                created_by_user_id=fixture_user_id,
-            ),
-            Matter(
-                id=matter_id,
-                tenant_id=fixture_id,
-                user_id=fixture_user_id,
-                slug="synthetic-matter",
-                matter_name="Synthetic Matter",
-                matter_type="litigation",
-                client_contact_id=contact_id,
-                key_dates={"source_document_id": str(document_id)},
-            ),
-            Document(
-                id=document_id,
-                tenant_id=fixture_id,
-                user_id=fixture_user_id,
-                matter_id=matter_id,
-                filename=source_path.name,
-                storage_path=str(source_path),
-                status="indexed",
-                chunk_count=1,
-            ),
-            Chunk(
-                tenant_id=fixture_id,
-                document_id=document_id,
-                content="Synthetic thirty-day notice clause",
-                chunk_index=0,
-            ),
-        ]
+    # These models intentionally do not expose ORM relationships. Flush each
+    # dependency level so the fixture follows the same FK order as the clone.
+    db_session.add(
+        Contact(
+            id=contact_id,
+            tenant_id=fixture_id,
+            first_name="Avery",
+            last_name="Synthetic",
+            created_by_user_id=fixture_user_id,
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        Matter(
+            id=matter_id,
+            tenant_id=fixture_id,
+            user_id=fixture_user_id,
+            slug="synthetic-matter",
+            matter_name="Synthetic Matter",
+            matter_type="litigation",
+            client_contact_id=contact_id,
+            key_dates={"source_document_id": str(document_id)},
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        Document(
+            id=document_id,
+            tenant_id=fixture_id,
+            user_id=fixture_user_id,
+            matter_id=matter_id,
+            filename=source_path.name,
+            storage_path=str(source_path),
+            status="indexed",
+            chunk_count=1,
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        Chunk(
+            tenant_id=fixture_id,
+            document_id=document_id,
+            content="Synthetic thirty-day notice clause",
+            chunk_index=0,
+        )
     )
     await db_session.commit()
 
