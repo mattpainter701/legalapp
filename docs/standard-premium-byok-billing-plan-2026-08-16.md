@@ -34,6 +34,135 @@ retrieval context. It must reject or require a safer route when the input is
 flagged; it must not claim that automated redaction makes a provider safe for
 confidential work.
 
+## PII firewall and end-user privacy control
+
+### Product decision
+
+Add a user-facing **Protect private details** toggle in Chat and the user
+profile. It expresses the user's preference to minimize detected personal
+details before a provider call; it is **not** permission to use a lower-trust
+route with confidential work. The server's route/data-class policy is always
+stricter than the toggle.
+
+For the initial launch:
+
+- Standard is always protected. Its toggle is shown as on and cannot weaken
+  Standard's enforced policy.
+- Premium and approved BYOK honour the user's choice to request detected-PII
+  redaction, while their provider qualification determines whether confidential
+  context is eligible at all.
+- A tenant administrator can choose the default, require protection for the
+  tenant, or disable private-context features. A user cannot override an
+  administrator or route restriction.
+- The existing `privacy_mode` setting is migration material, but it must be
+  replaced by an explicit policy result rather than used as the sole switch.
+
+Copy must be precise: “We remove detected details before a public/general
+model request; detection is not perfect and does not make client or matter
+information suitable for this route.” Never describe it as anonymous, secure,
+or legally sufficient by itself.
+
+### Route policy before LiteLLM
+
+LiteLLM's `drop_params: true` only removes unsupported API parameters. It does
+not inspect, redact, or prevent storage of prompt content. Build a server-side
+**pre-provider privacy firewall** before any LiteLLM or direct-BYOK call:
+
+1. Resolve the final route and its approved data class before loading
+   retrieval or composing a system prompt.
+2. Build a typed `ContextEnvelope`, where every candidate input has a source
+   and classification: current message, conversation history, user profile,
+   learned memory, tenant identity, matter, attachment, firm retrieval, cloud
+   retrieval, plugin/tool result, and public authority.
+3. Apply a policy decision of `allow`, `redact`, `block`, or `reroute`; build
+   the provider payload only from allowed/redacted items. No raw prompt may
+   reach LiteLLM first and be cleaned afterward.
+4. Run PII detection and redaction over every textual item that survives the
+   structural policy—not only the latest user message. Record only counts,
+   categories, policy result, and opaque request IDs; never raw values,
+   redacted values, prompts, or provider payloads in analytics/error logs.
+5. Apply the existing output detection/redaction boundary to the completed
+   answer as defense in depth. It does not compensate for an unsafe input.
+
+For `public_general` Standard, the policy removes—not merely regex-scrubs—all
+private context: tenant/firm name, user name/profile, learned memory, prior
+private history, active matter and its cloud folder, matter summaries/notes/
+events/communications/budgets/team/client metadata, attachments, tenant RAG,
+cloud search, email content, plugin or action-agent results, and hidden
+system-prompt fields. The only optional augmentation is curated public legal
+authority. The Standard system prompt must be a separate general-information
+template, rather than the current firm/matter-aware template with empty fields.
+
+When Standard detects PII in free-form text, it may continue only with the
+redacted message and a visible “redacted general mode” state. It must not ever
+fall back to raw text. A linked matter, an attachment, a tenant/firm retrieval
+request, or a tool result is a hard block for Standard; the user must start a
+general unlinked conversation or choose an approved Premium/BYOK route. This
+is deliberately more conservative than attempting to sanitize matter context.
+
+### Matter-context boundary
+
+`MatterContextService` currently returns a formatted matter record even when
+privacy mode is enabled; it redacts selected fields but can retain identifiers,
+case metadata, team, budget, and other context. Treat every matter-derived
+field as `client_confidential` for the Standard decision, irrespective of
+whether the regex detector found a match.
+
+- Enforce the restriction at the chat entry point and in each context loader:
+  matter service, attachment builder, RAG/retrieval planner, cloud search,
+  memory service, plugin/tool paths, action-agent transcripts, and background
+  memory generation.
+- Do not call these loaders, populate their caches, pass a `matter_id`/
+  cloud-folder scope, or concatenate their results for Standard. A check only
+  in the UI or only in `get_safe_matter_context` is insufficient.
+- A Standard conversation must be unlinked from a matter for provider work.
+  If the user has selected a matter, display a blocking card explaining that
+  matter context requires Premium or firm BYOK, with actions to start a clean
+  general conversation or change route. Do not silently omit the matter while
+  leaving the user to believe it was considered.
+- Premium/BYOK matter injection remains available only when the resolved
+  provider/endpoint is qualified for `client_confidential`; the user privacy
+  preference can redact detected values but cannot promote an ineligible
+  endpoint.
+
+### UX states
+
+Place the control next to the route selector in the composer and persist the
+user preference in Profile. The UI must show the effective server policy,
+not merely the switch position:
+
+| Situation | Composer state |
+| --- | --- |
+| Standard, no private source selected | “General mode: detected personal details are removed before this request.” |
+| Standard, matter/attachment/private retrieval selected | Block send; explain the source will not be sent and offer a clean chat or Premium/BYOK. |
+| Premium or qualified BYOK, protection on | “Detected personal details will be redacted before provider processing where possible.” |
+| Tenant policy requires protection | Toggle shown locked, with the firm policy explanation. |
+
+The composer should also show a lightweight local warning before send when it
+recognises likely PII, but the server decision is authoritative. Do not expose
+detected values in the browser telemetry or trust client-side detection for
+enforcement.
+
+### Implementation and verification sequence
+
+1. Define the data-class/route policy object and `ContextEnvelope`; add an
+   immutable policy revision to request/usage metadata.
+2. Refactor non-streaming and streaming chat to resolve policy before any
+   private loader, then assemble the dedicated Standard or confidential prompt.
+3. Apply the same firewall to skills, plugins, action-agent second passes,
+   memory jobs, direct BYOK calls, and every future inference entry point.
+4. Add the user preference, tenant default/lock controls, route-state API, and
+   composer/Profile UX. Backfill existing users to the tenant default; make
+   Standard protected from day one.
+5. Add a provider-payload test seam around LiteLLM and direct BYOK. Test that
+   synthetic SSNs, emails, names, tenant labels, matter data, documents,
+   cached history, cloud hits, and tool output cannot appear in a Standard
+   outbound body or log record. Test both streaming and non-streaming paths,
+   blocked-state UX/API responses, policy precedence, and no raw fallback.
+6. Run only synthetic fixtures in shadow/canary validation. Turn on strict
+   enforcement before enabling the public Standard provider; measure policy
+   outcomes and false positives using metadata, not retained prompt text.
+
 ## Standard: DeepSeek V4 Flash qualification
 
 `deepseek-v4-flash` is commercially attractive: the current direct API price
