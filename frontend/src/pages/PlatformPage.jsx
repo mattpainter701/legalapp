@@ -1001,9 +1001,7 @@ const isCompleteTarget = (target) => Boolean(target?.provider_id && target?.key_
 const modelTarget = (model) => ({ key_id: model.key_id, provider_id: model.provider_id, model: model.id, capacity: 100 })
 
 function preferredModelOptions(models = []) {
-  const legalReady = models.filter((model) => model.legal_eligible)
-  const source = legalReady.length ? legalReady : models
-  return [...source].sort((a, b) => {
+  return [...models].sort((a, b) => {
     const tierRank = { recommended: 0, usable: 1, limited: 2, excluded: 3 }
     const aRank = tierRank[a.legal_tier] ?? 2
     const bRank = tierRank[b.legal_tier] ?? 2
@@ -1131,7 +1129,7 @@ function TargetEditor({ value, allKeys, presets, models, modelListId, onChange, 
         )}
         {!compact && suggestedModels.length > 0 && (
           <p className="text-[11px] text-brand-muted mt-1 font-sans">
-            Provider/key-specific catalog models, ranked for legal work and latency. Custom IDs remain available.
+            All provider/key-specific catalog models, ranked for legal work and latency. Unsupported endpoints are visible but cannot be activated on the Chat Completions route.
           </p>
         )}
       </div>
