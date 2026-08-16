@@ -296,6 +296,28 @@ def test_nginx_never_noindexes_a_route_the_sitemap_publishes() -> None:
         )
 
 
+def test_nginx_collapses_the_www_hostname_onto_the_apex() -> None:
+    """Serving both hostnames publishes every page at two addresses.
+
+    The redirect must run in both the plain-HTTP and TLS servers, must use 308
+    so a POST that reaches www keeps its method and body, and must never catch
+    the ACME challenge path or certificate renewal breaks.
+    """
+    nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert nginx.count("if ($redirect_to_apex) {") == 2
+    assert nginx.count("return 308 https://$redirect_to_apex$request_uri;") == 2
+    assert "return 301 https://$redirect_to_apex" not in nginx
+
+    start = nginx.index("map $host$uri $redirect_to_apex {")
+    apex_map = nginx[start : nginx.index("}", start)]
+    acme = apex_map.index("acme-challenge")
+    www = apex_map.index("$apex;")
+    # nginx checks map regexes in definition order, so the exemption only holds
+    # while the ACME entry precedes the catch-all www entry.
+    assert acme < www, "the ACME exemption must be defined before the www catch-all"
+
+
 def test_production_nginx_keeps_platform_routes_active_in_http_and_tls() -> None:
     nginx = (ROOT / "nginx" / "nginx.conf").read_text(encoding="utf-8")
     assert nginx.count("location /api/platform/ {") == 2
