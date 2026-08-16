@@ -2026,7 +2026,7 @@ async def _send_message_under_generation_lock(
     )
     default_public_jurisdiction = select_public_jurisdiction_default(
         effective_matter.jurisdiction if matter_context_enabled else None,
-        user.primary_jurisdictions,
+        getattr(user, "primary_jurisdictions", None),
     )
     rag_scope_key = _rag_scope_key(
         context_matter_id,
@@ -2657,7 +2657,7 @@ async def _stream_message_under_generation_lock(
     )
     default_public_jurisdiction = select_public_jurisdiction_default(
         effective_matter.jurisdiction if matter_context_enabled else None,
-        user.primary_jurisdictions,
+        getattr(user, "primary_jurisdictions", None),
     )
     rag_scope_key = _rag_scope_key(
         context_matter_id,
