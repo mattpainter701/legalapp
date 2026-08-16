@@ -20,6 +20,10 @@ class _FakeLiteLLMResponse:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
 
 class _FakeLiteLLMClient:
     def __init__(self, responses):
@@ -93,6 +97,110 @@ def test_provider_route_builder_litellm_model_prefixes():
     )
     assert anthropic["litellm_params"]["model"] == "anthropic/claude-3-5-sonnet-latest"
     assert "api_base" not in anthropic["litellm_params"]
+
+
+def test_opencode_go_gpt_uses_responses_api_for_provider_canary():
+    assert (
+        platform_llm_router._provider_api_mode("opencode-go", "gpt-5.6-luna")
+        == "responses"
+    )
+    # It cannot be activated through the app's Chat Completions-only route,
+    # but it must remain directly testable from the Platform router.
+    assert platform_llm_router._route_compatible("opencode-go", "gpt-5.6-luna") is False
+
+
+def test_opencode_go_anthropic_compatible_models_use_messages_api_for_canary():
+    assert (
+        platform_llm_router._provider_api_mode("opencode-go", "qwen3.8-max")
+        == "messages"
+    )
+    assert (
+        platform_llm_router._provider_api_mode("opencode-go", "minimax-m3")
+        == "messages"
+    )
+
+
+def test_responses_output_text_extracts_openai_response_content():
+    payload = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "output_text", "text": "OK"},
+                ],
+            }
+        ]
+    }
+    assert platform_llm_router._responses_output_text(payload) == "OK"
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_gpt_canary_uses_responses_endpoint(
+    client: AsyncClient, db_session, monkeypatch
+):
+    key = LLMProviderKey(
+        id=uuid.uuid4(),
+        name="OpenCode Go test key",
+        provider_id="opencode-go",
+        encrypted_key="encrypted",
+        key_hint="hint",
+    )
+    db_session.add(key)
+    await db_session.commit()
+    monkeypatch.setattr(platform_llm_router, "decrypt_token", lambda _value: "sk-test")
+    fake = _FakeLiteLLMClient(
+        [
+            _FakeLiteLLMResponse(
+                200,
+                {
+                    "model": "gpt-5.6-luna",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "OK"}],
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 1,
+                        "total_tokens": 6,
+                    },
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(platform_llm_router.httpx, "AsyncClient", lambda **_kwargs: fake)
+
+    response = await client.post(
+        "/api/platform/llm/routes/test",
+        headers=platform_headers(),
+        json={
+            "provider_id": "opencode-go",
+            "key_id": str(key.id),
+            "model": "gpt-5.6-luna",
+            "route": "premium",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert fake.calls == [
+        (
+            "POST",
+            "https://opencode.ai/zen/go/v1/responses",
+            {
+                "model": "gpt-5.6-luna",
+                "input": [
+                    {
+                        "role": "developer",
+                        "content": "Follow the user's output format exactly.",
+                    },
+                    {"role": "user", "content": "Reply with exactly: OK"},
+                ],
+                "max_output_tokens": platform_llm_router.PROVIDER_CANARY_MAX_TOKENS,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -540,6 +540,32 @@ def _provider_api_mode(provider_id: str, model_id: str) -> str:
     return "chat_completions"
 
 
+def _responses_output_text(payload: dict[str, Any]) -> str:
+    """Extract text from an OpenAI Responses API payload.
+
+    OpenCode Go exposes GPT, Grok, and Muse through ``/responses`` rather
+    than ``/chat/completions``.  Keep this deliberately tolerant of response
+    item types so a provider-side metadata item cannot make the canary crash.
+    """
+
+    direct_text = payload.get("output_text")
+    if isinstance(direct_text, str):
+        return direct_text.strip()
+
+    parts: list[str] = []
+    for output in payload.get("output") or []:
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") in {"output_text", "text"}:
+                text = content.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    return " ".join(parts).strip()
+
+
 def _route_compatible(provider_id: str, model_id: str) -> bool:
     mode = _provider_api_mode(provider_id, model_id)
     return mode == "chat_completions" or (
@@ -2790,15 +2816,26 @@ async def test_route(
     provider_start = time.monotonic()
     try:
         mode = preset.get("litellm_mode", "openai_compatible")
-        if mode == "anthropic":
+        api_mode = _provider_api_mode(body.provider_id, body.model)
+        if mode == "anthropic" or api_mode == "messages":
+            message_headers = {
+                "x-api-key": plaintext,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            # OpenCode documents these models through the Anthropic-compatible
+            # endpoint but uses its own bearer token. Sending both credential
+            # forms keeps its documented SDK path and its gateway auth working.
+            if mode != "anthropic":
+                message_headers["Authorization"] = f"Bearer {plaintext}"
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(
-                    f"{preset['base_url']}/v1/messages",
-                    headers={
-                        "x-api-key": plaintext,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
+                    (
+                        f"{preset['base_url']}/v1/messages"
+                        if mode == "anthropic"
+                        else f"{preset['base_url']}/messages"
+                    ),
+                    headers=message_headers,
                     json={
                         "model": body.model,
                         "max_tokens": PROVIDER_CANARY_MAX_TOKENS,
@@ -2829,6 +2866,59 @@ async def test_route(
                 usage=_usage_payload(
                     prompt_tokens=usage.get("input_tokens"),
                     completion_tokens=usage.get("output_tokens"),
+                    elapsed_ms=elapsed_ms,
+                ),
+                error=_canary_error_message(canary_ok, drained),
+                error_category=_canary_error_category(canary_ok, drained),
+                provider_reachable=True,
+            )
+            await record_operator_audit(
+                db,
+                request,
+                action="llm.model_tested",
+                resource_type="llm_provider_key",
+                resource_id=str(key.id),
+                metadata=_model_test_audit_payload(body=body, key=key, result=result),
+            )
+            await db.commit()
+            return result
+
+        if api_mode == "responses":
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    f"{preset['base_url']}/responses",
+                    headers={
+                        "Authorization": f"Bearer {plaintext}",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": body.model,
+                        "input": [
+                            {
+                                "role": "developer",
+                                "content": "Follow the user's output format exactly.",
+                            },
+                            {"role": "user", "content": "Reply with exactly: OK"},
+                        ],
+                        "max_output_tokens": PROVIDER_CANARY_MAX_TOKENS,
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            elapsed_ms = int((time.monotonic() - provider_start) * 1000)
+            text = _responses_output_text(payload)
+            usage = payload.get("usage") or {}
+            canary_ok = canary_answer_matches(text)
+            drained = _canary_reasoning_drain(payload, text)
+            result = _timing_response(
+                ok=canary_ok,
+                provider_latency_ms=elapsed_ms,
+                model_used=payload.get("model") or body.model,
+                response_preview=text[:120],
+                usage=_usage_payload(
+                    prompt_tokens=usage.get("input_tokens"),
+                    completion_tokens=usage.get("output_tokens"),
+                    total_tokens=usage.get("total_tokens"),
                     elapsed_ms=elapsed_ms,
                 ),
                 error=_canary_error_message(canary_ok, drained),
