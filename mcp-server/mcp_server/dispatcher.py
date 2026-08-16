@@ -2,10 +2,35 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
+
+
+class JetsonDispatchError(RuntimeError):
+    """A dispatch failure whose message is safe to write to shared logs."""
+
+
+_URL_CREDENTIALS = re.compile(
+    r"(?P<prefix>\b(?:postgres(?:ql)?|https?|ssh)://[^\s:/@]+:)[^\s@]+(?P<suffix>@)",
+    re.IGNORECASE,
+)
+_DB_URL_ARGUMENT = re.compile(r"(?P<prefix>--db-url(?:=|\s+))(?P<value>\S+)", re.IGNORECASE)
+_PASSWORD_ASSIGNMENT = re.compile(
+    r"(?P<prefix>\b(?:password|passwd|pwd|sshpass)\s*[=:]\s*)(?P<value>[^\s,;]+)",
+    re.IGNORECASE,
+)
+
+
+def redact_secrets(value: object) -> str:
+    """Return a log-safe representation of a command or exception message."""
+
+    text = str(value)
+    text = _DB_URL_ARGUMENT.sub(r"\g<prefix><redacted>", text)
+    text = _URL_CREDENTIALS.sub(r"\g<prefix>***\g<suffix>", text)
+    return _PASSWORD_ASSIGNMENT.sub(r"\g<prefix><redacted>", text)
 
 
 @dataclass(frozen=True)
@@ -121,9 +146,19 @@ def run_ssh_command(
     reverse_tunnel: str | None = None,
     foreground: bool = False,
 ) -> subprocess.Popen | None:
-    ssh_command = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    ssh_command = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+    ]
     if reverse_tunnel:
-        ssh_command.extend(["-R", reverse_tunnel])
+        ssh_command.extend(["-o", "ExitOnForwardFailure=yes", "-R", reverse_tunnel])
     ssh_command.append(f"{target.user}@{target.host}")
     ssh_command.append(command)
     password = jetson_password_from_env(target.env_index)
@@ -131,9 +166,16 @@ def run_ssh_command(
     if password:
         env["SSHPASS"] = password
         ssh_command = ["sshpass", "-e", *ssh_command]
-    if foreground:
-        return subprocess.Popen(ssh_command, env=env)
-    subprocess.run(ssh_command, check=True, env=env)
+    try:
+        if foreground:
+            return subprocess.Popen(ssh_command, env=env)
+        subprocess.run(ssh_command, check=True, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return_code = getattr(exc, "returncode", None)
+        detail = f"exit_status={return_code}" if return_code is not None else f"error_type={type(exc).__name__}"
+        raise JetsonDispatchError(
+            f"Jetson SSH dispatch failed host={target.host} worker={target.worker_id} {detail}"
+        ) from None
     return None
 
 
@@ -149,7 +191,7 @@ def dispatch_targets(
     total = len(targets)
     if total == 0:
         raise ValueError("At least one Jetson host is required")
-    processes: list[subprocess.Popen] = []
+    processes: list[tuple[JetsonTarget, subprocess.Popen]] = []
     tunnel_host, tunnel_port = db_tunnel_endpoint(db_url) if reverse_tunnel else ("", 0)
     for target in targets:
         worker_db_url = (
@@ -176,11 +218,14 @@ def dispatch_targets(
             foreground=reverse_tunnel,
         )
         if process:
-            processes.append(process)
-    for process in processes:
+            processes.append((target, process))
+    for target, process in processes:
         code = process.wait()
         if code != 0:
-            raise subprocess.CalledProcessError(code, process.args)
+            raise JetsonDispatchError(
+                f"Jetson worker session failed host={target.host} "
+                f"worker={target.worker_id} exit_status={code}"
+            )
 
 
 def dispatch(hosts: list[str], user: str, script_dir: str, db_url: str, batch_size: int) -> None:

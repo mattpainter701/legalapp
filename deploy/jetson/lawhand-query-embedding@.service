@@ -1,0 +1,28 @@
+[Unit]
+Description=LawHand query embedding API on Jetson (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/data/legalapp-embeddings/app
+Environment=PYTHONPATH=/data/pip_packages:/data/legalapp-embeddings/app
+Environment=HF_HOME=/data/legalapp-embeddings/model-cache
+Environment=TRANSFORMERS_CACHE=/data/legalapp-embeddings/model-cache
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/data/legalapp-embeddings/query-embedding.env
+ExecStartPre=/usr/bin/test -x /data/legalapp-embeddings/venv/bin/python3
+ExecStartPre=/usr/bin/test -r /data/legalapp-embeddings/app/mcp_server/embedding_service.py
+ExecStart=/data/legalapp-embeddings/venv/bin/python3 -m uvicorn mcp_server.embedding_service:app --host 0.0.0.0 --port 8031
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

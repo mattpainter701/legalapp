@@ -50,6 +50,8 @@ def partition_sql(corpus: str = "opinion_chunks") -> str:
             JOIN legal_documents d ON d.id = c.document_id
             JOIN legal_sources s ON s.source_key = d.source_key
             WHERE c.embedding IS NULL
+              AND s.enabled IS TRUE
+              AND d.document_status = 'current'
               AND s.storage_policy IN ('mirror', 'normalized_text')
               AND ABS(HASHTEXT(c.id::text)) %% %s = %s
             ORDER BY c.created_at, c.id

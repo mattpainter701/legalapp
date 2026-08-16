@@ -106,7 +106,7 @@ embedding license.
 1. Reviewed federal HTML manifest pilot: Medicaid estate recovery, IRS estate/gift index,
    CMS manuals index. Implemented and live-fetch previewed.
 2. U.S. Code USLM adapter: Titles 26 and 42 first.
-3. eCFR XML adapter: Titles 26, 31, 42, and 45.
+3. eCFR XML adapter: all 49 active titles; completed as a raw/parse preview on 2026-08-15.
 4. CMS Coverage API: NCD/LCD metadata, text, and version history excluding licensed fields.
 5. IRS IRB discovery and document classification.
 6. Open States Ohio current-session feed.

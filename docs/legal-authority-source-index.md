@@ -1,6 +1,6 @@
 # Legal Authority Source Index
 
-Research and implementation snapshot: 2026-07-31.
+Research and implementation snapshot: 2026-08-15.
 
 This is the entry point for the public-law source program. It records official
 authority, open mirrors/tooling, commercial secondary material, and sources that
@@ -12,10 +12,11 @@ its policy state and retry route are part of the deliverable.
 | Artifact | Purpose |
 |---|---|
 | [`mcp-server/mcp_server/legal_sources.json`](../mcp-server/mcp_server/legal_sources.json) | Base machine-readable source and policy catalog. |
-| [`federal_freelaw.json`](../mcp-server/mcp_server/source_fragments/federal_freelaw.json), [`nd_mn_sd.json`](../mcp-server/mcp_server/source_fragments/nd_mn_sd.json), and [`oh_ca_tx_fl_local_secondary.json`](../mcp-server/mcp_server/source_fragments/oh_ca_tx_fl_local_secondary.json) | Modular federal, state, local-law, and secondary-source additions. Loaded automatically and duplicate-checked. |
+| [`federal_freelaw.json`](../mcp-server/mcp_server/source_fragments/federal_freelaw.json), [`federal_rules_research.json`](../mcp-server/mcp_server/source_fragments/federal_rules_research.json), [`nd_mn_sd.json`](../mcp-server/mcp_server/source_fragments/nd_mn_sd.json), and [`oh_ca_tx_fl_local_secondary.json`](../mcp-server/mcp_server/source_fragments/oh_ca_tx_fl_local_secondary.json) | Modular federal, state, local-law, and secondary-source additions. Loaded automatically and duplicate-checked. |
 | [`legal-authority-source-ledger.md`](legal-authority-source-ledger.md) | Human operational ledger, caveats, live results, and retry history. |
 | [`legal-authority-mass-catch-run-2026-07-31.md`](legal-authority-mass-catch-run-2026-07-31.md) | What was implemented, live-tested, deferred, or blocked in this catch. |
 | [`legal-authority-registry-and-ingestion.md`](legal-authority-registry-and-ingestion.md) | Database, chunking, embedding, retrieval, scheduler, and larger-server architecture. |
+| [`federal-rules-constitutional-tax-court-pack-2026-08-15.md`](research/federal-rules-constitutional-tax-court-pack-2026-08-15.md) | Reviewed official links, retained preview artifacts and hashes, extraction quality, and deferred boundaries for Federal Rules, Constitution Annotated, and Tax Court Reports. |
 
 ## Research audits
 

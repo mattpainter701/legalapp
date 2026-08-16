@@ -8,8 +8,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from mcp_server.schema import SCHEMA_SQL
-from mcp_server.source_catalog import (
+from mcp_server.schema import SCHEMA_SQL  # noqa: E402
+from mcp_server.source_catalog import (  # noqa: E402
     CatalogValidationError,
     catalog_summary,
     load_catalog,
@@ -67,6 +67,8 @@ def test_bundled_fragments_cover_requested_federal_and_state_source_families():
     assert {
         "irs:tax-law-official-guidance",
         "ecfr:current-api",
+        "uscourts:federal-rules",
+        "crs:constitution-annotated",
         "medicare:consumer-program-guidance",
         "freelawproject:github-organization",
         "minnesota:statutes",
@@ -79,9 +81,29 @@ def test_bundled_fragments_cover_requested_federal_and_state_source_families():
     }.issubset(keys)
     assert catalog["metadata"]["fragment_files"] == [
         "federal_freelaw.json",
+        "federal_rules_research.json",
         "nd_mn_sd.json",
         "oh_ca_tx_fl_local_secondary.json",
     ]
+
+
+def test_federal_rules_and_research_sources_have_auditable_bounded_policy():
+    sources = {source["source_key"]: source for source in load_catalog()["sources"]}
+
+    rules = sources["uscourts:federal-rules"]
+    conan = sources["crs:constitution-annotated"]
+    tax_court = sources["ustaxcourt:opinions"]
+
+    assert rules["ingestion_mode"] == "manifest"
+    assert rules["coverage_kind"] == "bounded"
+    assert rules["enabled"] is False
+    assert rules["implementation_status"] == "preview_verified"
+    assert "reviewed allowlist" in rules["acquisition_basis"].lower()
+    assert conan["authority_tier"] == "secondary_metadata"
+    assert conan["official_status"] == "official_authenticated"
+    assert "not binding primary law" in conan["coverage_notes"]
+    assert tax_court["implementation_status"] == "preview_verified"
+    assert "DAWSON" in tax_court["coverage_notes"]
 
 
 def test_oh_ca_tx_fl_secondary_fragment_is_conservative_and_complete():

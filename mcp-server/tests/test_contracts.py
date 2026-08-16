@@ -19,10 +19,13 @@ from mcp_server.dispatcher import (
 from mcp_server.embedding_scheduler import SchedulerConfig, run_scheduler_once
 from mcp_server.loader import (
     DEFAULT_MVP_STATES,
+    _load_csv,
     best_opinion_text,
     bz2_decompress_command,
+    coverage_court_ids,
     court_matches_mvp,
     iter_bulk_csv_rows,
+    parse_court_ids,
     parse_mvp_states,
     resolved_table_limit,
     should_keep_cluster,
@@ -350,6 +353,8 @@ def test_repository_searches_general_authority_with_effective_date_filters():
     assert "legal_documents" in sql
     assert "websearch_to_tsquery" in sql
     assert "termination_date" in sql
+    assert "s.enabled IS TRUE" in sql
+    assert "d.document_status = 'current'" in sql
     assert "embedding <=>" not in sql
 
 
@@ -368,6 +373,8 @@ def test_repository_uses_hybrid_search_for_general_authority():
     assert "embedding <=>" in sql
     assert "dense_rank" in sql
     assert "fts_rank" in sql
+    assert "s.enabled IS TRUE" in sql
+    assert "d.document_status = 'current'" in sql
 
 
 def test_repository_normalizes_messy_citation_before_lookup():
@@ -545,6 +552,8 @@ def test_worker_config_locks_mxbai_1024_and_partition_query():
     assert "legal_documents" in authority_sql
     assert "authority_tier" in authority_sql
     assert "d.source_key" in authority_sql
+    assert "s.enabled IS TRUE" in authority_sql
+    assert "d.document_status = 'current'" in authority_sql
 
 
 def test_dispatcher_supports_indexed_jetson_env(monkeypatch):
@@ -691,3 +700,18 @@ def test_mvp_cluster_filter_prefers_precedential_authority():
     assert should_keep_cluster(
         {"precedential_status": "Unpublished"}, precedential_only=False
     )
+
+
+def test_courtlistener_scale_profiles_are_explicit_and_deduplicated():
+    federal = coverage_court_ids("federal-appellate")
+    national = coverage_court_ids("national-priority")
+
+    assert federal[0] == "scotus"
+    assert {"ca1", "ca8", "cadc", "cafc"}.issubset(federal)
+    assert set(federal).issubset(national)
+    assert {"dcd", "tx", "cal", "ny"}.issubset(national)
+    assert parse_court_ids(" CA8, tax,ca8, bia ") == ("ca8", "tax", "bia")
+
+
+def test_zero_table_limit_skips_bulk_file_instead_of_meaning_unlimited(tmp_path):
+    assert _load_csv(None, tmp_path / "missing.csv.bz2", "citations", limit=0) == 0

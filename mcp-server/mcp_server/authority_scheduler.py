@@ -65,13 +65,19 @@ def default_jobs() -> list[AuthorityJob]:
         title_args = tuple(item for title in arguments for item in ("--title", title))
         jobs.append(AuthorityJob("us-code", "mcp_server.uscode_ingest", title_args, timeout))
     if _enabled("LEGAL_AUTHORITY_ECFR_ENABLED"):
-        titles = os.getenv("LEGAL_AUTHORITY_ECFR_TITLES", "26,42")
+        titles = os.getenv("LEGAL_AUTHORITY_ECFR_TITLES", "all")
         arguments = tuple(value for title in titles.split(",") if (value := title.strip()))
-        title_args = tuple(item for title in arguments for item in ("--title", title))
+        title_args = () if len(arguments) == 1 and arguments[0].lower() == "all" else tuple(
+            item for title in arguments for item in ("--title", title)
+        )
         jobs.append(AuthorityJob(
             "ecfr",
             "mcp_server.ecfr_ingest",
-            (*title_args, "--checkpoint-dir", "/data/legal-authority/checkpoints"),
+            (
+                *title_args,
+                "--checkpoint-dir", "/data/legal-authority/checkpoints",
+                "--raw-dir", "/data/legal-authority/raw/ecfr",
+            ),
             timeout,
         ))
     if _enabled("LEGAL_AUTHORITY_CMS_ENABLED"):

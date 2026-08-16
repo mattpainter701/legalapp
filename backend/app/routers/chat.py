@@ -50,6 +50,7 @@ from app.services.rag import (
     cloud_context_source_id,
     hybrid_rag_query,
     rag_result_is_cacheable,
+    select_public_jurisdiction_default,
 )
 from app.services.llm import LLMService
 from app.services.llm_routing import (
@@ -690,11 +691,16 @@ async def _effective_message_matter(
     return None
 
 
-def _rag_scope_key(matter_id: str | None, matter_cloud_folder: dict | None) -> str:
+def _rag_scope_key(
+    matter_id: str | None,
+    matter_cloud_folder: dict | None,
+    default_public_jurisdiction: str | None = None,
+) -> str:
     return json.dumps(
         {
             "matter_id": matter_id or "none",
             "matter_cloud_folder": matter_cloud_folder or None,
+            "default_public_jurisdiction": default_public_jurisdiction or None,
         },
         sort_keys=True,
         default=str,
@@ -2018,7 +2024,15 @@ async def _send_message_under_generation_lock(
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None
     )
-    rag_scope_key = _rag_scope_key(context_matter_id, context_matter_cloud_folder)
+    default_public_jurisdiction = select_public_jurisdiction_default(
+        effective_matter.jurisdiction if matter_context_enabled else None,
+        getattr(user, "primary_jurisdictions", None),
+    )
+    rag_scope_key = _rag_scope_key(
+        context_matter_id,
+        context_matter_cloud_folder,
+        default_public_jurisdiction,
+    )
 
     # 1a. Enforce daily token budget (fail fast before any work is done)
     await check_token_budget(db, user)
@@ -2167,6 +2181,7 @@ async def _send_message_under_generation_lock(
                 ),
                 matter_id=context_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
+                default_public_jurisdiction=default_public_jurisdiction,
             )
             await set_tenant_context(db, str(user.tenant_id))
             if rag_result_is_cacheable(context_str, chunks, cloud_hits):
@@ -2640,7 +2655,15 @@ async def _stream_message_under_generation_lock(
     context_matter_cloud_folder = (
         effective_matter.cloud_folder if matter_context_enabled else None
     )
-    rag_scope_key = _rag_scope_key(context_matter_id, context_matter_cloud_folder)
+    default_public_jurisdiction = select_public_jurisdiction_default(
+        effective_matter.jurisdiction if matter_context_enabled else None,
+        getattr(user, "primary_jurisdictions", None),
+    )
+    rag_scope_key = _rag_scope_key(
+        context_matter_id,
+        context_matter_cloud_folder,
+        default_public_jurisdiction,
+    )
 
     # 1a. Enforce daily token budget
     try:
@@ -2892,6 +2915,7 @@ async def _stream_message_under_generation_lock(
                         ),
                         matter_id=context_matter_id,
                         matter_cloud_folder=matter_cloud_folder,
+                        default_public_jurisdiction=default_public_jurisdiction,
                     )
                 except Exception:
                     logger.exception(

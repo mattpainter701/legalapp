@@ -49,9 +49,11 @@ The 58 GB staged archive is not the live searchable corpus. It is compressed
 source input. Searchable rows exist only after the loader imports opinions and
 `--chunk-opinions` creates `opinion_chunks`.
 
-MVP/test-hardware constraint: do not attempt a full CourtListener corpus sync
-on the current hypervisor. Load bounded regional/specialty batches only after
-checking projected Docker-volume growth.
+Do not equate available space with permission to run an unbounded national
+import. The current scale target is the published federal appellate profile,
+with explicit row ceilings and database-size checks before and after each
+stage. The full raw snapshot remains larger and noisier than the first useful
+research corpus.
 
 ## Start And Health Checks
 
@@ -227,6 +229,13 @@ docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --profile emb
 Scheduler behavior:
 
 - Runs every `EMBEDDING_SCHEDULER_INTERVAL_SECONDS` seconds, default 900.
+- After a failed SSH/worker session, retries with capped exponential backoff.
+  `EMBEDDING_SCHEDULER_RETRY_INITIAL_SECONDS` defaults to 60 and
+  `EMBEDDING_SCHEDULER_RETRY_MAX_SECONDS` defaults to 900.
+- SSH sessions use connection timeout and server-alive probes so a dead Jetson
+  session returns control to the scheduler instead of hanging indefinitely.
+- Scheduler errors redact database URL credentials and password assignments.
+  Do not add raw command arguments to scheduler or dispatcher exception logs.
 - Schedules embeddings for chunks already present in `opinion_chunks`; it does
   not download or import new CourtListener bulk/API data.
 - Uses `SCHEDULER_DB_URL` for its own lock/count queries inside Docker and
@@ -301,6 +310,56 @@ TRANSFORMERS_CACHE=/data/legalapp-embeddings/model-cache \
   mcp_server.embedding_service:app --host 0.0.0.0 --port 8031
 ```
 
+After the regional canary, expand from the already-staged snapshot without
+downloading it again:
+
+```bash
+docker exec -i legalapp-courtlistener-db-1 psql -U courtlistener -d courtlistener -P pager=off -c \
+  "SELECT pg_size_pretty(pg_database_size(current_database())) AS database_size,
+          (SELECT COUNT(*) FROM opinions) AS opinions,
+          (SELECT COUNT(*) FROM opinion_chunks) AS chunks;"
+
+docker run --rm --network legalapp_default \
+  -v legalapp_courtlistener_bulk:/data/courtlistener \
+  -e VECTORDB_URL=postgresql://courtlistener:<password>@courtlistener-db:5432/courtlistener \
+  legalapp-courtlistener-loader:latest \
+  python -m mcp_server.loader --load-mvp \
+    --coverage-profile federal-appellate --mvp-states ND,MT,MN,SD \
+    --docket-limit 500000 --cluster-limit 200000 --opinion-limit 200000 \
+    --citation-limit 2000000
+
+docker run --rm --network legalapp_default \
+  -e VECTORDB_URL=postgresql://courtlistener:<password>@courtlistener-db:5432/courtlistener \
+  legalapp-courtlistener-loader:latest \
+  python -m mcp_server.loader --chunk-opinions --limit 250000
+```
+
+`federal-appellate` adds SCOTUS and all federal circuits to the existing
+regional, Tax Court, immigration, and bankruptcy selection. Use
+`national-priority` only as a later explicit batch; it also adds the configured
+major state and D.C. courts. `--court-id` and `COURTLISTENER_EXTRA_COURT_IDS`
+support reviewed additions without changing source code. A numeric limit of
+zero now means skip that table, and repeat runs count newly inserted/changed
+rows instead of consuming the limit on unchanged rows.
+
+Production Jetsons should run the checked-in systemd template instead of
+`nohup`. Replace `<jetson-user>` with the account that owns the SSD checkout:
+
+```bash
+sudo install -o root -g root -m 0644 \
+  deploy/jetson/lawhand-query-embedding@.service \
+  /etc/systemd/system/lawhand-query-embedding@.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now lawhand-query-embedding@<jetson-user>.service
+sudo systemctl status lawhand-query-embedding@<jetson-user>.service
+journalctl -u lawhand-query-embedding@<jetson-user>.service -n 100 --no-pager
+```
+
+The unit restarts an unexpectedly exited process after ten seconds and waits for
+the network before starting. It expects the existing
+`/data/legalapp-embeddings` layout.
+Keep port 8031 restricted to the trusted LAN/firewall zone.
+
 Checks:
 
 ```bash
@@ -311,9 +370,21 @@ curl -sf http://127.0.0.1:8021/health
 `courtlistener-mcp` reports `"query_embedding":"configured"` when the env is
 present. The first query after model load can take about 18 seconds while the
 model warms up; later calls should be faster. The service is LAN-only and must
-not be exposed publicly. Current operational gap: it is launched by `nohup`, so
-the next hardening pass should make it a systemd service or Jetson-side Compose
-service.
+not be exposed publicly.
+
+## Scheduler Credential Rotation
+
+Scheduler/dispatcher exceptions no longer include the worker database URL, but
+any credential previously emitted by container logs must be treated as exposed.
+Rotate it only as a coordinated post-deploy operation:
+
+1. Back up the production `.env` and generate a new high-entropy password.
+2. Update the Postgres role password and `COURTLISTENER_DB_PASSWORD` together.
+3. Recreate `courtlistener-mcp`, loaders, and `embedding-scheduler` so every
+   client receives the new value; never print the value in a shell transcript.
+4. Verify MCP health, scheduler lock/count access, and one bounded Jetson worker
+   connection before revoking the old operational session.
+5. Inspect fresh scheduler logs and confirm no URL credentials are present.
 
 ## MCP Search Behavior
 
@@ -420,8 +491,7 @@ Do not prune volumes unless the intent is to delete the corpus/staged S3 cache.
 
 - Add Jetson 1 and Jetson 2 env/SSH keys and relaunch dispatcher with all
   available workers.
-- Convert the Jetson query embedding `nohup` process into systemd or a
-  Jetson-side Compose service.
+- Install and enable the checked-in Jetson query-embedding systemd unit.
 - Run a larger citation import pass with the fixed local-endpoint filter.
 - Expand the state/specialty corpus once disk projections still stay under the
   Docker-volume budget.

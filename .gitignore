@@ -35,6 +35,7 @@ Thumbs.db
 
 # Uploads (runtime data)
 uploads/
+/artifacts/legal-authority-preview/
 
 # SSL certs and Let's Encrypt data — never commit private keys
 nginx/ssl/*.pem

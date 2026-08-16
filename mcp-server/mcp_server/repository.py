@@ -133,7 +133,11 @@ class CourtListenerRepository:
         effective_on: str | None = None,
         query_embedding: list[float] | None = None,
     ) -> list[dict[str, Any]]:
-        filters = ["TRUE"]
+        # Only searchable, live catalog content may enter either retrieval path.
+        # Keeping these predicates in the shared filter list prevents disabled
+        # sources and superseded documents from leaking through FTS or dense
+        # candidates.
+        filters = ["s.enabled IS TRUE", "d.document_status = 'current'"]
         filter_params: list[Any] = []
         if jurisdiction:
             filters.append("d.jurisdiction = %s")

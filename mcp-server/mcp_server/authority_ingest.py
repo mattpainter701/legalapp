@@ -132,6 +132,9 @@ class FetchedDocument:
     retrieved_at: datetime
     source_modified_at: datetime | None
     etag: str | None
+    raw_content: bytes = b""
+    raw_content_hash: str = ""
+    resolved_url: str = ""
 
 
 def html_main_text(value: str) -> str:
@@ -139,6 +142,17 @@ def html_main_text(value: str) -> str:
     parser.feed(value)
     parser.close()
     return parser.text()
+
+
+def extracted_text_status(value: str) -> str:
+    """Reject a known class of PDF font-map output before it reaches embeddings."""
+
+    sample = value[:100_000]
+    glyph_references = len(re.findall(r"/(?:i255|\d+)", sample))
+    readable_words = len(re.findall(r"[A-Za-z]{3,}", sample))
+    if glyph_references > 100 and glyph_references > readable_words:
+        return "blocked_font_map"
+    return "passed_heuristic"
 
 
 def load_manifest(path: str | Path | None = None) -> dict[str, Any]:
@@ -165,7 +179,11 @@ def validate_manifest(manifest: dict[str, Any], catalog: dict[str, Any]) -> None
             "canonical_url",
             "jurisdiction",
             "authority_tier",
+            "official_status",
             "parser",
+            "parser_version",
+            "acquisition_basis",
+            "coverage_notes",
             "practice_areas",
         } - document.keys()
         if missing:
@@ -196,11 +214,39 @@ def validate_manifest(manifest: dict[str, Any], catalog: dict[str, Any]) -> None
             raise ManifestValidationError(
                 f"{identity}: document authority_tier must match its source"
             )
+        if document["official_status"] != source["official_status"]:
+            raise ManifestValidationError(
+                f"{identity}: document official_status must match its source"
+            )
         parsed = urlparse(document["canonical_url"])
         if parsed.scheme != "https" or not parsed.netloc:
             raise ManifestValidationError(f"{identity}: canonical_url must be https")
         if document["parser"] not in {"html_main_text", "pdf_text"}:
             raise ManifestValidationError(f"{identity}: unsupported parser")
+        for field in ("parser_version", "acquisition_basis", "coverage_notes"):
+            if not isinstance(document[field], str) or not document[field].strip():
+                raise ManifestValidationError(f"{identity}: {field} must be non-empty")
+        for field in (
+            "publication_date",
+            "effective_date",
+            "source_version_date",
+            "coverage_start_date",
+            "coverage_end_date",
+        ):
+            value = document.get(field)
+            if value:
+                try:
+                    datetime.strptime(value, "%Y-%m-%d")
+                except (TypeError, ValueError) as exc:
+                    raise ManifestValidationError(
+                        f"{identity}: {field} must be YYYY-MM-DD"
+                    ) from exc
+        if document.get("source_index_url"):
+            index_url = urlparse(document["source_index_url"])
+            if index_url.scheme != "https" or not index_url.netloc:
+                raise ManifestValidationError(
+                    f"{identity}: source_index_url must be https"
+                )
 
 
 def fetch_document(
@@ -271,6 +317,9 @@ def fetch_document(
             retrieved_at=datetime.now(timezone.utc),
             source_modified_at=modified,
             etag=response.headers.get("etag"),
+            raw_content=response.content,
+            raw_content_hash=hashlib.sha256(response.content).hexdigest(),
+            resolved_url=str(response.url),
         )
     finally:
         if owns_client:
@@ -278,11 +327,32 @@ def fetch_document(
 
 
 def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocument) -> dict[str, Any]:
+    extraction_status = extracted_text_status(fetched.text)
+    if extraction_status != "passed_heuristic":
+        raise RuntimeError(
+            f"{document['canonical_url']} text extraction is {extraction_status}; "
+            "raw artifact requires a reviewed parser before ingestion"
+        )
     metadata = {
         "practice_areas": document["practice_areas"],
         "etag": fetched.etag,
         "manifest_parser": document["parser"],
+        "official_status": document["official_status"],
+        "acquisition_basis": document["acquisition_basis"],
+        "coverage_notes": document["coverage_notes"],
+        "source_index_url": document.get("source_index_url"),
+        "raw_content_hash": fetched.raw_content_hash,
+        "resolved_url": fetched.resolved_url,
+        "text_extraction_status": extraction_status,
     }
+    for field in (
+        "publication_year",
+        "source_version_date",
+        "coverage_start_date",
+        "coverage_end_date",
+    ):
+        if field in document:
+            metadata[field] = document[field]
     metadata.update(document.get("metadata", {}))
     with conn.cursor() as cursor:
         cursor.execute(
@@ -343,7 +413,7 @@ def ingest_document(conn: Any, document: dict[str, Any], fetched: FetchedDocumen
                 fetched.retrieved_at,
                 fetched.content_hash,
                 fetched.media_type,
-                "pdf-text-v1" if document["parser"] == "pdf_text" else "html-main-text-v1",
+                document["parser_version"],
                 fetched.text,
                 json.dumps(metadata),
             ],
@@ -419,28 +489,122 @@ def selected_documents(
     return documents[:limit] if limit is not None else documents
 
 
-def preview(documents: list[dict[str, Any]], delay_seconds: float = 1.0) -> list[dict[str, Any]]:
+def _artifact_basename(document: dict[str, Any]) -> str:
+    value = f"{document['source_key']}--{document['external_id']}"
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-_").lower()
+
+
+def _raw_extension(fetched: FetchedDocument) -> str:
+    if fetched.media_type == "application/pdf":
+        return ".pdf"
+    if fetched.media_type in {"text/html", "application/xhtml+xml"}:
+        return ".html"
+    return ".bin"
+
+
+def _write_preview_artifact(
+    output_dir: Path,
+    document: dict[str, Any],
+    fetched: FetchedDocument,
+) -> tuple[str, str]:
+    raw_dir = output_dir / "raw"
+    text_dir = output_dir / "normalized"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    text_dir.mkdir(parents=True, exist_ok=True)
+    basename = _artifact_basename(document)
+    raw_path = raw_dir / f"{basename}{_raw_extension(fetched)}"
+    text_path = text_dir / f"{basename}.txt"
+    raw_path.write_bytes(fetched.raw_content)
+    # Keep the retained normalized artifact byte-for-byte consistent across
+    # platforms so its SHA-256 is the same canonical content hash recorded in
+    # the preview manifest and later stored in Postgres.
+    text_path.write_text(fetched.text, encoding="utf-8", newline="\n")
+    return raw_path.relative_to(output_dir).as_posix(), text_path.relative_to(output_dir).as_posix()
+
+
+def preview(
+    documents: list[dict[str, Any]],
+    delay_seconds: float = 1.0,
+    output_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
     results = []
+    output_path = Path(output_dir).resolve() if output_dir else None
+    if output_path:
+        output_path.mkdir(parents=True, exist_ok=True)
     user_agent = os.getenv("LEGAL_SOURCE_USER_AGENT", DEFAULT_USER_AGENT)
     with httpx.Client(
         timeout=45.0,
         follow_redirects=True,
-        headers={"User-Agent": user_agent, "Accept": "text/html"},
+        headers={
+            "User-Agent": user_agent,
+            "Accept": "text/html, application/xhtml+xml, application/pdf",
+        },
     ) as client:
         for index, document in enumerate(documents):
             fetched = fetch_document(document, client=client)
-            results.append(
-                {
-                    "source_key": document["source_key"],
-                    "external_id": document["external_id"],
-                    "characters": len(fetched.text),
-                    "chunks": len(chunk_text(fetched.text)),
-                    "content_hash": fetched.content_hash,
-                    "media_type": fetched.media_type,
-                }
-            )
+            raw_path = normalized_path = None
+            if output_path:
+                raw_path, normalized_path = _write_preview_artifact(
+                    output_path, document, fetched
+                )
+            result = {
+                "source_key": document["source_key"],
+                "external_id": document["external_id"],
+                "document_type": document["document_type"],
+                "title": document["title"],
+                "citation": document.get("citation"),
+                "canonical_url": document["canonical_url"],
+                "source_index_url": document.get("source_index_url"),
+                "resolved_url": fetched.resolved_url,
+                "jurisdiction": document["jurisdiction"],
+                "authority_tier": document["authority_tier"],
+                "official_status": document["official_status"],
+                "document_status": document.get("document_status", "current"),
+                "publication_year": document.get("publication_year"),
+                "publication_date": document.get("publication_date"),
+                "effective_date": document.get("effective_date"),
+                "source_version_date": document.get("source_version_date"),
+                "coverage_start_date": document.get("coverage_start_date"),
+                "coverage_end_date": document.get("coverage_end_date"),
+                "acquisition_basis": document["acquisition_basis"],
+                "coverage_notes": document["coverage_notes"],
+                "parser": document["parser"],
+                "parser_version": document["parser_version"],
+                "retrieved_at": fetched.retrieved_at.isoformat(),
+                "source_modified_at": (
+                    fetched.source_modified_at.isoformat()
+                    if fetched.source_modified_at
+                    else None
+                ),
+                "etag": fetched.etag,
+                "media_type": fetched.media_type,
+                "bytes": len(fetched.raw_content),
+                "characters": len(fetched.text),
+                "chunks": len(chunk_text(fetched.text)),
+                "text_extraction_status": extracted_text_status(fetched.text),
+                "embedding_readiness": (
+                    "pending_chunk_review"
+                    if extracted_text_status(fetched.text) == "passed_heuristic"
+                    else "blocked_parser_quality"
+                ),
+                "raw_content_hash": fetched.raw_content_hash,
+                "content_hash": fetched.content_hash,
+                "raw_path": raw_path,
+                "normalized_path": normalized_path,
+            }
+            results.append(result)
             if delay_seconds > 0 and index + 1 < len(documents):
                 time.sleep(delay_seconds)
+    if output_path:
+        report = {
+            "schema_version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "document_count": len(results),
+            "documents": results,
+        }
+        (output_path / "preview-manifest.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n"
+        )
     return results
 
 
@@ -486,11 +650,20 @@ def main() -> None:
     parser.add_argument("--source-key", action="append", dest="source_keys")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--preview", action="store_true", help="Fetch and parse without database writes")
+    parser.add_argument(
+        "--download-dir",
+        help="With --preview, retain raw and normalized artifacts plus preview-manifest.json",
+    )
+    parser.add_argument("--delay-seconds", type=float, default=1.0)
     parser.add_argument("--sync", action="store_true", help="Fetch and upsert documents/chunks")
     parser.add_argument("--db-url")
     args = parser.parse_args()
     if args.preview and args.sync:
         parser.error("choose either --preview or --sync")
+    if args.download_dir and not args.preview:
+        parser.error("--download-dir requires --preview")
+    if args.download_dir and (args.limit is None or args.limit < 1):
+        parser.error("--download-dir requires a positive --limit for a bounded fetch")
 
     catalog = load_catalog(args.catalog)
     manifest = load_manifest(args.manifest)
@@ -498,7 +671,16 @@ def main() -> None:
     documents = selected_documents(manifest, args.source_keys, args.limit)
 
     if args.preview:
-        print(json.dumps(preview(documents), indent=2))
+        print(
+            json.dumps(
+                preview(
+                    documents,
+                    delay_seconds=args.delay_seconds,
+                    output_dir=args.download_dir,
+                ),
+                indent=2,
+            )
+        )
     elif args.sync:
         print(json.dumps(sync_documents(documents, catalog, args.db_url), indent=2))
     else:

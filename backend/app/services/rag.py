@@ -76,6 +76,73 @@ _PUBLIC_JURISDICTIONS = (
     (re.compile(r"\b(?:montana|mt)\b", re.IGNORECASE), "mont", "MT"),
     (re.compile(r"\b(?:california|calif\.?|ca)\b", re.IGNORECASE), "cal", "CA"),
 )
+_US_STATE_NAMES = (
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "florida",
+    "georgia",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "new hampshire",
+    "new jersey",
+    "new mexico",
+    "new york",
+    "north carolina",
+    "north dakota",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "rhode island",
+    "south carolina",
+    "south dakota",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "washington",
+    "west virginia",
+    "wisconsin",
+    "wyoming",
+    "district of columbia",
+)
+_US_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS "
+    "MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV "
+    "WI WY DC".split()
+)
+_US_STATE_NAME_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(name) for name in _US_STATE_NAMES) + r")\b",
+    re.IGNORECASE,
+)
+_FEDERAL_JURISDICTION_RE = re.compile(
+    r"\b(?:federal|united\s+states)\b",
+    re.IGNORECASE,
+)
+_FEDERAL_JURISDICTION_ABBREVIATION_RE = re.compile(r"(?:\bUS\b|\bU\.S\.)")
 
 
 def _retrieval_terms(value: str | None) -> set[str]:
@@ -214,6 +281,44 @@ def _explicit_public_jurisdictions(query: str) -> list[tuple[str, str]]:
         (courtlistener_id, authority_id)
         for _, courtlistener_id, authority_id in matches
     ]
+
+
+def _query_mentions_any_public_jurisdiction(query: str) -> bool:
+    """Detect explicit jurisdiction text even when that corpus is unsupported.
+
+    Unsupported explicit states suppress a trusted default instead of silently
+    searching the wrong state. State abbreviations are only treated as such
+    when uppercase, avoiding common words such as ``in`` and ``or``.
+    """
+    if _explicit_public_jurisdictions(query):
+        return True
+    if (
+        _US_STATE_NAME_RE.search(query or "")
+        or _FEDERAL_JURISDICTION_RE.search(query or "")
+        or _FEDERAL_JURISDICTION_ABBREVIATION_RE.search(query or "")
+    ):
+        return True
+    return any(
+        token in _US_STATE_CODES for token in re.findall(r"\b[A-Z]{2}\b", query or "")
+    )
+
+
+def select_public_jurisdiction_default(
+    matter_jurisdiction: str | None,
+    primary_jurisdictions: list[str] | tuple[str, ...] | None,
+) -> str | None:
+    """Select one trusted, supported default jurisdiction for public retrieval.
+
+    Structured matter context takes precedence over the user's verified global
+    profile. Ambiguous or unsupported values deliberately produce no default;
+    query text remains authoritative and is evaluated separately at search time.
+    """
+    candidates = [matter_jurisdiction, *(primary_jurisdictions or ())]
+    for candidate in candidates:
+        matches = _explicit_public_jurisdictions(str(candidate or ""))
+        if len(matches) == 1:
+            return matches[0][1]
+    return None
 
 
 def infer_public_jurisdictions(query: str, tool_name: str) -> list[str]:
@@ -795,6 +900,7 @@ def _retrieval_value_or_default(
 async def search_courtlistener_mcp(
     query: str,
     top_k: int = 8,
+    default_jurisdiction: str | None = None,
 ) -> list[dict]:
     """Search public authority through the configured CourtListener MCP server."""
     if not settings.MCP_SERVER_URL:
@@ -802,9 +908,20 @@ async def search_courtlistener_mcp(
 
     url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/mcp/tools/call"
     explicit_jurisdictions = _explicit_public_jurisdictions(query)
+    default_target = select_public_jurisdiction_default(
+        default_jurisdiction,
+        None,
+    )
+    target_jurisdictions = explicit_jurisdictions
+    if (
+        not target_jurisdictions
+        and default_target
+        and not _query_mentions_any_public_jurisdiction(query)
+    ):
+        target_jurisdictions = _explicit_public_jurisdictions(default_target)
     requested_jurisdictions = [
         canonical_jurisdiction
-        for _courtlistener_id, canonical_jurisdiction in explicit_jurisdictions
+        for _courtlistener_id, canonical_jurisdiction in target_jurisdictions
     ]
 
     def result_with_coverage(
@@ -828,14 +945,14 @@ async def search_courtlistener_mcp(
         )
 
     search_plan: list[tuple[str, str | None, str | None]] = []
-    if explicit_jurisdictions:
+    if target_jurisdictions:
         for tool_name, key_index in (
             ("search_caselaw", 0),
             ("search_legal_authorities", 1),
         ):
             search_plan.extend(
                 (tool_name, jurisdiction[key_index], jurisdiction[1])
-                for jurisdiction in explicit_jurisdictions
+                for jurisdiction in target_jurisdictions
             )
     else:
         search_plan = [
@@ -875,9 +992,9 @@ async def search_courtlistener_mcp(
         )
 
     chunks_by_jurisdiction: dict[str | None, list[dict]] = {
-        jurisdiction[1]: [] for jurisdiction in explicit_jurisdictions
+        jurisdiction[1]: [] for jurisdiction in target_jurisdictions
     }
-    if not explicit_jurisdictions:
+    if not target_jurisdictions:
         chunks_by_jurisdiction[None] = []
     outcomes: list[dict[str, Any]] = []
     combined: list[dict] = []
@@ -910,7 +1027,7 @@ async def search_courtlistener_mcp(
         return float(chunk.get("relevance_score") or 0.0)
 
     combined.sort(key=relevance, reverse=True)
-    if len(explicit_jurisdictions) <= 1:
+    if len(target_jurisdictions) <= 1:
         return result_with_coverage(combined[:top_k], outcomes)
 
     # Reserve one unique hit per explicitly named jurisdiction before using the
@@ -926,7 +1043,7 @@ async def search_courtlistener_mcp(
             str(chunk.get("content") or ""),
         )
 
-    for _courtlistener_id, canonical_jurisdiction in explicit_jurisdictions:
+    for _courtlistener_id, canonical_jurisdiction in target_jurisdictions:
         candidates = sorted(
             chunks_by_jurisdiction.get(canonical_jurisdiction, []),
             key=relevance,
@@ -1035,6 +1152,7 @@ async def full_rag_query(
     matter_id: str | None = None,
     include_public: bool = True,
     reuse_db_for_usage: bool = False,
+    default_public_jurisdiction: str | None = None,
 ) -> Tuple[str, List[dict]]:
     """
     Hybrid RAG pipeline: dense (pgvector cosine) + FTS (PostgreSQL tsvector)
@@ -1052,11 +1170,14 @@ async def full_rag_query(
     if use_mcp_public:
         # Public authority retrieval does not depend on the tenant embedding.
         # Start it immediately instead of making it wait for embedding + FTS.
+        public_search_kwargs: dict[str, Any] = {
+            "query": question,
+            "top_k": settings.PUBLIC_RAG_TOP_K,
+        }
+        if default_public_jurisdiction:
+            public_search_kwargs["default_jurisdiction"] = default_public_jurisdiction
         public_task = asyncio.create_task(
-            search_courtlistener_mcp(
-                query=question,
-                top_k=settings.PUBLIC_RAG_TOP_K,
-            )
+            search_courtlistener_mcp(**public_search_kwargs)
         )
     if include_public and not use_mcp_public:
         embedding_result, public_embedding_result, fts_result = await asyncio.gather(
@@ -1506,6 +1627,7 @@ async def hybrid_rag_query(
     matter_context_str: str | None = None,
     matter_id: str | None = None,
     matter_cloud_folder: dict | None = None,
+    default_public_jurisdiction: str | None = None,
 ) -> tuple[str, list[dict], list[dict]]:
     """
     Hybrid RAG pipeline: pgvector search + cloud search + SMB file search.
@@ -1527,6 +1649,7 @@ async def hybrid_rag_query(
             user_id=user_id,
             include_public=include_public,
             reuse_db_for_usage=True,
+            default_public_jurisdiction=default_public_jurisdiction,
         )
     except asyncio.CancelledError:
         raise
