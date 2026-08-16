@@ -40,6 +40,9 @@ export default function ChatHeader({
   setUsePremium,
   includePublic,
   setIncludePublic,
+  privacyMode,
+  privacySaving,
+  onTogglePrivacy,
   onExportConversation,
   onSearchMessages,
   onRenameConversation,
@@ -263,6 +266,39 @@ export default function ChatHeader({
                     <span
                       className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
                         includePublic ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              <div className="mt-4 border-t border-brand-line pt-4">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!usePremium || privacyMode}
+                  aria-label="Protect private details"
+                  disabled={!usePremium || privacySaving}
+                  onClick={onTogglePrivacy}
+                  className="flex w-full items-center justify-between gap-4 rounded-xl text-left disabled:cursor-not-allowed disabled:opacity-80"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-brand-ink">Protect private details</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-brand-muted">
+                      {!usePremium
+                        ? 'Standard always redacts detected details and excludes matters, attachments, and private context.'
+                        : 'Redact detected personal details before eligible provider requests.'}
+                    </span>
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                      (!usePremium || privacyMode) ? 'bg-brand-accent' : 'bg-brand-line-2'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                        (!usePremium || privacyMode) ? 'translate-x-6' : 'translate-x-1'
                       }`}
                     />
                   </span>

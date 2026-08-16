@@ -1744,6 +1744,7 @@ async def get_me(
         job_title=user.job_title,
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
+        privacy_mode=user.privacy_mode,
     )
 
 
@@ -1783,6 +1784,7 @@ async def update_me(
         job_title=user.job_title,
         office_location=user.office_location,
         primary_jurisdictions=user.primary_jurisdictions or [],
+        privacy_mode=user.privacy_mode,
     )
 
 

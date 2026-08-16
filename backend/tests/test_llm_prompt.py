@@ -59,6 +59,18 @@ def test_system_prompt_does_not_expose_firm_context_label():
     assert "Never write the phrase" in prompt
 
 
+def test_public_general_prompt_has_no_confidential_context_contract():
+    prompt = LLMService.public_general_system_prompt()
+
+    assert "current user message" in prompt
+    assert (
+        "matter, client, firm documents, conversation history, user profile" in prompt
+    )
+    assert "{tenant_name}" not in prompt
+    assert "{context}" not in prompt
+    assert "SOURCE MATERIALS" not in prompt
+
+
 def test_verified_profile_is_a_distinct_prompt_section_and_privacy_scrubbed():
     user = SimpleNamespace(
         role="admin",  # Authorization role must never become professional context.

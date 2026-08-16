@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 }))
 
 const shellHarness = vi.hoisted(() => ({ value: null }))
+const authHarness = vi.hoisted(() => ({ value: null }))
 const routerHarness = vi.hoisted(() => ({
   query: 'conv=conversation-a',
   navigate: vi.fn(),
@@ -22,6 +23,9 @@ const routerHarness = vi.hoisted(() => ({
 vi.mock('../api', () => apiMocks)
 vi.mock('../components/AppShell', () => ({
   useAppShell: () => shellHarness.value,
+}))
+vi.mock('../App', () => ({
+  useAuth: () => authHarness.value,
 }))
 vi.mock('react-router-dom', () => ({
   useNavigate: () => routerHarness.navigate,
@@ -200,6 +204,10 @@ describe('streamed transcript reconciliation', () => {
 describe('ChatPage guarded stream lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authHarness.value = {
+      user: { privacy_mode: false },
+      refreshUser: vi.fn(),
+    }
     routerHarness.query = 'conv=conversation-a'
     routerHarness.navigate.mockImplementation((target) => {
       const query = String(target || '').split('?')[1] || ''
