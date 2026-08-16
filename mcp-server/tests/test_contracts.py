@@ -350,6 +350,8 @@ def test_repository_searches_general_authority_with_effective_date_filters():
     assert "legal_documents" in sql
     assert "websearch_to_tsquery" in sql
     assert "termination_date" in sql
+    assert "s.enabled IS TRUE" in sql
+    assert "d.document_status = 'current'" in sql
     assert "embedding <=>" not in sql
 
 
@@ -368,6 +370,8 @@ def test_repository_uses_hybrid_search_for_general_authority():
     assert "embedding <=>" in sql
     assert "dense_rank" in sql
     assert "fts_rank" in sql
+    assert "s.enabled IS TRUE" in sql
+    assert "d.document_status = 'current'" in sql
 
 
 def test_repository_normalizes_messy_citation_before_lookup():
@@ -545,6 +549,8 @@ def test_worker_config_locks_mxbai_1024_and_partition_query():
     assert "legal_documents" in authority_sql
     assert "authority_tier" in authority_sql
     assert "d.source_key" in authority_sql
+    assert "s.enabled IS TRUE" in authority_sql
+    assert "d.document_status = 'current'" in authority_sql
 
 
 def test_dispatcher_supports_indexed_jetson_env(monkeypatch):

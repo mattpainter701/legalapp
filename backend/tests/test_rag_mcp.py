@@ -20,6 +20,7 @@ async def test_hybrid_rag_serializes_db_phases_on_supplied_session(monkeypatch):
     async def local(**kwargs):
         assert kwargs["db"] is supplied_db
         assert kwargs["reuse_db_for_usage"] is True
+        assert kwargs["default_public_jurisdiction"] == "ND"
         calls.append("local")
         return "local context", [{"id": "local"}]
 
@@ -41,6 +42,7 @@ async def test_hybrid_rag_serializes_db_phases_on_supplied_session(monkeypatch):
         embedding_service=object(),
         question="contract indemnity",
         tenant_id="00000000-0000-0000-0000-000000000001",
+        default_public_jurisdiction="ND",
     )
 
     assert calls == ["local", "connected"]
@@ -271,6 +273,95 @@ def test_public_search_infers_explicit_california_jurisdiction():
 
     assert rag.infer_public_jurisdiction(query, "search_caselaw") == "cal"
     assert rag.infer_public_jurisdiction(query, "search_legal_authorities") == "CA"
+
+
+def test_public_search_default_prefers_matter_then_verified_user_profile():
+    assert (
+        rag.select_public_jurisdiction_default(
+            "North Dakota",
+            ["California"],
+        )
+        == "ND"
+    )
+    assert rag.select_public_jurisdiction_default(None, ["California"]) == "CA"
+    assert rag.select_public_jurisdiction_default("Unknown forum", ["Minnesota"]) == "MN"
+
+
+@pytest.mark.asyncio
+async def test_public_search_uses_trusted_default_but_explicit_query_overrides(
+    monkeypatch,
+):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    calls = []
+
+    async def fake_search(client, url, tool_name, query, top_k, jurisdiction):
+        calls.append((tool_name, jurisdiction))
+        return (
+            {"content": [{"type": "json", "json": []}]},
+            {
+                "tool_name": tool_name,
+                "status_code": 200,
+                "result_count": 0,
+                "latency_ms": 1,
+            },
+        )
+
+    monkeypatch.setattr(rag.settings, "MCP_SERVER_URL", "http://legal-mcp:8021")
+    monkeypatch.setattr(rag.settings, "MCP_UPSTREAM_API_KEY", "test-key")
+    monkeypatch.setattr(rag.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(rag, "_call_public_mcp_search", fake_search)
+
+    defaulted = await rag.search_courtlistener_mcp(
+        "Analyze divorce venue",
+        default_jurisdiction="North Dakota",
+    )
+    assert set(calls) == {
+        ("search_caselaw", "nd"),
+        ("search_legal_authorities", "ND"),
+    }
+    assert defaulted.requested_jurisdictions == ("ND",)
+
+    calls.clear()
+    lowercase_pronoun = await rag.search_courtlistener_mcp(
+        "Help us analyze divorce venue",
+        default_jurisdiction="North Dakota",
+    )
+    assert set(calls) == {
+        ("search_caselaw", "nd"),
+        ("search_legal_authorities", "ND"),
+    }
+    assert lowercase_pronoun.requested_jurisdictions == ("ND",)
+
+    calls.clear()
+    explicit = await rag.search_courtlistener_mcp(
+        "Analyze California divorce venue",
+        default_jurisdiction="North Dakota",
+    )
+    assert set(calls) == {
+        ("search_caselaw", "cal"),
+        ("search_legal_authorities", "CA"),
+    }
+    assert explicit.requested_jurisdictions == ("CA",)
+
+    calls.clear()
+    unsupported_explicit = await rag.search_courtlistener_mcp(
+        "Analyze Illinois divorce venue",
+        default_jurisdiction="North Dakota",
+    )
+    assert set(calls) == {
+        ("search_caselaw", None),
+        ("search_legal_authorities", None),
+    }
+    assert unsupported_explicit.requested_jurisdictions == ()
 
 
 @pytest.mark.asyncio
@@ -664,7 +755,8 @@ async def test_full_rag_query_uses_mcp_without_legacy_public_embedding(monkeypat
     async def fake_dense(**kwargs):
         return []
 
-    async def fake_mcp(query, top_k):
+    async def fake_mcp(query, top_k, default_jurisdiction):
+        assert default_jurisdiction == "ND"
         return [
             {
                 "id": "courtlistener:abc",
@@ -691,6 +783,7 @@ async def test_full_rag_query_uses_mcp_without_legacy_public_embedding(monkeypat
         question="parental rights methamphetamine",
         tenant_id="00000000-0000-0000-0000-000000000001",
         include_public=True,
+        default_public_jurisdiction="ND",
     )
 
     assert chunks[0]["source"] == "courtlistener_mcp"

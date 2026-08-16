@@ -1575,7 +1575,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
     mock_embeddings,
 ):
     test_user.professional_role = "Attorney"
-    test_user.primary_jurisdictions = ["North Dakota"]
+    test_user.primary_jurisdictions = ["California"]
     matter = Matter(
         id=uuid.uuid4(),
         tenant_id=test_tenant.id,
@@ -1583,6 +1583,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
         slug=f"linked-context-{uuid.uuid4().hex[:8]}",
         matter_name="North Dakota Probate File",
         matter_type="probate",
+        jurisdiction="North Dakota",
         status="open",
     )
     db_session.add(matter)
@@ -1609,6 +1610,7 @@ async def test_send_message_uses_linked_conversation_matter_context(
 
     assert resp.status_code == 201
     assert rag.call_args.kwargs["matter_id"] == matter_id
+    assert rag.call_args.kwargs["default_public_jurisdiction"] == "ND"
     assert "North Dakota Probate File" in mock_llm.call_args.kwargs["context"]
     assert "Professional role: Attorney" in mock_llm.call_args.kwargs[
         "global_user_context"
@@ -1666,6 +1668,7 @@ async def test_disabled_matter_context_keeps_link_but_skips_injection(
     assert response.status_code == 201, response.text
     matter_loader.assert_not_awaited()
     assert rag.call_args.kwargs["matter_id"] is None
+    assert rag.call_args.kwargs["default_public_jurisdiction"] is None
     assert "Do Not Inject This Matter" not in mock_llm.call_args.kwargs["context"]
 
 
