@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { reportError } from '../utils/reportError'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, CreditCard, Download, Printer } from 'lucide-react'
 import { getInvoice, updateInvoice, recordPayment, exportInvoice, syncInvoiceToQBO } from '../api'
@@ -40,7 +41,7 @@ export default function InvoiceDetailPage() {
       setInvoice(data)
       setPaymentForm((p) => ({ ...p, amount: String(data.total - (data.payments?.reduce((s, pm) => s + pm.amount, 0) || 0)) }))
     } catch (err) {
-      console.error('Failed to load invoice', err)
+      reportError('Failed to load invoice', err)
     } finally {
       setLoading(false)
     }
@@ -56,7 +57,7 @@ export default function InvoiceDetailPage() {
     } catch (err) {
       const detail = err?.response?.data?.detail
       toast.error('Invoice status was not updated', { message: typeof detail === 'string' ? detail : 'Please try again.' })
-      console.error('Failed to update status', err)
+      reportError('Failed to update status', err)
     }
   }
 
@@ -79,7 +80,7 @@ export default function InvoiceDetailPage() {
       setShowPayment(false)
       loadInvoice()
     } catch (err) {
-      console.error('Failed to record payment', err)
+      reportError('Failed to record payment', err)
     }
   }
 
@@ -92,7 +93,7 @@ export default function InvoiceDetailPage() {
       a.download = `invoice_${id}.${format}`
       a.click()
     } catch (err) {
-      console.error('Export failed', err)
+      reportError('Export failed', err)
     }
   }
 
@@ -102,7 +103,7 @@ export default function InvoiceDetailPage() {
       await syncInvoiceToQBO(id)
       loadInvoice()
     } catch (err) {
-      console.error('QBO sync failed', err)
+      reportError('QBO sync failed', err)
       toast.error('QuickBooks sync failed', { message: 'Make sure QuickBooks is connected in Admin.' })
     } finally {
       setSyncing(false)
@@ -180,7 +181,7 @@ export default function InvoiceDetailPage() {
                 const url = window.URL.createObjectURL(blob)
                 window.open(url, '_blank')
               } catch (err) {
-                console.error('Print failed', err)
+                reportError('Print failed', err)
               }
             }}
             style={{

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
-  Blocks, Scale, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
+  Blocks, X, BarChart2, CalendarDays, MessageSquare, FileSignature,
   Briefcase, Clock, Receipt, User, Landmark, CheckSquare, Users, ClipboardList,
   Mail, Shield, Rocket, PhoneCall, Lock, LogOut, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'

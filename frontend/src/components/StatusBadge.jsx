@@ -1,4 +1,3 @@
-import React from 'react'
 
 /**
  * Shared status badge for entities (estate, matter, mediation, contact).

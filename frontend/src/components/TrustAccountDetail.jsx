@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, Link } from 'react-router-dom'
 import {
   getTrustAccount, updateTrustAccount, closeTrustAccount,
   createTrustTransaction, listTrustTransactions,
@@ -35,7 +35,6 @@ function typeLabel(type) {
 export default function TrustAccountDetail() {
   const confirmAction = useConfirm()
   const { id } = useParams()
-  const navigate = useNavigate()
 
   const [account, setAccount] = useState(null)
   const [loading, setLoading] = useState(true)

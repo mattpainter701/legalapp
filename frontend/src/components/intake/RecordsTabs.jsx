@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 
 // tabs: [{ key, label, node }]
 export default function RecordsTabs({ tabs }) {

@@ -1,4 +1,3 @@
-import React from 'react'
 import { Check, Download, ExternalLink, FileCheck2, ShieldCheck, X } from 'lucide-react'
 
 const previewBlocks = (preview) => {

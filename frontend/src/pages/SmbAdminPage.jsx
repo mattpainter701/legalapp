@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   getSmbStatus,
   getSmbAgents,
@@ -9,7 +9,6 @@ import {
   createSmbShare,
   deleteSmbShare,
   getSmbActivity,
-  searchSmbFiles,
 } from '../api'
 import { format } from 'date-fns'
 import { Spinner } from '../components/ui'

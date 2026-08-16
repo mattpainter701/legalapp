@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate } from 'react-router-dom'
 import { getPlugins, updatePluginEntitlement } from '../api'
 import { useAuth } from '../App'
@@ -152,7 +153,7 @@ export default function PluginsPage() {
       })
       .catch((err) => {
         setError('Failed to load plugins.')
-        console.error(err)
+        reportError(err)
       })
       .finally(() => setLoading(false))
   }

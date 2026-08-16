@@ -1,4 +1,3 @@
-import React from 'react'
 import { AlertTriangle, CheckCircle2, FileDiff, Info } from 'lucide-react'
 
 const valueFor = (operation, keys) => {

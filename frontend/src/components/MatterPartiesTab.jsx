@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { getMatterParties, addMatterParty, removeMatterParty, getContacts } from '../api'
 import { Users, Plus, Trash2, Star } from 'lucide-react'
 

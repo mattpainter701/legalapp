@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listTrustAccounts, createTrustAccount, getMattersV2 } from '../api'
 import { Landmark, Plus, X, Loader2, Building2, ShieldCheck } from 'lucide-react'

@@ -1,4 +1,3 @@
-import React from 'react'
 import { Trash2, Pin } from 'lucide-react'
 
 export default function ConversationItem({

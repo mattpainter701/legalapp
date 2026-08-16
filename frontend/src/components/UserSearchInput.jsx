@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { searchUsers } from '../api'
 
 function Icon({ d, size = 16, className = '' }) {

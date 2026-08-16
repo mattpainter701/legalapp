@@ -1,4 +1,3 @@
-import React from 'react'
 import { FileSignature, LockKeyhole, ShieldCheck } from 'lucide-react'
 
 const signerIsPending = (signer) => signer?.status === 'pending'

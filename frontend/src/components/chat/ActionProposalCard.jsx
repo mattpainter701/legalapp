@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ClipboardCheck, FileText, LoaderCircle, Mail, Pencil, Send, X } from 'lucide-react'
 import { API_BASE_URL } from '../../api'
 

@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import {
   getMatterV2, updateMatterV2, getMatterTimeline, addMatterNote,
   getMatterBudgetV2, getMatterAssignments, addMatterAssignment,
-  removeMatterAssignment, getMatterMemory, updateMatterMemory,
+  removeMatterAssignment, updateMatterMemory,
   getPlugins, getCommunications, createCommunication,
   setAssignmentActive, getMatterTimeEntries, getConversations, createConversation,
   getTasks, updateTask, getMatterDashboard, getMatterCloudFiles,

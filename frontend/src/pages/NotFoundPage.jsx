@@ -1,4 +1,3 @@
-import React from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Compass, LifeBuoy } from 'lucide-react'
 import MarketingPageLayout from '../components/MarketingChrome'

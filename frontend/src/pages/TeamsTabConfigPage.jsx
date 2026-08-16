@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { app as teamsApp, pages as teamsPages } from '@microsoft/teams-js'
 import { Check, MessageSquare, X } from 'lucide-react'
 import {

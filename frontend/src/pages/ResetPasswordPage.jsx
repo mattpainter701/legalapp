@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { resetPassword } from '../api'
 import FormField from '../components/form/FormField'

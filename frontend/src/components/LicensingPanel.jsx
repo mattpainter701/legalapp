@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getLicensingInfo, toggleUserLicense, toggleUserPremium, updateSeatCount } from '../api'
 
 export default function LicensingPanel() {

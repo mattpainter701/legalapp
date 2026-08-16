@@ -13,7 +13,6 @@ const BACKEND_WRITE_DEBOUNCE_MS = 5000
 const MAX_DRAFTS = 30
 const MAX_RECEIPTS = 30
 const RATE_LIMIT_STATUS = 429
-const LOCAL_ORPHAN_KEEP_MS = 12 * 60 * 60 * 1000
 
 const DRAFT_FORM_DEFAULTS = {
   caller_name: '',
@@ -51,16 +50,6 @@ const newReceiptId = () => {
   return `receipt-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-const parseJson = (raw, fallback) => {
-  if (!raw) return fallback
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed === undefined ? fallback : parsed
-  } catch {
-    return fallback
-  }
-}
-
 const isTransientError = (error) => {
   const status = error?.status || error?.response?.status
   if (!status) return true
@@ -92,12 +81,6 @@ function hasMeaningfulDraftContent(draft) {
     .some((key) => draft[key] !== undefined && draft[key] !== DRAFT_FORM_DEFAULTS[key])
 }
 
-function isRecentLocalOrphan(draft) {
-  const timestamp = draft?._localUpdatedAt || draft?.updated_at || draft?.created_at
-  const age = Date.now() - new Date(timestamp || 0).getTime()
-  return Number.isFinite(age) && age >= 0 && age <= LOCAL_ORPHAN_KEEP_MS
-}
-
 // Defends against a proxy/gateway HTML error page (nginx 429/502/504) ever
 // getting stored verbatim as a receipt's error text — whether from a stale
 // entry saved before this guard existed, or a future regression.
@@ -122,26 +105,6 @@ function normalizeReceipts(list) {
     .filter((entry) => ['ok', 'failed', 'pending'].includes(entry.status))
 }
 
-function normalizeDraftFromStorage(raw) {
-  if (!raw || typeof raw !== 'object') return null
-  return {
-    ...DRAFT_FORM_DEFAULTS,
-    ...raw,
-    ...raw.payload,
-    draft_id: raw.draft_id || newDraftId(),
-    created_at: raw.created_at || nowISO(),
-    updated_at: raw.updated_at || nowISO(),
-    receipts: normalizeReceipts(raw.receipts || raw.payload?.receipts),
-    _dirty: Boolean(raw._dirty),
-    _localOnly: Boolean(raw._localOnly),
-    _syncing: false,
-    _syncError: raw._syncError || null,
-    _backendUpdatedAt: raw._backendUpdatedAt || null,
-    _localUpdatedAt: raw._localUpdatedAt || nowISO(),
-    _syncRetryCount: Number(raw._syncRetryCount || 0),
-  }
-}
-
 function normalizeDraftFromBackend(row) {
   const payload = (row && row.payload) || {}
   return {
@@ -163,14 +126,6 @@ function normalizeDraftFromBackend(row) {
 
 function mergeTime(a, b) {
   return new Date(a || 0).getTime() - new Date(b || 0).getTime()
-}
-
-function isBackendFresher(localDraft, backendDraft) {
-  const localTs = localDraft?._backendUpdatedAt || localDraft?.updated_at
-  const backendTs = backendDraft?._backendUpdatedAt || backendDraft?.updated_at
-  if (!backendTs) return false
-  if (!localTs) return true
-  return new Date(backendTs).getTime() >= new Date(localTs).getTime()
 }
 
 function sortDrafts(list) {
@@ -567,6 +522,5 @@ export default function useCallDrafts({ onToast } = {}) {
     updateReceipt,
     retryReceipt,
     executeOnBlur,
-    flushBackendDraft,
   }
 }

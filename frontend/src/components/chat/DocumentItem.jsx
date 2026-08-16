@@ -1,4 +1,3 @@
-import React from 'react'
 import { FileText, CheckCircle2, Loader2, Trash2 } from 'lucide-react'
 
 export default function DocumentItem({ doc, onDelete }) {
