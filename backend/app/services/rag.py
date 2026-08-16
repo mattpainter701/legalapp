@@ -299,8 +299,7 @@ def _query_mentions_any_public_jurisdiction(query: str) -> bool:
     ):
         return True
     return any(
-        token in _US_STATE_CODES
-        for token in re.findall(r"\b[A-Z]{2}\b", query or "")
+        token in _US_STATE_CODES for token in re.findall(r"\b[A-Z]{2}\b", query or "")
     )
 
 
@@ -1176,9 +1175,7 @@ async def full_rag_query(
             "top_k": settings.PUBLIC_RAG_TOP_K,
         }
         if default_public_jurisdiction:
-            public_search_kwargs["default_jurisdiction"] = (
-                default_public_jurisdiction
-            )
+            public_search_kwargs["default_jurisdiction"] = default_public_jurisdiction
         public_task = asyncio.create_task(
             search_courtlistener_mcp(**public_search_kwargs)
         )
