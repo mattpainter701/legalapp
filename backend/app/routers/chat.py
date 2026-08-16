@@ -2223,9 +2223,7 @@ async def _send_message_under_generation_lock(
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
     cloud_hits = []
-    if public_general:
-        context_str, chunks, cloud_hits = "", [], []
-    elif cached_rag:
+    if cached_rag:
         context_str, chunks, cloud_hits = cached_rag
         cache_hit_rag = True
     else:
@@ -2237,6 +2235,7 @@ async def _send_message_under_generation_lock(
                 tenant_id=str(user.tenant_id),
                 user_id=str(user.id),
                 include_public=body.include_public,
+                include_private=not public_general,
                 cloud_search_service=_get_cloud_search_service(),
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=prepare_provider_text(
@@ -2250,7 +2249,9 @@ async def _send_message_under_generation_lock(
                 default_public_jurisdiction=default_public_jurisdiction,
             )
             await set_tenant_context(db, str(user.tenant_id))
-            if rag_result_is_cacheable(context_str, chunks, cloud_hits):
+            if not public_general and rag_result_is_cacheable(
+                context_str, chunks, cloud_hits
+            ):
                 await cache_manager.set_cached_rag_results(
                     question=body.content,
                     tenant_id=str(user.tenant_id),
@@ -3006,9 +3007,7 @@ async def _stream_message_under_generation_lock(
             cache_hit_rag = False
             cloud_hits = []
             rag_cache_task = None
-            if public_general:
-                context_str, chunks, cloud_hits = "", [], []
-            elif cached_rag:
+            if cached_rag:
                 context_str, chunks, cloud_hits = cached_rag
                 cache_hit_rag = True
             else:
@@ -3020,6 +3019,7 @@ async def _stream_message_under_generation_lock(
                         tenant_id=str(user.tenant_id),
                         user_id=str(user.id),
                         include_public=body.include_public,
+                        include_private=not public_general,
                         cloud_search_service=_get_cloud_search_service(),
                         retrieval_planner=_get_retrieval_planner(),
                         tenant_name=prepare_provider_text(
@@ -3039,7 +3039,9 @@ async def _stream_message_under_generation_lock(
                     )
                     context_str, chunks = "", []
                 await set_tenant_context(db, str(user.tenant_id))
-                if rag_result_is_cacheable(context_str, chunks, cloud_hits):
+                if not public_general and rag_result_is_cacheable(
+                    context_str, chunks, cloud_hits
+                ):
                     # Cache writes should never hold up model time-to-first-token.
                     # Rejoin before stream completion so failures are observed.
                     rag_cache_task = asyncio.create_task(

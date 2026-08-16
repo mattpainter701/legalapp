@@ -48,6 +48,7 @@ from app.services.cloud_search import CloudHit
 from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.llm_routing import resolve_llm_route
 from app.services.matter_context import MatterContextService
+from app.services import rag as rag_service
 from app.services.rag import build_rag_context
 from app.utils.guardrails import (
     consolidate_unverified_model_knowledge,
@@ -103,6 +104,47 @@ def test_privacy_mode_removes_matter_identifiers_and_storage_locations():
     assert "cloud_folder" not in scrubbed
     assert scrubbed["team"][0]["name"] == "[REDACTED]"
     assert scrubbed["recent_notes"][0]["title"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_public_only_rag_skips_tenant_retrieval(monkeypatch):
+    private_fts = AsyncMock(side_effect=AssertionError("tenant FTS must not run"))
+    private_dense = AsyncMock(side_effect=AssertionError("tenant dense must not run"))
+    public_search = AsyncMock(
+        return_value=[
+            {
+                "id": "authority:public-1",
+                "source": "courtlistener",
+                "case_name": "Public Authority",
+                "citation": "123 U.S. 456",
+                "content": "Public legal authority excerpt.",
+                "similarity": 0.9,
+            }
+        ]
+    )
+    monkeypatch.setattr(rag_service.settings, "MCP_SERVER_URL", "")
+    monkeypatch.setattr(rag_service, "search_chunks_fts", private_fts)
+    monkeypatch.setattr(rag_service, "search_chunks", private_dense)
+    monkeypatch.setattr(rag_service, "search_public_chunks", public_search)
+    embedding_service = SimpleNamespace(
+        embed_public_query=AsyncMock(return_value=[0.1, 0.2]),
+        embed_text=AsyncMock(side_effect=AssertionError("tenant embed must not run")),
+    )
+
+    context, chunks = await rag_service.full_rag_query(
+        db=SimpleNamespace(),
+        embedding_service=embedding_service,
+        question="What is the public rule?",
+        tenant_id=str(uuid.uuid4()),
+        include_public=True,
+        include_private=False,
+    )
+
+    assert "Public legal authority excerpt." in context
+    assert [chunk["id"] for chunk in chunks] == ["authority:public-1"]
+    private_fts.assert_not_awaited()
+    private_dense.assert_not_awaited()
+    embedding_service.embed_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
