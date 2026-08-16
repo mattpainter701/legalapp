@@ -44,11 +44,14 @@ currency/effective date, retrieval time, and parser version.
 | IRS | IRB items and estate/gift/fiduciary forms/instructions | Official indexes and documents | `implemented`, `live_verified`, `sync_pending` | IRB issues are split into discrete rulings, procedures, notices, and decisions. IRM public-library expansion remains queued. |
 | GovInfo | CFR/FR, USCOURTS, authenticated packages | API/bulk packages | `queued` | API key and collection-specific package/version handling may apply. |
 | SEC EDGAR | Filing metadata and bounded material-contract exhibits | Official submissions/data endpoints | `queued` | Respect SEC request policy; exhibits are examples/evidence, not model contract authority. |
+| U.S. Courts current Federal Rules | Six national rules publications, including the official forms printed within applicable publications | Reviewed direct-PDF manifest | `preview_verified`, `sync_pending` | Five normalized previews passed; the appellate PDF raw artifact is retained but its broken font-map extraction is blocked from ingestion. Pending/local/superseded rules and separate forms are excluded. |
+| Constitution Annotated | Authenticated 2022 edition plus 2024 supplement | Reviewed GovInfo package PDFs | `preview_verified`, `sync_pending` | Official research analysis, not binding law. Snapshot reaches Supreme Court decisions through July 1, 2024; continuously updated essays require a later structured adapter. |
+| U.S. Tax Court Reports | Volume 165 pamphlets 1-5 with final `T.C.` pagination | Reviewed official pamphlet PDFs | `preview_verified`, `sync_pending` | Published division opinions only. DAWSON, orders, memorandum/summary opinions, and daily search automation remain excluded. |
 
 ## Registry expansion snapshot
 
-The merged catalog now contains 85 source families: the 37-entry base catalog
-plus modular federal/Free Law, ND/MN/SD, and OH/CA/TX/FL/local/secondary
+The merged catalog now contains 87 source families: the 37-entry base catalog
+plus modular federal/Free Law, federal rules/research, ND/MN/SD, and OH/CA/TX/FL/local/secondary
 fragments. Only 13 previously approved/implemented sources remain enabled. New
 research entries are disabled until both an adapter and their source-specific
 access/storage decision are complete. Twenty-five entries carry a structured

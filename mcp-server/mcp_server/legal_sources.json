@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_updated": "2026-07-31",
+  "catalog_updated": "2026-08-15",
   "sources": [
     {
       "source_key": "courtlistener:ohio-caselaw",
@@ -625,8 +625,11 @@
       "coverage_kind": "bounded",
       "parser_version": "ustaxcourt-opinion-v1",
       "practice_areas": ["tax", "estate_planning", "probate", "corporate"],
-      "implementation_status": "review_required",
-      "notes": "Start with the court's daily opinion/pamphlet publications. Do not broadly automate DAWSON search without documented permission."
+      "implementation_status": "preview_verified",
+      "acquisition_basis": "Reviewed allowlist of official Tax Court Reports pamphlet PDFs linked from the court's pamphlets index.",
+      "coverage_notes": "Initial coverage is limited to published T.C. Reports pamphlets in volume 165. DAWSON search, Today’s Opinions, orders, memorandum opinions, summary opinions, and broad case discovery remain out of scope.",
+      "last_policy_review": "2026-08-15",
+      "notes": "Use the court's published pamphlets as the bounded acquisition route. Do not broadly automate DAWSON search without documented permission."
     },
     {
       "source_key": "irs:irm-foia-library",
