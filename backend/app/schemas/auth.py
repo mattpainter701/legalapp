@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.schemas.demo import DemoInfo
+
 from app.utils.password_policy import is_common_password
 
 
@@ -86,6 +88,7 @@ class UserInfo(BaseModel):
     office_location: Optional[str] = None
     primary_jurisdictions: list[str] = Field(default_factory=list)
     privacy_mode: bool = False
+    demo: Optional[DemoInfo] = None
 
     model_config = {"from_attributes": True}
 

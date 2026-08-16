@@ -17,6 +17,7 @@ from app.middleware.tenant import TenantMiddleware
 from app.middleware.module_guard import ModuleGuardMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.access_log import ApiAccessLogMiddleware
+from app.middleware.demo_quota import DemoQuotaMiddleware
 from app.middleware.platform_audit import PlatformAuditMiddleware
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
@@ -82,6 +83,7 @@ from app.routers.office_assistant import router as office_assistant_router
 from app.routers.matter_document_revisions import (
     router as matter_document_revisions_router,
 )
+from app.routers.demo import router as demo_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -315,6 +317,7 @@ app.add_middleware(
         "Mcp-Protocol-Version",
         "Mcp-Session-Id",
         "Last-Event-ID",
+        "X-Idempotency-Key",
     ],
     expose_headers=[
         "Mcp-Session-Id",
@@ -333,6 +336,7 @@ app.add_middleware(RateLimitMiddleware)  # reads app.state.redis at request time
 app.add_middleware(PlatformAuditMiddleware)
 
 app.add_middleware(ApiAccessLogMiddleware)
+app.add_middleware(DemoQuotaMiddleware)
 
 # Request-id middleware is registered last so it is outermost in Starlette's
 # middleware stack and can stamp even middleware-generated responses.
@@ -353,6 +357,7 @@ app.router.routes.append(
     )
 )
 app.include_router(auth_router, prefix="/api")
+app.include_router(demo_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(documents_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")

@@ -58,6 +58,7 @@ from app.services.llm_routing import (
     resolve_llm_route,
 )
 from app.services.billing import calculate_cost
+from app.services.demo_access import reject_demo_premium
 from app.services.memory_service import MemoryService
 from app.services.user_context import build_global_user_context
 from app.services.matter_context import MatterContextService
@@ -2046,6 +2047,7 @@ async def _send_message_under_generation_lock(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    reject_demo_premium(user, body.use_premium_llm)
     use_premium = _premium_for_user(user, body.content, body.use_premium_llm)
     route = await resolve_llm_route(
         db,
@@ -2731,6 +2733,7 @@ async def _stream_message_under_generation_lock(
         )
 
     try:
+        reject_demo_premium(user, body.use_premium_llm)
         use_premium = _premium_for_user(user, body.content, body.use_premium_llm)
         route = await resolve_llm_route(
             db,

@@ -37,3 +37,12 @@ def require_office_pilot_tenant(tenant_id: UUID) -> None:
 
     if tenant_id not in allowed_tenants:
         raise HTTPException(status_code=404, detail="Office assistant is not enabled")
+
+
+def require_office_for_user(user) -> None:
+    """Apply the pilot allowlist, with an explicit synthetic-demo exception."""
+    require_office_globally_enabled()
+    tenant = getattr(user, "tenant", None)
+    if tenant is not None and tenant.billing_tier == "demo":
+        return
+    require_office_pilot_tenant(user.tenant_id)
