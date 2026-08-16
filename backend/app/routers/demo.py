@@ -59,8 +59,12 @@ def _validate_fixture_tenant(tenant: Tenant) -> None:
         tenant.stripe_subscription_id,
         tenant.api_key,
         tenant.api_key_hash,
+        tenant.api_key_prefix,
         tenant.cloud_root_folder,
         tenant.service_account_email,
+        tenant.stripe_subscription_status != "none",
+        tenant.mcp_entitlement_status != "disabled",
+        tenant.mcp_billing_status != "disabled",
     )
     if any(value for value in sensitive):
         raise DemoFixtureError(

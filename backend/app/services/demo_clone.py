@@ -128,6 +128,29 @@ def _safe_file_target(
 async def validate_demo_fixture(db: AsyncSession, fixture_tenant_id: uuid.UUID) -> None:
     """Reject fixture tenants carrying credentials or live integration state."""
     await set_tenant_context(db, str(fixture_tenant_id))
+    tenant_settings = Base.metadata.tables["tenant_settings"]
+    settings_row = (
+        (
+            await db.execute(
+                select(tenant_settings).where(
+                    tenant_settings.c.tenant_id == fixture_tenant_id
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if settings_row and any(
+        (
+            settings_row["use_customer_llm"],
+            settings_row["customer_llm_provider"],
+            settings_row["customer_llm_config"],
+            settings_row["primary_cloud_provider"],
+        )
+    ):
+        raise DemoFixtureError(
+            "Fixture tenant settings contain customer LLM or cloud configuration"
+        )
     for table_name in sorted(SENSITIVE_NEVER_CLONE):
         table = Base.metadata.tables[table_name]
         count = await db.scalar(

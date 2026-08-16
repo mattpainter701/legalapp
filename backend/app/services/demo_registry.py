@@ -150,6 +150,7 @@ SENSITIVE_NEVER_CLONE = frozenset(
         "teams_channel_links",
         "tenant_credentials",
         "tenant_oauth_apps",
+        "tenant_plugin_setups",
         "user_oauth_tokens",
     }
 )
