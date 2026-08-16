@@ -2817,15 +2817,25 @@ async def test_route(
     try:
         mode = preset.get("litellm_mode", "openai_compatible")
         api_mode = _provider_api_mode(body.provider_id, body.model)
-        if mode == "anthropic":
+        if mode == "anthropic" or api_mode == "messages":
+            message_headers = {
+                "x-api-key": plaintext,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            # OpenCode documents these models through the Anthropic-compatible
+            # endpoint but uses its own bearer token. Sending both credential
+            # forms keeps its documented SDK path and its gateway auth working.
+            if mode != "anthropic":
+                message_headers["Authorization"] = f"Bearer {plaintext}"
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(
-                    f"{preset['base_url']}/v1/messages",
-                    headers={
-                        "x-api-key": plaintext,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
+                    (
+                        f"{preset['base_url']}/v1/messages"
+                        if mode == "anthropic"
+                        else f"{preset['base_url']}/messages"
+                    ),
+                    headers=message_headers,
                     json={
                         "model": body.model,
                         "max_tokens": PROVIDER_CANARY_MAX_TOKENS,

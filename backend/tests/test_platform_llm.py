@@ -109,6 +109,17 @@ def test_opencode_go_gpt_uses_responses_api_for_provider_canary():
     assert platform_llm_router._route_compatible("opencode-go", "gpt-5.6-luna") is False
 
 
+def test_opencode_go_anthropic_compatible_models_use_messages_api_for_canary():
+    assert (
+        platform_llm_router._provider_api_mode("opencode-go", "qwen3.8-max")
+        == "messages"
+    )
+    assert (
+        platform_llm_router._provider_api_mode("opencode-go", "minimax-m3")
+        == "messages"
+    )
+
+
 def test_responses_output_text_extracts_openai_response_content():
     payload = {
         "output": [
