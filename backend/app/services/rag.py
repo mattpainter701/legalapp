@@ -53,10 +53,6 @@ async def _connected_providers(
     return [p for p in ("google", "microsoft") if p in providers]
 
 
-class RAGService:
-    pass
-
-
 # ── Reciprocal Rank Fusion ─────────────────────────────────────────────────
 
 
