@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .database import connect
-from .dispatcher import dispatch_targets, jetson_target_specs_from_env
+from .dispatcher import dispatch_targets, jetson_target_specs_from_env, redact_secrets
 
 DEFAULT_LOCK_ID = 2026062901
 
@@ -25,6 +25,8 @@ class SchedulerConfig:
     reverse_tunnel: bool = False
     tunnel_remote_port_base: int = 15434
     advisory_lock_id: int = DEFAULT_LOCK_ID
+    retry_initial_seconds: int = 60
+    retry_max_seconds: int = 900
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,17 @@ class SchedulerResult:
 
 
 DispatchFn = Callable[..., None]
+
+
+def retry_delay_seconds(failure_count: int, initial_seconds: int, maximum_seconds: int) -> int:
+    """Calculate a capped exponential reconnect delay after dispatch failures."""
+
+    if failure_count < 1:
+        return 0
+    initial = max(1, initial_seconds)
+    maximum = max(initial, maximum_seconds)
+    exponent = min(failure_count - 1, maximum.bit_length())
+    return min(initial * (2**exponent), maximum)
 
 
 def acquire_lock(conn, lock_id: int) -> bool:
@@ -56,7 +69,13 @@ def unembedded_chunk_count(conn) -> int:
             """
             SELECT
                 (SELECT COUNT(*) FROM opinion_chunks WHERE embedding IS NULL)
-              + (SELECT COUNT(*) FROM legal_document_chunks WHERE embedding IS NULL)
+              + (SELECT COUNT(*)
+                   FROM legal_document_chunks c
+                   JOIN legal_documents d ON d.id = c.document_id
+                   JOIN legal_sources s ON s.source_key = d.source_key
+                  WHERE c.embedding IS NULL
+                    AND d.document_status = 'current'
+                    AND s.enabled IS TRUE)
             """
         )
         row = cur.fetchone()
@@ -121,14 +140,18 @@ def config_from_env(args: argparse.Namespace) -> SchedulerConfig:
         reverse_tunnel=args.reverse_tunnel,
         tunnel_remote_port_base=args.tunnel_remote_port_base,
         advisory_lock_id=args.advisory_lock_id,
+        retry_initial_seconds=args.retry_initial_seconds,
+        retry_max_seconds=args.retry_max_seconds,
     )
 
 
 def run_scheduler(config: SchedulerConfig) -> None:
+    failure_count = 0
     while True:
         try:
             with connect(config.db_url) as conn:
                 result = run_scheduler_once(conn, config)
+            failure_count = 0
             print(
                 "embedding_scheduler "
                 f"reason={result.reason} "
@@ -137,7 +160,21 @@ def run_scheduler(config: SchedulerConfig) -> None:
                 flush=True,
             )
         except Exception as exc:
-            print(f"embedding_scheduler error={exc}", flush=True)
+            failure_count += 1
+            retry_seconds = retry_delay_seconds(
+                failure_count,
+                config.retry_initial_seconds,
+                config.retry_max_seconds,
+            )
+            print(
+                "embedding_scheduler "
+                f"error_type={type(exc).__name__} "
+                f"error={redact_secrets(exc)} "
+                f"retry_in_seconds={retry_seconds}",
+                flush=True,
+            )
+            time.sleep(retry_seconds)
+            continue
         time.sleep(config.interval_seconds)
 
 
@@ -176,6 +213,16 @@ def parse_args() -> argparse.Namespace:
         "--advisory-lock-id",
         type=int,
         default=int(os.environ.get("EMBEDDING_SCHEDULER_LOCK_ID", str(DEFAULT_LOCK_ID))),
+    )
+    parser.add_argument(
+        "--retry-initial-seconds",
+        type=int,
+        default=int(os.environ.get("EMBEDDING_SCHEDULER_RETRY_INITIAL_SECONDS", "60")),
+    )
+    parser.add_argument(
+        "--retry-max-seconds",
+        type=int,
+        default=int(os.environ.get("EMBEDDING_SCHEDULER_RETRY_MAX_SECONDS", "900")),
     )
     return parser.parse_args()
 

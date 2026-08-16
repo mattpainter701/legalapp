@@ -227,6 +227,13 @@ docker compose -p legalapp -f docker-compose.courtlistener-mcp.yml --profile emb
 Scheduler behavior:
 
 - Runs every `EMBEDDING_SCHEDULER_INTERVAL_SECONDS` seconds, default 900.
+- After a failed SSH/worker session, retries with capped exponential backoff.
+  `EMBEDDING_SCHEDULER_RETRY_INITIAL_SECONDS` defaults to 60 and
+  `EMBEDDING_SCHEDULER_RETRY_MAX_SECONDS` defaults to 900.
+- SSH sessions use connection timeout and server-alive probes so a dead Jetson
+  session returns control to the scheduler instead of hanging indefinitely.
+- Scheduler errors redact database URL credentials and password assignments.
+  Do not add raw command arguments to scheduler or dispatcher exception logs.
 - Schedules embeddings for chunks already present in `opinion_chunks`; it does
   not download or import new CourtListener bulk/API data.
 - Uses `SCHEDULER_DB_URL` for its own lock/count queries inside Docker and
@@ -301,6 +308,24 @@ TRANSFORMERS_CACHE=/data/legalapp-embeddings/model-cache \
   mcp_server.embedding_service:app --host 0.0.0.0 --port 8031
 ```
 
+Production Jetsons should run the checked-in systemd template instead of
+`nohup`. Replace `<jetson-user>` with the account that owns the SSD checkout:
+
+```bash
+sudo install -o root -g root -m 0644 \
+  deploy/jetson/lawhand-query-embedding@.service \
+  /etc/systemd/system/lawhand-query-embedding@.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now lawhand-query-embedding@<jetson-user>.service
+sudo systemctl status lawhand-query-embedding@<jetson-user>.service
+journalctl -u lawhand-query-embedding@<jetson-user>.service -n 100 --no-pager
+```
+
+The unit restarts an unexpectedly exited process after ten seconds and waits for
+the network before starting. It expects the existing
+`/data/legalapp-embeddings` layout.
+Keep port 8031 restricted to the trusted LAN/firewall zone.
+
 Checks:
 
 ```bash
@@ -311,9 +336,21 @@ curl -sf http://127.0.0.1:8021/health
 `courtlistener-mcp` reports `"query_embedding":"configured"` when the env is
 present. The first query after model load can take about 18 seconds while the
 model warms up; later calls should be faster. The service is LAN-only and must
-not be exposed publicly. Current operational gap: it is launched by `nohup`, so
-the next hardening pass should make it a systemd service or Jetson-side Compose
-service.
+not be exposed publicly.
+
+## Scheduler Credential Rotation
+
+Scheduler/dispatcher exceptions no longer include the worker database URL, but
+any credential previously emitted by container logs must be treated as exposed.
+Rotate it only as a coordinated post-deploy operation:
+
+1. Back up the production `.env` and generate a new high-entropy password.
+2. Update the Postgres role password and `COURTLISTENER_DB_PASSWORD` together.
+3. Recreate `courtlistener-mcp`, loaders, and `embedding-scheduler` so every
+   client receives the new value; never print the value in a shell transcript.
+4. Verify MCP health, scheduler lock/count access, and one bounded Jetson worker
+   connection before revoking the old operational session.
+5. Inspect fresh scheduler logs and confirm no URL credentials are present.
 
 ## MCP Search Behavior
 
@@ -420,8 +457,7 @@ Do not prune volumes unless the intent is to delete the corpus/staged S3 cache.
 
 - Add Jetson 1 and Jetson 2 env/SSH keys and relaunch dispatcher with all
   available workers.
-- Convert the Jetson query embedding `nohup` process into systemd or a
-  Jetson-side Compose service.
+- Install and enable the checked-in Jetson query-embedding systemd unit.
 - Run a larger citation import pass with the fixed local-endpoint filter.
 - Expand the state/specialty corpus once disk projections still stay under the
   Docker-volume budget.

@@ -15,8 +15,6 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable
-
 import httpx
 
 from .authority_adapter_store import AdapterDocument, refresh_source_status, upsert_adapter_document
@@ -27,6 +25,7 @@ FULL_XML_URL = "https://www.ecfr.gov/api/versioner/v1/full/{issue_date}/title-{t
 DEFAULT_TITLES = (26, 42)
 USER_AGENT = os.getenv("LEGAL_SOURCE_USER_AGENT") or "LegalApp-eCFRSync/0.1 (+https://github.com/mattpainter701/legalapp)"
 MAX_XML_BYTES = 256 * 1024 * 1024
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -98,38 +97,81 @@ def section_documents(snapshot: ECFRSnapshot, xml: bytes, *, retrieved_at: datet
     return result
 
 
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Return a bounded Retry-After delay or exponential fallback."""
+    if response is not None:
+        retry_after = response.headers.get("retry-after", "").strip()
+        try:
+            return min(60.0, max(0.0, float(retry_after)))
+        except ValueError:
+            pass
+    return float(2 ** attempt)
+
+
 def request_json(client: httpx.Client, url: str, *, retries: int = 3) -> dict:
-    for attempt in range(retries):
-        response = client.get(url)
-        if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < retries:
-            time.sleep(2 ** attempt)
-            continue
-        response.raise_for_status()
-        return response.json()
+    attempts = max(1, retries)
+    for attempt in range(attempts):
+        response: httpx.Response | None = None
+        try:
+            response = client.get(url)
+            if response.status_code in TRANSIENT_STATUS_CODES and attempt + 1 < attempts:
+                time.sleep(_retry_delay(response, attempt))
+                continue
+            response.raise_for_status()
+            return response.json()
+        except httpx.RequestError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(_retry_delay(response, attempt))
     raise AssertionError("unreachable")
 
 
 def fetch_xml(
-    client: httpx.Client, url: str, *, max_bytes: int = MAX_XML_BYTES
+    client: httpx.Client,
+    url: str,
+    *,
+    max_bytes: int = MAX_XML_BYTES,
+    retries: int = 3,
 ) -> bytes:
-    with client.stream("GET", url) as response:
-        response.raise_for_status()
-        announced = response.headers.get("content-length")
-        if announced and int(announced) > max_bytes:
-            raise RuntimeError(f"eCFR XML exceeds {max_bytes} byte bound")
-        raw = bytearray()
-        for block in response.iter_bytes():
-            raw.extend(block)
-            if len(raw) > max_bytes:
-                raise RuntimeError(f"eCFR XML exceeded {max_bytes} byte bound")
-        return bytes(raw)
+    attempts = max(1, retries)
+    for attempt in range(attempts):
+        response: httpx.Response | None = None
+        try:
+            with client.stream("GET", url) as response:
+                if response.status_code in TRANSIENT_STATUS_CODES and attempt + 1 < attempts:
+                    time.sleep(_retry_delay(response, attempt))
+                    continue
+                response.raise_for_status()
+                announced = response.headers.get("content-length")
+                if announced and int(announced) > max_bytes:
+                    raise RuntimeError(f"eCFR XML exceeds {max_bytes} byte bound")
+                raw = bytearray()
+                for block in response.iter_bytes():
+                    raw.extend(block)
+                    if len(raw) > max_bytes:
+                        raise RuntimeError(f"eCFR XML exceeded {max_bytes} byte bound")
+                return bytes(raw)
+        except httpx.RequestError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(_retry_delay(response, attempt))
+    raise AssertionError("unreachable")
 
 
 def checkpoint_path(base: Path, snapshot: ECFRSnapshot) -> Path:
     return base / f"ecfr-{snapshot.partition_key}.json"
 
 
-def sync_title(snapshot: ECFRSnapshot, xml: bytes, *, checkpoint_dir: Path, limit: int | None, dry_run: bool, db_url: str | None) -> list[dict]:
+def sync_title(
+    snapshot: ECFRSnapshot,
+    xml: bytes,
+    *,
+    checkpoint_dir: Path,
+    limit: int | None,
+    dry_run: bool,
+    db_url: str | None,
+    refresh_status: bool = True,
+) -> list[dict]:
     documents = section_documents(snapshot, xml, retrieved_at=datetime.now(timezone.utc))
     documents = documents[:limit] if limit is not None else documents
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +204,8 @@ def sync_title(snapshot: ECFRSnapshot, xml: bytes, *, checkpoint_dir: Path, limi
                          AND document_status = 'current'""",
                     [str(snapshot.title), snapshot.issue_date.isoformat()],
                 )
-        refresh_source_status(conn, {"govinfo:ecfr"})
+        if refresh_status:
+            refresh_source_status(conn, {"govinfo:ecfr"})
         conn.commit()
     return results
 
