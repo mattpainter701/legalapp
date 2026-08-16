@@ -27,6 +27,7 @@ from app.config import get_settings
 settings = get_settings()
 
 AUTH_LIMITS = {
+    "/api/demo/session": (5, 900),
     "/api/auth/login": (10, 600),
     "/api/auth/register": (5, 600),
     "/api/auth/forgot-password": (5, 900),
@@ -49,7 +50,7 @@ SKIP_PREFIXES = (
     "/openapi.json",
 )
 
-TENANT_DAILY_LIMITS = {"flat": 1_000, "payg": 10_000}
+TENANT_DAILY_LIMITS = {"flat": 1_000, "payg": 10_000, "demo": 200}
 USER_HOURLY_LIMIT = 600
 
 # Cheap, high-frequency read endpoints that the SPA polls in the background.

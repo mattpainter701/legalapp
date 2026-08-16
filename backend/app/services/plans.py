@@ -57,6 +57,15 @@ class Plan:
 
 
 PLANS: dict[str, Plan] = {
+    "demo": Plan(
+        id="demo",
+        label="Guided Demo",
+        modules=list(FULL_PLATFORM_MODULES),
+        default_module="matters",
+        billing_tier="demo",
+        public_signup=False,
+        upsell_target="full-platform",
+    ),
     "intake-only": Plan(
         id="intake-only",
         label="Call Intake",
