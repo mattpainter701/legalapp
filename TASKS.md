@@ -1,6 +1,6 @@
 # TASKS.md
 
-## Live Demo Mode — 2026-08-16 (IN PROGRESS)
+## Live Demo Mode — 2026-08-16 (IMPLEMENTED — PR #115)
 
 **Goal:** Give sales an immediate, isolated, populated `/demo` workspace with Standard
 AI, 20 atomic AI-operation reservations, and verified expiry/purge after 72 hours.
@@ -11,19 +11,19 @@ Planning doc: `docs/live-demo-mode-plan-2026-08-16.md`.
       shared tenant-expiry gate
 - [x] `BK25 / DEMO-02` Add the non-public demo plan, explicit demo daily limit, default-off
       configuration, and fail-closed startup validation
-- [ ] `BK25 / DEMO-03` Build a purge-complete table registry where cloning is a safe subset;
+- [x] `BK25 / DEMO-03` Build a purge-complete table registry where cloning is a safe subset;
       enforce metadata coverage and complete identifier remapping
-- [ ] `BK25 / DEMO-04` Clone the synthetic fixture, including tenant-specific document file
+- [x] `BK25 / DEMO-04` Clone the synthetic fixture, including tenant-specific document file
       copies, with no credentials or live integration bindings
-- [ ] `BK25 / DEMO-05` Add the IP-limited `/api/demo/session` endpoint with an advisory lock,
+- [x] `BK25 / DEMO-05` Add the IP-limited `/api/demo/session` endpoint with an advisory lock,
       active cap, RBAC, existing auth cookies, and sanitized audit
-- [ ] `BK25 / DEMO-06` Add atomic quota reservation/settlement across every user-initiated
+- [x] `BK25 / DEMO-06` Add atomic quota reservation/settlement across every user-initiated
       LLM surface
-- [ ] `BK25 / DEMO-07` Add inactive-at-expiry behavior and the verified hourly purge,
+- [x] `BK25 / DEMO-07` Add inactive-at-expiry behavior and the verified hourly purge,
       including clone-excluded rows generated during the demo
-- [ ] `BK25 / DEMO-08` Add `/demo`, the usage/expiry banner, `/auth/me` demo state, and
+- [x] `BK25 / DEMO-08` Add `/demo`, the usage/expiry banner, `/auth/me` demo state, and
       disabled Premium/live-integration controls
-- [ ] `BK25 / DEMO-09` Seed the synthetic fixture and write the salesperson demo runbook
+- [x] `BK25 / DEMO-09` Seed the synthetic fixture and write the salesperson demo runbook
 
 **Separate follow-ups:** trial conversion/expiry, unknown-tier rate-limit behavior, and
 consented CRM retention for demo prospects.

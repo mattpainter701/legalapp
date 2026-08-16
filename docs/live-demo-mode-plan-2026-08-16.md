@@ -1,5 +1,9 @@
 # Live Demo Mode — Revised Plan (2026-08-16)
 
+> Implementation status: complete on draft PR #115. Production remains disabled
+> until the synthetic fixture is seeded and the deployment settings in
+> `docs/LIVE_DEMO_RUNBOOK.md` are configured.
+
 ## Goal
 
 Let a salesperson create an isolated, populated LawHand workspace while standing in a
@@ -233,4 +237,3 @@ Each item is a logical commit:
   not enforced; the follow-up reuses `Tenant.expires_at`.
 - The unknown-billing-tier fail-closed change and `intake_trial` daily-limit reduction.
 - Consented CRM capture/retention for demo prospects.
-
