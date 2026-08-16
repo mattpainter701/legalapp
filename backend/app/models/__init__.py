@@ -1,4 +1,5 @@
 from app.models.tenant import Tenant, TenantSettings
+from app.models.demo_session import DemoSession
 from app.models.platform import PlatformSetting
 from app.models.user import User, UserMemory
 from app.models.document import Document, Chunk
@@ -98,6 +99,7 @@ from app.models.matter_document_revision import MatterDocumentRevision
 __all__ = [
     "Tenant",
     "TenantSettings",
+    "DemoSession",
     "PlatformSetting",
     "User",
     "UserMemory",

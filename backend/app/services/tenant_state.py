@@ -1,5 +1,7 @@
 """Shared fail-closed checks for tenant account state."""
 
+from datetime import datetime, timezone
+
 from typing import TypeVar
 
 from fastapi import HTTPException
@@ -18,4 +20,10 @@ def require_active_tenant(tenant: TenantT | None) -> TenantT:
 
     if tenant is None or not bool(getattr(tenant, "is_active", False)):
         raise HTTPException(status_code=403, detail="Tenant account is inactive")
+    expires_at = getattr(tenant, "expires_at", None)
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=403, detail="Tenant access has expired")
     return tenant
