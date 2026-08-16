@@ -85,6 +85,7 @@ class UserInfo(BaseModel):
     job_title: Optional[str] = None
     office_location: Optional[str] = None
     primary_jurisdictions: list[str] = Field(default_factory=list)
+    privacy_mode: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -96,6 +97,7 @@ class UserProfileUpdate(BaseModel):
     job_title: Optional[str] = Field(default=None, max_length=160)
     office_location: Optional[str] = Field(default=None, max_length=255)
     primary_jurisdictions: Optional[list[str]] = Field(default=None, max_length=25)
+    privacy_mode: Optional[bool] = None
 
     model_config = {"extra": "forbid"}
 

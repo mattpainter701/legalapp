@@ -14,18 +14,21 @@ from app.models.matter_note import MatterNote
 from app.models.plugin import Matter, MatterEvent
 from app.models.retainer import Retainer
 from app.models.tenant import TenantSettings
-from app.services.pii_detection import detect_pii
+from app.services.pii_detection import detect_pii, scrub_pii
 
 
 class MatterContextService:
     """Load and prepare matter context while respecting privacy constraints."""
 
     PII_SENSITIVE_FIELDS = {
+        "matter_name",
         "description",
         "memory_content",
         "counterparty",
         "outside_counsel",
         "initial_posture",
+        "judge",
+        "case_number",
     }
     MAX_DESCRIPTION_CHARS = 2_000
     MAX_MEMORY_CHARS = 4_000
@@ -304,7 +307,7 @@ class MatterContextService:
         if "recent_notes" in scrubbed:
             scrubbed["recent_notes"] = [
                 {
-                    "title": n.get("title", ""),
+                    "title": "[REDACTED]",
                     "content": "[REDACTED]",
                     "note_type": n.get("note_type"),
                 }
@@ -318,14 +321,28 @@ class MatterContextService:
                 scrubbed[field] = "[REDACTED]"
         if "recent_events" in scrubbed:
             scrubbed["recent_events"] = [
-                {**event, "content": "[REDACTED]"}
+                {**event, "title": "[REDACTED]", "content": "[REDACTED]"}
                 for event in scrubbed["recent_events"]
             ]
         if "recent_communications" in scrubbed:
             scrubbed["recent_communications"] = [
-                {**communication, "subject": "[REDACTED]", "summary": "[REDACTED]"}
+                {
+                    **communication,
+                    "subject": "[REDACTED]",
+                    "summary": "[REDACTED]",
+                }
                 for communication in scrubbed["recent_communications"]
             ]
+
+        # Matter/team labels and storage locations often identify a client even
+        # without matching a simple PII regex. Privacy mode preserves only the
+        # neutral workflow metadata needed to orient an approved private route.
+        if "team" in scrubbed:
+            scrubbed["team"] = [
+                {**member, "name": "[REDACTED]"} for member in scrubbed["team"]
+            ]
+        scrubbed["key_dates"] = {}
+        scrubbed.pop("cloud_folder", None)
 
         return scrubbed
 
@@ -497,5 +514,9 @@ class MatterContextService:
 
         scrubbed_data = self.scrub_matter_context(matter_data, privacy_mode)
         context_str = self.format_matter_context(scrubbed_data, scrubbed=privacy_mode)
+        if privacy_mode:
+            # Cover structured values that were not individually redacted
+            # above, including identifiers embedded in neutral-looking labels.
+            context_str = scrub_pii(context_str)
 
         return context_str, has_pii, pii_findings

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
-import { User, Briefcase, Clock, DollarSign, Building } from 'lucide-react'
+import { User, Briefcase, Clock, DollarSign, Building, ShieldCheck } from 'lucide-react'
 import { getMyMatters, getTimeEntries, updateMe } from '../api'
 
 export default function ProfilePage() {
@@ -14,6 +14,8 @@ export default function ProfilePage() {
   })
   const [contextSaving, setContextSaving] = useState(false)
   const [contextStatus, setContextStatus] = useState('')
+  const [privacySaving, setPrivacySaving] = useState(false)
+  const [privacyStatus, setPrivacyStatus] = useState('')
   const jurisdictionText = Array.isArray(user?.primary_jurisdictions)
     ? user.primary_jurisdictions.join(', ')
     : (user?.primary_jurisdictions || '')
@@ -80,6 +82,24 @@ export default function ProfilePage() {
     }
   }
 
+  const togglePrivacyMode = async () => {
+    if (privacySaving) return
+    setPrivacySaving(true)
+    setPrivacyStatus('')
+    try {
+      const nextValue = !Boolean(user?.privacy_mode)
+      await updateMe({ privacy_mode: nextValue })
+      await refreshUser?.()
+      setPrivacyStatus(nextValue
+        ? 'Private-detail protection is on for eligible routes.'
+        : 'Private-detail protection preference is off. Standard still removes detected details and excludes private context.')
+    } catch (err) {
+      setPrivacyStatus(err?.response?.data?.detail || 'Privacy preference could not be saved. Please try again.')
+    } finally {
+      setPrivacySaving(false)
+    }
+  }
+
   return (
     <div style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, marginBottom: 20 }}>Profile</h1>
@@ -142,6 +162,34 @@ export default function ProfilePage() {
           </button>
         </div>
       </form>
+
+      <section style={{ background: '#fff', border: '1px solid #E1D9C9', borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <ShieldCheck size={19} color="#426146" aria-hidden="true" />
+          <div style={{ flex: 1 }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Protect private details</h2>
+            <p style={{ margin: '4px 0 0', color: '#6A7587', fontSize: 13 }}>
+              Redact detected personal details before eligible provider requests. This is a safeguard, not a substitute for an approved private route.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(user?.privacy_mode)}
+            aria-label="Protect private details"
+            onClick={togglePrivacyMode}
+            disabled={privacySaving}
+            style={{ width: 44, height: 24, border: 0, borderRadius: 99, padding: 3, background: user?.privacy_mode ? '#426146' : '#9BA4B2', cursor: privacySaving ? 'wait' : 'pointer', opacity: privacySaving ? 0.65 : 1 }}
+          >
+            <span style={{ display: 'block', width: 18, height: 18, borderRadius: '50%', background: '#fff', transform: user?.privacy_mode ? 'translateX(20px)' : 'translateX(0)', transition: 'transform 150ms ease' }} />
+          </button>
+        </div>
+        <p role="status" style={{ margin: '12px 0 0', color: privacyStatus.includes('could not') ? '#9C4F3F' : '#426146', fontSize: 13 }}>
+          {privacyStatus || (user?.privacy_mode
+            ? 'On: detected personal details are redacted before eligible provider requests.'
+            : 'Off for eligible private routes. Standard remains protected and cannot use matters or attachments.')}
+        </p>
+      </section>
 
       {/* Stats cards */}
       <div style={{

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppShell } from '../components/AppShell'
+import { useAuth } from '../App'
 import ChatHeader from '../components/ChatHeader'
 import ChatInput from '../components/ChatInput'
 import Messages from '../components/Messages'
@@ -13,6 +14,7 @@ import {
   uploadChatAttachment,
   getMattersV2,
   getLegalSourceHealth,
+  updateMe,
 } from '../api'
 import { AlertBanner } from '../components/ui'
 import { Briefcase, ChevronDown, ExternalLink, Link2, Search, Unlink } from 'lucide-react'
@@ -303,6 +305,7 @@ export default function ChatPage() {
   const [searchParams] = useSearchParams()
   const routeConvId = searchParams.get('conv')
   const { conversations, setConversations, activeConvId, setActiveConvId, onConversationDeleted } = useAppShell()
+  const { user, refreshUser } = useAuth()
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -321,6 +324,7 @@ export default function ChatPage() {
   const [notice, setNotice] = useState(null)
   const [sourceHealth, setSourceHealth] = useState(null)
   const [metadataRefreshRetrying, setMetadataRefreshRetrying] = useState(false)
+  const [privacySaving, setPrivacySaving] = useState(false)
   const fileInputRef = useRef(null)
   const matterPickerRef = useRef(null)
   const messagesRef = useRef(messages)
@@ -355,6 +359,19 @@ export default function ChatPage() {
       message: err?.response?.data?.detail || err?.message || fallback,
     })
   }, [])
+
+  const togglePrivacyMode = useCallback(async () => {
+    if (privacySaving || !usePremium) return
+    setPrivacySaving(true)
+    try {
+      await updateMe({ privacy_mode: !Boolean(user?.privacy_mode) })
+      await refreshUser?.()
+    } catch (err) {
+      showErrorNotice('Privacy preference could not be saved', 'Please try again.', err)
+    } finally {
+      setPrivacySaving(false)
+    }
+  }, [privacySaving, refreshUser, showErrorNotice, usePremium, user?.privacy_mode])
 
   const cancelActiveStream = useCallback(({ abort = false, conversationId = null } = {}) => {
     streamRequestRef.current += 1
@@ -706,6 +723,25 @@ export default function ChatPage() {
   const handleSend = useCallback(async () => {
     const content = inputValue.trim()
     if (!content || isSending) return
+    const hasLinkedMatter = conversations.some(
+      (conversation) => conversation.id === activeConvIdRef.current && conversation.matter_id,
+    )
+    if (!usePremium && hasLinkedMatter) {
+      setNotice({
+        type: 'info',
+        title: 'Matter context requires a private route',
+        message: 'Standard AI cannot use matter context. Switch to Premium or unlink the matter and start a general conversation.',
+      })
+      return
+    }
+    if (!usePremium && pendingAttachments.length) {
+      setNotice({
+        type: 'info',
+        title: 'Attachments require a private route',
+        message: 'Standard AI cannot process attachments. Switch to Premium or remove the attachment before sending.',
+      })
+      return
+    }
     if (streamControllersRef.current.size > 0) {
       setNotice({
         type: 'info',
@@ -1011,7 +1047,7 @@ export default function ChatPage() {
         setIsSending(false)
       }
     }
-  }, [inputValue, isSending, includePublic, usePremium, pendingAttachments, setConversations, setActiveConvId, showErrorNotice, navigate, applyRefreshedConversation, loadConversation])
+  }, [inputValue, isSending, includePublic, usePremium, conversations, pendingAttachments, setConversations, setActiveConvId, showErrorNotice, navigate, applyRefreshedConversation, loadConversation])
 
   const handleExportConversation = () => {
     if (messages.length === 0) {
@@ -1160,6 +1196,9 @@ export default function ChatPage() {
             setUsePremium={setUsePremium}
             includePublic={includePublic}
             setIncludePublic={setIncludePublic}
+            privacyMode={Boolean(user?.privacy_mode)}
+            privacySaving={privacySaving}
+            onTogglePrivacy={togglePrivacyMode}
             onExportConversation={handleExportConversation}
             onRenameConversation={handleRenameConversation}
             onRenameError={(message) => setNotice({ type: 'error', title: 'Rename failed', message })}

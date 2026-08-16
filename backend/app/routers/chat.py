@@ -616,6 +616,37 @@ def _premium_for_user(user, query: str, user_requested_premium: bool) -> bool:
     )
 
 
+_PUBLIC_GENERAL_MATTER_DETAIL = (
+    "This conversation is linked to a matter. Standard AI cannot use matter "
+    "context; start an unlinked general conversation or use an approved private route."
+)
+_PUBLIC_GENERAL_ATTACHMENT_DETAIL = (
+    "Standard AI cannot process attachments. Start an unlinked general "
+    "conversation or use an approved private route."
+)
+
+
+def _is_public_general_route(route) -> bool:
+    """Return whether this request must carry only public/general data.
+
+    The route *request* is decisive, not the configured model alias. That
+    keeps a tenant's managed-standard alias or a future provider change from
+    accidentally receiving client context.
+    """
+    return route.requested_route in {"standard", "tenant-standard"}
+
+
+def _assert_public_general_sources_allowed(
+    conv: Conversation,
+    body: MessageCreate,
+) -> None:
+    """Block sources that cannot safely cross the Standard provider boundary."""
+    if conv.matter_id or getattr(body, "matter_id", None):
+        raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_MATTER_DETAIL)
+    if getattr(body, "attachment_ids", None):
+        raise HTTPException(status_code=409, detail=_PUBLIC_GENERAL_ATTACHMENT_DETAIL)
+
+
 async def _matter_for_tenant_or_400(
     db: AsyncSession,
     user,
@@ -2015,7 +2046,23 @@ async def _send_message_under_generation_lock(
     if not _conversation_belongs_to_user(conv, user):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    effective_matter = await _effective_message_matter(db, user, conv, body)
+    use_premium = _premium_for_user(user, body.content, body.use_premium_llm)
+    route = await resolve_llm_route(
+        db,
+        user.tenant_id,
+        use_premium=use_premium,
+        requested_provider=body.provider,
+    )
+    public_general = _is_public_general_route(route)
+    privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
+    if public_general:
+        _assert_public_general_sources_allowed(conv, body)
+
+    effective_matter = (
+        None
+        if public_general
+        else await _effective_message_matter(db, user, conv, body)
+    )
     effective_matter_id = str(effective_matter.id) if effective_matter else None
     matter_context_enabled = bool(
         effective_matter
@@ -2038,7 +2085,7 @@ async def _send_message_under_generation_lock(
     await check_token_budget(db, user)
 
     # 2. Check for PII in user input
-    pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
+    pii_findings = check_pii_in_input(body.content) if privacy_mode else []
 
     # 2a. Save user message with PII flags
     user_msg = Message(
@@ -2063,16 +2110,20 @@ async def _send_message_under_generation_lock(
     )
     recent_messages = list(reversed(history_result.scalars().all()))
     # Exclude the message we just added (it's the last one)
-    history_messages = [
-        {"role": m.role, "content": m.content}
-        for m in recent_messages
-        if str(m.id) != str(user_msg.id)
-    ][-10:]
+    history_messages = (
+        []
+        if public_general
+        else [
+            {"role": m.role, "content": m.content}
+            for m in recent_messages
+            if str(m.id) != str(user_msg.id)
+        ][-10:]
+    )
     llm_messages = prepare_provider_messages(
         history_messages + [{"role": "user", "content": body.content}],
-        user.privacy_mode,
+        privacy_mode,
     )
-    provider_question = prepare_provider_text(body.content, user.privacy_mode)
+    provider_question = prepare_provider_text(body.content, privacy_mode)
 
     # The submitted turn is durable before retrieval/provider work begins. If a
     # downstream dependency fails, the user's message remains visible and can
@@ -2091,7 +2142,7 @@ async def _send_message_under_generation_lock(
         cached = await cache_manager.get_cached_matter_context(
             matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         if cached:
             return cached, [], context_matter_cloud_folder, True
@@ -2099,14 +2150,14 @@ async def _send_message_under_generation_lock(
             db=db,
             matter_id=context_matter_id,
             tenant_id=user.tenant_id,
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
             matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         return mcs, mpf if mpf else [], context_matter_cloud_folder, False
 
@@ -2123,43 +2174,58 @@ async def _send_message_under_generation_lock(
             db=db, user_id=user.id
         )
 
-    async def _resolve_nonstream_route():
-        return await resolve_llm_route(
-            db,
-            user.tenant_id,
-            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-            requested_provider=body.provider,
+    if public_general:
+        (
+            matter_context_str,
+            matter_pii_findings,
+            matter_cloud_folder,
+            cache_hit_matter,
+        ) = (
+            "",
+            [],
+            None,
+            False,
         )
-
-    (
-        matter_context_str,
-        matter_pii_findings,
-        matter_cloud_folder,
-        cache_hit_matter,
-    ) = await _load_matter_context_nonstream()
-    attachment_context, attachment_sources = await _load_attachment_context_nonstream()
-    memory_context = await _load_memory_context_nonstream()
-    route = await _resolve_nonstream_route()
+        attachment_context, attachment_sources = "", []
+        memory_context = ""
+    else:
+        (
+            matter_context_str,
+            matter_pii_findings,
+            matter_cloud_folder,
+            cache_hit_matter,
+        ) = await _load_matter_context_nonstream()
+        (
+            attachment_context,
+            attachment_sources,
+        ) = await _load_attachment_context_nonstream()
+        memory_context = await _load_memory_context_nonstream()
     rag_cache_revision = str(
         await db.scalar(
             select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
         )
         or 0
     )
-    cached_rag = await cache_manager.get_cached_rag_results(
-        question=body.content,
-        tenant_id=str(user.tenant_id),
-        user_id=str(user.id),
-        skill=body.skill if hasattr(body, "skill") else user.default_skill,
-        include_public=body.include_public,
-        scope_key=rag_scope_key,
-        corpus_revision=rag_cache_revision,
+    cached_rag = (
+        None
+        if public_general
+        else await cache_manager.get_cached_rag_results(
+            question=body.content,
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            skill=body.skill if hasattr(body, "skill") else user.default_skill,
+            include_public=body.include_public,
+            scope_key=rag_scope_key,
+            corpus_revision=rag_cache_revision,
+        )
     )
 
     # 4. RAG: embed question, search chunks, build context (with caching)
     cache_hit_rag = False
     cloud_hits = []
-    if cached_rag:
+    if public_general:
+        context_str, chunks, cloud_hits = "", [], []
+    elif cached_rag:
         context_str, chunks, cloud_hits = cached_rag
         cache_hit_rag = True
     else:
@@ -2174,10 +2240,10 @@ async def _send_message_under_generation_lock(
                 cloud_search_service=_get_cloud_search_service(),
                 retrieval_planner=_get_retrieval_planner(),
                 tenant_name=prepare_provider_text(
-                    user.tenant.name if user.tenant else "Legal", user.privacy_mode
+                    user.tenant.name if user.tenant else "Legal", privacy_mode
                 ),
                 matter_context_str=prepare_provider_text(
-                    matter_context_str, user.privacy_mode
+                    matter_context_str, privacy_mode
                 ),
                 matter_id=context_matter_id,
                 matter_cloud_folder=matter_cloud_folder,
@@ -2209,7 +2275,7 @@ async def _send_message_under_generation_lock(
                 user_id=user.id,
                 tenant_id=user.tenant_id,
                 request=request,
-                query_text=body.content,
+                query_text=provider_question,
                 conversation_id=conv.id,
                 severity="error",
             )
@@ -2222,19 +2288,27 @@ async def _send_message_under_generation_lock(
         matter_context_str,
         context_str,
     )
-    context_str = prepare_provider_text(context_str, user.privacy_mode)
-    memory_context = prepare_provider_text(memory_context, user.privacy_mode)
-    global_user_context = build_global_user_context(user)
+    context_str = prepare_provider_text(context_str, privacy_mode)
+    memory_context = prepare_provider_text(memory_context, privacy_mode)
+    global_user_context = "" if public_general else build_global_user_context(user)
 
     # 5. Call LLM. Conversational answers are deliberately not response-cached:
     # history and injected memory are part of the semantic input, and serving a
     # stale answer is a worse failure mode than paying for a fresh completion.
-    tenant_name = prepare_provider_text(
-        user.tenant.name if user.tenant else "Legal", user.privacy_mode
+    tenant_name = (
+        "Legal"
+        if public_general
+        else prepare_provider_text(
+            user.tenant.name if user.tenant else "Legal", privacy_mode
+        )
     )
-    user_first_name = prepare_provider_text(
-        (user.full_name or "").split()[0] if user.full_name else "",
-        user.privacy_mode,
+    user_first_name = (
+        ""
+        if public_general
+        else prepare_provider_text(
+            (user.full_name or "").split()[0] if user.full_name else "",
+            privacy_mode,
+        )
     )
 
     cache_hit_llm = False
@@ -2247,7 +2321,7 @@ async def _send_message_under_generation_lock(
             context=context_str,
             memory_context=memory_context,
             global_user_context=global_user_context,
-            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            use_premium=use_premium,
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
@@ -2259,9 +2333,14 @@ async def _send_message_under_generation_lock(
                 user_id=user.id,
                 conversation_id=conv.id,
                 operation_type="chat",
-                matter_id=effective_matter_id,
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                matter_id=None if public_general else effective_matter_id,
+                skill=None
+                if public_general
+                else (body.skill if hasattr(body, "skill") else user.default_skill),
+                premium=use_premium,
+            ),
+            system_prompt_override=(
+                llm_service.public_general_system_prompt() if public_general else None
             ),
             usage_sink=llm_usage,
         )
@@ -2274,7 +2353,7 @@ async def _send_message_under_generation_lock(
             user_id=user.id,
             tenant_id=user.tenant_id,
             request=request,
-            query_text=body.content,
+            query_text=provider_question,
             conversation_id=conv.id,
             severity="error",
         )
@@ -2285,7 +2364,7 @@ async def _send_message_under_generation_lock(
 
     # 6. Apply guardrails (check for AI self-disclosure and PII in privacy mode)
     cleaned_response, needs_retry, response_pii = apply_guardrails(
-        response_text, privacy_mode=user.privacy_mode
+        response_text, privacy_mode=privacy_mode
     )
 
     if needs_retry:
@@ -2302,7 +2381,7 @@ async def _send_message_under_generation_lock(
             context=context_str,
             memory_context=memory_context,
             global_user_context=global_user_context,
-            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+            use_premium=use_premium,
             provider=route.provider,
             model=route.model,
             user_name=user_first_name,
@@ -2314,14 +2393,19 @@ async def _send_message_under_generation_lock(
                 user_id=user.id,
                 conversation_id=conv.id,
                 operation_type="chat_retry",
-                matter_id=effective_matter_id,
-                skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                matter_id=None if public_general else effective_matter_id,
+                skill=None
+                if public_general
+                else (body.skill if hasattr(body, "skill") else user.default_skill),
+                premium=use_premium,
+            ),
+            system_prompt_override=(
+                llm_service.public_general_system_prompt() if public_general else None
             ),
             usage_sink=llm_usage,
         )
         cleaned_response, _, response_pii = apply_guardrails(
-            response_text2, privacy_mode=user.privacy_mode
+            response_text2, privacy_mode=privacy_mode
         )
         tokens_in += tokens_in2
         tokens_out += tokens_out2
@@ -2407,16 +2491,20 @@ async def _send_message_under_generation_lock(
     )
     await set_tenant_context(db, str(user.tenant_id))
 
-    proposed_actions, action_note = await _propose_followthrough_actions(
-        db,
-        user,
-        question=body.content,
-        answer=cleaned_response,
-        rag_context=context_str,
-        route=route,
-        conversation_id=conv.id,
-        use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-        sources=source_dicts,
+    proposed_actions, action_note = (
+        ([], "")
+        if public_general
+        else await _propose_followthrough_actions(
+            db,
+            user,
+            question=body.content,
+            answer=cleaned_response,
+            rag_context=context_str,
+            route=route,
+            conversation_id=conv.id,
+            use_premium=use_premium,
+            sources=source_dicts,
+        )
     )
     if action_note:
         cleaned_response = f"{cleaned_response}{action_note}"
@@ -2470,7 +2558,7 @@ async def _send_message_under_generation_lock(
         tokens_out=tokens_out,
         cost_usd=cost,
         operation_type="chat",
-        query_text=retained_gateway_query_text(body.content),
+        query_text=retained_gateway_query_text(provider_question),
         rag_chunks_retrieved=len(chunks),
         rag_source_ids=[c["id"] for c in chunks if c.get("id")] + cloud_source_ids,
         ip_address=request.client.host if request.client else None,
@@ -2486,14 +2574,15 @@ async def _send_message_under_generation_lock(
     generation_state.assistant_turn_committed = True
 
     # Trigger auto-memory generation in background (non-blocking)
-    background_tasks.add_task(
-        _trigger_auto_memory_generation_bg,
-        user_id=str(user.id),
-        tenant_id=str(user.tenant_id),
-        conversation_id=str(conv.id),
-        tenant_name=user.tenant.name if user.tenant else "Legal",
-        privacy_mode=user.privacy_mode,
-    )
+    if not public_general:
+        background_tasks.add_task(
+            _trigger_auto_memory_generation_bg,
+            user_id=str(user.id),
+            tenant_id=str(user.tenant_id),
+            conversation_id=str(conv.id),
+            tenant_name=user.tenant.name if user.tenant else "Legal",
+            privacy_mode=privacy_mode,
+        )
 
     return _message_to_response(assistant_msg)
 
@@ -2641,7 +2730,22 @@ async def _stream_message_under_generation_lock(
         )
 
     try:
-        effective_matter = await _effective_message_matter(db, user, conv, body)
+        use_premium = _premium_for_user(user, body.content, body.use_premium_llm)
+        route = await resolve_llm_route(
+            db,
+            user.tenant_id,
+            use_premium=use_premium,
+            requested_provider=body.provider,
+        )
+        public_general = _is_public_general_route(route)
+        privacy_mode = public_general or bool(getattr(user, "privacy_mode", False))
+        if public_general:
+            _assert_public_general_sources_allowed(conv, body)
+        effective_matter = (
+            None
+            if public_general
+            else await _effective_message_matter(db, user, conv, body)
+        )
     except HTTPException as matter_exc:
         return StreamingResponse(
             _error_stream(matter_exc.detail),
@@ -2675,7 +2779,7 @@ async def _stream_message_under_generation_lock(
         )
 
     # 2. Check for PII in user input
-    pii_findings = check_pii_in_input(body.content) if user.privacy_mode else []
+    pii_findings = check_pii_in_input(body.content) if privacy_mode else []
 
     # 2a. Save user message with PII flags
     user_msg = Message(
@@ -2699,16 +2803,20 @@ async def _stream_message_under_generation_lock(
         .limit(11)
     )
     recent_messages = list(reversed(history_result.scalars().all()))
-    history_messages = [
-        {"role": m.role, "content": m.content}
-        for m in recent_messages
-        if str(m.id) != str(user_msg.id)
-    ][-10:]
+    history_messages = (
+        []
+        if public_general
+        else [
+            {"role": m.role, "content": m.content}
+            for m in recent_messages
+            if str(m.id) != str(user_msg.id)
+        ][-10:]
+    )
     llm_messages = prepare_provider_messages(
         history_messages + [{"role": "user", "content": body.content}],
-        user.privacy_mode,
+        privacy_mode,
     )
-    provider_question = prepare_provider_text(body.content, user.privacy_mode)
+    provider_question = prepare_provider_text(body.content, privacy_mode)
 
     # Commit before returning the StreamingResponse. The generator can fail or
     # the client can disconnect after this point without losing the user turn.
@@ -2726,7 +2834,7 @@ async def _stream_message_under_generation_lock(
         cached = await cache_manager.get_cached_matter_context(
             matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         if cached:
             return cached, [], context_matter_cloud_folder, True
@@ -2734,14 +2842,14 @@ async def _stream_message_under_generation_lock(
             db=db,
             matter_id=context_matter_id,
             tenant_id=user.tenant_id,
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         await cache_manager.set_cached_matter_context(
             matter_id=context_matter_id,
             tenant_id=str(user.tenant_id),
             context=mcs,
             expertise_level=user.expertise_level,
-            privacy_mode=user.privacy_mode,
+            privacy_mode=privacy_mode,
         )
         return mcs, mpf if mpf else [], context_matter_cloud_folder, False
 
@@ -2758,33 +2866,33 @@ async def _stream_message_under_generation_lock(
             db=db, user_id=user.id
         )
 
-    async def _resolve_stream_route():
-        return await resolve_llm_route(
-            db,
-            user.tenant_id,
-            use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-            requested_provider=body.provider,
-        )
-
     async def _load_stream_prework():
-        matter_context = await _load_matter_context()
-        attachment_context = await _load_attachment_context_for_stream()
-        memory_context = await _load_memory_context_for_stream()
-        route = await _resolve_stream_route()
+        if public_general:
+            matter_context = ("", [], None, False)
+            attachment_context = ("", [])
+            memory_context = ""
+        else:
+            matter_context = await _load_matter_context()
+            attachment_context = await _load_attachment_context_for_stream()
+            memory_context = await _load_memory_context_for_stream()
         rag_cache_revision = str(
             await db.scalar(
                 select(Tenant.rag_corpus_revision).where(Tenant.id == user.tenant_id)
             )
             or 0
         )
-        cached_rag = await cache_manager.get_cached_rag_results(
-            question=body.content,
-            tenant_id=str(user.tenant_id),
-            user_id=str(user.id),
-            skill=body.skill if hasattr(body, "skill") else user.default_skill,
-            include_public=body.include_public,
-            scope_key=rag_scope_key,
-            corpus_revision=rag_cache_revision,
+        cached_rag = (
+            None
+            if public_general
+            else await cache_manager.get_cached_rag_results(
+                question=body.content,
+                tenant_id=str(user.tenant_id),
+                user_id=str(user.id),
+                skill=body.skill if hasattr(body, "skill") else user.default_skill,
+                include_public=body.include_public,
+                scope_key=rag_scope_key,
+                corpus_revision=rag_cache_revision,
+            )
         )
         return (
             matter_context,
@@ -2798,11 +2906,17 @@ async def _stream_message_under_generation_lock(
     attachment_count = len(body.attachment_ids or [])
 
     # Create the streaming generator
-    stream_user_first_name = prepare_provider_text(
-        (user.full_name or "").split()[0] if user.full_name else "",
-        user.privacy_mode,
+    stream_user_first_name = (
+        ""
+        if public_general
+        else prepare_provider_text(
+            (user.full_name or "").split()[0] if user.full_name else "",
+            privacy_mode,
+        )
     )
-    stream_global_user_context = build_global_user_context(user)
+    stream_global_user_context = (
+        "" if public_general else build_global_user_context(user)
+    )
     # Keep primitive identifiers for the exception path. A rollback expires ORM
     # instances; reading user/tenant attributes afterward can trigger async IO
     # outside SQLAlchemy's greenlet and hide the original stream failure.
@@ -2892,7 +3006,9 @@ async def _stream_message_under_generation_lock(
             cache_hit_rag = False
             cloud_hits = []
             rag_cache_task = None
-            if cached_rag:
+            if public_general:
+                context_str, chunks, cloud_hits = "", [], []
+            elif cached_rag:
                 context_str, chunks, cloud_hits = cached_rag
                 cache_hit_rag = True
             else:
@@ -2908,10 +3024,10 @@ async def _stream_message_under_generation_lock(
                         retrieval_planner=_get_retrieval_planner(),
                         tenant_name=prepare_provider_text(
                             user.tenant.name if user.tenant else "Legal",
-                            user.privacy_mode,
+                            privacy_mode,
                         ),
                         matter_context_str=prepare_provider_text(
-                            matter_context_str, user.privacy_mode
+                            matter_context_str, privacy_mode
                         ),
                         matter_id=context_matter_id,
                         matter_cloud_folder=matter_cloud_folder,
@@ -2990,10 +3106,14 @@ async def _stream_message_under_generation_lock(
                 matter_context_str,
                 context_str,
             )
-            context_str = prepare_provider_text(context_str, user.privacy_mode)
-            memory_context = prepare_provider_text(memory_context, user.privacy_mode)
-            tenant_name = prepare_provider_text(
-                user.tenant.name if user.tenant else "Legal", user.privacy_mode
+            context_str = prepare_provider_text(context_str, privacy_mode)
+            memory_context = prepare_provider_text(memory_context, privacy_mode)
+            tenant_name = (
+                "Legal"
+                if public_general
+                else prepare_provider_text(
+                    user.tenant.name if user.tenant else "Legal", privacy_mode
+                )
             )
             generation_started_at = time.monotonic()
             drafting_label = (
@@ -3019,7 +3139,7 @@ async def _stream_message_under_generation_lock(
                 context=context_str,
                 memory_context=memory_context,
                 global_user_context=stream_global_user_context,
-                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                use_premium=use_premium,
                 provider=route.provider,
                 model=route.model,
                 user_name=stream_user_first_name,
@@ -3031,9 +3151,16 @@ async def _stream_message_under_generation_lock(
                     user_id=user.id,
                     conversation_id=conv.id,
                     operation_type="chat_stream",
-                    matter_id=effective_matter_id,
-                    skill=body.skill if hasattr(body, "skill") else user.default_skill,
-                    premium=_premium_for_user(user, body.content, body.use_premium_llm),
+                    matter_id=None if public_general else effective_matter_id,
+                    skill=None
+                    if public_general
+                    else (body.skill if hasattr(body, "skill") else user.default_skill),
+                    premium=use_premium,
+                ),
+                system_prompt_override=(
+                    llm_service.public_general_system_prompt()
+                    if public_general
+                    else None
                 ),
                 usage_sink=stream_usage,
             ):
@@ -3070,7 +3197,7 @@ async def _stream_message_under_generation_lock(
 
             # Apply guardrails to full response
             cleaned_response, needs_retry, response_pii = apply_guardrails(
-                accumulated_text, privacy_mode=user.privacy_mode
+                accumulated_text, privacy_mode=privacy_mode
             )
 
             if needs_retry:
@@ -3096,9 +3223,7 @@ async def _stream_message_under_generation_lock(
                     context=context_str,
                     memory_context=memory_context,
                     global_user_context=stream_global_user_context,
-                    use_premium=_premium_for_user(
-                        user, body.content, body.use_premium_llm
-                    ),
+                    use_premium=use_premium,
                     provider=route.provider,
                     model=route.model,
                     user_name=stream_user_first_name,
@@ -3110,13 +3235,18 @@ async def _stream_message_under_generation_lock(
                         user_id=user.id,
                         conversation_id=conv.id,
                         operation_type="chat_stream_retry",
-                        matter_id=effective_matter_id,
-                        skill=body.skill
-                        if hasattr(body, "skill")
-                        else user.default_skill,
-                        premium=_premium_for_user(
-                            user, body.content, body.use_premium_llm
+                        matter_id=None if public_general else effective_matter_id,
+                        skill=None
+                        if public_general
+                        else (
+                            body.skill if hasattr(body, "skill") else user.default_skill
                         ),
+                        premium=use_premium,
+                    ),
+                    system_prompt_override=(
+                        llm_service.public_general_system_prompt()
+                        if public_general
+                        else None
                     ),
                     usage_sink=retry_usage,
                 ):
@@ -3132,7 +3262,7 @@ async def _stream_message_under_generation_lock(
                     stream_usage["model"] = retry_usage["model"]
 
                 cleaned_response, _, response_pii = apply_guardrails(
-                    accumulated_text, privacy_mode=user.privacy_mode
+                    accumulated_text, privacy_mode=privacy_mode
                 )
 
             # Build source citations from chunks
@@ -3257,16 +3387,20 @@ async def _stream_message_under_generation_lock(
 
             # Mirrors send_message. The action pass runs after the answer has
             # already streamed, so a proposal never delays the first token.
-            proposed_actions, action_note = await _propose_followthrough_actions(
-                db,
-                user,
-                question=body.content,
-                answer=cleaned_response,
-                rag_context=context_str,
-                route=route,
-                conversation_id=conv.id,
-                use_premium=_premium_for_user(user, body.content, body.use_premium_llm),
-                sources=source_dicts,
+            proposed_actions, action_note = (
+                ([], "")
+                if public_general
+                else await _propose_followthrough_actions(
+                    db,
+                    user,
+                    question=body.content,
+                    answer=cleaned_response,
+                    rag_context=context_str,
+                    route=route,
+                    conversation_id=conv.id,
+                    use_premium=use_premium,
+                    sources=source_dicts,
+                )
             )
             if action_note:
                 # Persist the same text that will be streamed after commit so a
@@ -3339,7 +3473,7 @@ async def _stream_message_under_generation_lock(
                 tokens_out=tokens_out,
                 cost_usd=cost,
                 operation_type="chat_stream",
-                query_text=retained_gateway_query_text(body.content),
+                query_text=retained_gateway_query_text(provider_question),
                 rag_chunks_retrieved=len(chunks),
                 rag_source_ids=[c["id"] for c in chunks if c.get("id")]
                 + cloud_source_ids,
@@ -3376,14 +3510,15 @@ async def _stream_message_under_generation_lock(
 
             # Run memory generation after the response body releases the pinned
             # turn connection; it must not consume a second pool slot in-flight.
-            background_tasks.add_task(
-                _trigger_auto_memory_generation_bg,
-                user_id=str(user.id),
-                tenant_id=str(user.tenant_id),
-                conversation_id=str(conv.id),
-                tenant_name=user.tenant.name if user.tenant else "Legal",
-                privacy_mode=user.privacy_mode,
-            )
+            if not public_general:
+                background_tasks.add_task(
+                    _trigger_auto_memory_generation_bg,
+                    user_id=str(user.id),
+                    tenant_id=str(user.tenant_id),
+                    conversation_id=str(conv.id),
+                    tenant_name=user.tenant.name if user.tenant else "Legal",
+                    privacy_mode=privacy_mode,
+                )
 
             # Send completion marker
             yield "data: [STREAM_COMPLETE]\n\n"
@@ -3404,7 +3539,7 @@ async def _stream_message_under_generation_lock(
                 user_id=stream_user_id,
                 tenant_id=stream_tenant_id,
                 request=request,
-                query_text=body.content,
+                query_text=provider_question,
                 conversation_id=stream_conversation_id,
                 severity="error",
             )

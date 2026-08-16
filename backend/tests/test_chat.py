@@ -24,6 +24,8 @@ from app.routers.chat import (
     _join_context_sections,
     _mark_cited_sources,
     _message_to_response,
+    _is_public_general_route,
+    _assert_public_general_sources_allowed,
     _partition_stream_source_previews,
     _propose_followthrough_actions,
     _source_dict_from_chunk,
@@ -45,6 +47,7 @@ from app.models.user import User
 from app.services.cloud_search import CloudHit
 from app.services.corpus_revision import advance_rag_corpus_revision
 from app.services.llm_routing import resolve_llm_route
+from app.services.matter_context import MatterContextService
 from app.services.rag import build_rag_context
 from app.utils.guardrails import (
     consolidate_unverified_model_knowledge,
@@ -52,6 +55,54 @@ from app.utils.guardrails import (
     reconcile_retrieved_source_attribution,
     validate_citation_confidence,
 )
+
+
+def test_standard_route_is_public_general_even_with_a_managed_alias():
+    assert _is_public_general_route(
+        SimpleNamespace(requested_route="standard", gateway_alias="cheap-managed-model")
+    )
+    assert _is_public_general_route(
+        SimpleNamespace(requested_route="tenant-standard", gateway_alias="firm-default")
+    )
+    assert not _is_public_general_route(
+        SimpleNamespace(requested_route="premium", gateway_alias="premium-model")
+    )
+
+
+def test_standard_rejects_matter_or_attachment_sources_before_loading_context():
+    with pytest.raises(HTTPException, match="linked to a matter"):
+        _assert_public_general_sources_allowed(
+            SimpleNamespace(matter_id=uuid.uuid4()), MessageCreate(content="Question")
+        )
+
+    with pytest.raises(HTTPException, match="cannot process attachments"):
+        _assert_public_general_sources_allowed(
+            SimpleNamespace(matter_id=None),
+            MessageCreate(content="Question", attachment_ids=[str(uuid.uuid4())]),
+        )
+
+
+def test_privacy_mode_removes_matter_identifiers_and_storage_locations():
+    scrubbed = MatterContextService().scrub_matter_context(
+        {
+            "matter_name": "Smith divorce",
+            "case_number": "2026-CV-123",
+            "judge": "Judge Jones",
+            "key_dates": {"Jane Smith deposition": "2026-09-10"},
+            "cloud_folder": {"onedrive": {"url": "https://private.example/file"}},
+            "team": [{"name": "Jane Lawyer", "role": "lead"}],
+            "recent_notes": [{"title": "Call with Jane Smith", "content": "secret"}],
+        },
+        privacy_mode=True,
+    )
+
+    assert scrubbed["matter_name"] == "[REDACTED]"
+    assert scrubbed["case_number"] == "[REDACTED]"
+    assert scrubbed["judge"] == "[REDACTED]"
+    assert scrubbed["key_dates"] == {}
+    assert "cloud_folder" not in scrubbed
+    assert scrubbed["team"][0]["name"] == "[REDACTED]"
+    assert scrubbed["recent_notes"][0]["title"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -1612,9 +1663,10 @@ async def test_send_message_uses_linked_conversation_matter_context(
     assert rag.call_args.kwargs["matter_id"] == matter_id
     assert rag.call_args.kwargs["default_public_jurisdiction"] == "ND"
     assert "North Dakota Probate File" in mock_llm.call_args.kwargs["context"]
-    assert "Professional role: Attorney" in mock_llm.call_args.kwargs[
-        "global_user_context"
-    ]
+    assert (
+        "Professional role: Attorney"
+        in mock_llm.call_args.kwargs["global_user_context"]
+    )
 
 
 @pytest.mark.asyncio
