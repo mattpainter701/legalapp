@@ -907,12 +907,18 @@ any existing count decreases. `scripts/backup_db.sh` no longer prunes backups
 unless explicitly confirmed. Production deploy memory and the deploy skill now
 require the guard before customer-facing deploys.
 
-Follow-up: production is currently running with `DEV_MODE=true`; set
-`DEV_MODE=false` after confirming non-placeholder production secrets, then
-restart and verify `/api/dev/*`, `/docs`, `/redoc`, and `/openapi.json` are not
-served. During incident inspection, the backend environment was accidentally
-printed to the tool log; rotate production secrets before treating the install
-as customer-safe.
+Follow-up status (verified 2026-08-16): `/docs` returns 404 on the live domain,
+so `DEV_MODE=false` is in effect in production. A boot-time validator
+(`validate_dev_mode_urls` in `backend/app/config.py`) now refuses to start with
+`DEV_MODE=true` on any non-localhost URL, so this cannot silently regress on
+the next deploy.
+
+STILL OPEN: during incident inspection, the backend environment was
+accidentally printed to the tool log. Production secrets (SECRET_KEY, OAuth
+client secrets, TOKEN_ENCRYPTION_KEY, DB passwords) remain exposed by that log
+and MUST be rotated before treating the install as customer-safe. The local
+.env keys were rotated 2026-08-16; the production .env on the hypervisor is
+the remaining exposure.
 
 ---
 
