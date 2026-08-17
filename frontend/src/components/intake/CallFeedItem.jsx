@@ -1,4 +1,3 @@
-import React from 'react'
 import { Clock, ExternalLink, PhoneIncoming, PhoneMissed, PhoneOutgoing } from 'lucide-react'
 
 const STATUS = {

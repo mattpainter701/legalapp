@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { reportError } from '../utils/reportError'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../App'
 import Sidebar from './Sidebar'
 import ProfessionalContextPrompt from './ProfessionalContextPrompt'
-import { getConversations, createConversation, deleteConversation, getDocuments, uploadDocument, deleteDocument, logout } from '../api'
+import { getConversations, createConversation, deleteConversation, getDocuments, deleteDocument, logout } from '../api'
 import { canAccessModuleList } from '../moduleAccess'
 import { useConfirm } from './dialog/ConfirmProvider'
 import { Briefcase, CalendarDays, CheckSquare, GripVertical, Menu, MessageSquare, PhoneCall, Shield } from 'lucide-react'
@@ -203,7 +204,7 @@ export default function AppShell({ children, title }) {
       navigate(`/chat?conv=${conv.id}`)
       setSidebarOpen(false)
     } catch (err) {
-      console.error('Failed to create conversation', err)
+      reportError('Failed to create conversation', err)
     }
   }, [canSeeModule, navigate])
 
@@ -223,7 +224,7 @@ export default function AppShell({ children, title }) {
       }
       return true
     } catch (err) {
-      console.error('Failed to delete conversation', err)
+      reportError('Failed to delete conversation', err)
       throw err
     }
   }, [activeConvId, confirmAction])
@@ -240,7 +241,7 @@ export default function AppShell({ children, title }) {
       await deleteDocument(id)
       setDocuments((prev) => prev.filter((d) => d.id !== id))
     } catch (err) {
-      console.error('Failed to delete document', err)
+      reportError('Failed to delete document', err)
     }
   }, [])
 

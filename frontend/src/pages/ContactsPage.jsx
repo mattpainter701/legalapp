@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getContacts, createContact } from '../api'
 import { Users, Building2, User, Plus, Search, ChevronRight, Phone, Mail } from 'lucide-react'

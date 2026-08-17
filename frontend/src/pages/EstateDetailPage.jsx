@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -210,7 +211,7 @@ export default function EstateDetailPage() {
         setEvents(data.events || e.events || [])
         setEditData(e)
       })
-      .catch((err) => { setError('Failed to load estate.'); console.error(err) })
+      .catch((err) => { setError('Failed to load estate.'); reportError(err) })
       .finally(() => setLoading(false))
   }, [id])
 

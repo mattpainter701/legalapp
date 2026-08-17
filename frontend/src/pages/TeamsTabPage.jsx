@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CalendarDays, ExternalLink, Link2, MessageSquare } from 'lucide-react'
 import { getTeamsLinks } from '../api'
 

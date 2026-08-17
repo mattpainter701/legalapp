@@ -644,7 +644,7 @@ function LogsTab({ platformKey, tenants }) {
   const [logTotal, setLogTotal] = useState(0)
   const [logDays, setLogDays] = useState(7)
   const [logSeverity, setLogSeverity] = useState('')
-  const [logType, setLogType] = useState('')
+  const [logType] = useState('')
   const [logTenant, setLogTenant] = useState('')
   const [logUnresolved, setLogUnresolved] = useState(false)
   const [logLoading, setLogLoading] = useState(false)

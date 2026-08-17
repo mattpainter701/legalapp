@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { FileText, Paperclip, Send, Sparkles, X } from 'lucide-react'
 
 const QUICK_EXAMPLES = [

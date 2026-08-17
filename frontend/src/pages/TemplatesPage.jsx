@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react'
 import {
   getTemplates,
   analyzeTemplateUpload,

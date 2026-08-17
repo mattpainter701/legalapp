@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppShell } from '../components/AppShell'
 import { useAuth } from '../App'
@@ -423,7 +424,7 @@ export default function ChatPage() {
         navigate(`/chat?conv=${conv.id}`)
         convId = conv.id
       } catch (err) {
-        console.error('Failed to create conversation', err)
+        reportError('Failed to create conversation', err)
         showErrorNotice('Conversation could not be created', 'Start a new conversation and try again.', err)
         return
       }
@@ -434,7 +435,7 @@ export default function ChatPage() {
         const doc = await uploadChatAttachment(convId, file)
         setPendingAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }])
       } catch (err) {
-        console.error('Upload failed:', err)
+        reportError('Upload failed:', err)
         showErrorNotice('Attachment upload failed', `${file.name} could not be uploaded.`, err)
       }
     }
@@ -486,7 +487,7 @@ export default function ChatPage() {
         || activeConvIdRef.current !== id
       ) return
 
-      console.error('Failed to load conversation', err)
+      reportError('Failed to load conversation', err)
       const status = err?.response?.status
       // Never leave a previous conversation visible beneath a newly selected
       // conversation ID. A stale legal transcript is worse than an empty error
@@ -582,7 +583,7 @@ export default function ChatPage() {
       setNotice(null)
       navigate(`/chat?conv=${conv.id}`)
     } catch (err) {
-      console.error('Failed to create conversation', err)
+      reportError('Failed to create conversation', err)
       showErrorNotice('Conversation could not be created', 'Please try again.', err)
     }
   }, [cancelActiveStream, navigate, setConversations, setActiveConvId, showErrorNotice])
@@ -705,7 +706,7 @@ export default function ChatPage() {
         metadataRefreshRequestRef.current !== retryRequestId
         || activeConvIdRef.current !== retryContext.conversationId
       ) return
-      console.error('Failed to retry streamed message metadata', err)
+      reportError('Failed to retry streamed message metadata', err)
       setNotice({
         type: 'warning',
         kind: 'metadata',
@@ -772,7 +773,7 @@ export default function ChatPage() {
         // newly selected conversation.
         if (activeConvIdRef.current !== convId) return
       } catch (err) {
-        console.error('Failed to create conversation', err)
+        reportError('Failed to create conversation', err)
         showErrorNotice('Conversation could not be created', 'Your message was not sent. Try again after starting a new conversation.', err)
         return
       }
@@ -983,7 +984,7 @@ export default function ChatPage() {
           metadataRefreshContextRef.current = null
         } catch (refreshErr) {
           if (!isCurrentStream()) return
-          console.error('Failed to refresh streamed message metadata', refreshErr)
+          reportError('Failed to refresh streamed message metadata', refreshErr)
           metadataRefreshContextRef.current = {
             conversationId: convId,
             userMessage,
@@ -1020,7 +1021,7 @@ export default function ChatPage() {
         return
       }
       if (err?.name === 'AbortError') return
-      console.error('Failed to send message', err)
+      reportError('Failed to send message', err)
       const errorMessage = err?.response?.data?.detail || err?.message || 'Please try again.'
       const failedProgress = { ...streamProgress, complete: true, status: 'Response failed' }
       const failedReferenceContext = buildReferenceContext({ progress: failedProgress })

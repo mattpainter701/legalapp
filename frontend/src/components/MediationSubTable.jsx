@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Plus, Trash2, Pencil, X, Check, Upload } from 'lucide-react'
+import { Plus, Trash2, Pencil, Check, Upload } from 'lucide-react'
 import { useConfirm } from './dialog/ConfirmProvider'
 
 /**

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { reportError } from '../utils/reportError'
 import { Link, useNavigate } from 'react-router-dom'
 import { format, parseISO, isPast, differenceInDays } from 'date-fns'
 import { getEstates, createEstate } from '../api'
@@ -91,7 +92,7 @@ export default function EstatePortfolioPage() {
         setError(status === 404
           ? 'Trust & Estate data could not be loaded. Confirm the API route is deployed.'
           : err?.message || 'Failed to load estates.')
-        console.error(err)
+        reportError(err)
       })
       .finally(() => setLoading(false))
   }, [])

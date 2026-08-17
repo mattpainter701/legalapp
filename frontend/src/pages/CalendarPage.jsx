@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate } from 'react-router-dom'
 import {
   getCalendarEvents,
@@ -228,7 +229,7 @@ export default function CalendarPage() {
       setTotal(mergedEvents.length)
     } catch (err) {
       setError('Failed to load calendar events.')
-      console.error(err)
+      reportError(err)
     } finally {
       setLoading(false)
     }

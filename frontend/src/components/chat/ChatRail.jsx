@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Database, FileText, MessageSquare, Plus, Search, X } from 'lucide-react'
 import { useAppShell } from '../AppShell'
 import FileUpload from '../FileUpload'

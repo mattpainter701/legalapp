@@ -1,4 +1,3 @@
-import React from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight, Bot, Braces, Building2, CalendarClock, CheckCircle2, ClipboardList,

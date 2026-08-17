@@ -24,6 +24,10 @@ export default [
       // actually catches this, so it must stay an error.
       'react/jsx-no-undef': 'error',
       'no-undef': 'error',
+      // Without this, identifiers used only as JSX elements are reported as
+      // unused — the "~890 unused" backlog was mostly these false positives,
+      // which hid genuinely dead imports in the noise.
+      'react/jsx-uses-vars': 'error',
       // Unused identifiers are a warning, not a build gate: the repo currently
       // carries ~890 of them and clearing that backlog is separate work.
       // They stay visible so new ones are noticed in review.

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { createMatterV2, getContacts, getAdminUsers, getPlugins, createContact } from '../api'
 
 const PRACTICE_AREAS = [

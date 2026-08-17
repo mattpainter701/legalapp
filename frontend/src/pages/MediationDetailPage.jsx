@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { reportError } from '../utils/reportError'
 import { useNavigate, useParams } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -132,7 +133,7 @@ export default function MediationDetailPage() {
       })
       .catch((err) => {
         setError('Failed to load mediation case.')
-        console.error(err)
+        reportError(err)
       })
       .finally(() => setLoading(false))
   }, [id])

@@ -1,4 +1,3 @@
-import React from 'react'
 import { Bell, X } from 'lucide-react'
 
 export default function NewCallToasts({ toasts, onView, onDismiss }) {

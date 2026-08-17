@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   KeyboardSensor,
@@ -29,7 +29,6 @@ import {
   Scale,
   Search,
   UserRound,
-  UsersRound,
   X,
 } from 'lucide-react'
 import {

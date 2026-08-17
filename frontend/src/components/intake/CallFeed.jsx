@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PhoneCall, RefreshCw } from 'lucide-react'
 import CallFeedItem from './CallFeedItem'
 
