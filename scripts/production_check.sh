@@ -186,6 +186,41 @@ if not required.issubset(models):
     raise SystemExit(f"missing required model aliases: {sorted(required - models)}")
 PY
 
+# Model discovery proves only that aliases are registered.  Exercise one
+# minimal, non-customer completion through each customer-facing route so a
+# provider outage, broken fallback chain, or alias that returns no visible
+# content blocks the release instead of surfacing as a generic chat failure.
+"${compose[@]}" exec -T litellm python - <<'PY' >/dev/null 2>&1 || fail "LiteLLM customer-route completion probe failed"
+import json
+import os
+import urllib.request
+
+for model in ("clarity-standard", "clarity-premium"):
+    request = urllib.request.Request(
+        "http://127.0.0.1:4000/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": "Reply with exactly READY."}
+                ],
+                "max_tokens": 128,
+                "temperature": 0,
+            }
+        ).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {os.environ['LITELLM_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=45) as response:
+        payload = json.load(response)
+    choices = payload.get("choices") or []
+    content = choices[0].get("message", {}).get("content") if choices else None
+    if not isinstance(content, str) or not content.strip():
+        raise SystemExit(f"{model} returned no visible completion")
+PY
+
 sql() {
   "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null
 }

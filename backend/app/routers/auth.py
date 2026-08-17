@@ -68,6 +68,29 @@ CALENDAR_REQUIRED_SCOPES = {
 _STATE_TTL = 600
 
 
+async def _active_demo_session(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> DemoSession | None:
+    """Return optional demo metadata without making normal authentication depend on it.
+
+    A signed-in user's profile is required to finish OAuth and load the workspace.
+    Demo quota is only a display/control enhancement, so an incomplete demo
+    migration or its RLS policy must not convert ``/auth/me`` into a 500.
+    """
+    try:
+        return await db.scalar(
+            select(DemoSession).where(
+                DemoSession.tenant_id == tenant_id,
+                DemoSession.status == "active",
+            )
+        )
+    except Exception:
+        logger.exception(
+            "Unable to load optional demo metadata for tenant_id=%s", tenant_id
+        )
+        return None
+
+
 def _require_public_signup_enabled() -> None:
     if not settings.PUBLIC_SIGNUP_ENABLED:
         raise HTTPException(
@@ -1726,12 +1749,7 @@ async def get_me(
         db, user.tenant_id, user=user
     )
     plan_id, upsell_target = await resolve_plan_meta(db, user.tenant_id)
-    demo_session = await db.scalar(
-        select(DemoSession).where(
-            DemoSession.tenant_id == user.tenant_id,
-            DemoSession.status == "active",
-        )
-    )
+    demo_session = await _active_demo_session(db, user.tenant_id)
     return UserInfo(
         id=str(user.id),
         tenant_id=str(user.tenant_id),

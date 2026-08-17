@@ -715,6 +715,15 @@ def test_production_check_asserts_disabled_public_mcp_surface() -> None:
     assert '[[ "$disabled_mcp_status" == "404" ]]' in scheduled_health
 
 
+def test_production_check_exercises_customer_llm_routes() -> None:
+    production_check = PRODUCTION_CHECK.read_text(encoding="utf-8")
+
+    assert "LiteLLM customer-route completion probe failed" in production_check
+    assert 'for model in ("clarity-standard", "clarity-premium"):' in production_check
+    assert '"http://127.0.0.1:4000/v1/chat/completions"' in production_check
+    assert '"Reply with exactly READY."' in production_check
+
+
 def test_host_disk_monitor_is_persistent_read_only_and_alertable() -> None:
     hypervisor = yaml.safe_load((ROOT / "docker-compose.hypervisor.yml").read_text())
     production = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())

@@ -15,6 +15,19 @@ from app.config import get_settings
 settings = get_settings()
 
 
+@pytest.mark.asyncio
+async def test_optional_demo_metadata_does_not_break_auth_profile(caplog):
+    """A demo-table problem must not make a valid session look logged out."""
+    from app.routers.auth import _active_demo_session
+
+    class BrokenDemoLookup:
+        async def scalar(self, _statement):
+            raise RuntimeError("demo_sessions relation is unavailable")
+
+    assert await _active_demo_session(BrokenDemoLookup(), uuid.uuid4()) is None
+    assert "optional demo metadata" in caplog.text
+
+
 def make_token(
     user_id: str,
     tenant_id: str,

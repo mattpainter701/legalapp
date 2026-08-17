@@ -22,7 +22,14 @@ async def _auto_log_and_task(
     email: dict,
     classification: dict,
 ) -> None:
-    """Persist a CommunicationLog, optionally a Task, and link to matters."""
+    """Persist an email only when it is tied to a matter contact.
+
+    A mailbox scan may classify every message it can see, but classification is
+    transient user-facing triage.  It must not turn newsletters, firewall
+    notices, or other unrelated inbox traffic into tenant records.  Durable
+    communications, notes, and deadline tasks require a contact that is linked
+    to an active matter.
+    """
     try:
         from app.database import set_tenant_context
         from app.models.communication_log import CommunicationLog
@@ -36,6 +43,13 @@ async def _auto_log_and_task(
 
         # Match email to matters by sender/recipient
         matched_matter_ids = await _match_email_to_matters(db, tid, email)
+        if not matched_matter_ids:
+            logger.debug(
+                "Keeping unmatched mailbox message out of durable records: %s",
+                email.get("id") or email.get("subject") or "unknown",
+            )
+            return
+
         message_id = email.get("id")
         provider = email.get("provider") or email.get("source")
         external_ref = email.get("external_ref") or (
@@ -145,7 +159,7 @@ async def _match_email_to_matters(
     email: dict,
 ) -> list[uuid_mod.UUID]:
     """Find matters linked to contacts whose email matches sender/recipient."""
-    from sqlalchemy import select, or_
+    from sqlalchemy import func, select
 
     from app.models.contact import Contact
     from app.models.matter_party import MatterParty
@@ -169,7 +183,7 @@ async def _match_email_to_matters(
         select(Contact.id, Contact.email).where(
             Contact.tenant_id == tenant_id,
             Contact.is_active.is_(True),
-            or_(*[Contact.email.ilike(f"%{a}%") for a in addresses]),
+            func.lower(Contact.email).in_(addresses),
         )
     )
     contacts = contact_q.all()
@@ -180,9 +194,13 @@ async def _match_email_to_matters(
 
     # Find active matters linked to these contacts via MatterParty or client_contact_id
     party_q = await db.execute(
-        select(MatterParty.matter_id).where(
+        select(MatterParty.matter_id)
+        .join(Matter, Matter.id == MatterParty.matter_id)
+        .where(
             MatterParty.tenant_id == tenant_id,
             MatterParty.contact_id.in_(contact_ids),
+            Matter.tenant_id == tenant_id,
+            Matter.is_closed.is_(False),
         )
     )
     matter_ids_from_parties = [row[0] for row in party_q.all()]
