@@ -4,7 +4,7 @@ Additive only: creates one new operator-owned table. No tenant table is
 touched, so this is safe to apply ahead of the application deploy.
 
 Revision ID: 108_platform_operator_api_keys
-Revises: 107_access_log_request_correlation
+Revises: 107_access_log_request_id
 """
 
 from alembic import op
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "108_platform_operator_api_keys"
-down_revision = "107_access_log_request_correlation"
+down_revision = "107_access_log_request_id"
 branch_labels = None
 depends_on = None
 

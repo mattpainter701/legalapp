@@ -12,7 +12,28 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["106_demo_usage_reservations"]
+    assert heads == ["108_platform_operator_api_keys"]
+
+
+def test_revision_ids_fit_the_alembic_version_column():
+    """alembic_version.version_num is varchar(32).
+
+    A longer id passes every local check and then fails at the very end of
+    `alembic upgrade`, after the DDL has run, when the stamp is written back.
+    """
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "migrations"))
+    script = ScriptDirectory.from_config(config)
+
+    oversized = {
+        revision.revision: len(revision.revision)
+        for revision in script.walk_revisions()
+        if len(revision.revision) > 32
+    }
+
+    assert not oversized, f"revision ids exceed varchar(32): {oversized}"
 
 
 def test_live_demo_foundation_is_additive_and_forces_tenant_rls():

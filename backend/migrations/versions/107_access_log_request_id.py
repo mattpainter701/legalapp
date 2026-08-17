@@ -4,14 +4,16 @@ Additive and nullable: existing rows keep a NULL request_id and stay valid.
 Without this column an operator holding the request_id from a customer's failed
 response can find the error row but not the request that produced it.
 
-Revision ID: 107_access_log_request_correlation
+Revision ID: 107_access_log_request_id
 Revises: 106_demo_usage_reservations
+
+Revision ids are capped at 32 characters by alembic_version.version_num.
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "107_access_log_request_correlation"
+revision = "107_access_log_request_id"
 down_revision = "106_demo_usage_reservations"
 branch_labels = None
 depends_on = None
