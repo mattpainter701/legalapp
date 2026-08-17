@@ -613,6 +613,17 @@ class LegalScheduler:
             replace_existing=True,
         )
 
+        from app.services.demo_purge import purge_expired_demo_tenants
+
+        self.scheduler.add_job(
+            self._guarded("demo-session-purge", purge_expired_demo_tenants),
+            "interval",
+            hours=1,
+            id="demo-session-purge",
+            name="Expired Demo Session Purge",
+            replace_existing=True,
+        )
+
         # estate-deadline-watcher: daily 8:05 AM ET
         self.scheduler.add_job(
             self._guarded("estate-deadline-watcher", self.run_estate_deadline_watcher),
@@ -631,7 +642,7 @@ class LegalScheduler:
             replace_existing=True,
         )
 
-        agent_count = 8
+        agent_count = 9
 
         # cloud-sync: every CLOUD_METADATA_SYNC_INTERVAL_MIN minutes (if enabled)
         if settings.CLOUD_SEARCH_ENABLED:

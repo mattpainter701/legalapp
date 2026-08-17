@@ -5,7 +5,12 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.middleware import rate_limit
-from app.middleware.rate_limit import RateLimitMiddleware, _counts_against_tenant_daily
+from app.middleware.rate_limit import (
+    AUTH_LIMITS,
+    TENANT_DAILY_LIMITS,
+    RateLimitMiddleware,
+    _counts_against_tenant_daily,
+)
 
 
 class _FakeRedis:
@@ -69,6 +74,12 @@ def test_tenant_daily_limit_counts_llm_and_tool_paths():
         is True
     )
     assert _counts_against_tenant_daily("POST", "/api/plugins/execute") is True
+
+
+def test_demo_has_explicit_public_and_daily_limits_without_changing_unknown_fallback():
+    assert AUTH_LIMITS["/api/demo/session"] == (5, 900)
+    assert TENANT_DAILY_LIMITS["demo"] == 200
+    assert TENANT_DAILY_LIMITS["payg"] == 10_000
 
 
 @pytest.mark.asyncio

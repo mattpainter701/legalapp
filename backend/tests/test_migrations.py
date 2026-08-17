@@ -12,7 +12,34 @@ def test_alembic_revision_graph_resolves_heads():
 
     heads = script.get_heads()
 
-    assert heads == ["104_user_professional_context"]
+    assert heads == ["106_demo_usage_reservations"]
+
+
+def test_live_demo_foundation_is_additive_and_forces_tenant_rls():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "105_live_demo_foundation.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'down_revision = "104_user_professional_context"' in source
+    assert (
+        'sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True)' in source
+    )
+    assert "CREATE POLICY demo_sessions_tenant_isolation" in source
+    assert "ALTER TABLE demo_sessions FORCE ROW LEVEL SECURITY" in source
+    assert "ck_demo_sessions_quota_counters" in source
+
+
+def test_demo_quota_migration_is_tenant_scoped_and_idempotent():
+    backend_dir = Path(__file__).resolve().parents[1]
+    source = (
+        backend_dir / "migrations" / "versions" / "106_demo_usage_reservations.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'down_revision = "105_live_demo_foundation"' in source
+    assert "uq_demo_usage_session_key" in source
+    assert "ALTER TABLE demo_usage_reservations FORCE ROW LEVEL SECURITY" in source
+    assert "tenant_isolation_demo_usage_reservations" in source
 
 
 def test_document_revision_migration_forces_tenant_rls_and_preserves_sources():
@@ -205,10 +232,7 @@ def test_revision_ids_fit_alembic_version_column():
 def test_action_audit_cutover_terminalizes_legacy_work_under_owner_rls_window():
     backend_dir = Path(__file__).resolve().parents[1]
     source = (
-        backend_dir
-        / "migrations"
-        / "versions"
-        / "103_task_action_delivery_audit.py"
+        backend_dir / "migrations" / "versions" / "103_task_action_delivery_audit.py"
     ).read_text(encoding="utf-8")
 
     run_no_force = "ALTER TABLE task_automation_runs NO FORCE ROW LEVEL SECURITY"

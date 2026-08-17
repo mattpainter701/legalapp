@@ -57,7 +57,7 @@ export function useAppShell() {
 }
 
 export default function AppShell({ children, title }) {
-  const { user, logout: authLogout } = useAuth()
+  const { user, logout: authLogout, refreshUser } = useAuth()
   const confirmAction = useConfirm()
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -88,6 +88,12 @@ export default function AppShell({ children, title }) {
   useEffect(() => {
     setSidebarOpen(false)
   }, [pathname])
+
+  useEffect(() => {
+    if (!user?.demo) return undefined
+    const timer = window.setInterval(() => refreshUser(), 15000)
+    return () => window.clearInterval(timer)
+  }, [refreshUser, user?.demo?.session_id])
 
   useEffect(() => {
     sidebarWidthRef.current = desktopSidebarWidth
@@ -363,6 +369,12 @@ export default function AppShell({ children, title }) {
               )}
             </div>
           </header>
+
+          {user?.demo && (
+            <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950 md:text-sm">
+              Demo session — {user.demo.used} of {user.demo.quota} AI operations used · expires in {Math.max(0, Math.ceil((new Date(user.demo.expires_at).getTime() - Date.now()) / 3600000))}h · Premium AI and live integrations are disabled
+            </div>
+          )}
 
           {/* Main content */}
           <main className="flex-1 overflow-auto [scrollbar-gutter:stable]">
